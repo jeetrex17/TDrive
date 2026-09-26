@@ -275,9 +275,7 @@ func TestRandomAccessDecryptorSupportsConcurrentReadsWithBoundedRequests(t *test
 	var wait sync.WaitGroup
 	errorsFound := make(chan error, 32)
 	for worker := range 32 {
-		wait.Add(1)
-		go func(worker int) {
-			defer wait.Done()
+		wait.Go(func() {
 			off := int64((worker * 7919) % (len(plain) - 2*chunkSizePlain))
 			got := make([]byte, 2*chunkSizePlain+13)
 			n, readErr := decryptor.ReadAt(context.Background(), got, off)
@@ -288,7 +286,7 @@ func TestRandomAccessDecryptorSupportsConcurrentReadsWithBoundedRequests(t *test
 			if !bytes.Equal(got[:n], plain[off:off+int64(n)]) {
 				errorsFound <- errors.New("concurrent plaintext mismatch")
 			}
-		}(worker)
+		})
 	}
 	wait.Wait()
 	close(errorsFound)

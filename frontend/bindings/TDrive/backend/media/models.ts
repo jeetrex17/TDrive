@@ -31,6 +31,13 @@ export interface OpenResult {
     "token": string;
     "url": string;
     "thumbnail_url": string;
+
+    /**
+     * HLSURL is set only for a container Apple platforms cannot open, such as
+     * Matroska. It points at a playlist backed by an on-demand remux, and it is
+     * empty for every file a player can take directly.
+     */
+    "hls_url": string;
     "name": string;
     "kind": StreamKind;
     "mime_type": string;
@@ -74,6 +81,7 @@ export enum StreamKind {
     StreamKindAudio = "audio",
     StreamKindPDF = "pdf",
     StreamKindText = "text",
+    StreamKindImage = "image",
 };
 
 export interface ThroughputStats {

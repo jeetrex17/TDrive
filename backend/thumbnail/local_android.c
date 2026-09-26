@@ -1,0 +1,39 @@
+//go:build android && cgo
+
+#include "android_jni.h"
+
+static tdrive_jni_binding image_binding = TDRIVE_JNI_BINDING_INIT;
+
+// Called once by the Java host after loading libwails.
+JNIEXPORT void JNICALL Java_com_wails_app_GalleryImage_nativeInit(JNIEnv *env, jclass cls) {
+    tdrive_jni_bind(&image_binding, env, cls, "downsample", "([BIZI)[B");
+}
+
+int tdrive_android_thumbnail(const char *path, size_t pathLength, int edge, int encoded, int orientation, void **bytes, size_t *length) {
+    *bytes = NULL;
+    *length = 0;
+    JavaVM *vm;
+    jclass cls;
+    jmethodID method;
+    if (!tdrive_jni_resolve(&image_binding, &vm, &cls, &method)) return 3; // CLI/non-Java host: guarded portable decoder.
+    int attached = 0;
+    JNIEnv *env = tdrive_jni_attach(vm, &attached);
+    if (!env) return 1;
+    if ((*env)->PushLocalFrame(env, 4) < 0) {
+        if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+        tdrive_jni_detach(vm, attached);
+        return 1;
+    }
+    // For a named source these bytes are the path; for an in-memory one they are
+    // the image itself, which is why the Java side takes a byte[] either way.
+    jbyteArray source = tdrive_jni_utf8(env, path, pathLength);
+    if (source) {
+        jbyteArray result = (jbyteArray)(*env)->CallStaticObjectMethod(
+            env, cls, method, source, (jint)edge, (jboolean)encoded, (jint)orientation);
+        tdrive_jni_take_bytes(env, result, bytes, length);
+    }
+    if ((*env)->ExceptionCheck(env)) (*env)->ExceptionClear(env);
+    (*env)->PopLocalFrame(env, NULL);
+    tdrive_jni_detach(vm, attached);
+    return *bytes ? 0 : 1;
+}

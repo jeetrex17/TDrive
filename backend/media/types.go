@@ -20,6 +20,10 @@ var (
 	ErrEncryptedUnsupported = errors.New("media: encrypted playback format is unsupported")
 	ErrKeyUnavailable       = errors.New("media: encryption key is unavailable")
 	ErrUnsupportedMediaType = errors.New("media: unsupported media type")
+	ErrStaleRevision        = errors.New("media: stale file revision")
+	ErrInvalidImage         = errors.New("media: invalid image content")
+	ErrImageTooLarge        = errors.New("media: image exceeds safe viewing limits")
+	ErrAnimatedImageUnsafe  = errors.New("media: animated image is unavailable for direct display")
 	ErrSessionNotFound      = errors.New("media: session not found")
 	ErrThumbnailPending     = errors.New("media: thumbnail pending")
 	ErrThumbnailUnavailable = errors.New("media: thumbnail unavailable")
@@ -50,6 +54,7 @@ const (
 	StreamKindAudio   StreamKind = "audio"
 	StreamKindPDF     StreamKind = "pdf"
 	StreamKindText    StreamKind = "text"
+	StreamKindImage   StreamKind = "image"
 )
 
 // Segment is one stored Telegram document body in a logical TDrive file.
@@ -86,9 +91,13 @@ func (f LogicalFile) SegmentCount() int {
 }
 
 type OpenResult struct {
-	Token         string      `json:"token"`
-	URL           string      `json:"url"`
-	ThumbnailURL  string      `json:"thumbnail_url"`
+	Token        string `json:"token"`
+	URL          string `json:"url"`
+	ThumbnailURL string `json:"thumbnail_url"`
+	// HLSURL is set only for a container Apple platforms cannot open, such as
+	// Matroska. It points at a playlist backed by an on-demand remux, and it is
+	// empty for every file a player can take directly.
+	HLSURL        string      `json:"hls_url"`
 	Name          string      `json:"name"`
 	Kind          StreamKind  `json:"kind"`
 	MimeType      string      `json:"mime_type"`

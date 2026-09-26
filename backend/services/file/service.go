@@ -1,3 +1,52 @@
+// Package file moves bytes. It is the only place in the backend that turns a
+// local file into Telegram document messages and back, and the only place that
+// decides which messages constitute one logical file.
+//
+// Everything it publishes leaves as a projection.Op whose formatted TDX1 header
+// is the Telegram caption. projection owns the SQLite write, tgclient owns the
+// transport and its flood-wait retries, crypto owns the TDE1 stream format, and
+// mountwrite owns the durable journal behind mounted writes. This package
+// supplies only policy: what to split, when to encrypt, what to retry, and when
+// a write becomes visible.
+//
+// Visibility differs per upload shape and is the easiest thing here to get
+// wrong:
+//
+//  1. A file's identity is the msg_id of its header-carrying message — the
+//     document for a single-part upload, the manifest text message for a
+//     multipart one. Part messages are OpFilePart and never reach the files
+//     table, so they can never be mistaken for orphans.
+//  2. A single-part upload commits when Telegram accepts the document. Local
+//     projection happens afterwards, so an upload can return both metadata and
+//     an error; a non-zero msg id means the file exists and must not be resent.
+//  3. A multipart upload commits on the manifest send. Before it, failure
+//     aborts and deletes the part bodies; once the manifest send has been
+//     attempted, aborting is forbidden, because sync may still project a
+//     manifest Telegram accepted.
+//  4. Hidden (mount) uploads never commit here at all. UploadHidden returns a
+//     body and mountwrite publishes it with OpFileCommit.
+//  5. Delete never touches Telegram. It publishes a trash operation and stops;
+//     the bytes are destroyed only by an explicit purge or by the retention
+//     sweep, both of which delete exactly the messages the projection's
+//     immutable hard-delete plan lists.
+//
+// Retrying is only safe because every send derives a stable Telegram random id
+// from the upload UUID plus a step label, and because every body is an
+// io.ReadSeeker that is rewound before a resend rather than resumed mid-stream.
+// Without an idempotent sender a multipart upload refuses to start and an
+// unknown single-part outcome becomes terminal: failing is better than
+// publishing a duplicate nobody can tell apart.
+//
+// The split decision uses the stored (ciphertext) size rather than the
+// plaintext size, so encrypting a file near a boundary can make it multipart.
+// Concurrency is bounded everywhere on purpose — one upload semaphore covers
+// GUI uploads, imports, backups and mount writes alike — so no caller can turn
+// a folder import into an unbounded fan-out against Telegram.
+//
+// Encryption is per-call intent, never per-drive: the caller asks, and the
+// injected key providers decide whether that is allowed. Every key this package
+// receives is a caller-owned copy that is zeroed on every return path,
+// including error paths.
 package file
 
 import (
@@ -10,17 +59,17 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"time"
 
 	tdcrypto "TDrive/backend/crypto"
+	"TDrive/backend/datadir"
 	"TDrive/backend/projection"
 	"TDrive/backend/services/servicecontext"
 	"TDrive/backend/tgclient"
 	"TDrive/backend/thumbnail"
-
-	"golang.org/x/sync/singleflight"
 )
 
 type PeerResolver interface {
@@ -35,12 +84,15 @@ type ActorIDFunc func(ctx context.Context) (int64, error)
 // non-nil key on every return path, including when err is non-nil.
 type RequireEncryptionKeyFunc func(encrypted bool) ([]byte, error)
 
+// RequireEncryptionKeyForChannelFunc binds a rendition key request to the
+// source channel. Production providers must reject encrypted shared drives.
+type RequireEncryptionKeyForChannelFunc func(channelID int64, encrypted bool) ([]byte, error)
+
 // MasterKeyForUploadFunc returns a caller-owned key copy. Service clears a
 // non-nil key on every return path, including when err is non-nil.
 type MasterKeyForUploadFunc func(channelID int64, wantEncrypted bool) ([]byte, error)
 type WriteCiphertextTempFunc func(plain io.Reader, plaintextSize int64, masterKey []byte) (*os.File, error)
 type encryptStreamFunc func(plain io.Reader, ciphertext io.Writer, masterKey []byte, plaintextSize int64) error
-type thumbnailGeneratorFunc func(ctx context.Context, channelID int64, msgID int, cacheKey string, encrypted bool, masterKey []byte) ([]byte, error)
 type WarnFunc func(format string, args ...any)
 
 // CreateFolderFunc creates a folder and returns its new ID. It is injected so
@@ -60,14 +112,20 @@ type Service struct {
 	EmitOpContext        EmitOpContextFunc
 	ActorID              ActorIDFunc
 	RequireEncryptionKey RequireEncryptionKeyFunc
-	MasterKeyForUpload   MasterKeyForUploadFunc
-	WriteCiphertextTemp  WriteCiphertextTempFunc
-	encryptStream        encryptStreamFunc
-	generateThumbnailFn  thumbnailGeneratorFunc
-	CreateFolder         CreateFolderFunc
-	Events               EventSink
-	Warnf                WarnFunc
-	Now                  func() time.Time
+	// RequireEncryptionKeyForChannel is used by rendition reads before cache or
+	// network access. RequireEncryptionKey remains for legacy non-rendition
+	// paths until they can adopt the scoped contract.
+	RequireEncryptionKeyForChannel RequireEncryptionKeyForChannelFunc
+	// PersonalChannelID lets this service fail closed for encrypted shared-drive
+	// records even if a test or legacy caller has not provided a scoped key hook.
+	PersonalChannelID   func() int64
+	MasterKeyForUpload  MasterKeyForUploadFunc
+	WriteCiphertextTemp WriteCiphertextTempFunc
+	encryptStream       encryptStreamFunc
+	CreateFolder        CreateFolderFunc
+	Events              EventSink
+	Warnf               WarnFunc
+	Now                 func() time.Time
 	// MaxUploadBytes overrides the per-file upload limit. 0 uses the standard
 	// 2 GiB cap; it is raised to the 4 GiB Premium cap once the account is known
 	// to be Premium. See maxUploadBytes.
@@ -82,22 +140,29 @@ type Service struct {
 	MaxConcurrentUploads int
 	uploadOnce           sync.Once
 	uploadSem            chan struct{}
-	previewMu            sync.Mutex
+	// uploadCancels holds a cancel handle per running upload, keyed by the
+	// upload ID its progress events carry, so one transfer row can be stopped
+	// without taking the rest of the batch with it. Only goroutines that hold
+	// an upload slot are registered, so it stays bounded by MaxConcurrentUploads.
+	uploadCancelMu sync.Mutex
+	uploadCancels  map[int]context.CancelFunc
+	previewMu      sync.Mutex
 	// afterHiddenPartSend is a nil-by-default crash-injection seam used only by
 	// package tests. It runs immediately after Telegram returns a positive
 	// message ID and before that receipt enters any local collection/projection.
 	afterHiddenPartSend func(partIndex int, msgID int64)
 
-	// Thumbs is the on-disk thumbnail cache. Nil disables caching (every
-	// Thumbnail call regenerates), which keeps the cache optional in tests.
+	// Thumbs is the on-disk rendition cache. Nil disables caching; requests
+	// then fetch bounded remote derivatives without generating from originals.
 	Thumbs *thumbnail.Cache
-	// ThumbConcurrency bounds how many thumbnails generate at once. <= 0 uses
-	// a sensible default. Thumbnail generation runs off previewMu so the grid
-	// can fill in parallel without blocking single-file previews/downloads.
+	// ThumbConcurrency bounds active rendition transfers. Values are clamped
+	// to four; the default is three. Grid work does not hold previewMu.
 	ThumbConcurrency int
 	thumbOnce        sync.Once
 	thumbSem         chan struct{}
-	thumbGroup       singleflight.Group
+	renditionFlights renditionFlightGroup
+	// CacheNamespace is the authenticated account identity. Configure before use.
+	CacheNamespace string
 }
 
 type Metadata struct {
@@ -299,7 +364,7 @@ func (s *Service) writeCiphertextTemp(plain io.Reader, plaintextSize int64, mast
 	}
 	keyCopy := append([]byte(nil), masterKey...)
 	defer clearOwnedKey(keyCopy)
-	tmp, err := os.CreateTemp("", "tdrive-upload-*")
+	tmp, err := datadir.CreateCacheTemp("tdrive-upload-*")
 	if err != nil {
 		return nil, err
 	}
@@ -347,14 +412,14 @@ func stageUploadPart(ctx context.Context, dir string, source io.Reader, size int
 func createTempWithFallback(dir string, pattern string) (*os.File, error) {
 	// Prefer the source filesystem for multi-gigabyte ciphertext so an upload
 	// from an external volume does not unexpectedly exhaust the system temp
-	// volume. Read-only or otherwise unsuitable source directories fall back to
-	// the OS temp directory.
-	if dir != "" {
+	// volume. Mobile source paths can be shared storage, so all mobile staging
+	// stays in the app-private cache regardless of its source location.
+	if runtime.GOOS != "android" && runtime.GOOS != "ios" && dir != "" {
 		if tmp, err := os.CreateTemp(dir, pattern); err == nil {
 			return tmp, nil
 		}
 	}
-	return os.CreateTemp("", pattern)
+	return datadir.CreateCacheTemp(pattern)
 }
 
 func uploadSourceTempDir(source io.ReadSeeker) string {
@@ -401,7 +466,28 @@ func (s *Service) emitEvent(name string, args ...any) {
 	}
 }
 
-func (s *Service) downloadProgress(total int64) func(done, total int64) {
+type downloadProgressRequestIDKey struct{}
+
+// WithDownloadProgressID binds frontend scheduler identity to emitted progress
+// events. It is kept on the operation context so other service callers can
+// remain compatible while Wails downloads are precisely correlated.
+func WithDownloadProgressID(ctx context.Context, requestID string) context.Context {
+	if ctx == nil || requestID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, downloadProgressRequestIDKey{}, requestID)
+}
+
+func downloadProgressRequestID(ctx context.Context) string {
+	if ctx == nil {
+		return ""
+	}
+	id, _ := ctx.Value(downloadProgressRequestIDKey{}).(string)
+	return id
+}
+
+func (s *Service) downloadProgress(ctx context.Context, total int64) func(done, total int64) {
+	requestID := downloadProgressRequestID(ctx)
 	lastProgress := time.Now()
 	var mu sync.Mutex
 	return func(done, callbackTotal int64) {
@@ -421,7 +507,7 @@ func (s *Service) downloadProgress(total int64) func(done, total int64) {
 				percent = 100
 			}
 		}
-		s.emitEvent("download_progress", percent)
+		s.emitEvent("download_progress", percent, requestID)
 		lastProgress = time.Now()
 	}
 }

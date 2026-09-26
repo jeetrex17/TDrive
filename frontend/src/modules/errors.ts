@@ -285,6 +285,28 @@ function safeDetails(chain: readonly unknown[], raw: string): SafeErrorDetails {
     });
 }
 
+const TELEGRAM_CODES = new Map<string, string>([
+    ['FILE_REFERENCE_EXPIRED', 'Telegram needs a fresh reference for this file. Try again.'],
+    ['MESSAGE_ID_INVALID', 'Telegram no longer has this file.'],
+    ['CHAT_WRITE_FORBIDDEN', "You can't add to this drive."],
+    ['CHAT_ADMIN_REQUIRED', 'Only an admin of this drive can do that.'],
+    ['USER_BANNED_IN_CHANNEL', 'You were removed from this drive.'],
+    ['CHANNEL_PRIVATE', 'This drive is no longer available to you.'],
+    ['FILE_PARTS_INVALID', 'Telegram rejected the upload. Try again.'],
+    ['MEDIA_EMPTY', 'Telegram received an empty file.'],
+]);
+
+function telegramPresentation(code: string): ErrorPresentation {
+    const known = TELEGRAM_CODES.get(code);
+    const forbidden = code.includes('FORBIDDEN') || code.includes('ADMIN_REQUIRED') || code.includes('BANNED');
+    return {
+        kind: forbidden ? 'permission' : 'unavailable',
+        title: forbidden ? 'Not allowed' : 'Telegram refused that',
+        message: known ?? `Telegram answered ${code.toLowerCase().replace(/_/g, ' ')}. Try again.`,
+        retryable: !forbidden && !known?.startsWith('Telegram no longer'),
+    };
+}
+
 function classifyMessage(raw: string, source: AppErrorSource): ErrorPresentation {
     const message = singleLine(raw, MAX_USER_MESSAGE_LENGTH);
     const lower = message.toLowerCase();
@@ -372,6 +394,30 @@ function classifyMessage(raw: string, source: AppErrorSource): ErrorPresentation
     if (lower.includes('deadline exceeded') || lower.includes('timed out') || lower.includes('timeout')) {
         return OPERATION_PRESENTATIONS.deadline_exceeded;
     }
+    // Telegram answers a refused RPC with a bare code ("rpc error code 400:
+    // FILE_REFERENCE_EXPIRED"), and the backend passes it up as it is. The
+    // codes that a user can do something about get their own sentence; the
+    // rest are named rather than printed as a stack of capitals.
+    const rpc = /\b([A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+)\b/.exec(message);
+    if (rpc && (lower.includes('rpc error') || TELEGRAM_CODES.has(rpc[1]))) {
+        return telegramPresentation(rpc[1]);
+    }
+    if (lower.includes('database is locked') || lower.includes('sqlite')) {
+        return {
+            kind: 'unavailable',
+            title: 'Catalog is busy',
+            message: "TDrive's local catalog is busy. Try again in a moment.",
+            retryable: true,
+        };
+    }
+    if (lower.includes('context canceled') || lower.includes('forcibly closed')) {
+        return {
+            kind: 'unexpected',
+            title: 'Interrupted',
+            message: 'That was interrupted before it finished. Try again.',
+            retryable: true,
+        };
+    }
     if (lower.includes('tg client') || lower.includes('telegram') || lower.includes('network')) {
         return OPERATION_PRESENTATIONS.network_unavailable;
     }
@@ -446,6 +492,15 @@ export function toAppError(error: unknown, options: AppErrorOptions = {}): AppEr
 /** Converts backend failures into concise, non-sensitive copy safe for inline UI. */
 export function humanizeBackendError(error: unknown): string {
     return toAppError(error, { source: 'backend' }).message;
+}
+
+// Direct Wails methods reject with a wrapped Go error instead of the operation
+// envelope used by mutations and downloads. Keep that bridge-specific fallback
+// in one place so media surfaces never branch on raw error text themselves.
+export function isEncryptionPasswordRequired(error: unknown): boolean {
+    const normalized = toAppError(error, { source: 'backend' });
+    return normalized.code === 'encryption_password_required'
+        || (normalized.kind === 'authentication' && normalized.title === 'Password required');
 }
 
 /** Formats only already-redacted fields; the original cause is deliberately excluded. */

@@ -79,11 +79,24 @@ describe("native media tracks", () => {
 });
 
 describe("shortNativeTrackLabel", () => {
-    it("prefers the language code, then a trimmed title, then the position", () => {
-        const base = { id: 1, type: "audio" as const, selected: false, default: false, forced: false };
+    const base = { id: 1, type: "audio" as const, selected: false, default: false, forced: false };
+
+    it("prefers the language code, then a trimmed title", () => {
         expect(shortNativeTrackLabel({ ...base, language: "eng", title: "Main" }, 0)).toBe("ENG");
         expect(shortNativeTrackLabel({ ...base, title: "Signs" }, 0)).toBe("Signs");
         expect(shortNativeTrackLabel({ ...base, title: "Director commentary" }, 0)).toBe("Director co…");
-        expect(shortNativeTrackLabel(base, 2)).toBe("#3");
+    });
+
+    it("says nothing when the file named nothing", () => {
+        // The pill is a few dozen pixels on a phone. A label that only repeats
+        // the pill's own position costs a line of the control row and tells the
+        // viewer nothing, so the icon stands alone and the settings sheet
+        // carries the full name.
+        expect(shortNativeTrackLabel(base, 2)).toBe("");
+        expect(shortNativeTrackLabel({ ...base, title: "Audio 1" }, 0)).toBe("");
+        expect(shortNativeTrackLabel({ ...base, title: "Track 2" }, 1)).toBe("");
+        expect(shortNativeTrackLabel({ ...base, title: "Subtitles" }, 0)).toBe("");
+        // A real name is never mistaken for a generic one.
+        expect(shortNativeTrackLabel({ ...base, title: "Audio description" }, 0)).toBe("Audio descr…");
     });
 });

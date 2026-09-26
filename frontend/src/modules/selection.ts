@@ -3,11 +3,15 @@
 import { state } from '../state';
 import { openDeleteModal } from './modals/delete';
 import { openMoveModal } from './modals/move';
-import { setSelectionCount } from '../ui/selection/selection-bar-store';
+import { enqueueDownload, enqueueFolderDownload } from './transfers';
+import { notify } from './notifications';
+import { setSelectionCount, setSelectionModeActive } from '../ui/selection/selection-bar-store';
 import { setSelectedFileRowKeys } from '../ui/file-list/row-state-store';
-import type { FileCommandItem, FileListFileRow, FileSource, FolderListRow } from '../ui/file-list/types';
+import { fileListRowForElement } from '../ui/file-list/row-lookup';
+import type { FileCommandItem, FileListFileRow, FolderListRow } from '../ui/file-list/types';
 
 const SELECTABLE_ROW_SELECTOR = '.drive-row[data-type="folder"], .drive-row[data-type="file"]';
+const MAX_BULK_DOWNLOAD_ITEMS = 500;
 let selectionAnchorKey = '';
 
 type LogicalFileListRow = FolderListRow | FileListFileRow;
@@ -16,12 +20,13 @@ function emitSelectionChange(): void {
     window.dispatchEvent(new Event('tdrive:selectionchange'));
 }
 
+/**
+ * A row element's identity, and the only thing selection reads off the markup.
+ * Every other field it needs belongs to the row itself and is fetched from the
+ * store, so the element and the row can never drift apart.
+ */
 export function getRowKey(row: HTMLElement): string {
-    const explicitKey = row.dataset.rowKey ?? '';
-    if (explicitKey) return explicitKey;
-    const type = row.dataset.type ?? '';
-    const id = row.dataset.id ?? '';
-    return type && id ? `${type}:${id}` : '';
+    return row.dataset.rowKey ?? '';
 }
 
 function syncSelectedRowKeys(): void {
@@ -33,32 +38,16 @@ export function isRowSelected(row: HTMLElement): boolean {
     return Boolean(key && state.selectedItems.has(key));
 }
 
-export function rowToSelectionItem(row: HTMLElement): FileCommandItem {
-    if (row.dataset.type === 'folder') {
-        return {
-            type: 'folder',
-            id: row.dataset.id ?? '',
-            name: row.dataset.name || 'Folder',
-            parentId: row.dataset.parentId ?? '',
-            canDelete: row.dataset.canDelete !== 'false',
-            canRename: row.dataset.canRename !== 'false',
-            row,
-        };
-    }
-
-    const source: FileSource = row.dataset.source === 'tg' ? 'tg' : 'fs';
-    return {
-        type: 'file',
-        id: Number(row.dataset.id ?? 0),
-        name: row.dataset.name || 'File',
-        size: Number(row.dataset.size ?? 0),
-        source,
-        parentId: row.dataset.parentId ?? '',
-        uploaderID: Number(row.dataset.uploaderId ?? 0),
-        canDelete: row.dataset.canDelete !== 'false',
-        canRename: row.dataset.canRename !== 'false',
-        row,
-    };
+/**
+ * The selection entry for a rendered row, keyed back to the row the list drew
+ * it from. Null when the element no longer belongs to the published list, in
+ * which case there is nothing to select: the caller leaves the selection alone
+ * rather than adding an entry built from a row the reader cannot see.
+ */
+function selectionItemForElement(element: HTMLElement): { key: string; item: FileCommandItem } | null {
+    const row = fileListRowForElement(element);
+    if (!row) return null;
+    return { key: row.selectionKey, item: logicalRowToSelectionItem(row, element) };
 }
 
 function logicalRowToSelectionItem(row: LogicalFileListRow, element?: HTMLElement): FileCommandItem {
@@ -68,6 +57,7 @@ function logicalRowToSelectionItem(row: LogicalFileListRow, element?: HTMLElemen
             type: 'folder',
             id: row.id,
             name: row.name,
+            channelId: row.channelId,
             parentId: row.parentId,
             canDelete: true,
             canRename: true,
@@ -79,6 +69,7 @@ function logicalRowToSelectionItem(row: LogicalFileListRow, element?: HTMLElemen
             type: 'file',
             id: Number(row.id),
             name: row.name,
+            channelId: row.channelId,
             size: row.size,
             source: 'tg',
             parentId: row.parentId,
@@ -92,6 +83,7 @@ function logicalRowToSelectionItem(row: LogicalFileListRow, element?: HTMLElemen
         type: 'file',
         id: Number(row.id),
         name: row.name,
+        channelId: row.channelId,
         size: row.size,
         source: 'fs',
         parentId: row.parentId,
@@ -127,6 +119,7 @@ export function updateSelectionBar(): void {
 
 export function clearSelection({ keepAnchor = false }: { keepAnchor?: boolean } = {}): void {
     state.selectedItems.clear();
+    setSelectionModeActive(false);
     if (!keepAnchor) {
         selectionAnchorKey = '';
         state.selectionAnchorIndex = -1;
@@ -134,11 +127,15 @@ export function clearSelection({ keepAnchor = false }: { keepAnchor?: boolean } 
     updateSelectionBar();
 }
 
+export function startSelectionMode(): void {
+    setSelectionModeActive(true);
+}
+
 export function selectRow(row: HTMLElement, rowIndex: number): void {
-    const key = getRowKey(row);
-    if (!key) return;
-    state.selectedItems.set(key, rowToSelectionItem(row));
-    selectionAnchorKey = key;
+    const selected = selectionItemForElement(row);
+    if (!selected) return;
+    state.selectedItems.set(selected.key, selected.item);
+    selectionAnchorKey = selected.key;
     state.selectionAnchorIndex = rowIndex;
     updateSelectionBar();
 }
@@ -165,9 +162,9 @@ export function reconcileSelection(list: HTMLElement, logicalRows?: readonly Log
         }
     } else {
         for (const row of renderedRows) {
-            const key = getRowKey(row);
-            if (!key || !previous.has(key)) continue;
-            next.set(key, rowToSelectionItem(row));
+            const selected = selectionItemForElement(row);
+            if (!selected || !previous.has(selected.key)) continue;
+            next.set(selected.key, selected.item);
         }
     }
 
@@ -227,24 +224,17 @@ export function handleRowSelection(
             }
             const rangeRow = renderedRows[cursor];
             if (!rangeRow) continue;
-            const rangeKey = getRowKey(rangeRow);
-            if (!rangeKey || state.selectedItems.has(rangeKey)) continue;
-            state.selectedItems.set(rangeKey, rowToSelectionItem(rangeRow));
+            const selected = selectionItemForElement(rangeRow);
+            if (!selected || state.selectedItems.has(selected.key)) continue;
+            state.selectedItems.set(selected.key, selected.item);
         }
         updateSelectionBar();
         return;
     }
 
     if (isToggle) {
-        if (isRowSelected(row)) {
-            deselectRow(row);
-        } else {
-            if (!key) return;
-            state.selectedItems.set(key, rowToSelectionItem(row));
-            selectionAnchorKey = key;
-            state.selectionAnchorIndex = index;
-            updateSelectionBar();
-        }
+        if (isRowSelected(row)) deselectRow(row);
+        else selectRow(row, index);
         return;
     }
 
@@ -274,6 +264,7 @@ export function getSelectionPayload(): FileCommandItem[] {
                 type: 'folder',
                 id: item.id,
                 name: item.name,
+                channelId: item.channelId,
                 parentId: item.parentId,
                 canDelete: item.canDelete,
                 canRename: item.canRename,
@@ -284,6 +275,7 @@ export function getSelectionPayload(): FileCommandItem[] {
                 type: 'file',
                 id: item.id,
                 name: item.name,
+                channelId: item.channelId,
                 size: item.size,
                 source: 'tg',
                 parentId: item.parentId,
@@ -296,6 +288,7 @@ export function getSelectionPayload(): FileCommandItem[] {
             type: 'file',
             id: item.id,
             name: item.name,
+            channelId: item.channelId,
             size: item.size,
             source: 'fs',
             parentId: item.parentId,
@@ -314,6 +307,41 @@ export function openSelectedItemsDelete(): void {
 export function openSelectedItemsMove(): void {
     if (state.selectedItems.size === 0) return;
     openMoveModal({ type: 'bulk', items: getSelectionPayload(), parentId: state.currentFolderId });
+}
+
+export function openSelectedItemsDownload(): void {
+    const items = getSelectionPayload();
+    if (items.length === 0) return;
+    if (items.length > MAX_BULK_DOWNLOAD_ITEMS) {
+        notify({
+            level: 'warning',
+            title: 'Too many downloads',
+            body: `Select up to ${MAX_BULK_DOWNLOAD_ITEMS} items at a time.`,
+        });
+        return;
+    }
+    const downloads = items.map((item) => ({
+        item,
+        channelId: Number.isSafeInteger(item.channelId) && Number(item.channelId) > 0
+            ? Number(item.channelId)
+            : null,
+    }));
+    if (downloads.some(({ channelId }) => channelId === null)) {
+        notify({
+            level: 'error',
+            title: 'Download unavailable',
+            body: 'Refresh the drive and select the items again.',
+        });
+        return;
+    }
+    for (const { item, channelId } of downloads) {
+        if (item.type === 'folder') {
+            enqueueFolderDownload(item.id, item.name, 0, channelId);
+        } else {
+            enqueueDownload(item.id, item.name, item.size ?? 0, channelId);
+        }
+    }
+    clearSelection();
 }
 
 export function activateSelectionBar(): () => void {

@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test as base, type Page } from '@playwright/test';
 
@@ -9,6 +9,7 @@ type MockOutcome =
 
 export type MockPlan =
     | MockOutcome
+    | { kind: 'galleryPage'; count: number; template: Record<string, unknown> }
     | { kind: 'byFirstArg'; values: Record<string, MockPlan>; fallback: MockPlan };
 
 export interface MockCall {
@@ -20,6 +21,7 @@ export interface MockCall {
 interface BrowserMock {
     calls: MockCall[];
     emit: (eventName: string, ...args: unknown[]) => void;
+    setPlan: (method: string, plan: MockPlan) => void;
 }
 
 declare global {
@@ -44,6 +46,14 @@ export function byFirstArg(values: Record<string, MockPlan>, fallback: MockPlan 
     return { kind: 'byFirstArg', values, fallback };
 }
 
+/** Generate one page at the wire boundary so scale tests do not inject a full
+ * 100k metadata array into the app under test. */
+export function galleryPage(count: number, template: Record<string, unknown>): MockPlan {
+    return { kind: 'galleryPage', count, template };
+}
+
+const MOCK_IMAGE_CAPABILITY = 'mock-original-image';
+
 const DEFAULT_METHODS: Record<string, MockPlan> = {
     AppVersion: resolves({ version: '0.0.0-test', os: 'test', arch: 'test' }),
     CheckForUpdate: resolves({ phase: 'up_to_date', current_version: '0.0.0-test' }),
@@ -59,6 +69,8 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
     GetFileList: resolves([]),
     GetFolderContents: resolves({ folders: [], files: [] }),
     GetStorageUsed: resolves(0),
+    GetGalleryStorage: resolves({ cache_bytes: 1024, cache_limit: 268435456, cache_entries: 1, catalog_bytes: 2048 }),
+    ClearGalleryCache: resolves({ cache_bytes: 0, cache_limit: 268435456, cache_entries: 0, catalog_bytes: 2048 }),
     GetUpdateState: resolves({ phase: 'idle', current_version: '0.0.0-test' }),
     ListChannels: resolves([
         {
@@ -70,6 +82,11 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
         },
     ]),
     ListMedia: resolves([]),
+    GetMediaTimeline: resolves({ channel_id: 1, generation: 'test', total_count: 0, page_size: 128, buckets: [], anchors: [] }),
+    OpenGalleryImages: resolves({ token: crypto.randomUUID(), base_url: '/mock-renditions', channel_id: 1 }),
+    CloseGalleryImages: resolves(null),
+    OpenOriginalImage: resolves({ token: MOCK_IMAGE_CAPABILITY, url: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZcsQAAAAASUVORK5CYII=', thumbnail_url: '', hls_url: '', name: 'photo.png', kind: 'image', mime_type: 'image/png', supports_range: true, info: { channel_id: 1, file_id: 1, revision: 1, name: 'photo.png', stored_size: 68, plaintext_size: 68, encrypted: false, multipart: false } }),
+    CloseMedia: resolves(null),
     ListPendingJoins: resolves([]),
     Me: resolves({ user_id: 7, display_name: 'Test User', username: 'test', photo_base64: '' }),
     MountDrive: resolves({
@@ -88,25 +105,35 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
     SyncChannel: resolves(null),
 };
 
-// The generated bindings (frontend/bindings/TDrive/app.ts) call
-// `$Call.ByID(<numeric id>, ...args)` for every bound Go method — there is no
-// name in the wire request. Recover the id -> method name mapping straight
-// from that generated file instead of hand-copying 89 numbers, so this stays
-// correct across regenerations.
-const APP_BINDINGS_PATH = join(__dirname, '../bindings/TDrive/app.ts');
+// The generated bindings call `$Call.ByID(<numeric id>, ...args)` for every
+// bound Go method — there is no name in the wire request. Recover the
+// id -> method name mapping straight from the generated sources instead of
+// hand-copying ~100 numbers, so this stays correct across regenerations.
+//
+// Every service gets its own module (app.ts, driveservice.ts, mediaservice.ts,
+// ...), so the whole directory is scanned rather than one file. Scanning only
+// app.ts is how OpenMedia and PreparePersonalDrive silently stopped being
+// mockable when the God object was split: an unrecovered id falls through to
+// the empty-success branch below, and the app sees an undefined result.
+const BINDINGS_DIR = join(__dirname, '../bindings/TDrive');
+const GENERATED_MODEL_MODULES = new Set(['index.ts', 'models.ts']);
 
 function loadMethodIdsByName(): Record<string, number> {
-    const source = readFileSync(APP_BINDINGS_PATH, 'utf8');
     const ids: Record<string, number> = {};
-    const functionPattern = /^export function (\w+)\(/gm;
-    let match: RegExpExecArray | null;
-    while ((match = functionPattern.exec(source)) !== null) {
-        const name = match[1];
-        const bodyStart = source.indexOf('{', match.index);
-        const bodyEnd = source.indexOf('\n}', bodyStart);
-        const body = source.slice(bodyStart, bodyEnd === -1 ? source.length : bodyEnd);
-        const idMatch = /\$Call\.ByID\((\d+)/.exec(body);
-        if (idMatch) ids[name] = Number(idMatch[1]);
+    const modules = readdirSync(BINDINGS_DIR)
+        .filter((name) => name.endsWith('.ts') && !GENERATED_MODEL_MODULES.has(name));
+    for (const moduleName of modules) {
+        const source = readFileSync(join(BINDINGS_DIR, moduleName), 'utf8');
+        const functionPattern = /^export function (\w+)\(/gm;
+        let match: RegExpExecArray | null;
+        while ((match = functionPattern.exec(source)) !== null) {
+            const name = match[1];
+            const bodyStart = source.indexOf('{', match.index);
+            const bodyEnd = source.indexOf('\n}', bodyStart);
+            const body = source.slice(bodyStart, bodyEnd === -1 ? source.length : bodyEnd);
+            const idMatch = /\$Call\.ByID\((\d+)/.exec(body);
+            if (idMatch) ids[name] = Number(idMatch[1]);
+        }
     }
     return ids;
 }
@@ -121,26 +148,63 @@ function methodNamesById(): Record<string, string> {
 export interface WailsMockHandle {
     calls(method?: string): Promise<MockCall[]>;
     emit(eventName: string, ...args: unknown[]): Promise<void>;
+    setPlan(method: string, plan: MockPlan): Promise<void>;
+}
+
+export interface BootOptions {
+    /**
+     * Where to land, relative to the dev server. The app reads its platform
+     * from the query string (`?mobile=ios`), which is how a desktop browser
+     * gets to drive a phone build's branches.
+     */
+    url?: string;
 }
 
 export async function bootTDrive(
     page: Page,
     methodOverrides: Record<string, MockPlan> = {},
+    options: BootOptions = {},
 ): Promise<WailsMockHandle> {
     const methods = { ...DEFAULT_METHODS, ...methodOverrides };
+    // Older journeys supply a complete timeline; reuse it for both new phases.
+    methods.GetMediaTimelineSummary ??= methods.GetMediaTimeline;
+    methods.GetMediaTimelineAnchors ??= methods.GetMediaTimeline;
     const methodNameById = methodNamesById();
+
+    // A plan for a method the bindings do not export can never fire, and the
+    // symptom is remote from the cause: the app just receives an empty
+    // success. Fail here, naming the method, rather than in some assertion
+    // three screens later.
+    const boundNames = new Set(Object.values(methodNameById));
+    const unbound = Object.keys(methods).filter((name) => !boundNames.has(name));
+    if (unbound.length > 0) {
+        throw new Error(
+            `wails-mock: no generated binding for ${unbound.join(', ')}. `
+            + 'Renamed, unbound, or are the bindings stale?',
+        );
+    }
 
     await page.addInitScript(({ configuredMethods, methodNameById: idToName }: {
         configuredMethods: Record<string, MockPlan>;
         methodNameById: Record<string, string>;
     }) => {
-        const plans = configuredMethods;
+        let plans = configuredMethods;
         const calls: MockCall[] = [];
 
         const selectPlan = (candidate: MockPlan | undefined, args: unknown[]): MockOutcome => {
             const plan = candidate ?? { kind: 'resolve', value: null, delayMs: 0 };
             if (plan.kind === 'byFirstArg') {
                 return selectPlan(plan.values[String(args[0])] ?? plan.fallback, args);
+            }
+            if (plan.kind === 'galleryPage') {
+                const start = Number(args[0]);
+                return { kind: 'resolve', delayMs: 0, value: {
+                    generation: 'test', start_index: start, next_cursor: '',
+                    items: Array.from({ length: Math.max(0, Math.min(128, plan.count - start)) }, (_, offset) => ({
+                        ...plan.template, name: `photo-${start + offset}.jpg`, msg_id: 1000 + start + offset,
+                        revision: 1, content_msg_id: 1000 + start + offset, content_hash: '',
+                    })),
+                } };
             }
             return plan;
         };
@@ -230,6 +294,7 @@ export async function bootTDrive(
 
         window.__wailsMock = {
             calls,
+            setPlan(method, plan) { plans = { ...plans, [method]: plan }; },
             emit(eventName: string, ...args: unknown[]) {
                 // @wailsio/runtime's events module always wires up this hook
                 // (window._wails.dispatchWailsEvent) once it loads — the same
@@ -242,9 +307,13 @@ export async function bootTDrive(
         };
     }, { configuredMethods: methods, methodNameById });
 
-    await page.goto('/');
+    await page.goto(options.url ?? '/');
 
     return {
+        setPlan: (method: string, plan: MockPlan) => page.evaluate(
+            ([name, nextPlan]) => window.__wailsMock.setPlan(name, nextPlan),
+            [method, plan] as const,
+        ),
         calls: (method?: string) => page.evaluate((name) => {
             const calls = window.__wailsMock.calls;
             return name ? calls.filter((call) => call.method === name) : calls;

@@ -13,11 +13,13 @@ const mocks = vi.hoisted(() => ({
     eventsOn: vi.fn(),
     enqueueDownload: vi.fn(),
     notify: vi.fn(),
+    accessEncryptedResource: vi.fn(async (_encrypted: boolean, open: () => Promise<unknown>) => open()),
 }));
 
 vi.mock('../../api', () => ({
     openStream: mocks.openStream,
     closeMedia: mocks.closeMedia,
+    isMobilePlatform: () => false,
     onRuntimeEvent: (name: string, callback: () => void) => {
         mocks.eventsOn(name, callback);
         mocks.events.set(name, callback);
@@ -27,6 +29,7 @@ vi.mock('../../api', () => ({
 vi.mock('../../ui/viewers/pdf-frame', () => ({ pdfViewerFrameSrc: () => 'about:blank', isPdfFrameMessage: () => false }));
 vi.mock('../transfers', () => ({ enqueueDownload: mocks.enqueueDownload }));
 vi.mock('../notifications', () => ({ notify: mocks.notify }));
+vi.mock('../encryption', () => ({ accessEncryptedResource: mocks.accessEncryptedResource }));
 
 
 function opened(token: string, encrypted = true, name = 'secret.txt') {
@@ -73,6 +76,7 @@ afterAll(async () => {
 
 beforeEach(() => { mocks.openStream.mockReset();
 mocks.closeMedia.mockReset().mockResolvedValue(undefined);
+mocks.accessEncryptedResource.mockImplementation(async (_encrypted: boolean, open: () => Promise<unknown>) => open());
 vi.stubGlobal('fetch', vi.fn(async () => new Response('secret', { status: 200 }))); });
 
 afterEach(() => {

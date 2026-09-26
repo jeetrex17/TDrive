@@ -1,3 +1,22 @@
+// Package folder is the only writer of directory-structure ops: mkdir, rename,
+// move, and the trash operation that deletes a subtree. It validates and emits;
+// the injected emitters send to Telegram first and project locally second, so
+// Telegram is the log of record and a local failure converges on the next sync.
+//
+// Deleting a subtree is one operation on the folder itself, not a tombstone per
+// member: the projection tombstones the tree and records a single restorable
+// trash entry for the root. No Telegram body is deleted here at all. The bytes
+// outlive the delete and are destroyed only by an explicit purge or by the
+// retention sweep once the entry's purge_after has passed.
+//
+// A move is checked against the projection for cycles before it is emitted, so
+// a folder can never be moved inside its own descendant.
+//
+// The encryption key is requested purely as a gate and cleared immediately
+// without being used: renaming, moving or deleting a subtree containing any
+// encrypted file requires an unlocked vault, so the UI prompts rather than
+// silently succeeding. On a shared drive a delete additionally requires the
+// actor to own every file in the subtree, and an unknown uploader fails closed.
 package folder
 
 import (
@@ -9,37 +28,30 @@ import (
 
 	"TDrive/backend/projection"
 	"TDrive/backend/services/servicecontext"
-	"TDrive/backend/tgclient"
 
 	"github.com/google/uuid"
 )
 
-type PeerResolver interface {
-	ResolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error)
-}
-
 type EmitOpFunc func(channelID int64, op projection.Op) error
-type EmitOpsFunc func(channelID int64, ops []projection.Op) error
 type EmitOpContextFunc func(ctx context.Context, channelID int64, op projection.Op) error
-type EmitOpsContextFunc func(ctx context.Context, channelID int64, ops []projection.Op) error
 type ActorIDFunc func(ctx context.Context) (int64, error)
 
 // RequireEncryptionKeyFunc returns a caller-owned key copy. Service clears a
 // non-nil key whether the provider succeeds or returns an error.
 type RequireEncryptionKeyFunc func(encrypted bool) ([]byte, error)
-type WarnFunc func(format string, args ...any)
+
+// TrashObjectFunc publishes the trash operation for one object id. It is
+// injected rather than reimplemented so a folder delete and a file delete are
+// literally the same operation, differing only in which object they name.
+type TrashObjectFunc func(ctx context.Context, channelID int64, objectID string) error
 
 type Service struct {
 	DB                   *sql.DB
-	TG                   tgclient.Client
-	Peers                PeerResolver
 	EmitOp               EmitOpFunc
-	EmitOps              EmitOpsFunc
 	EmitOpContext        EmitOpContextFunc
-	EmitOpsContext       EmitOpsContextFunc
 	ActorID              ActorIDFunc
 	RequireEncryptionKey RequireEncryptionKeyFunc
-	Warnf                WarnFunc
+	TrashObject          TrashObjectFunc
 }
 
 type Folder struct {
@@ -104,6 +116,10 @@ func (s *Service) CreateContext(ctx context.Context, channelID int64, name strin
 	}, nil
 }
 
+// Delete moves a folder and its whole subtree into the trash with one
+// operation. The subtree is walked here only to gate the delete -- permission
+// and encryption still apply to every file in it -- and no Telegram body is
+// touched: the bytes stay until an explicit purge or the retention sweep.
 func (s *Service) Delete(ctx context.Context, channelID int64, folderID string) error {
 	if err := servicecontext.Check(ctx, "folder: delete"); err != nil {
 		return err
@@ -117,43 +133,24 @@ func (s *Service) Delete(ctx context.Context, channelID int64, folderID string) 
 	if !projection.IsFolderID(folderID) || !projection.FolderExists(s.DB, channelID, folderID) {
 		return fmt.Errorf("Folder not found")
 	}
-
 	files, err := projection.FolderSubtreeFiles(s.DB, channelID, folderID)
 	if err != nil {
 		return err
 	}
-	folders, err := projection.FolderSubtreeFolders(s.DB, channelID, folderID)
-	if err != nil {
-		return err
-	}
-
 	if err := s.requireDeletePermission(ctx, channelID, files); err != nil {
 		return err
 	}
 	if err := s.requireEncryptedKey(files); err != nil {
 		return err
 	}
-
-	ops := make([]projection.Op, 0, len(files)+len(folders))
-	for _, file := range files {
-		ops = append(ops, projection.Op{
-			Type: projection.OpTomb,
-			Obj:  fmt.Sprintf("%s%d", projection.FileIDPrefix, file.MsgID),
-		})
+	if s.TrashObject == nil {
+		return fmt.Errorf("folder trash not ready")
 	}
-	for _, folder := range folders {
-		ops = append(ops, projection.Op{Type: projection.OpRmdir, Obj: folder.ID})
-	}
-	if err := s.emitMany(ctx, channelID, ops); err != nil {
+	if err := s.TrashObject(ctx, channelID, folderID); err != nil {
 		slog.Error("folder: delete failed", "channel_id", channelID, "folder_id", folderID, "error", err)
 		return fmt.Errorf("delete folder failed: %w", err)
 	}
-	slog.Debug("folder: deleted", "channel_id", channelID, "folder_id", folderID, "files", len(files), "subfolders", len(folders))
-
-	// Body deletion is best effort and runs only after the whole subtree's
-	// metadata is locally tombstoned. If Telegram body cleanup fails, replayed
-	// tombstone metadata stays canonical and the orphan sweep can retry parts.
-	s.deleteBodiesBestEffort(ctx, channelID, files)
+	slog.Debug("folder: moved to trash", "channel_id", channelID, "folder_id", folderID, "files", len(files))
 	return nil
 }
 
@@ -269,22 +266,6 @@ func (s *Service) emit(ctx context.Context, channelID int64, op projection.Op) e
 	return s.EmitOp(channelID, op)
 }
 
-func (s *Service) emitMany(ctx context.Context, channelID int64, ops []projection.Op) error {
-	if len(ops) == 0 {
-		return nil
-	}
-	if err := servicecontext.Check(ctx, "folder: emit operations"); err != nil {
-		return err
-	}
-	if s.EmitOpsContext != nil {
-		return s.EmitOpsContext(ctx, channelID, ops)
-	}
-	if s.EmitOps == nil {
-		return fmt.Errorf("folder batch emitter not ready")
-	}
-	return s.EmitOps(channelID, ops)
-}
-
 func (s *Service) requireDeletePermission(ctx context.Context, channelID int64, files []projection.FileSlim) error {
 	if len(files) == 0 {
 		return nil
@@ -338,63 +319,6 @@ func (s *Service) requireSubtreeEncryptionKey(channelID int64, folderID string) 
 		return err
 	}
 	return s.requireEncryptedKey(files)
-}
-
-func (s *Service) deleteBodiesBestEffort(ctx context.Context, channelID int64, files []projection.FileSlim) {
-	if len(files) == 0 || s.TG == nil || s.Peers == nil {
-		return
-	}
-	// Each file's body is its own message; a multipart file also has N part
-	// document bodies that must be deleted too (and their file_parts rows).
-	ids := make([]int64, 0, len(files))
-	for _, file := range files {
-		ids = append(ids, file.MsgID)
-	}
-	partIDs, err := projection.MultipartPartMsgIDsForFiles(s.DB, channelID, ids)
-	if err != nil {
-		s.warnf("warn: folder tomb succeeded but reading multipart part bodies failed: %v\n", err)
-		return
-	}
-	ids = append(ids, partIDs...)
-	peer, err := s.Peers.ResolvePeer(ctx, channelID)
-	if err != nil {
-		s.warnf("warn: folder tomb succeeded but peer resolve failed for %d file bodies: %v\n", len(ids), err)
-		return
-	}
-	if err := s.deleteMessagesChunked(ctx, peer, ids); err != nil {
-		// Keep the file_parts rows so the orphan sweep can retry the part bodies.
-		s.warnf("warn: folder tomb succeeded but body delete failed for %d bodies: %v\n", len(ids), err)
-		return
-	}
-	if len(partIDs) > 0 {
-		if err := projection.DeleteFilePartsByMsgIDs(s.DB, channelID, partIDs); err != nil {
-			s.warnf("warn: folder tomb succeeded but dropping file_parts rows failed: %v\n", err)
-		}
-	}
-}
-
-// deleteMessagesChunked deletes Telegram messages in batches of 100 (a folder
-// subtree plus multipart parts can exceed the deleteMessages limit), returning
-// the first error encountered, nil if every chunk succeeded.
-func (s *Service) deleteMessagesChunked(ctx context.Context, peer tgclient.InputPeer, msgIDs []int64) error {
-	if s.TG == nil || len(msgIDs) == 0 {
-		return nil
-	}
-	const chunk = 100
-	var firstErr error
-	for start := 0; start < len(msgIDs); start += chunk {
-		end := min(start+chunk, len(msgIDs))
-		if err := s.TG.DeleteMessages(ctx, peer, msgIDs[start:end]); err != nil && firstErr == nil {
-			firstErr = err
-		}
-	}
-	return firstErr
-}
-
-func (s *Service) warnf(format string, args ...any) {
-	if s.Warnf != nil {
-		s.Warnf(format, args...)
-	}
 }
 
 func (s *Service) ready() error {

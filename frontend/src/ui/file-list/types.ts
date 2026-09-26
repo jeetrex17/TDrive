@@ -1,4 +1,4 @@
-export type FileListActionKind = 'open' | 'play' | 'download';
+export type FileListActionKind = 'open' | 'play' | 'download' | 'restore' | 'purge';
 
 export type FileListAction = {
     kind: FileListActionKind;
@@ -10,7 +10,16 @@ export type FileListAction = {
 
 export type FileListUploaderChip = {
     label: string;
+    // The phone row shows initials plus a first name instead of the label.
+    firstName?: string;
+    initials?: string;
 };
+
+export type FileThumbnailIdentity = Readonly<{
+    channelId: number;
+    fileId: number;
+    revision: number;
+}>;
 
 type BaseInteractiveRow = {
     key: string;
@@ -18,9 +27,30 @@ type BaseInteractiveRow = {
     id: string;
     name: string;
     parentId: string;
+    // Captured when the row is rendered. Actions may be invoked after a drive
+    // switch while the old row/action sheet is still on screen.
+    channelId?: number;
     metaLabel: string;
     sizeLabel: string;
     ariaLabel: string;
+    /**
+     * What to say in place of the row's age on the phone's meta line, where
+     * type, size and time share one line and the whole line is composed rather
+     * than taken from metaLabel. A row that reports something other than "how
+     * long ago" -- the trash reports how long is left -- sets this so both
+     * shells say the same thing.
+     */
+    timeLabel?: string;
+    /**
+     * Renders `actions` on the row itself on the phone as well as the desktop,
+     * instead of folding them into the overflow menu and offering a swipe.
+     *
+     * For rows whose actions are few, important, and have no menu behind them:
+     * the phone's overflow sheet is built from the operations a live item
+     * supports, so a row that supports none of them would open an empty sheet
+     * and a swipe would reveal a Move that cannot happen.
+     */
+    actionsInline?: boolean;
     onClick?: (event: MouseEvent, row: FileListRow) => void;
     onDoubleClick?: (event: MouseEvent, row: FileListRow) => void;
 };
@@ -47,6 +77,9 @@ export type FileListFileRow = BaseInteractiveRow & {
     encrypted: boolean;
     canDelete: boolean;
     canRename: boolean;
+    // Present only for projected images in the folder currently being viewed.
+    // Search and raw Telegram rows intentionally remain icon-only.
+    thumbnail?: FileThumbnailIdentity;
     uploaderChip?: FileListUploaderChip | null;
     actions: FileListAction[];
 };
@@ -60,13 +93,17 @@ export type PendingFolderListRow = {
 
 export type FileListRow = FolderListRow | FileListFileRow | PendingFolderListRow;
 
+export type FileListStateAction = Readonly<{
+    label: string;
+    onClick: () => void;
+}>;
+
 export type FileListStateView = {
     kind: 'state';
     stateKind: 'loading' | 'empty' | 'error';
     title: string;
     body?: string;
-    actionLabel?: string;
-    onAction?: () => void;
+    actions?: readonly FileListStateAction[];
 };
 
 export type FileListRowsView = {
@@ -80,6 +117,7 @@ export type FileSource = 'fs' | 'tg';
 
 type CommandItemBase = {
     name: string;
+    channelId?: number;
     parentId?: string;
     row?: HTMLElement;
     canDelete?: boolean;

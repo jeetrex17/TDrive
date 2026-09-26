@@ -35,25 +35,35 @@ func main() {
 		updater.WaitForExit(pid, relaunchWait, processlock.ProcessRunning)
 	}
 
-	app := NewApp()
-	app.version = appVersion
+	app := NewApp(appVersion)
 
 	wailsApp := application.New(application.Options{
 		Name: "TDrive",
 		// The default About panel reads Name/Description/Icon (there is no
 		// v2-style mac.AboutInfo any more), so the version lives here.
-		Description: "Version " + app.version + "\nTelegram-backed desktop drive.",
-		Services: []application.Service{
-			application.NewService(app),
-		},
+		Description: "Version " + appVersion + "\nTelegram-backed desktop drive.",
+		Services:    app.services(),
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
+		// Match the window BackgroundColour below so the phone shows the TDrive
+		// Vault backdrop, not a white flash, before the WebView paints.
+		IOS: application.IOSOptions{
+			EnableInlineMediaPlayback: true,
+			DisableBounce:             true,
+			BackgroundColour:          application.NewRGB(14, 23, 28),
+		},
+		Android: application.AndroidOptions{
+			DisableOverscroll: true,
+			BackgroundColour:  application.NewRGB(14, 23, 28),
+		},
 	})
 	app.wails = wailsApp
+	// Wire OS suspend/resume on phones; a no-op on desktop.
+	registerMobileLifecycle(app, wailsApp)
 	// macOS only; nil elsewhere keeps Windows/Linux without a menu bar.
 	if menu := buildAppMenu(app, wailsApp); menu != nil {
 		wailsApp.Menu.Set(menu)

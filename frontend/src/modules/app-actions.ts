@@ -14,6 +14,7 @@ export interface AppActions {
     triggerRefresh: () => Promise<void>;
     openFile: (target: AppFileTarget) => Promise<void>;
     playVideo: (target: AppFileTarget) => Promise<void>;
+    downloadFile: (target: AppFileTarget) => void;
 }
 
 let configuredActions: AppActions | null = null;

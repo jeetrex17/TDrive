@@ -3,6 +3,7 @@ module TDrive
 go 1.25.13
 
 require (
+	github.com/Eyevinn/mp4ff v0.56.0
 	github.com/Microsoft/go-winio v0.6.2
 	github.com/google/uuid v1.6.0
 	github.com/gotd/td v0.145.1

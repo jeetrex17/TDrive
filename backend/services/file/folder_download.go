@@ -153,6 +153,7 @@ func (s *Service) DownloadFolder(
 		s, folderID, manifest.Root.Name, plan.files,
 		manifest.TotalStoredBytes, manifest.TotalOutputBytes,
 	)
+	progress.requestID = downloadProgressRequestID(ctx)
 	progress.emitInitial()
 	if err := s.downloadFolderFiles(ctx, peer, stagingPath, plan.files, masterKey, progress); err != nil {
 		return folderDownloadFailure(ctx, err)
@@ -198,9 +199,7 @@ func (s *Service) downloadFolderFiles(
 		})
 	}
 	for range workerCount {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			for index := range jobs {
 				file := files[index]
 				destination, err := joinWithinRoot(stagingRoot, file.relativePath)
@@ -218,7 +217,7 @@ func (s *Service) downloadFolderFiles(
 				}
 				progress.complete(index, file.relativePath)
 			}
-		}()
+		})
 	}
 
 sendLoop:
@@ -400,6 +399,7 @@ func folderDownloadFailure(ctx context.Context, err error) DownloadResult {
 
 type folderDownloadProgress struct {
 	service          *Service
+	requestID        string
 	folderID         string
 	folderName       string
 	filesTotal       int
@@ -501,6 +501,7 @@ func (p *folderDownloadProgress) emitLocked(currentFile string, terminal bool, f
 	}
 	percent = min(max(percent, 0), 100)
 	p.service.emitEvent("folder_download_progress", map[string]any{
+		"request_id":         p.requestID,
 		"folder_id":          p.folderID,
 		"folder_name":        p.folderName,
 		"current_file":       filepath.ToSlash(currentFile),

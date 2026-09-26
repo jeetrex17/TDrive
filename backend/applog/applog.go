@@ -17,10 +17,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"TDrive/backend/datadir"
 )
 
 const (
-	privateDirMode  os.FileMode = 0o700
 	privateFileMode os.FileMode = 0o600
 	LogFileName                 = "tdrive-dev.log"
 )
@@ -71,12 +72,8 @@ func Init() {
 }
 
 func openLogFile() (string, *os.File, error) {
-	configDir, err := os.UserConfigDir()
+	appDir, err := datadir.Dir()
 	if err != nil {
-		return "", nil, err
-	}
-	appDir := filepath.Join(configDir, "TDrive")
-	if err := os.MkdirAll(appDir, privateDirMode); err != nil {
 		return "", nil, err
 	}
 	path := filepath.Join(appDir, LogFileName)

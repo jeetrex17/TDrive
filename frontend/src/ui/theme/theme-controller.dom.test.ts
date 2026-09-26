@@ -90,29 +90,35 @@ describe('theme controller', () => {
         controller.destroy();
     });
 
-    it('migrates a persisted System preference to explicit dark', () => {
+    it('follows a persisted System preference when device appearance changes', () => {
         storage.setItem(THEME_STORAGE_KEY, JSON.stringify({
             mode: 'system',
             lightThemeId: 'catppuccin-latte',
             darkThemeId: 'nord',
         }));
+        const systemAppearance = createMediaQuery(false);
         const controller = createThemeController({
             document,
             storage,
             reducedMotion: createMediaQuery(true),
+            systemAppearance,
         });
 
         controller.start();
 
         expect(get(controller.state).preference).toEqual({
-            mode: 'dark',
+            mode: 'system',
             lightThemeId: 'catppuccin-latte',
             darkThemeId: 'nord',
         });
-        expect(document.documentElement.dataset.theme).toBe('nord');
+        expect(document.documentElement.dataset.theme).toBe('catppuccin-latte');
         expect(JSON.parse(storage.getItem(THEME_STORAGE_KEY) ?? '')).toEqual(
             get(controller.state).preference,
         );
+
+        systemAppearance.setMatches(true);
+        expect(get(controller.state).resolvedAppearance).toBe('dark');
+        expect(document.documentElement.dataset.theme).toBe('nord');
         controller.destroy();
     });
 
@@ -235,7 +241,7 @@ describe('theme controller', () => {
         expect(document.documentElement.classList.contains('theme-transition-fallback')).toBe(true);
         expect(document.documentElement.style.getPropertyValue('--theme-origin-x')).toBe(`${window.innerWidth / 2}px`);
 
-        vi.advanceTimersByTime(1249);
+        vi.advanceTimersByTime(239);
         expect(document.documentElement.classList.contains('theme-transition-fallback')).toBe(true);
 
         vi.advanceTimersByTime(1);
@@ -268,7 +274,7 @@ describe('theme controller', () => {
         expect(document.documentElement.classList.contains('theme-transition-fallback')).toBe(true);
         expect(document.documentElement.style.getPropertyValue('--theme-origin-x')).toBe('120px');
 
-        vi.advanceTimersByTime(1250);
+        vi.advanceTimersByTime(240);
         expect(document.documentElement.classList.contains('theme-transition-fallback')).toBe(false);
         controller.destroy();
     });
@@ -287,7 +293,7 @@ describe('theme controller', () => {
         expect(() => controller.start()).not.toThrow();
         const initial = get(controller.state);
         (controller.setMode as (mode: string) => void)('sepia');
-        (controller.setMode as (mode: string) => void)('system');
+        (controller.setMode as (mode: string) => void)('sepia');
         controller.setPreferredTheme('light', 'dracula' as ThemeId);
         controller.setPreferredTheme('sepia' as ThemeAppearance, 'porcelain');
         expect(get(controller.state)).toBe(initial);

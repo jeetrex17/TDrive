@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 	"sync"
 )
 
@@ -99,14 +99,8 @@ func normalizeLockKeys(keys []string) []string {
 			copyOfKeys = append(copyOfKeys, key)
 		}
 	}
-	sort.Strings(copyOfKeys)
-	result := copyOfKeys[:0]
-	for _, key := range copyOfKeys {
-		if len(result) == 0 || result[len(result)-1] != key {
-			result = append(result, key)
-		}
-	}
-	return result
+	slices.Sort(copyOfKeys)
+	return slices.Compact(copyOfKeys)
 }
 
 func objectLockKey(driveID int64, objectID string) string {

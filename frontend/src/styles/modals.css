@@ -15,6 +15,20 @@
 }
 .modal-title { color: var(--color-text); font-size: 1.05rem; font-weight: 700; margin-bottom: 6px; }
 .modal-subtitle { color: var(--text-muted); font-size: 0.9rem; margin-bottom: 18px; }
+.share-drive-link {
+    width: 100%;
+    min-height: 44px;
+    margin-bottom: 15px;
+    padding: 12px 15px;
+    overflow-wrap: anywhere;
+    user-select: text;
+    background: var(--bg-dark);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    color: var(--color-text);
+    font-size: 0.95rem;
+    line-height: 1.35;
+}
 .delete-target-name {
     max-height: 5.5rem;
     margin: 10px 0 14px;
@@ -36,8 +50,11 @@
     margin: -8px 0 16px;
     opacity: 0.78;
 }
-.modal-actions { display: flex; gap: 12px; justify-content: flex-end; }
-.modal-actions .primary-btn { width: auto; padding: 12px 16px; }
+.modal-actions { display: flex; gap: 12px; justify-content: flex-end; align-items: center; }
+/* One size for both: the filled button is the heavier of the two by colour,
+   and it should not be the taller one as well. */
+.modal-actions .primary-btn,
+.modal-actions .secondary-btn { width: auto; min-height: 44px; padding: 12px 16px; }
 .modal-empty {
     padding: 14px;
     color: var(--text-muted);
@@ -70,3 +87,122 @@
     margin-top: -10px;
 }
 
+/* === MOBILE: dialogs become bottom sheets ============================== */
+/* Everything below is gated on html.mobile so desktop stays pixel-identical.
+   ModalShell adds .modal-overlay-sheet to the host and .modal-sheet to the
+   card when presentation resolves to "sheet". */
+
+@property --sheet-scrim {
+    syntax: '<number>';
+    inherits: true;
+    initial-value: 1;
+}
+
+html.mobile .modal-overlay-sheet {
+    align-items: flex-end;
+    justify-content: center;
+    padding: 0;
+    /* Scrim fades with the sheet on open/close and tracks the finger on a
+       swipe (--sheet-scrim is driven live during a drag). */
+    background: color-mix(in srgb, var(--scrim) calc(var(--sheet-scrim, 1) * 100%), transparent);
+    transition: --sheet-scrim var(--motion-med) var(--ease-standard);
+}
+html.mobile .modal-overlay-sheet:has(.is-dragging) { transition: none; }
+
+html.mobile .modal-sheet {
+    width: 100%;
+    max-width: 640px;
+    margin-top: auto;
+    /* Lift the whole sheet above the keyboard rather than padding it down,
+       so the primary button stays where the thumb expects it. The height cap
+       comes down by the same amount, because that space is gone. */
+    margin-bottom: var(--inset-keyboard);
+    max-height: calc(90dvh - var(--inset-keyboard));
+    display: flex;
+    flex-direction: column;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    /* A 16 sheet with 4 padding holds 12 inner groups (design-1). Subtract
+       what the margin above already took: --inset-bottom folds the keyboard
+       in, and reserving it twice floats the sheet a keyboard clear of the
+       keys. The remainder is the gesture bar, which is nothing once the
+       keyboard covers it. */
+    padding: var(--space-1) var(--space-4)
+        calc(var(--space-4) + var(--inset-bottom) - var(--inset-keyboard));
+    box-shadow: var(--shadow-lg);
+    animation: tdrive-sheet-enter var(--motion-slow) var(--ease-enter) both;
+    touch-action: pan-y;
+}
+html.mobile .modal-sheet.is-dragging { animation: none; transition: none; }
+html.mobile .modal-sheet.is-closing {
+    animation: none;
+    transition: transform var(--motion-med) var(--ease-standard);
+    transform: translateY(100%);
+}
+
+@keyframes tdrive-sheet-enter {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+}
+
+/* 36 x 5 grabber in a 22px band across the full width of the sheet. Not 44:
+   above it is the scrim, which dismisses on a tap, and below it is the sheet's
+   first row, which in an action sheet is a menu item -- a taller grab area
+   would take its target from one of them. The drag is a shortcut anyway: the
+   scrim, Escape and hardware BACK all close the same sheet. */
+html.mobile .sheet-handle {
+    flex: 0 0 auto;
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 22px;
+    margin: 0 calc(-1 * var(--space-4));
+    cursor: grab;
+    touch-action: none;
+}
+html.mobile .sheet-handle:active { cursor: grabbing; }
+html.mobile .sheet-handle span {
+    width: 36px;
+    height: 5px;
+    border-radius: var(--radius-pill);
+    background: var(--color-border);
+}
+
+/* The scrolling middle; header and actions stay pinned. */
+html.mobile .modal-sheet .modal-sheet-body {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+}
+
+html.mobile .modal-sheet .modal-title { font-size: var(--type-lg); }
+html.mobile .modal-sheet .modal-subtitle { font-size: var(--type-base); }
+
+/* 16px inputs stop iOS zooming the page on focus (the global input rule is
+   0.95rem). Full-height controls meet the 44 touch-target floor. */
+html.mobile .modal-sheet input,
+html.mobile .modal-sheet textarea,
+html.mobile .modal-sheet select { font-size: 16px; }
+
+/* Actions become a stacked, full-width, thumb-reachable footer. Primary on
+   top so it sits closest to the content it confirms. */
+html.mobile .modal-sheet .modal-actions {
+    flex: 0 0 auto;
+    flex-direction: column-reverse;
+    gap: var(--space-2);
+    padding-top: var(--space-3);
+}
+html.mobile .modal-sheet .modal-actions .primary-btn,
+html.mobile .modal-sheet .modal-actions .secondary-btn {
+    width: 100%;
+    min-height: 48px;
+    padding: 12px 16px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html.mobile .modal-sheet { animation: none; }
+    html.mobile .modal-sheet.is-closing { transition: none; }
+    html.mobile .modal-overlay-sheet { transition: none; }
+}

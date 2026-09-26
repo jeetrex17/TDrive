@@ -6,6 +6,14 @@ import ToastStack from './ToastStack.svelte';
 import TransferRow from './TransferRow.svelte';
 import { historyEvents, notifPanelOpen, type NoticeEvent, type TransferEvent } from './notif-store';
 import { toasts, type ToastItem } from './toast-store';
+import { cancelSingleUpload } from '../../modules/notif-bell';
+
+// The row talks to the backend itself when it can stop just this one upload;
+// the rest of the module stays real so the stores behave as they do in the app.
+vi.mock('../../modules/notif-bell', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../modules/notif-bell')>();
+    return { ...actual, cancelSingleUpload: vi.fn() };
+});
 
 let mounts: Record<string, unknown>[] = [];
 let hosts: HTMLElement[] = [];
@@ -68,6 +76,7 @@ function makeToast(overrides: Partial<ToastItem> = {}): ToastItem {
 }
 
 afterEach(async () => {
+    vi.clearAllMocks();
     toasts.set([]);
     historyEvents.set([]);
     notifPanelOpen.set(false);
@@ -82,13 +91,31 @@ afterEach(async () => {
 });
 
 describe('notification interaction controls', () => {
-    it('cancels a transfer through native button activation', () => {
+    it('stops the whole direction from an upload row on desktop', () => {
+        // The narrow per-file cancel is the phone's, because the phone also has
+        // a Cancel all beside the section title. The bell's rows are its only
+        // cancel, and only three uploads run at once, so narrowing it here
+        // would leave a twenty-file batch with no way to stop.
         const onCancel = vi.fn();
         const host = mountComponent(TransferRow, { transfer: makeTransfer(), onCancel });
-        const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel transfer"]');
+        const button = host.querySelector<HTMLButtonElement>('button[aria-label="Cancel all uploads"]');
         if (!button) throw new Error('Missing cancel button');
         button.click();
         expect(onCancel).toHaveBeenCalledExactlyOnceWith('up');
+        expect(cancelSingleUpload).not.toHaveBeenCalled();
+    });
+    it('cancels the whole direction for a row the backend cannot stop on its own', () => {
+        for (const id of ['xfer:down:file:42', 'xfer:up:import']) {
+            const direction = id.startsWith('xfer:up:') ? 'up' as const : 'down' as const;
+            const onCancel = vi.fn();
+            const host = mountComponent(TransferRow, { transfer: makeTransfer({ id, direction }), onCancel });
+            const label = direction === 'down' ? 'Cancel active download' : 'Cancel all uploads';
+            const button = host.querySelector<HTMLButtonElement>(`button[aria-label="${label}"]`);
+            if (!button) throw new Error('Missing cancel button');
+            button.click();
+            expect(onCancel).toHaveBeenCalledExactlyOnceWith(direction);
+            expect(cancelSingleUpload).not.toHaveBeenCalled();
+        }
     });
     it('copies error details only from the explicit Copy details button', async () => {
         clipboardDescriptor = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
@@ -148,6 +175,24 @@ describe('notification interaction controls', () => {
         expect(progress.getAttribute('aria-valuemax')).toBe('100');
         expect(progress.getAttribute('aria-valuenow')).toBe('40');
         expect(progress.hasAttribute('aria-live')).toBe(false);
+    });
+
+    it('says what a stopped desktop transfer is instead of drawing it as zero percent', () => {
+        // The rules are transfer-view's and the phone row already followed them.
+        // This one open-coded its own arithmetic and so drew a queued download
+        // as a 0% bar with a meta line reading "0%", and a paused one exactly
+        // like a running one.
+        const queued = mountComponent(TransferRow, { transfer: makeTransfer({ status: 'queued', progress: 0, bytes: 0 }) });
+        expect(queued.querySelector('.notif-row-meta')?.textContent?.trim()).toBe('Waiting its turn');
+
+        const paused = mountComponent(TransferRow, { transfer: makeTransfer({ status: 'paused' }) });
+        expect(paused.querySelector('.notif-row-meta')?.textContent?.trim()).toBe('Paused');
+
+        // A folder still being walked has no fraction to be, so its bar reports
+        // no value at all rather than a zero it would be read as stalled at.
+        const preparing = mountComponent(TransferRow, { transfer: makeTransfer({ total: 0, bytes: 0, progress: 0 }) });
+        expect(preparing.querySelector('.notif-row-meta')?.textContent?.trim()).toBe('Preparing…');
+        expect(preparing.querySelector('[role="progressbar"]')?.hasAttribute('aria-valuenow')).toBe(false);
     });
 
     it('opens from the keyboard and restores the bell after Escape', () => {

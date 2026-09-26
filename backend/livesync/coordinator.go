@@ -1,3 +1,24 @@
+// Package livesync decides when to sync a channel, never how.
+//
+// The rule the whole package rests on is that Telegram update payloads are
+// doorbells, not data: a signal carries only a channel id meaning "this
+// probably changed", and the authoritative content always comes from the
+// syncer's own history pull. That is why dropping signals is safe, and why the
+// update handler's send is non-blocking with a counter for what it drops — the
+// gotd update loop must never block behind a sync.
+//
+// The coordinator collapses bursts through a debounce keyed by channel id, so
+// many signals for one channel become one sync. Signals for channels TDrive
+// does not manage are discarded after a single reload of the known set.
+// Flushes are sequential and individually timed out, and a failed sync is not
+// retried.
+//
+// Because fresh signals reset the debounce, a continuously busy channel could
+// starve. A periodic backstop that marks every known channel is the safety net,
+// and it cannot be disabled by configuring zero.
+//
+// Start and Stop are idempotent and Stop blocks until the loop has exited, so
+// the pause/resume cycle a backgrounded mobile app relies on is safe to repeat.
 package livesync
 
 import (

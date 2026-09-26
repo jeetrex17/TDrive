@@ -17,7 +17,7 @@
             <button id="preview-info-btn" class="preview-icon-btn" type="button" aria-label="Photo info" aria-pressed="false" title="Info (i)">
                 <InfoIcon aria-hidden="true" />
             </button>
-            <button id="preview-download" class="preview-icon-btn" type="button" aria-label="Download" title="Download">
+            <button id="preview-download" class="preview-icon-btn" type="button" aria-label="Download original" title="Download original">
                 <DownloadIcon aria-hidden="true" />
             </button>
             <button id="preview-close" class="preview-close-btn" type="button" aria-label="Close preview" title="Close preview">
@@ -36,16 +36,17 @@
     <div id="preview-counter" class="preview-counter" hidden></div>
 
     <div id="preview-stage" class="preview-content">
-        <div id="preview-loading" class="preview-loading" aria-hidden="true" style="display: none;">
+        <img id="preview-thumbnail" class="preview-thumbnail" src="" alt="" aria-hidden="true" hidden>
+        <img id="preview-image" class="preview-original" src="" alt="" hidden>
+        <div id="preview-loading" class="preview-loading" role="status" aria-label="Loading original image" aria-hidden="true" style="display: none;">
             <div class="preview-loading-track" aria-hidden="true">
                 <div id="preview-loading-fill" class="preview-loading-fill"></div>
             </div>
         </div>
         <div id="preview-error" class="preview-error" style="display: none;" role="alert"></div>
-        <img id="preview-image" src="" alt="Preview" hidden>
     </div>
 
-    <aside id="preview-info" class="preview-info" aria-label="Photo info">
+    <aside id="preview-info" class="preview-info" aria-label="Photo info" aria-hidden="true" inert>
         <button id="preview-info-close" class="preview-info-close" type="button" aria-label="Close info" title="Close info">
             <XIcon size={14} aria-hidden="true" />
         </button>

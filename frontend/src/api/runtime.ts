@@ -1,5 +1,13 @@
 import { Browser, Events, System, Window } from "@wailsio/runtime";
 import {
+    Haptic as rawHaptic,
+    SafeAreaInsets as rawSafeAreaInsets,
+    SetImmersive as rawSetImmersive,
+    SetKeyboardWatch as rawSetKeyboardWatch,
+    SetScreenProtect as rawSetScreenProtect,
+} from "../../bindings/TDrive/deviceservice";
+import {
+    invokeBackend,
     invokeRuntimeAsync,
     noopRuntimeUnsubscribe,
     RuntimeInvocationError,
@@ -32,7 +40,7 @@ export interface RuntimeEventMap {
     "live_sync_started": [payload: unknown];
     "live_sync_completed": [payload: unknown];
     "live_sync_failed": [payload: unknown];
-    download_progress: [percent: unknown];
+    download_progress: [percent: unknown, requestId: unknown];
     folder_download_progress: [payload: unknown];
     upload_start: [id: unknown, name: unknown, size: unknown, parentId: unknown];
     upload_progress: [id: unknown, percent: unknown];
@@ -44,9 +52,31 @@ export interface RuntimeEventMap {
     import_upload_progress: [payload: unknown];
     import_complete: [payload: unknown];
     files_dropped: [payload: unknown];
-    preview_progress: [messageId: unknown, percent: unknown];
     native_media_state: [payload: unknown];
     encrypted_media_sessions_closed: [];
+    "android:NetworkChanged": [payload: unknown];
+    "android:BatteryChanged": [payload: unknown];
+    "ios:NetworkChanged": [payload: unknown];
+    "ios:BatteryChanged": [payload: unknown];
+    "android:PhotoBackupMediaChanged": [payload: unknown];
+    "android:BackgroundTransferExpired": [payload?: unknown];
+    /** A button on one of TDrive's own notifications was pressed: {id}. */
+    "android:NotificationAction": [payload: unknown];
+    /** A notification was tapped and asked for a particular screen: {route}. */
+    "android:OpenRoute": [payload: unknown];
+    "ios:PhotoBackupMediaChanged": [payload: unknown];
+    "photo-backup:materialize": [payload: unknown];
+    "photo-backup:release": [payload: unknown];
+    "photo-backup:state": [payload: unknown];
+    gallery_memory_pressure: [];
+    // Emitted by both phone hosts while SetKeyboardWatch is on; the payload is
+    // {visible, height}. Android reports the only soft-keyboard height its
+    // WebView knows, so this is the fallback where visualViewport is absent.
+    "common:keyboard": [payload: unknown];
+    // Android only, while it copies a picked selection out of the document
+    // provider and into the cache; the payload is {phase, done, total}. iOS
+    // copies behind its own picker and so reports nothing.
+    "common:filepicker": [payload: unknown];
     "updates:open": [];
     update_state: [payload: unknown];
 }
@@ -123,8 +153,60 @@ function openExternalUrlInBrowser(url: string): void {
     if (typeof window !== "undefined") window.open(url, "_blank", "noopener,noreferrer");
 }
 
+/**
+ * Browser-preview override so the mobile branches can be exercised in Vite
+ * without a device: `?mobile=1` previews a generic phone, `?mobile=ios` or
+ * `?mobile=android` a specific one. A real webview loads the app without a
+ * query string, so it never applies there.
+ */
+function mobileOverride(): "mobile" | "ios" | "android" | null {
+    if (typeof window === "undefined") return null;
+    const value = new URLSearchParams(window.location?.search ?? "").get("mobile");
+    if (value === "ios" || value === "android") return value;
+    return value === "1" ? "mobile" : null;
+}
+
+/**
+ * The Android host answers `wails.platform()` synchronously from its
+ * JavascriptInterface, which makes it usable before the environment has been
+ * hydrated. The other hosts have no such call, so this only ever says
+ * "android" or nothing.
+ */
+function bridgePlatform(): string | null {
+    if (typeof window === "undefined") return null;
+    const bridge = window.wails;
+    // Android throws "Java bridge method can't be invoked on a non-injected
+    // object" when an interface method is called without its receiver, so the
+    // call has to stay attached to `window.wails`.
+    if (!bridge || typeof bridge.platform !== "function") return null;
+    try {
+        return bridge.platform();
+    } catch {
+        return null;
+    }
+}
+
+/** True on iOS and Android (real or previewed); false until the gateway is ready. */
+export function isMobilePlatform(): boolean {
+    return mobileOverride() !== null
+        || (isGatewayReady() && (System.IsMobile() || bridgePlatform() === "android"));
+}
+
+export function isIOSPlatform(): boolean {
+    const override = mobileOverride();
+    if (override) return override === "ios";
+    return isGatewayReady() && System.IsIOS();
+}
+
+export function isAndroidPlatform(): boolean {
+    const override = mobileOverride();
+    if (override) return override === "android";
+    return isGatewayReady() && (System.IsAndroid() || bridgePlatform() === "android");
+}
+
+/** Wails window fullscreen is a desktop feature; on a phone it is a no-op. */
 export function fullscreenAvailable(): boolean {
-    return isGatewayReady();
+    return isGatewayReady() && !isMobilePlatform();
 }
 
 export function enterFullscreen(): void {
@@ -157,25 +239,33 @@ export function setNativeWindowBackgroundColour(red: number, green: number, blue
 }
 
 /** Resolves once a real Wails webview (as opposed to the browser preview) is ready. */
-export function waitForGatewayReady(timeoutMs = 4000): Promise<boolean> {
-    if (isGatewayReady()) return Promise.resolve(true);
-    if (typeof window === "undefined") return Promise.resolve(false);
+export async function waitForGatewayReady(timeoutMs = 4000): Promise<boolean> {
+    if (typeof window === "undefined") return false;
 
     const deadline = Date.now() + Math.max(0, timeoutMs);
-    const { promise, resolve } = Promise.withResolvers<boolean>();
-    const tick = () => {
-        if (isGatewayReady()) {
-            resolve(true);
-            return;
-        }
-        if (Date.now() >= deadline) {
-            resolve(false);
-            return;
-        }
-        window.setTimeout(tick, 30);
-    };
-    tick();
-    return promise;
+    while (!isGatewayReady()) {
+        if (Date.now() >= deadline) return false;
+        await new Promise((resolve) => window.setTimeout(resolve, 30));
+    }
+    await hydrateEnvironment();
+    return true;
+}
+
+/**
+ * Fills `window._wails.environment` on hosts that do not inject it (iOS and
+ * Android in Wails 3 beta.22), so the runtime's `System.Is*` helpers and the
+ * platform gating built on them answer correctly everywhere. A failure leaves
+ * the platform helpers on their bridge fallbacks and is not fatal.
+ */
+async function hydrateEnvironment(): Promise<void> {
+    if (window._wails?.environment) return;
+    try {
+        const info = await System.Environment();
+        window._wails = window._wails ?? {};
+        window._wails.environment = { OS: info.OS, Arch: info.Arch, Debug: info.Debug };
+    } catch (cause) {
+        console.warn("System.Environment failed:", cause);
+    }
 }
 
 export function runtimeEventsAvailable(): boolean {
@@ -186,13 +276,46 @@ export function runtimeEventsAvailable(): boolean {
  * True inside a real Wails webview, false in the plain Vite dev/preview
  * browser. `@wailsio/runtime` always wires up `Events.On`/bound methods as
  * regular JS functions regardless of environment, so their mere presence
- * can't tell the two apart. `window._wails.environment` can: Go injects it
- * with an inline script before the app bundle loads, in every real webview
- * (dev or built), and nothing sets it in a plain browser tab.
+ * can't tell the two apart. `window._wails.environment` can on desktop, where
+ * Go injects it with an inline script before the app bundle loads; the phone
+ * hosts skip that script, so their message bridge stands in for it. Nothing
+ * sets either in a plain browser tab.
  */
 export function isGatewayReady(): boolean {
     if (typeof window === "undefined") return false;
-    return Boolean(window._wails?.environment);
+    return Boolean(window._wails?.environment) || nativeBridgePresent();
+}
+
+/**
+ * The message bridge each Wails host installs before the page runs: WebView2
+ * on Windows, the WKWebView handler on macOS and iOS, the JavascriptInterface
+ * on Android. It is the readiness signal on the phones, where beta.22 never
+ * injects `_wails.environment`.
+ */
+function nativeBridgePresent(): boolean {
+    return Boolean(
+        window.chrome?.webview?.postMessage
+        || window.webkit?.messageHandlers?.external?.postMessage
+        || window.wails?.invoke,
+    );
+}
+
+/** Screen edges the OS reserves for its own chrome. Zero off a phone. */
+export interface SafeAreaInsets {
+    top: number;
+    bottom: number;
+    left: number;
+    right: number;
+}
+
+export async function getSafeAreaInsets(): Promise<SafeAreaInsets> {
+    const raw = await invokeBackend(rawSafeAreaInsets);
+    return {
+        top: Number(raw?.top ?? 0),
+        bottom: Number(raw?.bottom ?? 0),
+        left: Number(raw?.left ?? 0),
+        right: Number(raw?.right ?? 0),
+    };
 }
 
 export async function getRuntimeEnvironment(): Promise<RuntimeEnvironment> {
@@ -203,4 +326,58 @@ export async function getRuntimeEnvironment(): Promise<RuntimeEnvironment> {
         platform: info.OS,
         arch: info.Arch,
     };
+}
+
+/**
+ * The semantic feedback vocabulary both phone platforms implement. The names
+ * describe the meaning, not the waveform: the OS picks the generator, and a
+ * user who has turned system haptics off feels nothing.
+ */
+export type HapticKind =
+    | "impact-light"
+    | "impact-medium"
+    | "impact-heavy"
+    | "selection"
+    | "success"
+    | "warning"
+    | "error";
+
+/**
+ * Plays one haptic. Fire-and-forget on purpose: feedback that arrives late is
+ * worse than none, so nothing waits on it and a failure is swallowed. Silent
+ * off a phone, where the backend call is a no-op stub.
+ */
+export function playHaptic(kind: HapticKind): void {
+    if (!isGatewayReady()) return;
+    void invokeBackend(rawHaptic, kind).catch(() => undefined);
+}
+
+/**
+ * Asks the OS to keep app contents out of screenshots and the app switcher.
+ *
+ * Android honours this fully (FLAG_SECURE). iOS cannot block screenshots at
+ * all, so there the same call only enables detection -- the switcher preview
+ * still shows unless a native resign-active overlay is added to the host.
+ */
+export function setScreenProtect(enabled: boolean): void {
+    if (!isGatewayReady()) return;
+    void invokeBackend(rawSetScreenProtect, enabled).catch(() => undefined);
+}
+
+/** Starts or stops the host's "common:keyboard" {visible,height} events. */
+export function setKeyboardWatch(enabled: boolean): void {
+    if (!isGatewayReady()) return;
+    void invokeBackend(rawSetKeyboardWatch, enabled).catch(() => undefined);
+}
+
+/**
+ * Hides the phone's system bars for a full-screen surface, or gives them back.
+ *
+ * Only the video player asks. On Android 15 this is the only way to be rid of
+ * the grey band the system paints down the edge for three-button navigation,
+ * and on both platforms a picture with nothing over it is the point.
+ */
+export function setImmersive(enabled: boolean): void {
+    if (!isGatewayReady() || !isMobilePlatform()) return;
+    void invokeBackend(rawSetImmersive, enabled).catch(() => undefined);
 }

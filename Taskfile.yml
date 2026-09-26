@@ -20,6 +20,16 @@ includes:
   windows: ./build/windows/Taskfile.yml
   darwin: ./build/darwin/Taskfile.yml
   linux: ./build/linux/Taskfile.yml
+  # Mobile. Vars go on the include entry: a root-level var of the same name is
+  # clobbered by the `{{.X | default ...}}` declaration inside these Taskfiles.
+  ios:
+    taskfile: ./build/ios/Taskfile.yml
+    vars:
+      MIN_IOS_VERSION: "16.0" # keep in sync with ios.minIOSVersion in build/config.yml
+  android:
+    taskfile: ./build/android/Taskfile.yml
+    vars:
+      APP_ID: com.jeetraj.tdrive # must match applicationId in build/android/app/build.gradle
 
 tasks:
   build:

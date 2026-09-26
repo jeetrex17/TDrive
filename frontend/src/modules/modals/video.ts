@@ -4,18 +4,23 @@ import {
     closeMedia,
     closeNativeMedia,
     getMediaStats,
+    isAndroidPlatform,
+    isIOSPlatform,
+    isMobilePlatform,
     onRuntimeEvent,
     openMedia,
     openNativeMedia,
+    setImmersive,
     updateMediaPlayback,
-    type MediaStats,
     type MediaOpenResult,
     type NativeMediaOpenResult,
     type NativeMediaRect,
 } from "../../api";
 
 import { formatBytes } from "../../utils";
-import { isWebviewDirectVideo, videoFormatLabel } from "../media-types";
+import { isIOSPlayableVideo, isRemuxableVideo, isWebviewDirectVideo, videoFormatLabel } from "../media-types";
+import { appActions } from "../app-actions";
+import { accessEncryptedResource } from "../encryption";
 import { prefersNativePlayer, rememberNativePlayer } from "../video/native-memory";
 import {
     SerialPlaybackTransitions,
@@ -23,27 +28,42 @@ import {
     shouldFallbackFromHtmlMediaError,
     type PlaybackIntent,
 } from "../video/playback-lifecycle";
-import {
-    nativeTrackLabel,
-    shortNativeTrackLabel,
-    type NativeMediaTrack,
-} from "../video/media-tracks";
+import { type NativeMediaTrack } from "../video/media-tracks";
 import {
     EMPTY_PLAYER_STATE,
     HtmlVideoAdapter,
-    MAX_PLAYBACK_RATE,
-    MIN_PLAYBACK_RATE,
     NativeMediaStateRouter,
     NativeMpvAdapter,
-    clampPlaybackRate,
     type PlayerAdapter,
     type PlayerState,
+    type TrackSwitching,
 } from "../video/player-adapters";
+import { errorDetail, errorMessage } from "../video/playback-errors";
+import { handleMenuKeydown } from "../video/menu-keyboard";
+import {
+    nextPresetRate,
+    parseCustomPlaybackRate,
+    speedMenuMarkup,
+    syncSpeedControls,
+} from "../video/speed-menu-view";
+import { StreamActivityMonitor } from "../video/stream-activity";
+import { TrackPicker, type TrackPickerHost } from "../video/track-picker";
+import {
+    createActivePlaylist,
+    normalizeVideoTarget,
+    playlistItemIdentity,
+    playlistViewItems,
+    type ActiveVideoPlaylist,
+    type VideoOpenTarget,
+    type VideoPlaylistLaunch,
+} from "../video/video-queue";
+import { attachHls, prefersJsPlayer, type HlsSource } from "../video/hls-source";
 import { MediaPrefetcher, readyToPrefetch, warmMediaEdges } from "../video/video-prefetch";
 import { VideoGeometryController } from "../video/video-geometry";
 import { SEEK_STEP_SECONDS, VOLUME_STEP, VideoTransportController } from "../video/video-transport";
 import { bindVideoDOM, byID, collectVideoDOM, type VideoDOM } from "../video/video-dom";
 import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from "../../ui/modals/modal-a11y";
+import { bindTouchGestures, type TouchGestureHandlers } from "../../ui/preview/touch-gestures";
 import { videoPlaybackPreferences } from "../../ui/video/video-preferences-store";
 import { loadAutoNextPreference } from "../video/video-playlist";
 import {
@@ -53,36 +73,13 @@ import {
     setVideoPlaylistCurrentIndex,
     setVideoPlaylistOpen,
     setVideoPlaylistSwitching,
-    type VideoPlaylistViewItem,
 } from "../../ui/video/video-playlist-store";
+
+export type { VideoOpenTarget, VideoPlaylistLaunch } from "../video/video-queue";
 
 const CHROME_HIDE_DELAY_MS = 2500;
 const LOADING_DEBOUNCE_MS = 250;
-const RATE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
 const PLAYBACK_HINT_INTERVAL_MS = 1000;
-const MEDIA_STATS_POLL_MS = 1000;
-const STREAM_ACTIVITY_HOLD_MS = 2000;
-
-interface VideoOpenTarget {
-    id: number;
-    name: string;
-    key?: string;
-    size?: number;
-    encrypted?: boolean;
-}
-
-export interface VideoPlaylistLaunch {
-    readonly items: readonly VideoOpenTarget[];
-    readonly currentIndex: number;
-    readonly title: string;
-}
-
-interface ActiveVideoPlaylist {
-    readonly items: readonly VideoOpenTarget[];
-    readonly title: string;
-    currentIndex: number;
-    autoNext: boolean;
-}
 
 interface VideoOpenAttempt {
     generation: number;
@@ -137,11 +134,6 @@ let hasError = false;
 let lastPlaybackHintAt = 0;
 let playbackHintTimer: number | null = null;
 let playbackHintInFlight = false;
-let mediaStatsTimer: number | null = null;
-let mediaStatsInFlight = false;
-let streamActivityClearTimer: number | null = null;
-let streamActivityText = "";
-let streamActivityAt = 0;
 let mediaMetaBaseText = "";
 let mediaMetaBytes = 0;
 let a11y: ReturnType<typeof installModalA11y> | null = null;
@@ -149,6 +141,11 @@ let videoHostObserver: MutationObserver | null = null;
 let videoHostEl: HTMLElement | null = null;
 let unbindVideoDOM: (() => void) | null = null;
 let unbindSpeedMenu: (() => void) | null = null;
+let unbindTouchGestures: (() => void) | null = null;
+// Where the last stage pointer came from: touch taps go through the phone
+// recogniser, and a tap that began on the chrome is the chrome's to handle.
+let stagePointerTouch = false;
+let stagePointerOnChrome = false;
 let videoDOM: VideoDOM | null = null;
 let geometry: VideoGeometryController | null = null;
 let transport: VideoTransportController | null = null;
@@ -158,25 +155,21 @@ function isOpen() {
     return Boolean(modalEl && modalEl.style.display !== "none");
 }
 
-function errorDetail(err: unknown) {
-    return err instanceof Error && err.message ? err.message : String(err || "");
-}
-
-function errorMessage(err: unknown, fallback: string) {
-    const normalized = errorDetail(err).toLowerCase();
-    if (
-        normalized.includes("resolve peer") ||
-        normalized.includes("rpcdorequest") ||
-        normalized.includes("retryuntilack") ||
-        normalized.includes("engine forcibly closed")
-    ) {
-        return "Could not reach Telegram. Check your connection and try again.";
-    }
-    if (normalized.includes("context canceled")) {
-        return "The video request was canceled. Try again.";
-    }
-    return fallback;
-}
+// The throughput line in the title bar and the buffering status both read from
+// here. It is given accessors rather than values because it outlives any one
+// media session: the token, the error state and the file's size all change
+// under it while it keeps polling.
+const streamActivity = new StreamActivityMonitor({
+    readStats: (token) => getMediaStats(token),
+    activeToken: () => activeMediaToken,
+    hasError: () => hasError,
+    mediaBytes: () => mediaMetaBytes,
+    durationSeconds: () => currentState.duration,
+    changed: () => {
+        renderMediaMeta();
+        updateLoadingStatus();
+    },
+});
 
 function isNativeFallbackActive() {
     return Boolean(activeNative && !activeNative.htmlControls && activeNative.presentation !== "standalone");
@@ -245,12 +238,13 @@ function updateLoadingStatus() {
         loadingStatusEl.textContent = "Opening video";
         return;
     }
-    if (streamActivityText === "Rate-limited") {
+    const activity = streamActivity.label;
+    if (activity === "Rate-limited") {
         loadingStatusEl.textContent = "Buffering · Rate-limited";
         return;
     }
-    if (streamActivityText.startsWith("Streaming ")) {
-        loadingStatusEl.textContent = `Buffering · ${streamActivityText.slice("Streaming ".length)}`;
+    if (activity.startsWith("Streaming ")) {
+        loadingStatusEl.textContent = `Buffering · ${activity.slice("Streaming ".length)}`;
         return;
     }
     loadingStatusEl.textContent = "Buffering";
@@ -261,103 +255,25 @@ function setLoadingStatusOverride(message: string) {
     updateLoadingStatus();
 }
 
-function syncMediaStatsPolling() {
-    if (activeMediaToken && !hasError) {
-        startMediaStatsPolling();
-    } else {
-        clearMediaStatsPolling();
-    }
-}
 
-function startMediaStatsPolling() {
-    if (mediaStatsTimer != null) return;
-    void pollMediaStats();
-    mediaStatsTimer = window.setInterval(() => {
-        void pollMediaStats();
-    }, MEDIA_STATS_POLL_MS);
-}
+/**
+ * What the error's primary button does. Null means Retry, which is right when
+ * the failure might not recur. A failure that will repeat identically forever
+ * gets an action that can actually help instead.
+ */
+// ErrorAction is the one thing an error offers the reader beyond Retry, for the
+// failures where retrying is not the answer.
+type ErrorAction = { label: string; run: () => void };
 
-function clearMediaStatsPolling() {
-    if (mediaStatsTimer != null) {
-        window.clearInterval(mediaStatsTimer);
-        mediaStatsTimer = null;
-    }
-    clearStreamActivity();
-    updateLoadingStatus();
-}
+let errorPrimaryAction: ErrorAction | null = null;
 
-async function pollMediaStats() {
-    if (!activeMediaToken || mediaStatsInFlight) return;
-    const token = activeMediaToken;
-    mediaStatsInFlight = true;
-    try {
-        const stats = await getMediaStats(token);
-        if (token !== activeMediaToken) return;
-        syncStreamActivity(stats);
-    } catch (err) {
-        console.warn("GetMediaStats failed:", err);
-    } finally {
-        mediaStatsInFlight = false;
-    }
-}
-
-function syncStreamActivity(stats: MediaStats | null) {
-    const text = stats ? streamActivityLabel(stats) : "";
-    const now = Date.now();
-    if (text) {
-        streamActivityText = text;
-        streamActivityAt = now;
-        scheduleStreamActivityClear();
-    } else if (streamActivityText && now - streamActivityAt >= STREAM_ACTIVITY_HOLD_MS) {
-        streamActivityText = "";
-        clearStreamActivityTimer();
-    }
-    renderMediaMeta();
-    updateLoadingStatus();
-}
-
-function streamActivityLabel(stats: MediaStats) {
-    const playback = stats.playback;
-    if (playback.recentFloodWait) {
-        return "Rate-limited";
-    }
-    const rate = playback.bytesPerSecond || 0;
-    if (rate <= 0) return "";
-    const multiplier = formatStreamMultiplier(rate);
-    return `Streaming ${formatStreamRate(rate)}${multiplier ? ` ${multiplier}` : ""}`;
-}
-
-function scheduleStreamActivityClear() {
-    clearStreamActivityTimer();
-    streamActivityClearTimer = window.setTimeout(() => {
-        if (Date.now() - streamActivityAt >= STREAM_ACTIVITY_HOLD_MS) {
-            streamActivityText = "";
-            renderMediaMeta();
-            updateLoadingStatus();
-        }
-        streamActivityClearTimer = null;
-    }, STREAM_ACTIVITY_HOLD_MS);
-}
-
-function clearStreamActivityTimer() {
-    if (streamActivityClearTimer == null) return;
-    window.clearTimeout(streamActivityClearTimer);
-    streamActivityClearTimer = null;
-}
-
-function clearStreamActivity() {
-    clearStreamActivityTimer();
-    streamActivityText = "";
-    streamActivityAt = 0;
-    renderMediaMeta();
-}
-
-
-function setError(message: string) {
+function setError(message: string, primary: ErrorAction | null = null) {
     hasError = true;
+    errorPrimaryAction = primary;
+    if (errorRetryBtnEl) errorRetryBtnEl.textContent = primary ? primary.label : "Retry";
     loadingStatusOverride = "";
     setLoading(false);
-    clearMediaStatsPolling();
+    streamActivity.stop();
     if (errorMessageEl) errorMessageEl.textContent = message;
     if (errorEl) errorEl.style.display = "block";
     modalEl?.classList.add("is-video-error");
@@ -369,6 +285,8 @@ function setError(message: string) {
 function clearError() {
     const restoreFocus = Boolean(errorEl?.contains(document.activeElement));
     hasError = false;
+    errorPrimaryAction = null;
+    if (errorRetryBtnEl) errorRetryBtnEl.textContent = "Retry";
     errorMessageEl?.replaceChildren();
     if (errorEl) errorEl.style.display = "none";
     modalEl?.classList.remove("is-video-error");
@@ -376,8 +294,14 @@ function clearError() {
 }
 
 function retryVideoOpen() {
+    if (!hasError || !isOpen()) return;
+    if (errorPrimaryAction) {
+        const run = errorPrimaryAction.run;
+        run();
+        return;
+    }
     const target = activeOpenAttempt?.target;
-    if (!target || !hasError || !isOpen()) return;
+    if (!target) return;
     void openVideoTarget(target, null);
 }
 
@@ -387,35 +311,20 @@ function handleHtmlPlaybackError(detail: string) {
 }
 
 
-function syncSpeed(state: PlayerState) {
-    const customInput = byID<HTMLInputElement>("video-speed-custom-input");
-    if (speedBtnEl) {
-        speedBtnEl.textContent = `${formatRate(state.rate)}x`;
-        speedBtnEl.title = `Playback speed: ${formatRate(state.rate)}x. Click to cycle`;
-        speedBtnEl.setAttribute("aria-label", speedBtnEl.title);
-    }
-    if (customInput && document.activeElement !== customInput) {
-        customInput.value = formatRate(state.rate);
-    }
-    const slider = byID<HTMLInputElement>("video-speed-slider");
-    if (slider) {
-        slider.value = String(state.rate);
-        slider.setAttribute("aria-valuetext", `${formatRate(state.rate)} times`);
-        slider.style.setProperty("--range-fill", `${(state.rate - MIN_PLAYBACK_RATE) / (MAX_PLAYBACK_RATE - MIN_PLAYBACK_RATE) * 100}%`);
-    }
-    const value = byID("video-speed-value");
-    if (value) value.textContent = `${formatRate(state.rate)}x`;
-    speedMenuEl?.querySelectorAll<HTMLButtonElement>("[data-rate]").forEach((button) => {
-        const selected = Math.abs(Number(button.dataset.rate || 1) - state.rate) < 0.001;
-        button.classList.toggle("is-selected", selected);
-        button.setAttribute("aria-checked", selected ? "true" : "false");
-    });
-}
-
 // Keep available audio and subtitle tracks discoverable, even with one track. A pill appearing changes the
 // controls height, so the native viewport is re-measured.
+// trackSwitchingPlayer is the active player when it is one the pills can drive.
+// A standalone native window owns its own controls, so the pills do not apply
+// to it even though mpv is behind it.
+function trackSwitchingPlayer(): TrackSwitching | null {
+    if (activeNative && activeNative.presentation === "standalone") return null;
+    if (activeAdapter instanceof NativeMpvAdapter) return activeAdapter;
+    if (activeAdapter instanceof HtmlVideoAdapter) return activeAdapter;
+    return null;
+}
+
 function syncNativeTracks(tracks: NativeMediaTrack[]) {
-    const available = Boolean(activeNative && activeNative.presentation !== "standalone");
+    const available = trackSwitchingPlayer() !== null;
     const audio = tracks.filter((track) => track.type === "audio");
     const subtitles = tracks.filter((track) => track.type === "subtitle");
     const selectedCodec = subtitles.find((track) => track.selected)?.codec?.toLowerCase() ?? "";
@@ -427,173 +336,22 @@ function syncNativeTracks(tracks: NativeMediaTrack[]) {
     if (audioChanged || subtitleChanged) geometry?.scheduleNativeResize();
 }
 
-interface TrackPickerElements {
-    wrap: HTMLElement | null;
-    button: HTMLButtonElement | null;
-    label: HTMLElement | null;
-    menu: HTMLElement | null;
-}
-
-// TrackPicker's pill steps to the next track on each click; the full list
-// lives in the settings dock, where the picker renders it.
-class TrackPicker {
-    private tracks: NativeMediaTrack[] = [];
-    private renderedSignature = "";
-
-    constructor(
-        private readonly title: string,
-        private readonly offLabel: string | null,
-        private readonly apply: (adapter: NativeMpvAdapter, id: number | null) => void,
-        private readonly els: TrackPickerElements,
-    ) {
-        els.button?.addEventListener("click", (event) => {
-            event.stopPropagation();
-            this.cycle();
-            revealChrome();
-        });
-        els.menu?.addEventListener("click", (event) => {
-            const item = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-track]");
-            if (!item) return;
-            this.select(item.dataset.track === "no" ? null : Number(item.dataset.track));
-            this.close(true);
-        });
-        els.menu?.addEventListener("keydown", (event) => {
-            if (this.isOpen()) handleMenuKeydown(event, this.items().filter((item) => !item.hidden), () => this.close(true));
-        });
-    }
-
-    get visible() {
-        return Boolean(this.els.wrap && !this.els.wrap.hidden);
-    }
-
-    // update returns whether the pill appeared or disappeared.
-    update(tracks: NativeMediaTrack[], show: boolean): boolean {
-        const wasVisible = this.visible;
-        this.tracks = tracks;
-        if (this.els.wrap) this.els.wrap.hidden = !show;
-        if (!show) {
-            // Hiding the command-row pill must not take the settings panel with
-            // it: the section may be on screen, and "no tracks" is a legitimate
-            // thing for it to show.
-            if (settingsSection === this.section) this.setMenuOpen(true);
-            else this.close();
-            if (tracks.length === 0) {
-                this.renderedSignature = "";
-                this.els.menu?.replaceChildren();
-                if (this.els.menu) this.els.menu.innerHTML = `<p class="video-settings-note">No ${this.title.toLowerCase()} tracks available.</p>`;
-                return wasVisible;
-            }
-        }
-        const signature = JSON.stringify(this.tracks.map((track) => [track.id, track.title, track.language, track.codec]));
-        if (signature !== this.renderedSignature) {
-            this.renderedSignature = signature;
-            this.render();
-        }
-        this.syncSelection();
-        return !wasVisible;
-    }
-
-    isOpen() {
-        return Boolean(this.els.menu?.classList.contains("is-open"));
-    }
-
-    get section(): SettingsSection {
-        return this.offLabel === null ? "audio" : "subtitle";
-    }
-
-    // setMenuOpen shows or hides just this picker's list. It deliberately
-    // leaves the settings panel alone so a section swap never closes it.
-    setMenuOpen(open: boolean) {
-        this.els.menu?.classList.toggle("is-open", open);
-        if (!open) return;
-        clearChromeTimer();
-        requestAnimationFrame(() => { if (this.isOpen()) this.selectedItem()?.focus({ preventScroll: true }); });
-    }
-
-    close(restoreFocus = false) {
-        if (!this.isOpen()) return;
-        this.setMenuOpen(false);
-        if (settingsSection === this.section) hideSettingsPanel();
+// The pills share the player's chrome, its settings panel and its notion of
+// which player can switch tracks; the picker itself owns none of that, so it is
+// handed this view of the controller rather than reading these directly.
+const trackPickerHost: TrackPickerHost = {
+    openSettingsSection: () => settingsSection,
+    hideSettingsPanel: () => hideSettingsPanel(),
+    holdChrome: clearChromeTimer,
+    // A menu closing only restarts the fade when the player is in a state that
+    // fades at all: paused, errored or shut, the chrome stays put.
+    releaseChrome: () => {
         if (isOpen() && !currentState.paused && !hasError) scheduleChromeHide();
-        if (restoreFocus) byID("video-picture-button")?.focus({ preventScroll: true });
-    }
-
-    contains(target: Node | null) {
-        return Boolean(target && (this.els.menu?.contains(target) || this.els.button?.contains(target)));
-    }
-
-    // cycle steps to the next track in order; an optional track (subtitles)
-    // has "off" as one of the stops, a required one wraps to the first.
-    cycle() {
-        if (!this.visible || this.tracks.length === 0) return;
-        const current = this.currentTrack();
-        const next = this.tracks[(current ? this.tracks.indexOf(current) : -1) + 1];
-        const target = next?.id ?? (this.offLabel === null ? this.tracks[0].id : null);
-        if (target !== (current?.id ?? null)) this.select(target);
-    }
-
-    // toggle switches an optional track (subtitles) between off and its default.
-    toggle() {
-        if (!this.visible || this.offLabel === null) return;
-        const selected = this.tracks.find((track) => track.selected);
-        this.select(selected ? null : this.defaultTrack()?.id ?? null);
-    }
-
-    private defaultTrack() {
-        return this.tracks.find((track) => track.default) ?? this.tracks[0];
-    }
-
-    private currentTrack() {
-        return this.tracks.find((track) => track.selected) ?? (this.offLabel === null ? this.defaultTrack() : undefined);
-    }
-
-    private select(id: number | null) {
-        if (!(activeAdapter instanceof NativeMpvAdapter)) return;
-        if (id !== null && !this.tracks.some((track) => track.id === id)) return;
-        this.apply(activeAdapter, id);
-        // Reflect the choice immediately; mpv confirms it on the next state event.
-        this.tracks = this.tracks.map((track) => ({ ...track, selected: track.id === id }));
-        this.syncSelection();
-        revealChrome();
-    }
-
-
-    private items() {
-        return Array.from(this.els.menu?.querySelectorAll<HTMLButtonElement>("[data-track]") || []);
-    }
-
-    private selectedItem() {
-        return this.items().find((item) => item.classList.contains("is-selected")) || this.items()[0] || null;
-    }
-
-    private render() {
-        if (!this.els.menu) return;
-        const items = this.tracks.map((track, index) => menuItemMarkup(`data-track="${track.id}"`, nativeTrackLabel(track, index)));
-        if (this.offLabel !== null) items.unshift(menuItemMarkup('data-track="no"', this.offLabel));
-        this.els.menu.innerHTML = `<div class="video-menu-title">${this.title}</div><div class="video-track-list" role="radiogroup" aria-label="${this.title} tracks">${items.join("")}</div>`;
-    }
-
-    private syncSelection() {
-        const current = this.currentTrack();
-        const key = current ? String(current.id) : "no";
-        for (const item of this.items()) {
-            const on = item.dataset.track === key;
-            item.classList.toggle("is-selected", on);
-            item.setAttribute("aria-checked", on ? "true" : "false");
-            item.tabIndex = on ? 0 : -1;
-        }
-        const index = current ? this.tracks.indexOf(current) : -1;
-        const short = current ? shortNativeTrackLabel(current, index) : this.offLabel ?? "";
-        const full = current ? nativeTrackLabel(current, index) : this.offLabel ?? "";
-        if (this.els.label) this.els.label.textContent = short;
-        if (this.els.button) {
-            const choices = this.tracks.length + (this.offLabel === null ? 0 : 1);
-            this.els.button.dataset.state = current ? "on" : "off";
-            this.els.button.title = `${this.title}: ${full}${choices > 1 ? ". Click to cycle" : ""}`;
-            this.els.button.setAttribute("aria-label", this.els.button.title);
-        }
-    }
-}
+    },
+    revealChrome,
+    trackSwitchingPlayer,
+    returnFocus: () => byID("video-picture-button")?.focus({ preventScroll: true }),
+};
 
 export function updatePlaybackPreferences(value: PlaybackPreferences): void {
     playbackPreferences = normalizePlaybackPreferences(value);
@@ -606,12 +364,18 @@ export function updatePlaybackPreferences(value: PlaybackPreferences): void {
 
 const PICTURE_MODES: PictureMode[] = ["fit", "fill", "original", "16:9", "4:3"];
 const PICTURE_LABELS: Record<PictureMode, string> = { fit: "Fit", fill: "Fill", original: "Original", "16:9": "16:9", "4:3": "4:3" };
+// A phone's control row is a few hundred pixels wide and every pill on it
+// competes for the same space. "Original" alone is wide enough to push the row
+// onto a second line, so the pill says the short form and the description the
+// button announces stays the full one.
+const PICTURE_PILL_LABELS: Record<PictureMode, string> = { ...PICTURE_LABELS, original: "Orig" };
 
 function syncAspectButton() {
     const button = byID("video-aspect-button");
     if (!button) return;
-    const label = PICTURE_LABELS[playbackPreferences.pictureMode];
-    button.textContent = label;
+    const mode = playbackPreferences.pictureMode;
+    const label = PICTURE_LABELS[mode];
+    button.textContent = isMobilePlatform() ? PICTURE_PILL_LABELS[mode] : label;
     button.title = `Video fit: ${label}. Click to cycle`;
     button.setAttribute("aria-label", button.title);
 }
@@ -819,58 +583,6 @@ function closeOpenMenu() {
     return true;
 }
 
-function menuItemMarkup(attributes: string, label: string) {
-    return `<button type="button" role="radio" ${attributes} aria-checked="false"><span class="video-menu-check" aria-hidden="true">✓</span><span>${escapeHTML(label)}</span></button>`;
-}
-
-function escapeHTML(value: string) {
-    return value.replace(/[&<>"']/g, (char) => `&#${char.charCodeAt(0)};`);
-}
-
-function handleMenuKeydown(event: KeyboardEvent, buttons: HTMLButtonElement[], close: () => void) {
-    if ((event.target as HTMLElement)?.tagName === "INPUT" && event.key === "ArrowDown") {
-        buttons[0]?.focus();
-        event.preventDefault();
-        event.stopPropagation();
-        return;
-    }
-    const current = Math.max(0, buttons.indexOf(document.activeElement as HTMLButtonElement));
-    const focusAt = (index: number) => buttons[(index + buttons.length) % buttons.length]?.focus({ preventScroll: true });
-    switch (event.key) {
-        case "Escape":
-            close();
-            break;
-        case "ArrowDown":
-        case "ArrowRight":
-            focusAt(current + 1);
-            break;
-        case "ArrowUp":
-        case "ArrowLeft":
-            focusAt(current - 1);
-            break;
-        case "Home":
-            focusAt(0);
-            break;
-        case "End":
-            focusAt(buttons.length - 1);
-            break;
-        case "Enter":
-        case " ":
-            (document.activeElement as HTMLButtonElement | null)?.click();
-            break;
-        default:
-            return;
-    }
-    event.preventDefault();
-    event.stopPropagation();
-}
-
-function parseCustomPlaybackRate(value: string) {
-    const rate = Number(value.trim());
-    if (!Number.isFinite(rate) || rate <= 0) return null;
-    return clampPlaybackRate(rate);
-}
-
 // The next playlist item is opened and warmed once the current one is close to
 // the end and fully buffered, so auto-next starts without a cold round-trip to
 // Telegram. A single slot is enough: only the immediate next item is useful.
@@ -901,11 +613,11 @@ function applyState(state: PlayerState) {
     }
     schedulePlaybackHint(state);
     transport?.sync(state);
-    syncSpeed(state);
+    syncSpeedControls(speedBtnEl, speedMenuEl, state.rate);
     syncNativeTracks(state.tracks);
     applyHtmlPicture();
     setLoading(state.loading);
-    syncMediaStatsPolling();
+    streamActivity.sync();
     maybePrefetchNext(state);
     if (state.paused || hasError) {
         clearChromeTimer();
@@ -967,31 +679,6 @@ function clearPlaybackHintTimer() {
     playbackHintTimer = null;
 }
 
-function formatRate(rate: number) {
-    return Number.isInteger(rate) ? String(rate) : String(rate).replace(/0+$/, "").replace(/\.$/, "");
-}
-
-function formatStreamRate(bytesPerSecond: number) {
-    const safe = Math.max(0, Number.isFinite(bytesPerSecond) ? bytesPerSecond : 0);
-    if (safe < 1024 * 1024) {
-        return `${Math.max(0.1, safe / 1024).toFixed(1)} KB/s`;
-    }
-    return `${(safe / (1024 * 1024)).toFixed(1)} MB/s`;
-}
-
-function formatStreamMultiplier(bytesPerSecond: number) {
-    const duration = currentState.duration;
-    if (!(mediaMetaBytes > 0 && duration > 0 && bytesPerSecond > 0)) return "";
-    const averageBytesPerSecond = mediaMetaBytes / duration;
-    if (!(averageBytesPerSecond > 0)) return "";
-    const multiplier = bytesPerSecond / averageBytesPerSecond;
-    if (!Number.isFinite(multiplier) || multiplier <= 0) return "";
-    if (multiplier >= 100) return "(~99x+)";
-    if (multiplier < 10) return `(~${Math.max(0.1, multiplier).toFixed(1)}x)`;
-    return `(~${Math.round(multiplier)}x)`;
-}
-
-
 async function releaseActive() {
     const adapter = detachActiveReferences();
     if (adapter) {
@@ -1014,7 +701,7 @@ function detachActiveReferences(): PlayerAdapter | null {
     unsubscribeState?.();
     unsubscribeState = null;
     clearPlaybackHintTimer();
-    clearMediaStatsPolling();
+    streamActivity.stop();
     transport?.resetSession();
     closeMenus();
     hideSettingsPanel();
@@ -1053,6 +740,18 @@ async function safelyCloseNativeMedia(token: string) {
     }
 }
 
+// The phone shows the first-frame thumbnail, blurred, until the stream paints
+// (design-5). It is fetched off the element first: a poster the element cannot
+// load fires `error` on the video, and the thumbnail endpoint has no mpv
+// behind it on the phones.
+function preloadPoster(url: string, token: string) {
+    const image = new Image();
+    image.onload = () => {
+        if (videoEl && isOpen() && activeMediaToken === token) videoEl.poster = url;
+    };
+    image.src = url;
+}
+
 function updateMediaText(name: string, size: number) {
     if (filenameEl) filenameEl.textContent = name || "Video";
     mediaMetaBaseText = `${videoFormatLabel(name)}${size ? ` · ${formatBytes(size)}` : ""}`;
@@ -1062,63 +761,8 @@ function updateMediaText(name: string, size: number) {
 
 function renderMediaMeta() {
     if (!metaEl) return;
-    metaEl.textContent = streamActivityText ? `${mediaMetaBaseText} · ${streamActivityText}` : mediaMetaBaseText;
-}
-
-function normalizeVideoTarget(target: VideoOpenTarget): VideoOpenTarget | null {
-    const id = Number(target.id || 0);
-    if (!Number.isFinite(id) || id <= 0) return null;
-    const normalized = {
-        id,
-        name: String(target.name || "Video"),
-        size: Math.max(0, Number(target.size) || 0),
-        encrypted: Boolean(target.encrypted),
-    };
-    const key = String(target.key || "").trim();
-    return key ? { ...normalized, key } : normalized;
-}
-
-function createActivePlaylist(target: VideoOpenTarget, launch?: VideoPlaylistLaunch): ActiveVideoPlaylist {
-    const fallback = Object.freeze([{ ...target }]);
-    if (!launch) {
-        return { items: fallback, title: "Videos", currentIndex: 0, autoNext: loadAutoNextPreference() };
-    }
-
-    const items = launch.items
-        .map(normalizeVideoTarget)
-        .filter((item): item is VideoOpenTarget => item !== null);
-    let currentIndex = Number.isInteger(launch.currentIndex) ? launch.currentIndex : -1;
-    if (currentIndex < 0 || currentIndex >= items.length || items[currentIndex].id !== target.id) {
-        const matches = items.reduce<number[]>((indices, item, index) => {
-            if (item.id === target.id) indices.push(index);
-            return indices;
-        }, []);
-        currentIndex = matches.length === 1 ? matches[0] : -1;
-    }
-    if (currentIndex < 0) {
-        return { items: fallback, title: "Videos", currentIndex: 0, autoNext: loadAutoNextPreference() };
-    }
-    items[currentIndex] = { ...items[currentIndex], ...target };
-    return {
-        items: Object.freeze(items.map((item) => Object.freeze({ ...item }))),
-        title: String(launch.title || "Videos"),
-        currentIndex,
-        autoNext: loadAutoNextPreference(),
-    };
-}
-
-function playlistItemIdentity(item: VideoOpenTarget, index: number): string {
-    return item.key || `video:${item.id}:${index}`;
-}
-
-function playlistViewItems(playlist: ActiveVideoPlaylist): readonly VideoPlaylistViewItem[] {
-    return playlist.items.map((item, index) => ({
-        id: playlistItemIdentity(item, index),
-        name: item.name,
-        size: item.size || 0,
-        format: videoFormatLabel(item.name),
-        position: index + 1,
-    }));
+    const activity = streamActivity.label;
+    metaEl.textContent = activity ? `${mediaMetaBaseText} · ${activity}` : mediaMetaBaseText;
 }
 
 function syncPlaylistButton() {
@@ -1152,7 +796,7 @@ function syncPlaylistSnapshot() {
 function installVideoPlaylist(target: VideoOpenTarget, launch?: VideoPlaylistLaunch) {
     hideVideoPlaylist();
     void mediaPrefetcher.discard();
-    activePlaylist = createActivePlaylist(target, launch);
+    activePlaylist = createActivePlaylist(target, loadAutoNextPreference(), launch);
     syncPlaylistSnapshot();
 }
 
@@ -1220,7 +864,17 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
     let opened: MediaOpenResult | null = null;
     let adapter: HtmlVideoAdapter | null = null;
     try {
-        opened = mediaPrefetcher.take(attempt.target.id) ?? await openMedia(attempt.target.id);
+        // A prefetched session was opened while the file was already unlocked,
+        // so only a cold open can reach the vault prompt. A null here is the
+        // user dismissing that prompt, which is not an error to surface.
+        opened = mediaPrefetcher.take(attempt.target.id) ?? await accessEncryptedResource(
+            Boolean(attempt.target.encrypted),
+            () => openMedia(attempt.target.id),
+        );
+        if (!opened) {
+            if (isCurrent()) await closeVideoModal();
+            return;
+        }
         if (!isCurrent() || !isOpen()) {
             await safelyCloseMedia(opened.token);
             return;
@@ -1231,11 +885,26 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
             throw new Error("media session did not return a playable URL");
         }
 
+        // Android's Chromium can neither list a file's soundtracks nor switch
+        // between them, so a file that carries more than one is handed to a
+        // JavaScript player pointed at the same remuxed playlist iOS uses. A
+        // file with one soundtrack keeps the native path, which is faster and
+        // has nothing to gain from the detour.
+        let hlsSource: HlsSource | null = null;
+        if (opened.hlsUrl && isAndroidPlatform() && await prefersJsPlayer(opened.hlsUrl)) {
+            if (!isCurrent() || !isOpen()) {
+                await safelyCloseMedia(opened.token);
+                return;
+            }
+            hlsSource = await attachHls(videoEl!, opened.hlsUrl, () => adapter?.refresh());
+        }
+
         const displayName = opened.info.name || opened.name || attempt.target.name || "Video";
         const displaySize = opened.info.plaintextSize || opened.info.storedSize || attempt.target.size || 0;
         updateMediaText(displayName, displaySize);
         transport?.beginSession(opened.thumbnailUrl);
         activeMediaToken = opened.token;
+        if (isMobilePlatform() && opened.thumbnailUrl) preloadPoster(`${opened.thumbnailUrl}?t=0`, opened.token);
         activeMediaEncrypted = Boolean(opened.info.encrypted);
 
         adapter = new HtmlVideoAdapter(videoEl!, opened, {
@@ -1243,7 +912,7 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
             playbackError: handleHtmlPlaybackError,
             revealChrome,
             mediaEnded: () => handleNaturalMediaEnd(attempt, adapter!),
-        });
+        }, hlsSource);
         activeAdapter = adapter;
         unsubscribeState = adapter.subscribe((state) => {
             if (!isCurrent() || activeAdapter !== adapter) return;
@@ -1285,7 +954,9 @@ function handleHtmlMediaError(
     attempt.htmlFailureHandled = true;
     console.error("HTML media player failed:", { code, state });
 
-    if (shouldFallbackFromHtmlMediaError(code)) {
+    // Phones have no native player to promote to; the HTML error is final there.
+    const undecodable = shouldFallbackFromHtmlMediaError(code);
+    if (undecodable && !isMobilePlatform()) {
         rememberNativePlayer(attempt.target);
         attempt.nativeFallbackRequested = true;
         const intent = capturePlaybackIntent(state, attempt.pausedByUser);
@@ -1297,11 +968,31 @@ function handleHtmlMediaError(
 
     const message = code === 2
         ? "The video stream was interrupted. Check your connection and try again."
-        : "The embedded player could not continue playing this video. Try again.";
+        : undecodable
+            ? "This video can't be played on this device."
+            : "The embedded player could not continue playing this video. Try again.";
+    // A repackaged container that still will not decode has nothing left to
+    // retry: the streams inside are ones this device has no decoder for. Point
+    // at the one thing that can still work rather than at a button that cannot.
+    const action = undecodable && isRemuxableVideo(attempt.target.name)
+        ? downloadInstead(attempt.target)
+        : null;
     void playbackTransitions.run(attempt.generation, async (isCurrent) => {
         await releaseActive();
-        if (isCurrent()) setError(message);
+        if (isCurrent()) setError(message, action);
     });
+}
+
+// downloadInstead is the escape from a file this device cannot play: the share
+// sheet hands it to an app that can.
+function downloadInstead(target: VideoOpenTarget): ErrorAction {
+    return {
+        label: "Download",
+        run: () => {
+            appActions().downloadFile({ id: target.id, name: target.name, size: target.size || 0 });
+            void closeVideoModal();
+        },
+    };
 }
 
 async function promoteHtmlToNative(
@@ -1339,9 +1030,18 @@ async function openNativePlayback(
     let opened: NativeMediaOpenResult | null = null;
     let owner: "none" | "html" | "native" | "adapter" = existing ? "html" : "none";
     try {
+        // Re-attaching an existing session never re-prompts: its token was only
+        // handed out after the file was unlocked once.
         const result = existing
             ? await attachNativeMedia(existing.token, rect)
-            : await openNativeMedia(attempt.target.id, rect);
+            : await accessEncryptedResource(
+                Boolean(attempt.target.encrypted),
+                () => openNativeMedia(attempt.target.id, rect),
+            );
+        if (!result) {
+            if (isCurrent()) await closeVideoModal();
+            return;
+        }
         opened = result;
         owner = "native";
         if (existing && opened.token !== existing.token) {
@@ -1476,15 +1176,36 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
     activeOpenAttempt = attempt;
 
     updateMediaText(target.name || "Video", target.size || 0);
+    videoEl.removeAttribute("poster");
     clearError();
     setLoadingStatusOverride("");
     setLoading(true);
     setChromeVisible(true);
     modalEl.style.display = "flex";
     modalEl.setAttribute("aria-hidden", "false");
+    // Take the phone's system bars for the duration. A player is the one
+    // surface that wants the whole screen, and on Android it is also the only
+    // way to be rid of the band the system paints behind the navigation
+    // buttons, which lands on top of the picture.
+    setImmersive(true);
     activateModalOwnership(modalEl);
     a11y?.activate();
     void geometry?.syncFullscreenState();
+
+    // A container iOS cannot demux and the backend will not repackage fails no
+    // matter how long it is given, so do not open a media session for it: that
+    // would spend Telegram bandwidth and API calls to reach a guaranteed
+    // failure, and leave the reader looking at a Retry button that can never
+    // work. Offer the download instead, which hands the file to the share sheet
+    // and on to a player that can open it.
+    if (isIOSPlatform() && !isIOSPlayableVideo(target.name) && !isRemuxableVideo(target.name)) {
+        const format = videoFormatLabel(target.name);
+        setError(
+            `iOS cannot open ${format} files. Download it to play in another app.`,
+            downloadInstead(target),
+        );
+        return;
+    }
 
     await playbackTransitions.run(attempt.generation, async (isCurrent) => {
         await releaseActive();
@@ -1493,8 +1214,9 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
         setLoading(true);
         // A container the webview handles goes to the HTML player, unless it
         // already failed to decode this very file: then the native player
-        // opens first and the failed attempt is not paid again.
-        if (isWebviewDirectVideo(attempt.target.name) && !prefersNativePlayer(attempt.target)) {
+        // opens first and the failed attempt is not paid again. Phones have
+        // no native player, so every container goes through <video>.
+        if (isMobilePlatform() || (isWebviewDirectVideo(attempt.target.name) && !prefersNativePlayer(attempt.target))) {
             await openHtmlPlayback(attempt, isCurrent);
             return;
         }
@@ -1530,6 +1252,7 @@ export async function closeVideoModal() {
     if (!playbackTransitions.isCurrent(generation)) return;
     modalEl.style.display = "none";
     modalEl.setAttribute("aria-hidden", "true");
+    setImmersive(false);
     deactivateModalOwnership(modalEl);
     a11y?.deactivate();
     await playbackTransitions.run(generation, async () => releaseActive());
@@ -1539,12 +1262,6 @@ export async function closeVideoModal() {
     setLoading(false);
 }
 
-
-// nextPresetRate steps to the first preset above the current rate and wraps at
-// the top, so a custom rate from the slider still lands on a sensible next step.
-function nextPresetRate(current: number) {
-    return RATE_OPTIONS.find((rate) => rate > current + 0.001) ?? RATE_OPTIONS[0];
-}
 
 function isSpeedMenuOpen() {
     return Boolean(speedMenuEl?.classList.contains("is-open"));
@@ -1698,7 +1415,10 @@ function handleVideoShortcut(event: KeyboardEvent) {
     }
 }
 
-function handleVideoPointerMove() {
+function handleVideoPointerMove(event: PointerEvent) {
+    // A finger dragging across the phone player is a gesture, not a request
+    // for the controls.
+    if (event.pointerType === "touch" && isMobilePlatform()) return;
     revealChrome();
 }
 
@@ -1709,39 +1429,80 @@ function targetIsVideoChrome(target: EventTarget | null) {
 
 function handleStageClick(event: MouseEvent) {
     if (activeNative?.presentation === "standalone") return;
+    if (stagePointerTouch && isMobilePlatform()) return;
     if (targetIsVideoChrome(event.target)) return;
     transport?.togglePlayback();
 }
 
 function handleStageDoubleClick(event: MouseEvent) {
     if (activeNative?.presentation === "standalone") return;
+    if (stagePointerTouch && isMobilePlatform()) return;
     if (targetIsVideoChrome(event.target)) return;
     event.preventDefault();
     void geometry?.toggleFullscreen();
 }
 
+function trackStagePointer(event: PointerEvent) {
+    stagePointerTouch = event.pointerType === "touch";
+    stagePointerOnChrome = targetIsVideoChrome(event.target);
+}
+
+// Phone gestures: a tap toggles the controls, a double tap on either side
+// seeks ten seconds (in the middle it toggles playback) and a swipe down
+// closes the player.
+function videoTouchHandlers(): TouchGestureHandlers {
+    const shell = () => byID<HTMLElement>("video-shell");
+    return {
+        tap: () => {
+            if (!isOpen() || hasError || stagePointerOnChrome) return;
+            if (modalEl?.classList.contains("is-video-chrome-visible")) {
+                clearChromeTimer();
+                setChromeVisible(false);
+            } else {
+                revealChrome();
+            }
+        },
+        doubleTap: (x) => {
+            if (!isOpen() || hasError || stagePointerOnChrome || !stageEl) return;
+            const { left, width } = stageEl.getBoundingClientRect();
+            const across = (x - left) / Math.max(1, width);
+            if (across < 1 / 3) transport?.seekBy(-SEEK_STEP_SECONDS);
+            else if (across > 2 / 3) transport?.seekBy(SEEK_STEP_SECONDS);
+            else transport?.togglePlayback();
+        },
+        dragStart: (axis) => axis === "y" && isOpen() && !stagePointerOnChrome && !isAnyMenuOpen(),
+        drag: (_dx, dy) => {
+            const el = shell();
+            if (!el) return;
+            const drop = Math.max(0, dy);
+            el.style.transition = "none";
+            el.style.transform = `translate3d(0, ${drop}px, 0)`;
+            el.style.opacity = String(Math.max(0.4, 1 - drop / 480));
+        },
+        dragEnd: (_dx, dy, _axis, velocity) => {
+            const el = shell();
+            if (!el) return;
+            el.style.transition = "";
+            el.style.transform = "";
+            el.style.opacity = "";
+            if (dy > 120 || (dy > 32 && velocity > 0.6)) void closeVideoModal();
+        },
+    };
+}
+
 function bindEncryptedMediaLifecycle() {
     if (unsubscribeEncryptedMediaSessionsClosed) return;
     unsubscribeEncryptedMediaSessionsClosed = onRuntimeEvent("encrypted_media_sessions_closed", () => {
+        // The warmed next item goes first, whatever is on screen. It was
+        // opened while the vault was open and is taken without asking for a
+        // password -- that is the point of warming one -- so a lock has to
+        // drop it, or the next item plays from a session the backend has
+        // already closed and the reader is never asked to unlock.
+        void mediaPrefetcher.discard();
         if (!activeOpenAttempt || (!activeOpenAttempt.target.encrypted && !activeMediaEncrypted)) return;
         void closeVideoModal();
     });
 }
-
-function renderSpeedOptions() {
-    if (!speedMenuEl) return;
-    const options = RATE_OPTIONS.map(speedOptionMarkup).join("");
-    speedMenuEl.innerHTML = `<div class="video-speed-adjustment"><label class="video-settings-field" for="video-speed-slider"><span>Playback speed <output id="video-speed-value">1x</output></span><input id="video-speed-slider" class="video-settings-range" type="range" min="${MIN_PLAYBACK_RATE}" max="${MAX_PLAYBACK_RATE}" step="0.05" value="1" aria-valuetext="1 times" /></label><div class="video-range-endpoints" aria-hidden="true"><span>${MIN_PLAYBACK_RATE}x</span><span>${MAX_PLAYBACK_RATE}x</span></div></div><div class="video-speed-presets" role="menu" aria-label="Speed presets">${options}</div>${customSpeedMarkup()}`;
-}
-
-function speedOptionMarkup(rate: number) {
-    return `<button type="button" role="menuitemradio" data-rate="${rate}" aria-checked="${rate === 1 ? "true" : "false"}"><span class="video-menu-check" aria-hidden="true">✓</span><span>${formatRate(rate)}x</span></button>`;
-}
-
-function customSpeedMarkup() {
-    return `<form class="video-speed-custom" role="none" aria-label="Custom playback speed"><label for="video-speed-custom-input">Custom</label><div class="video-speed-custom-row"><input id="video-speed-custom-input" type="number" inputmode="decimal" min="${MIN_PLAYBACK_RATE}" max="${MAX_PLAYBACK_RATE}" step="0.05" value="1" aria-label="Custom playback speed" /><span aria-hidden="true">x</span><button type="submit">Set</button></div></form>`;
-}
-
 
 export function teardownVideoModal(): void {
     playbackTransitions.begin();
@@ -1755,6 +1516,7 @@ export function teardownVideoModal(): void {
         modalEl.setAttribute("aria-hidden", "true");
     }
 
+    setImmersive(false);
     if (modalEl) deactivateModalOwnership(modalEl);
     a11y?.deactivate();
     a11y = null;
@@ -1762,6 +1524,9 @@ export function teardownVideoModal(): void {
     unbindVideoDOM = null;
     unbindSpeedMenu?.();
     unbindSpeedMenu = null;
+    unbindTouchGestures?.();
+    unbindTouchGestures = null;
+    stageEl?.removeEventListener("pointerdown", trackStagePointer);
     nativeStateRouter.unbind();
     unsubscribeEncryptedMediaSessionsClosed?.();
     unsubscribeEncryptedMediaSessionsClosed = null;
@@ -1835,14 +1600,15 @@ export function activateVideoModal(): () => void {
         speedButton: speedBtnEl,
         speedMenu: speedMenuEl,
     } = videoDOM);
-    audioPicker = new TrackPicker("Audio", null, (adapter, id) => {
-        if (id !== null) adapter.setAudioTrack(id);
-    }, videoDOM.audioPicker);
+    audioPicker = new TrackPicker("Audio", null, (player, id) => {
+        if (id !== null) player.setAudioTrack(id);
+    }, videoDOM.audioPicker, trackPickerHost);
     subtitlePicker = new TrackPicker(
         "Subtitles",
         "Off",
-        (adapter, id) => adapter.setSubtitleTrack(id),
+        (player, id) => player.setSubtitleTrack(id),
         videoDOM.subtitlePicker,
+        trackPickerHost,
     );
 
     if (!modalEl || !videoEl || !stageEl) {
@@ -1901,7 +1667,7 @@ export function activateVideoModal(): () => void {
     });
     bindEncryptedMediaLifecycle();
     nativeStateRouter.bind();
-    renderSpeedOptions();
+    if (speedMenuEl) speedMenuEl.innerHTML = speedMenuMarkup();
     transport.bind();
     unbindSpeedMenu = bindSpeedMenu();
     bindSettingsPanel();
@@ -1923,6 +1689,10 @@ export function activateVideoModal(): () => void {
         syncActivePanelGeometry();
         applyHtmlPicture();
     });
+    if (isMobilePlatform()) {
+        stageEl.addEventListener("pointerdown", trackStagePointer);
+        unbindTouchGestures = bindTouchGestures(stageEl, videoTouchHandlers());
+    }
     applyState(EMPTY_PLAYER_STATE);
     return teardownVideoModal;
 }

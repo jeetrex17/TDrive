@@ -1027,15 +1027,13 @@ func TestPUTResumeConcurrentSequencesForDifferentPathsDoNotInterfere(t *testing.
 	results := make([]int, 2)
 	paths := []string{"/Docs/a.bin", "/Docs/b.bin"}
 	for index, path := range paths {
-		group.Add(1)
-		go func(index int, path string) {
-			defer group.Done()
+		group.Go(func() {
 			request := trustedRequest(http.MethodPut, testCapability+path, strings.NewReader("BBBB"))
 			request.Header.Set("Content-Range", "bytes 4-7/8")
 			recorder := httptest.NewRecorder()
 			handler.ServeHTTP(recorder, request)
 			results[index] = recorder.Code
-		}(index, path)
+		})
 	}
 	group.Wait()
 

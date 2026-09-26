@@ -20,6 +20,11 @@ type hardDeleteScope struct {
 	objectKind string
 	fileMsgID  int64
 	revision   int64
+	// trashed marks a root that was already hidden by an earlier trash
+	// operation. Its namespace rows are final, so the marker only has to
+	// destroy content; re-running the tombstone would advance the object's
+	// body revision past its own row.
+	trashed bool
 }
 
 // applyHardDeleteTree validates the complete Telegram body set and hides the
@@ -70,6 +75,9 @@ func applyHardDeleteTree(tx *sql.Tx, channelID, markerMsgID int64, op Op) error 
 	if err := removeHardDeleteTrashEntriesTx(tx, scope); err != nil {
 		return err
 	}
+	if scope.trashed {
+		return nil
+	}
 	if scope.objectKind == ObjectKindFile {
 		return trashFileTreeRoot(tx, channelID, scope.objectID, scope.revision)
 	}
@@ -92,16 +100,33 @@ func loadHardDeleteScope(tx *sql.Tx, channelID int64, op Op) (hardDeleteScope, e
 	if err != nil {
 		return hardDeleteScope{}, err
 	}
+	// A hard delete targets either a live object (the mount's "delete without
+	// trashing") or one already sitting in the trash (a purge). A tombstoned
+	// root is only addressable while it still holds a trash entry, so a second
+	// marker for an already-purged object stays rejected.
 	var revision int64
+	var tombstoned int
 	err = tx.QueryRow(`
-		SELECT revision FROM dirents
-		WHERE channel_id=? AND object_id=? AND tombstoned=0
-	`, channelID, op.Obj).Scan(&revision)
+		SELECT revision, tombstoned FROM dirents
+		WHERE channel_id=? AND object_id=?
+	`, channelID, op.Obj).Scan(&revision, &tombstoned)
 	if errors.Is(err, sql.ErrNoRows) {
 		return hardDeleteScope{}, ErrObjectNotFound
 	}
 	if err != nil {
 		return hardDeleteScope{}, fmt.Errorf("projection: read hard-delete root: %w", err)
+	}
+	if tombstoned != 0 {
+		var one int
+		err := tx.QueryRow(`
+			SELECT 1 FROM trash_entries WHERE channel_id=? AND object_id=?
+		`, channelID, op.Obj).Scan(&one)
+		if errors.Is(err, sql.ErrNoRows) {
+			return hardDeleteScope{}, ErrObjectNotFound
+		}
+		if err != nil {
+			return hardDeleteScope{}, fmt.Errorf("projection: read hard-delete trash entry: %w", err)
+		}
 	}
 	if revision != op.ExpectedRevision {
 		return hardDeleteScope{}, ErrRevisionConflict
@@ -112,6 +137,7 @@ func loadHardDeleteScope(tx *sql.Tx, channelID int64, op Op) (hardDeleteScope, e
 		objectID:   op.Obj,
 		objectKind: kind,
 		revision:   revision,
+		trashed:    tombstoned != 0,
 	}
 	if kind == ObjectKindFile {
 		scope.fileMsgID, err = parseFileMsgID(op.Obj)
@@ -354,12 +380,18 @@ func createHardDeletePlanTx(tx *sql.Tx, scope hardDeleteScope, markerMsgID int64
 			  ON parts.channel_id=revisions.channel_id
 			 AND parts.upload_uuid=revisions.upload_uuid
 			WHERE revisions.channel_id=? AND revisions.upload_uuid!=''
+			UNION
+			SELECT r.msg_id FROM file_renditions r
+			JOIN affected_files ON affected_files.file_msg_id=r.file_msg_id
+			JOIN files f ON f.channel_id=r.channel_id AND f.msg_id=r.file_msg_id
+			WHERE r.channel_id=? AND (EXISTS(SELECT 1 FROM channels c WHERE c.channel_id=r.channel_id AND c.kind='personal')
+			 OR (r.actor_user_id>0 AND r.actor_user_id=f.uploader_user_id))
 		)
 		INSERT INTO hard_delete_plan_items (channel_id, op_id, msg_id)
 		SELECT ?, ?, msg_id FROM body_messages
 		WHERE msg_id>0 AND msg_id!=?
 	`)
-	args = append(args, scope.channelID, scope.channelID, scope.channelID, opID, markerMsgID)
+	args = append(args, scope.channelID, scope.channelID, scope.channelID, scope.channelID, opID, markerMsgID)
 	if _, err := tx.Exec(query, args...); err != nil {
 		return fmt.Errorf("projection: capture hard-delete body plan: %w", err)
 	}
@@ -390,6 +422,19 @@ func clearHardDeleteRetentionTx(tx *sql.Tx, scope hardDeleteScope) error {
 }
 
 func removeHardDeletedPartPointersTx(tx *sql.Tx, scope hardDeleteScope) error {
+	// The normalized deletion plan already owns every receipt. Remove hidden
+	// rendition pointers on secondary clients too, including duplicate blobs.
+	for _, tail := range []string{
+		`DELETE FROM file_parts WHERE channel_id=? AND msg_id IN (
+		 SELECT msg_id FROM file_renditions WHERE channel_id=? AND file_msg_id IN (SELECT file_msg_id FROM affected_files))`,
+		`DELETE FROM file_renditions WHERE channel_id=? AND channel_id=? AND file_msg_id IN (SELECT file_msg_id FROM affected_files)`,
+	} {
+		query, args := scope.withAffectedFiles(tail)
+		args = append(args, scope.channelID, scope.channelID)
+		if _, err := tx.Exec(query, args...); err != nil {
+			return fmt.Errorf("projection: clear hard-delete renditions: %w", err)
+		}
+	}
 	query, args := scope.withAffectedFiles(`
 		DELETE FROM file_parts
 		WHERE channel_id=? AND upload_uuid IN (

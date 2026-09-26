@@ -1,3 +1,20 @@
+// Package lifecycle owns which drive is active and the coarse refreshes over
+// it: activation, incremental sync, full projection rebuild, and kicking off
+// the personal backfill. It implements none of that work — the syncer, the
+// backfiller and the rebuild function are all injected. It does not manage
+// application startup, shutdown or mounts, despite the name.
+//
+// The ordering rule worth knowing is snapshot invalidation. Incremental sync
+// commits one page at a time, so mounted snapshots are invalidated on both
+// success and failure; a rebuild is all-or-nothing and invalidates only on
+// success. Reconciling files whose Telegram messages were deleted outside
+// TDrive runs only after a successful incremental and is best-effort, so it can
+// never turn a good sync into a failed one.
+//
+// Backfill is fire-and-forget but not unbounded: at most one goroutine per
+// channel exists at a time, and a panic inside it is recovered into an error
+// event rather than taking the process down. It inherits the context of the
+// call that started it, so there is no separate stop.
 package lifecycle
 
 import (
@@ -100,6 +117,16 @@ func NewService(c Config) *Service {
 }
 
 func (s *Service) UsePersonalChannel(ctx context.Context, channelID int64) error {
+	if err := s.RestorePersonalChannel(channelID); err != nil {
+		return err
+	}
+	s.kickoffPersonalBackfill(ctx, channelID)
+	return nil
+}
+
+// RestorePersonalChannel applies saved local state without opening Telegram.
+// Network work resumes only after the caller has verified the login session.
+func (s *Service) RestorePersonalChannel(channelID int64) error {
 	if channelID == 0 || s.DB == nil {
 		return nil
 	}
@@ -109,7 +136,6 @@ func (s *Service) UsePersonalChannel(ctx context.Context, channelID int64) error
 	}
 	s.Active.Set(channelID)
 	slog.Info("lifecycle: active drive set", "channel_id", channelID)
-	s.kickoffPersonalBackfill(ctx, channelID)
 	return nil
 }
 

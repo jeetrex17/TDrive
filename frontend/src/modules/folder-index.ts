@@ -94,10 +94,10 @@ export function refreshFolderIndex(): Promise<FolderIndex> {
     if (!driveKey) return buildFolderIndex();
 
     if (state.folderIndexCacheDriveKey === driveKey && state.folderIndexCache) {
-        return Promise.resolve(state.folderIndexCache as FolderIndex);
+        return Promise.resolve(state.folderIndexCache);
     }
     if (state.folderIndexBuildDriveKey === driveKey && state.folderIndexBuildPromise) {
-        return state.folderIndexBuildPromise as Promise<FolderIndex>;
+        return state.folderIndexBuildPromise;
     }
 
     const generation = folderIndexGeneration(driveKey);

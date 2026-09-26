@@ -5,7 +5,9 @@
 import { state } from '../state';
 import { getEncryptionStatus } from '../api';
 import { openEncryptionPasswordModal } from './modals/encryption-password';
+import { openEncryptionSetupModal } from './modals/encryption-setup';
 import { encryptionEntryVisible } from '../ui/chrome/profile-store';
+import { isEncryptionPasswordRequired } from './errors';
 
 export async function loadEncryptionStatus(): Promise<void> {
     try {
@@ -34,6 +36,26 @@ export function renderEncryptionSettingsEntry() {
 // requireEncryptionPassword gates encrypted file access and encrypted mounts.
 // It resolves to true on success and false when the user cancels.
 export async function requireEncryptionPassword(): Promise<boolean> {
+    if (!state.encryption?.loaded) await loadEncryptionStatus();
     if (state.encryption?.passwordRemembered) return true;
-    return openEncryptionPasswordModal() as Promise<boolean>;
+    return state.encryption?.passwordSet
+        ? openEncryptionPasswordModal() as Promise<boolean>
+        : openEncryptionSetupModal();
+}
+
+// Opens a protected resource after one password prompt. The metadata hint
+// avoids a doomed backend call for known encrypted files; the error fallback
+// covers stale or incomplete list metadata returned by older projections.
+export async function accessEncryptedResource<T>(
+    encrypted: boolean,
+    open: () => Promise<T>,
+): Promise<T | null> {
+    if (encrypted && !await requireEncryptionPassword()) return null;
+    try {
+        return await open();
+    } catch (error) {
+        if (!isEncryptionPasswordRequired(error)) throw error;
+        if (!await openEncryptionPasswordModal()) return null;
+        return open();
+    }
 }

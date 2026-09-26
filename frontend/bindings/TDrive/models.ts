@@ -72,6 +72,43 @@ export interface EncryptionStatus {
 }
 
 /**
+ * GalleryItem keeps existing file wire fields while adding immutable content
+ * identity. Pixel caches must use content identity, never a filename alone.
+ */
+export interface GalleryItem {
+    "name": string;
+    "size": number;
+    "msg_id": number;
+    "parent_id": string;
+    "upload_time": number;
+    "uploader_id": number;
+    "encrypted"?: boolean;
+    "plaintext_size"?: number;
+    "content_msg_id": number;
+    "content_hash": string;
+    "revision": number;
+}
+
+export interface GalleryPage {
+    "generation": string;
+    "start_index": number;
+    "anchor_offset": number;
+    "items": GalleryItem[] | null;
+    "next_cursor": string;
+}
+
+/**
+ * GalleryStorage separates disposable media from the durable local catalog.
+ * Saved downloads are user files and are never included in cache cleanup.
+ */
+export interface GalleryStorage {
+    "cache_bytes": number;
+    "cache_limit": number;
+    "cache_entries": number;
+    "catalog_bytes": number;
+}
+
+/**
  * JoinDriveResult distinguishes instant joins from approval-required requests.
  */
 export interface JoinDriveResult {
@@ -213,6 +250,95 @@ export interface PersonalDriveSetupState {
     "active_channel_id": string;
 }
 
+/**
+ * PhotoBackupAsset is the native/frontend handoff shape for one discovered
+ * photo-library or watched-folder item.
+ */
+export interface PhotoBackupAsset {
+    "id": string;
+    "version": string;
+    "name": string;
+    "media_type": string;
+    "resource_id": string;
+    "modified_at": number;
+
+    /**
+     * CreatedAt is the capture time in Unix milliseconds, or 0 when the host
+     * does not know it. Editing a photo moves ModifiedAt; this stays put.
+     */
+    "created_at": number;
+
+    /**
+     * RelDir is where the asset sits below its source, "/" separated, empty at
+     * the top of it. A library or an album has no tree and never sets it; a
+     * watched folder on a phone is enumerated by the host, so this is the only
+     * thing that can say which subfolder a photo came out of.
+     */
+    "rel_dir": string;
+    "size": number;
+}
+
+export interface PhotoBackupCapabilities {
+    "wifi_only": PhotoBackupCapability;
+    "access": {"status": string, "detail": string};
+}
+
+export interface PhotoBackupCapability {
+    "supported": boolean;
+    "label": string;
+    "detail": string;
+}
+
+export interface PhotoBackupPolicy {
+    "wifi": boolean;
+    "observed_at": number;
+}
+
+export interface PhotoBackupSettings {
+    "enabled": boolean;
+    "photos": boolean;
+    "videos": boolean;
+    "wifi_only": boolean;
+    "destination_parent_id": string;
+    "encrypt": boolean;
+}
+
+export interface PhotoBackupSource {
+    "id": string;
+    "kind": string;
+    "name": string;
+    "root": string;
+    "enabled": boolean;
+    "added_at": number;
+}
+
+export interface PhotoBackupState {
+    "settings": PhotoBackupSettings;
+    "sources": PhotoBackupSource[] | null;
+    "status": PhotoBackupStatus;
+    "platform": string;
+    "capabilities": PhotoBackupCapabilities;
+    "destination": {"id": string, "title": string, "kind": string};
+    "manual_paused": boolean;
+    "encryption_required": boolean;
+}
+
+export interface PhotoBackupStatus {
+    "current_file": string;
+    "current_file_bytes_done": number;
+    "current_file_bytes_total": number;
+    "current_file_percent": number;
+    "phase": string;
+    "pending": number;
+    "uploading": number;
+    "complete": number;
+    "failed": number;
+    "paused"?: number;
+    "bytes_done": number;
+    "bytes_total": number;
+    "message": string;
+}
+
 export interface PreviewPayload {
     "data_base64": string;
     "mime_type": string;
@@ -224,6 +350,19 @@ export interface PreviewPayload {
 export interface PreviewResult {
     "result": OperationResult;
     "payload": PreviewPayload;
+}
+
+/**
+ * SafeAreaInsets is how much of each screen edge the OS reserves for its own
+ * chrome: the status bar and the gesture handle on a phone. Zero everywhere
+ * else. Android reports device pixels and iOS reports points, so the caller
+ * scales by the device pixel ratio; see ui/mobile/safe-area.ts.
+ */
+export interface SafeAreaInsets {
+    "top": number;
+    "bottom": number;
+    "left": number;
+    "right": number;
 }
 
 /**
@@ -245,6 +384,55 @@ export interface TDriveFile {
     "size": number;
     "access_hash": number;
     "date": number;
+}
+
+/**
+ * TrashEntry is one deleted object as the trash view needs it: what it was
+ * called, where it came from, and the two instants that bound how long it can
+ * still be brought back.
+ */
+export interface TrashEntry {
+    /**
+     * "f:2615" or "d:uuid"
+     */
+    "object_id": string;
+
+    /**
+     * "file" | "folder"
+     */
+    "kind": string;
+
+    /**
+     * original display name
+     */
+    "name": string;
+
+    /**
+     * human path it came from, "" for the drive root
+     */
+    "parent_path": string;
+
+    /**
+     * bytes, 0 for a folder
+     */
+    "size": number;
+
+    /**
+     * unix millis
+     */
+    "deleted_at": number;
+
+    /**
+     * unix millis
+     */
+    "purge_after": number;
+
+    /**
+     * What the trash view needs to render a row the way the drive rendered it,
+     * rather than as a generic icon and a name. Zero for a folder.
+     */
+    "revision": number;
+    "encrypted": boolean;
 }
 
 /**

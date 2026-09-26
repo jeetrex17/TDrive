@@ -412,6 +412,26 @@ func scanFileSlim(scanner sqlScanner) (FileSlim, error) {
 // for its current revision. The logical MsgID may identify a control message;
 // callers must use ContentMsgID or UploadUUID/PartCount to read bytes.
 func FileByID(db *sql.DB, channelID, msgID int64) (File, bool, error) {
+	return fileByID(db, channelID, msgID, `AND tombstoned=0`)
+}
+
+// FileByIDIncludingTrashed also finds a file that deletion tombstoned, provided
+// it is still listed in the trash.
+//
+// Trashing a file does not destroy its bytes -- that is what makes it
+// restorable -- so a trash row is as entitled to its thumbnail as the drive row
+// it came from. The trash_entries join is what keeps that narrow: a file that
+// was purged, or tombstoned by anything other than a trash, has no entry and
+// stays as unreachable as it was before.
+func FileByIDIncludingTrashed(db *sql.DB, channelID, msgID int64) (File, bool, error) {
+	return fileByID(db, channelID, msgID, `AND (tombstoned=0 OR EXISTS (
+		SELECT 1 FROM trash_entries entry
+		WHERE entry.channel_id=files.channel_id
+		  AND entry.object_id='f:'||files.msg_id
+	))`)
+}
+
+func fileByID(db *sql.DB, channelID, msgID int64, tombstoneClause string) (File, bool, error) {
 	if db == nil {
 		return File{}, false, fmt.Errorf("projection: file by id: db is nil")
 	}
@@ -426,8 +446,7 @@ func FileByID(db *sql.DB, channelID, msgID int64) (File, bool, error) {
 		       encryption_version, content_msg_id, content_hash, revision,
 		       upload_uuid, part_count
 		FROM files
-		WHERE channel_id=? AND msg_id=? AND tombstoned=0
-	`, channelID, msgID).Scan(
+		WHERE channel_id=? AND msg_id=? `+tombstoneClause, channelID, msgID).Scan(
 		&file.ChannelID, &file.MsgID, &file.Name, &file.Size, &file.ParentID,
 		&file.UploadTime, &file.UploaderUserID, &tombstoned, &encrypted,
 		&file.PlaintextSize, &file.EncryptionVersion, &file.ContentMsgID,
@@ -515,10 +534,30 @@ func Search(db *sql.DB, channelID int64, query string, limit int) ([]SearchHit, 
 	return results, nil
 }
 
-func AllFileMsgIDs(db *sql.DB, channelID int64) ([]int64, error) {
+// ManagedMsgIDs returns every Telegram message in this channel that TDrive
+// owns, so the root listing can tell its own storage apart from whatever else
+// was posted to the channel.
+//
+// Deleted files are deliberately included. A trashed file is tombstoned in the
+// projection while its Telegram message stays in the channel until the purge
+// deadline -- that is what makes a restore possible. Reading only live rows
+// therefore made every deletion look like someone else's upload, and the file
+// the user had just deleted reappeared at the root of My Drive as an unmanaged
+// row that nothing could open. The question this answers is "is this message
+// ours", not "is this file alive", and a tombstone does not hand ownership
+// back.
+//
+// Content messages count as much as the file message does: an overwritten file
+// keeps one message per revision, and every one of those is TDrive's.
+func ManagedMsgIDs(db *sql.DB, channelID int64) ([]int64, error) {
 	rows, err := db.Query(`
-		SELECT msg_id FROM files
-		WHERE channel_id = ? AND tombstoned = 0
+		SELECT msg_id FROM files WHERE channel_id = ?1
+		UNION
+		SELECT content_msg_id FROM files
+		WHERE channel_id = ?1 AND content_msg_id > 0
+		UNION
+		SELECT content_msg_id FROM file_revisions
+		WHERE channel_id = ?1 AND content_msg_id > 0
 	`, channelID)
 	if err != nil {
 		return nil, err

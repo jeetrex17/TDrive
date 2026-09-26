@@ -8,7 +8,10 @@ import (
 	"strings"
 )
 
-const wireVersionPrefix = "TDX1"
+const (
+	wireVersionPrefix    = "TDX1"
+	maxWireUnixTimestamp = int64(253402300799) // 9999-12-31T23:59:59Z, SQLite's upper bound.
+)
 
 var (
 	ErrWireMissingHeader = errors.New("wire: header missing")
@@ -260,6 +263,22 @@ func Parse(raw string) (Op, error) {
 		if err := setPositiveInt64(&op.ExpectedRevision, kv["rev"]); err != nil {
 			return Op{}, err
 		}
+	case OpRestoreTree:
+		if err := setWritableEnvelope(&op, kv); err != nil {
+			return Op{}, err
+		}
+		if err := setObjAny(&op, kv["obj"]); err != nil {
+			return Op{}, err
+		}
+		if err := setParent(&op, kv["p"]); err != nil {
+			return Op{}, err
+		}
+		if err := setName(&op, kv["n"]); err != nil {
+			return Op{}, err
+		}
+		if err := setPositiveInt64(&op.ExpectedRevision, kv["rev"]); err != nil {
+			return Op{}, err
+		}
 	default:
 		return Op{}, ErrWireBadOpType
 	}
@@ -273,7 +292,7 @@ func Parse(raw string) (Op, error) {
 	}
 	if s, ok := kv["ts"]; ok {
 		n, err := strconv.ParseInt(s, 10, 64)
-		if err != nil || n < 0 {
+		if err != nil || n < 0 || n > maxWireUnixTimestamp {
 			return Op{}, ErrWireMalformed
 		}
 		op.FileUploadTime = n
@@ -299,6 +318,16 @@ func Parse(raw string) (Op, error) {
 		op.PlaintextSize = n
 	}
 
+	if raw, ok := kv["rend"]; ok {
+		if op.Type != OpFilePart {
+			return Op{}, ErrWireMalformed
+		}
+		r, err := parseRendition(raw)
+		if err != nil {
+			return Op{}, err
+		}
+		op.Rendition = r
+	}
 	return op, nil
 }
 
@@ -450,8 +479,22 @@ func Format(op Op) string {
 		b.WriteString(op.Obj)
 		b.WriteString("|rev=")
 		b.WriteString(strconv.FormatInt(op.ExpectedRevision, 10))
+	case OpRestoreTree:
+		appendWritableEnvelope(&b, op)
+		b.WriteString("|obj=")
+		b.WriteString(op.Obj)
+		b.WriteString("|p=")
+		b.WriteString(op.Parent)
+		b.WriteString("|n=")
+		b.WriteString(url.QueryEscape(op.Name))
+		b.WriteString("|rev=")
+		b.WriteString(strconv.FormatInt(op.ExpectedRevision, 10))
 	}
 
+	if op.Rendition != nil {
+		b.WriteString("|rend=")
+		b.WriteString(formatRendition(*op.Rendition))
+	}
 	return b.String()
 }
 

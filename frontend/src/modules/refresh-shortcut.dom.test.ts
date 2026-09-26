@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { activateModalOwnership, deactivateModalOwnership } from '../ui/modals/modal-a11y';
 import { handleRefreshShortcut } from './refresh-shortcut';
 
 function shortcut(overrides: KeyboardEventInit = {}): KeyboardEvent {
@@ -52,9 +53,8 @@ describe('handleRefreshShortcut', () => {
         expect(repeated.defaultPrevented).toBe(true);
 
         const dialog = document.createElement('div');
-        dialog.setAttribute('role', 'dialog');
-        dialog.setAttribute('aria-modal', 'true');
         document.body.append(dialog);
+        activateModalOwnership(dialog);
         const modalEvent = shortcut();
 
         const handled = handleRefreshShortcut(modalEvent, refresh);
@@ -62,5 +62,21 @@ describe('handleRefreshShortcut', () => {
         expect(handled).toBe(true);
         expect(modalEvent.defaultPrevented).toBe(true);
         expect(refresh).not.toHaveBeenCalled();
+
+        deactivateModalOwnership(dialog);
+    });
+
+    it('refreshes again once the last dialog has closed', () => {
+        const refresh = vi.fn();
+        const dialog = document.createElement('div');
+        document.body.append(dialog);
+
+        activateModalOwnership(dialog);
+        expect(handleRefreshShortcut(shortcut(), refresh)).toBe(true);
+        expect(refresh).not.toHaveBeenCalled();
+
+        deactivateModalOwnership(dialog);
+        expect(handleRefreshShortcut(shortcut(), refresh)).toBe(true);
+        expect(refresh).toHaveBeenCalledTimes(1);
     });
 });

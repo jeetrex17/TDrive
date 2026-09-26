@@ -2,6 +2,12 @@
 // The active stack has one keyboard owner: the topmost dialog. While it is
 // open, every other branch of the application is inert and hidden from the
 // accessibility tree. This also makes nested dialogs behave as one stack.
+//
+// Android's BACK is the same press as Escape, so it is answered from here
+// rather than by each dialog: anything that installs a close path gets BACK
+// for free, and the two can never disagree about what is on top.
+
+import { pushSheet, type SheetHandle } from './sheet-stack';
 
 const FOCUSABLE = [
     'a[href]',
@@ -136,6 +142,21 @@ export function installModalA11y(
 ) {
     let lastActive: Element | null = null;
     let active = false;
+    let backEntry: SheetHandle | null = null;
+
+    // Registers this dialog as the surface BACK dismisses next.
+    const claimBack = (): void => {
+        if (!requestClose || backEntry) return;
+        backEntry = pushSheet(() => {
+            // The stack has already dropped this entry.
+            backEntry = null;
+            requestClose();
+            // A press can land on an inner layer instead -- the video player's
+            // playlist, say -- and leave the dialog itself open. It is still
+            // the surface the next press belongs to, so claim it again.
+            if (active) claimBack();
+        });
+    };
 
     const focusable = (): HTMLElement[] =>
         Array.from(modal.querySelectorAll<HTMLElement>(FOCUSABLE)).filter(canFocus);
@@ -176,6 +197,7 @@ export function installModalA11y(
             active = true;
             lastActive = document.activeElement instanceof Element ? document.activeElement : null;
             activateModalOwnership(modal);
+            claimBack();
             document.addEventListener('keydown', onKeydown, true);
             const target =
                 (typeof initialFocus === 'function' ? initialFocus() : initialFocus) || focusable()[0];
@@ -184,6 +206,8 @@ export function installModalA11y(
         deactivate() {
             if (!active) return;
             active = false;
+            backEntry?.release();
+            backEntry = null;
             document.removeEventListener('keydown', onKeydown, true);
             deactivateModalOwnership(modal);
             const restore = lastActive;

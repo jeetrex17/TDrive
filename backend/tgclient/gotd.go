@@ -285,6 +285,10 @@ func (g *Gotd) SendFile(ctx context.Context, peer InputPeer, r io.Reader, name, 
 }
 
 func (g *Gotd) SendFileWithRandomID(ctx context.Context, peer InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64), sendRandomID int64) (SendFileResult, error) {
+	return g.sendFileWithThumbnail(ctx, peer, r, name, caption, totalSize, onProgress, sendRandomID, nil)
+}
+
+func (g *Gotd) sendFileWithThumbnail(ctx context.Context, peer InputPeer, r io.Reader, name, caption string, totalSize int64, onProgress func(sent, total int64), sendRandomID int64, thumbnail []byte) (SendFileResult, error) {
 	if sendRandomID <= 0 {
 		return SendFileResult{}, fmt.Errorf("tgclient: random id must be positive")
 	}
@@ -323,6 +327,21 @@ func (g *Gotd) SendFileWithRandomID(ctx context.Context, peer InputPeer, r io.Re
 		return SendFileResult{}, fmt.Errorf("tgclient: upload: %w", err)
 	}
 
+	var thumbResult tg.InputFileClass
+	if len(thumbnail) > 0 {
+		thumbResult, err = u.Upload(ctx, uploader.NewUpload("thumbnail.jpg", bytes.NewReader(thumbnail), int64(len(thumbnail))))
+		if err != nil {
+			if ctx.Err() != nil {
+				return SendFileResult{}, ctx.Err()
+			}
+			// The original upload has already finished. An optional thumbnail
+			// must not force its bytes through Telegram a second time; publish
+			// the document normally and let portable renditions fill the grid.
+			slog.Warn("tgclient: optional document thumbnail unavailable", "error", err)
+			thumbResult = nil
+		}
+	}
+
 	var result SendFileResult
 	err = g.writes.Do(ctx, writeClassMessage, func() error {
 		return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
@@ -338,6 +357,9 @@ func (g *Gotd) SendFileWithRandomID(ctx context.Context, peer InputPeer, r io.Re
 				},
 				RandomID: sendRandomID,
 				Message:  caption,
+			}
+			if thumbResult != nil {
+				req.Media.(*tg.InputMediaUploadedDocument).SetThumb(thumbResult)
 			}
 			updates, err := api.MessagesSendMedia(ctx, req)
 			if err != nil {

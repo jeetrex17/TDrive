@@ -1,3 +1,24 @@
+// Package read is the read-only view of the drive. It emits no ops, writes no
+// rows and holds no cache across calls; each method is a mapping over a
+// projection query.
+//
+// A zero channel id means "no drive selected yet" and is a normal empty result
+// rather than an error on nearly every method. Folder paths are built with a
+// visited set because a parent chain can contain a cycle or a missing link, and
+// a broken chain yields a shortened path rather than a failure — a damaged
+// projection stays browsable.
+//
+// Two methods break the pattern deliberately. Listing Telegram's root bypasses
+// the projection and reads history live, filtering out multipart part documents
+// by parsing their TDX1 header; the frontend cannot do that itself because part
+// msg ids live in the parts table and never in the files table. And the orphan
+// listing is the broken-parent-chain bucket, seeded only from files that have a
+// parent, so a root-level file is never an orphan.
+//
+// The gallery methods are a flat index independent of folder structure. They
+// thread an opaque generation token through anchors, lookups and neighbours so
+// paging stays consistent against a projection that is still being written, and
+// they return sparse seek keys and counts rather than every record.
 package read
 
 import (
@@ -217,14 +238,16 @@ func (s *Service) MediaFiles(channelID int64) ([]File, error) {
 	return out, nil
 }
 
-func (s *Service) AllFileMsgIDs(channelID int64) ([]int, error) {
+// ManagedMsgIDs reports which Telegram messages in a channel belong to TDrive,
+// deleted files included. See projection.ManagedMsgIDs for why.
+func (s *Service) ManagedMsgIDs(channelID int64) ([]int, error) {
 	if err := s.ready(); err != nil {
 		return nil, err
 	}
 	if channelID == 0 {
 		return []int{}, nil
 	}
-	ids64, err := projection.AllFileMsgIDs(s.DB, channelID)
+	ids64, err := projection.ManagedMsgIDs(s.DB, channelID)
 	if err != nil {
 		return nil, err
 	}
@@ -328,34 +351,6 @@ func fileFromProjection(f projection.FileSlim) File {
 		Encrypted:     f.Encrypted,
 		PlaintextSize: f.PlaintextSize,
 	}
-}
-
-func buildFolderPath(folders map[string]projection.FolderSlim, folderID string) string {
-	folderID = strings.TrimSpace(folderID)
-	if folderID == projection.RootParent {
-		return "My Drive"
-	}
-	names := make([]string, 0, 8)
-	visited := make(map[string]bool)
-	cur := folderID
-	for cur != projection.RootParent && !visited[cur] {
-		visited[cur] = true
-		folder, ok := folders[cur]
-		if !ok {
-			break
-		}
-		if name := strings.TrimSpace(folder.Name); name != "" {
-			names = append(names, name)
-		}
-		cur = strings.TrimSpace(folder.ParentID)
-	}
-	if len(names) == 0 {
-		return "My Drive"
-	}
-	for i, j := 0, len(names)-1; i < j; i, j = i+1, j-1 {
-		names[i], names[j] = names[j], names[i]
-	}
-	return "My Drive / " + strings.Join(names, " / ")
 }
 
 func buildFolderPathLazy(db *sql.DB, channelID int64, folderID string, cache map[string]projection.FolderSlim) (string, error) {

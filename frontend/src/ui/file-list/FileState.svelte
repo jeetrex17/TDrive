@@ -1,6 +1,7 @@
 <script lang="ts">
     import FolderIcon from '@lucide/svelte/icons/folder';
     import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
+    import type { FileListStateAction } from './types';
 
     type FileStateKind = 'loading' | 'empty' | 'error';
 
@@ -8,16 +9,14 @@
         kind: FileStateKind;
         title: string;
         body?: string;
-        actionLabel?: string;
-        onAction?: () => void;
+        actions?: readonly FileListStateAction[];
     }
 
     let {
         kind,
         title,
         body = '',
-        actionLabel = '',
-        onAction,
+        actions = [],
     }: FileStateProps = $props();
 </script>
 
@@ -47,9 +46,11 @@
     {#if body}
         <div class:sr-only={kind === 'loading'} class="file-state-body">{body}</div>
     {/if}
-    {#if actionLabel && onAction}
+    {#if actions.length > 0}
         <div class="file-state-actions">
-            <button class="secondary-btn" type="button" onclick={onAction}>{actionLabel}</button>
+            {#each actions as action (action.label)}
+                <button class="secondary-btn" type="button" onclick={action.onClick}>{action.label}</button>
+            {/each}
         </div>
     {/if}
 </div>

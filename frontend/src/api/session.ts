@@ -1,19 +1,21 @@
 import {
     CheckLoginStatus as rawCheckLoginStatus,
     CheckSystemStatus as rawCheckSystemStatus,
-    CreatePersonalDrive as rawCreatePersonalDrive,
-    DiscoverPersonalDrives as rawDiscoverPersonalDrives,
     LoginPhoneNumber as rawLoginPhoneNumber,
     Logout as rawLogout,
     Me as rawMe,
     MyUserID as rawMyUserId,
-    PreparePersonalDrive as rawPreparePersonalDrive,
     ResolveUsernames as rawResolveUsernames,
     SaveSetup as rawSaveSetup,
-    SelectPersonalDrive as rawSelectPersonalDrive,
     SubmitCode as rawSubmitCode,
     SubmitPassword as rawSubmitPassword,
 } from "../../bindings/TDrive/app";
+import {
+    CreatePersonalDrive as rawCreatePersonalDrive,
+    DiscoverPersonalDrives as rawDiscoverPersonalDrives,
+    PreparePersonalDrive as rawPreparePersonalDrive,
+    SelectPersonalDrive as rawSelectPersonalDrive,
+} from "../../bindings/TDrive/driveservice";
 import type { PersonalDriveCandidate, PersonalDriveSetup, SelfUser } from "../types";
 import { asRecord, finiteNumber } from "./shared";
 import { invokeBackend } from "./gateway";

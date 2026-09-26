@@ -36,8 +36,26 @@ func (s *Server) authSetup(apiID int, apiHash string) (AuthStatusResponse, error
 
 func (s *Server) authStatus(ctx context.Context) (AuthStatusResponse, error) {
 	status := AuthStatus{SystemStatus: s.engine.AuthService().SystemStatus()}
-	if status.SystemStatus != "NEEDS_SETUP" {
-		status.LoggedIn = s.engine.AuthService().IsLoggedIn(ctx)
+	if status.SystemStatus == "NEEDS_SETUP" {
+		return AuthStatusResponse{Status: status}, nil
+	}
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	if s.authFlowActive {
+		status.LoggedIn = s.authReady
+		return AuthStatusResponse{Status: status}, nil
+	}
+	if !s.authReady {
+		s.authReady = s.engine.AuthService().IsLoggedIn(ctx)
+	}
+	status.LoggedIn = s.authReady
+	if s.authReady && !s.drivePrepared {
+		s.engine.ResumeLiveSync()
+		if _, err := s.engine.PersonalDriveService().Prepare(ctx); err != nil {
+			slog.Warn("daemon: saved drive preparation failed", "error", err)
+		} else {
+			s.drivePrepared = true
+		}
 	}
 	return AuthStatusResponse{Status: status}, nil
 }
@@ -48,6 +66,22 @@ func (s *Server) authLogin(ctx context.Context, phone string) (AuthLoginResponse
 	phone = strings.TrimSpace(phone)
 	if phone == "" {
 		return AuthLoginResponse{}, fmt.Errorf("phone number required")
+	}
+	s.authMu.Lock()
+	if s.authFlowActive {
+		s.authMu.Unlock()
+		return AuthLoginResponse{}, fmt.Errorf("login already in progress")
+	}
+	alreadyReady := s.authReady
+	s.authFlowActive = true
+	s.authMu.Unlock()
+	defer func() {
+		s.authMu.Lock()
+		s.authFlowActive = false
+		s.authMu.Unlock()
+	}()
+	if alreadyReady {
+		return s.completeLogin(ctx)
 	}
 
 	events := s.subscribeEvents()
@@ -65,23 +99,10 @@ func (s *Server) authLogin(ctx context.Context, phone string) (AuthLoginResponse
 			switch event.Name {
 			case "login-success":
 				slog.Info("daemon: login succeeded, preparing personal drive")
-				setup, err := s.preparePersonalDrive(ctx)
-				if err != nil {
-					slog.Warn("daemon: personal drive preparation failed", "error", err)
-					return AuthLoginResponse{}, err
-				}
-				active := s.engine.ActiveChannelID()
-				if active != 0 {
-					if err := s.saveCurrentDrive(active); err != nil {
-						return AuthLoginResponse{}, err
-					}
-				}
-				return AuthLoginResponse{
-					LoggedIn:        true,
-					InitDriveResult: setup.Status,
-					ActiveChannelID: active,
-					PersonalDrive:   setup,
-				}, nil
+				s.authMu.Lock()
+				s.authReady = true
+				s.authMu.Unlock()
+				return s.completeLogin(ctx)
 			case "login-error":
 				slog.Warn("daemon: login failed")
 				return AuthLoginResponse{}, fmt.Errorf("%s", firstEventArg(event))
@@ -90,6 +111,30 @@ func (s *Server) authLogin(ctx context.Context, phone string) (AuthLoginResponse
 			return AuthLoginResponse{}, ctx.Err()
 		}
 	}
+}
+
+func (s *Server) completeLogin(ctx context.Context) (AuthLoginResponse, error) {
+	s.engine.ResumeLiveSync()
+	setup, err := s.preparePersonalDrive(ctx)
+	if err != nil {
+		slog.Warn("daemon: personal drive preparation failed", "error", err)
+		return AuthLoginResponse{}, err
+	}
+	s.authMu.Lock()
+	s.drivePrepared = true
+	s.authMu.Unlock()
+	active := s.engine.ActiveChannelID()
+	if active != 0 {
+		if err := s.saveCurrentDrive(active); err != nil {
+			return AuthLoginResponse{}, err
+		}
+	}
+	return AuthLoginResponse{
+		LoggedIn:        true,
+		InitDriveResult: setup.Status,
+		ActiveChannelID: active,
+		PersonalDrive:   setup,
+	}, nil
 }
 
 // preparePersonalDrive composes the local and remote setup steps for the

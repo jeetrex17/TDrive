@@ -200,7 +200,9 @@
     top: 22px;
     left: 24px;
     right: 24px;
-    z-index: 2;
+    /* The original photo is also positioned. Keep the visible controls above
+       it so Android hit-testing reaches the buttons instead of the image. */
+    z-index: 6;
     display: flex;
     align-items: flex-start;
     justify-content: space-between;
@@ -286,6 +288,25 @@
     object-fit: contain;
     box-shadow: 0 32px 90px rgba(0,0,0,0.28);
 }
+
+/* The thumbnail reserves a stable visual surface while the current original
+   stream opens. Both layers use identical bounds, so promotion never shifts
+   the dialog or the surrounding gallery. */
+.preview-thumbnail,
+.preview-original {
+    position: absolute;
+    inset: 84px 32px 40px;
+    width: calc(100% - 64px);
+    height: calc(100% - 124px);
+    margin: auto;
+}
+.preview-thumbnail { z-index: 1; }
+.preview-original {
+    z-index: 2;
+    opacity: 0;
+    transition: opacity 160ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.preview-overlay.is-original-ready .preview-original { opacity: 1; }
 
 .preview-loading {
     position: absolute;
@@ -377,6 +398,13 @@
         padding: 74px 16px 24px;
     }
 
+    .preview-thumbnail,
+    .preview-original {
+        inset: 74px 16px 24px;
+        width: calc(100% - 32px);
+        height: calc(100% - 98px);
+    }
+
     .preview-content img {
         max-height: calc(100vh - 116px);
     }
@@ -385,6 +413,10 @@
         max-width: calc(100vw - 32px);
         border-radius: var(--radius-xl);
     }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .preview-original { transition: none; }
 }
 
 /* CONTEXT MENU */
@@ -439,3 +471,246 @@
     margin: var(--space-1) var(--space-2);
 }
 
+/* === MOBILE: context menu becomes a bottom action sheet =============== */
+/* Gated on html.mobile; the desktop popover above is untouched. The sheet and
+   its scrim render inside the always-present #context-menu host, so the host
+   is lifted to the modal rung only on a phone. */
+html.mobile .context-menu { z-index: var(--z-modal); }
+
+html.mobile .action-sheet-scrim {
+    position: fixed;
+    inset: 0;
+    pointer-events: auto;
+    background: var(--scrim);
+    animation: tdrive-scrim-in var(--motion-med) var(--ease-standard) both;
+}
+
+html.mobile .action-sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 1;
+    pointer-events: auto;
+    outline: none;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: 640px;
+    margin: 0 auto;
+    max-height: 82dvh;
+    padding: var(--space-1) var(--space-4) calc(var(--space-3) + var(--inset-bottom));
+    background: var(--color-surface-0);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    box-shadow: var(--shadow-lg);
+    animation: tdrive-sheet-enter var(--motion-slow) var(--ease-enter) both;
+    touch-action: pan-y;
+}
+
+@keyframes tdrive-scrim-in {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* The sheet opens on one item, so it leads with that item: a large type glyph
+   over the name, the way a file's own page would. Centred, because the row of
+   action tiles under it is centred and a left-aligned header would leave the
+   two halves arguing. */
+html.mobile .action-sheet-header {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-2) var(--space-4);
+    margin-bottom: 0;
+    text-align: center;
+}
+html.mobile .action-sheet-icon {
+    flex: 0 0 auto;
+    width: 88px;
+    height: 88px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: var(--radius-xl);
+    background: var(--color-surface-2);
+    color: var(--color-text-muted);
+}
+/* Folders keep the accent tile they carry in the list. */
+html.mobile .action-sheet-icon.is-folder {
+    background: color-mix(in srgb, var(--color-accent) 16%, var(--color-surface-0));
+    color: var(--color-accent);
+}
+html.mobile .action-sheet-heading {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    max-width: 100%;
+}
+html.mobile .action-sheet-title {
+    font-weight: 700;
+    font-size: 1.125rem;
+    line-height: 1.3;
+    color: var(--color-text);
+    /* The name is the subject of the sheet, so it wraps to a second line
+       rather than ellipsising the part that tells files apart. */
+    overflow-wrap: anywhere;
+}
+
+/* Everyday actions as a row of tiles. Four is the most that stay above 64px
+   wide on a 390px screen, which is why the builders promote at most four. */
+html.mobile .action-sheet-tiles {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 1fr;
+    gap: var(--space-2);
+    padding: 0 0 var(--space-4);
+}
+html.mobile .action-sheet-tile {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    min-height: 68px;
+    padding: var(--space-2) 4px;
+    border: 0;
+    border-radius: var(--radius-lg);
+    background: var(--color-surface-2);
+    color: var(--color-accent);
+    font: inherit;
+    cursor: pointer;
+    transition: background-color var(--motion-fast) var(--ease-standard);
+}
+html.mobile .action-sheet-tile:active { background: var(--color-surface-3); }
+html.mobile .action-sheet-tile:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--color-accent);
+}
+html.mobile .action-sheet-tile:disabled { opacity: 0.4; }
+html.mobile .action-sheet-tile-label {
+    color: var(--color-text-soft);
+    font-size: 0.75rem;
+    font-weight: var(--weight-semibold);
+    line-height: 1;
+}
+
+/* The facts about the item, as a quiet table under the actions. */
+html.mobile .action-sheet-details {
+    margin: 0 0 var(--space-3);
+    padding: var(--space-1) var(--space-3);
+    border-radius: var(--radius-lg);
+    background: var(--color-surface-2);
+}
+html.mobile .action-sheet-detail {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    min-height: 40px;
+    padding: var(--space-2) 0;
+}
+html.mobile .action-sheet-detail + .action-sheet-detail {
+    border-top: 1px solid var(--color-border-soft);
+}
+html.mobile .action-sheet-detail dt {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    margin: 0;
+    color: var(--color-text-muted);
+    font-size: var(--type-sm);
+    font-weight: var(--weight-medium);
+}
+html.mobile .action-sheet-detail dd {
+    min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    margin: 0;
+    color: var(--color-text);
+    font-size: var(--type-sm);
+    font-weight: var(--weight-semibold);
+    text-align: right;
+    overflow-wrap: anywhere;
+}
+/* The chevron marks the one line that leads somewhere, so it is muted against
+   the value it follows rather than competing with it. */
+html.mobile .action-sheet-detail dd svg { flex: 0 0 auto; color: var(--color-text-subtle); }
+html.mobile .action-sheet-meta {
+    font-size: var(--type-sm);
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+html.mobile .action-sheet-items {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    display: flex;
+    flex-direction: column;
+}
+html.mobile .action-sheet-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    min-height: 48px;
+    padding: 0 var(--space-2);
+    border: none;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--text-main);
+    font-weight: 600;
+    font-size: var(--type-md);
+    text-align: left;
+    cursor: pointer;
+}
+html.mobile .action-sheet-row:active { background: var(--overlay-neutral-2); }
+html.mobile .action-sheet-row:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--overlay-accent-3);
+}
+html.mobile .action-sheet-row.danger { color: var(--color-danger); }
+html.mobile .action-sheet-row:disabled { opacity: 0.4; cursor: not-allowed; }
+html.mobile .action-sheet-sep {
+    height: 1px;
+    background: var(--color-border-soft);
+    margin: var(--space-1) 0;
+}
+
+/* No Cancel button. A sheet on a phone is dismissed by the handle above it, a
+   swipe down, or a tap on the dimmed screen behind: three ways that are already
+   there and that people reach for first. A fourth, spelled out and occupying a
+   full row at the bottom, is the one place the thumb has furthest to travel and
+   it pushes the actions that matter further up the screen. */
+
+@media (prefers-reduced-motion: reduce) {
+    html.mobile .action-sheet,
+    html.mobile .action-sheet-scrim { animation: none; }
+}
+
+/* Move sheet: the drill-down card owns its own padded sections, so drop the
+   sheet's horizontal padding and let it fill; the footer stacks like other
+   sheet actions. */
+html.mobile .move-modal-card.modal-sheet {
+    padding-left: 0;
+    padding-right: 0;
+    max-width: 100%;
+}
+html.mobile .move-modal-card .modal-sheet-body { padding: 0; }
+html.mobile .move-modal-footer {
+    flex-direction: column-reverse;
+    gap: var(--space-2);
+}
+html.mobile .move-modal-footer .primary-btn,
+html.mobile .move-modal-footer .secondary-btn {
+    width: 100%;
+    min-height: 48px;
+}

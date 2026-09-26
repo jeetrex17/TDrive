@@ -7,13 +7,14 @@ import { THEME_DEFINITIONS } from './theme-model';
 const html = readFileSync(new URL('../../../index.html', import.meta.url), 'utf8');
 const bootstrap = /<script>([\s\S]*?)<\/script>/.exec(html)?.[1];
 
-function runBootstrap(saved: string | null): Record<string, string> {
+function runBootstrap(saved: string | null, systemDark = false): Record<string, string> {
     if (!bootstrap) throw new Error('missing pre-paint appearance bootstrap');
     const dataset: Record<string, string> = {};
 
     runInNewContext(bootstrap, {
         document: { documentElement: { dataset } },
         localStorage: { getItem: () => saved },
+        matchMedia: () => ({ matches: systemDark }),
     });
 
     return dataset;
@@ -32,14 +33,15 @@ describe('pre-paint theme bootstrap', () => {
         }
     });
 
-    it('migrates a saved System pair to its explicit dark palette before application boot', () => {
+    it('uses the device appearance for a saved System pair before application boot', () => {
         const saved = JSON.stringify({
             mode: 'system',
             lightThemeId: 'catppuccin-latte',
             darkThemeId: 'nord',
         });
 
-        expect(runBootstrap(saved)).toEqual({ theme: 'nord', themeAppearance: 'dark' });
+        expect(runBootstrap(saved)).toEqual({ theme: 'catppuccin-latte', themeAppearance: 'light' });
+        expect(runBootstrap(saved, true)).toEqual({ theme: 'nord', themeAppearance: 'dark' });
     });
 
     it('keeps legacy Porcelain and Tokyo Night preferences during pre-paint boot', () => {
@@ -52,11 +54,11 @@ describe('pre-paint theme bootstrap', () => {
         expect(runBootstrap(saved)).toEqual({ theme: 'porcelain', themeAppearance: 'light' });
     });
 
-    it('normalizes missing and unknown persisted values to Quiet Relay without OS lookup', () => {
+    it('normalizes missing and unknown persisted values to Quiet Relay', () => {
         const invalid = JSON.stringify({ mode: 'sepia', lightThemeId: 'dracula', darkThemeId: 'missing' });
         expect(runBootstrap(null)).toEqual({ theme: 'quiet-relay', themeAppearance: 'dark' });
         expect(runBootstrap(invalid)).toEqual({ theme: 'quiet-relay', themeAppearance: 'dark' });
-        expect(bootstrap).not.toContain('matchMedia');
-        expect(bootstrap).not.toContain('prefers-color-scheme');
+        expect(bootstrap).toContain('matchMedia');
+        expect(bootstrap).toContain('prefers-color-scheme');
     });
 });

@@ -146,6 +146,18 @@
         to { transform: rotate(360deg); }
     }
 
+    /* Phones: a 44px target without changing the desktop control. */
+    :global(html.mobile) .ui-button {
+        min-height: 44px;
+        padding: 0 var(--space-5);
+        font-size: var(--font-size-base);
+    }
+
+    :global(html.mobile) .is-small {
+        min-height: 40px;
+        padding: 0 var(--space-4);
+    }
+
     @media (prefers-reduced-motion: reduce) {
         .ui-button {
             transition: none;

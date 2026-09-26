@@ -1,5 +1,5 @@
 /* === AUTH SCREENS === */
-#auth-wrapper { display: flex; justify-content: center; align-items: safe center; height: 100vh; padding: 24px 16px; overflow-y: auto; background: var(--bg-dark); }
+#auth-wrapper { display: flex; justify-content: center; align-items: safe center; height: 100vh; height: 100dvh; padding: 24px 16px; overflow-y: auto; background: var(--bg-dark); }
 
 .auth-box {
     background: var(--bg-sidebar); border: 1px solid var(--border);
@@ -133,3 +133,187 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 .input-with-action .input-action-btn[data-state="visible"] .icon-eye { display: none; }
 .input-with-action .input-action-btn[data-state="visible"] .icon-eye-off { display: block; }
 
+
+/* === AUTH SCREENS ON PHONES === */
+/* The phone hosts put html.mobile on the root; nothing below applies on the
+   desktop card. A step is a full-bleed page instead: the page scrolls between
+   the safe areas and the primary button sits in a bar under it.
+
+   Signing in measures no edge of its own. It shortens itself by --inset-keyboard
+   so the page ends where the keys begin, and everything inside it reserves by
+   the screen edge alone, so nothing is counted twice between the button and the
+   keyboard. On desktop the two page containers are display: contents, so the
+   card's flex layout is untouched. */
+.auth-page-body,
+.auth-actions { display: contents; }
+
+html.mobile #auth-wrapper {
+    display: block;
+    padding: 0;
+}
+
+html.mobile .auth-box {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    max-width: none;
+    /* The page ends at the top of the keyboard, so what scrolls is only what
+       can be seen. A page the keyboard covers half of would scroll a field
+       under the keys and call it visible. */
+    height: calc(100% - var(--inset-keyboard));
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    /* Where a field is allowed to come to rest when it is scrolled into view.
+       Padding at the top of a scroller scrolls away with the content, so
+       without this the status bar is where a field lands; the scroll stops
+       short of it instead. Both the browser's own scroll on focus and
+       ui/mobile/keyboard-insets.ts obey these. */
+    scroll-padding-top: calc(var(--inset-top) + 8px);
+    scroll-padding-bottom: 8px;
+    padding: 0;
+    text-align: left;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
+    --motion-enter-x: 8px;
+    --motion-enter-y: 0;
+}
+
+/* Grows to fill a page with room to spare, which keeps the button docked at
+   the bottom, and refuses to shrink below its content when there is not,
+   which pushes the button below the fold and lets the page scroll instead.
+   A landscape phone with the keyboard up has about one field's worth of page
+   left, and a docked bar would take most of it. */
+html.mobile .auth-page-body {
+    display: flex;
+    flex: 1 0 auto;
+    flex-direction: column;
+    padding: calc(var(--inset-top) + 40px) 16px 8px;
+}
+
+/* The welcome is the one screen without a field to keep near the top. */
+html.mobile .auth-welcome .auth-page-body { justify-content: center; }
+
+html.mobile .auth-actions {
+    display: block;
+    flex: none;
+    /* Whatever the page has not already taken out of its own height: the
+       gesture bar at rest, and nothing at all while the keyboard is up, since
+       the keys cover that bar and the page now stops above them. */
+    padding: 12px 16px calc(var(--inset-bottom) - var(--inset-keyboard) + 12px);
+}
+
+html.mobile .auth-icon-box { display: none; }
+
+html.mobile .auth-box h2 {
+    margin-bottom: 8px;
+    font-size: 1.375rem;
+    font-weight: 700;
+    line-height: 1.2;
+    text-wrap: balance;
+}
+
+html.mobile .auth-box p {
+    font-size: 0.9375rem;
+    line-height: 1.5;
+}
+
+html.mobile .auth-box input {
+    min-height: 48px;
+    padding: 12px 14px;
+    margin-bottom: 0;
+    /* 16px is the floor: iOS zooms the page into anything smaller. */
+    font-size: 1rem;
+    background: var(--color-surface-1);
+    border-radius: var(--radius-lg);
+}
+
+html.mobile .auth-box input::placeholder { color: var(--color-text-subtle); }
+
+/* A field arrives with the label that names it: the scroll treats the input as
+   starting a line above itself, so what stops at the top of the page is the
+   label, not the box under it. */
+html.mobile .auth-field input {
+    scroll-margin-top: 2rem;
+    scroll-margin-bottom: 0.75rem;
+}
+
+html.mobile .auth-box .code-input {
+    font-size: 1.375rem;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.2em;
+}
+
+html.mobile .auth-box .code-input::placeholder {
+    font-weight: 500;
+    letter-spacing: 0.2em;
+}
+
+html.mobile .auth-actions .primary-btn {
+    min-height: 50px;
+    padding: 0 16px;
+    font-size: 1rem;
+    border-radius: var(--radius-lg);
+}
+
+html.mobile .auth-actions .primary-btn:hover { transform: none; }
+html.mobile .auth-actions .primary-btn:active:not(:disabled) { transform: scale(0.98); }
+
+html.mobile .auth-helper-row {
+    justify-content: flex-start;
+    margin: -8px 0 20px;
+    font-size: 0.9375rem;
+}
+
+html.mobile .auth-helper-pill {
+    padding: 4px 10px;
+    font-size: 0.9375rem;
+    background: var(--color-surface-1);
+}
+
+html.mobile .auth-link {
+    min-height: 44px;
+    padding: 0 10px;
+    font-size: 0.9375rem;
+}
+
+html.mobile .auth-caption {
+    margin-top: -12px;
+    font-size: 0.875rem;
+    line-height: 1.5;
+}
+
+html.mobile .auth-box .input-with-action { margin-bottom: 0; }
+html.mobile .auth-box .input-with-action input { padding-right: 56px; }
+html.mobile .auth-box .input-with-action .input-action-btn {
+    right: 2px;
+    width: 44px;
+    height: 44px;
+}
+html.mobile .auth-box .input-with-action .input-action-btn:hover {
+    background: transparent;
+    border-color: transparent;
+}
+html.mobile .auth-box .input-with-action .input-action-btn:active {
+    transform: translateY(-50%);
+    background: var(--overlay-neutral-2);
+}
+
+/* The Paste control is a word, not a glyph, so it keeps its own width. */
+html.mobile .auth-box .input-with-action .input-action-text {
+    width: auto;
+    padding: 0 12px;
+    color: var(--accent);
+    font: inherit;
+    font-size: 0.9375rem;
+    font-weight: 600;
+}
+html.mobile .auth-box .input-with-action:has(.input-action-text) input { padding-right: 76px; }
+
+html.mobile .auth-box button:focus-visible,
+html.mobile .auth-box input:focus-visible {
+    outline: none;
+    box-shadow: var(--focus-ring);
+}

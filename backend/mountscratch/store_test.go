@@ -93,15 +93,13 @@ func TestStoreTracksAggregateReservationsConcurrently(t *testing.T) {
 	var accepted atomic.Int64
 	var workers sync.WaitGroup
 	for range 32 {
-		workers.Add(1)
-		go func() {
-			defer workers.Done()
+		workers.Go(func() {
 			if reserveErr := store.Reserve(1); reserveErr == nil {
 				accepted.Add(1)
 			} else if !errors.Is(reserveErr, ErrQuotaExceeded) {
 				t.Errorf("reserve error = %v", reserveErr)
 			}
-		}()
+		})
 	}
 	workers.Wait()
 

@@ -47,7 +47,12 @@
     background: transparent; border: none; padding: 6px 8px; border-radius: var(--radius-md);
     color: var(--text-main); font-weight: 600; cursor: pointer; transition: background 0.15s ease;
     max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    /* Middle crumbs give way first, and each may go to a few characters; the
+       root and the folder being looked at are the two a reader needs whole. */
+    flex: 0 1 auto; min-width: 3ch;
 }
+.breadcrumb-path > .breadcrumb-link:first-child,
+.breadcrumb-path > .breadcrumb-link:last-child { flex-shrink: 0; min-width: 0; }
 .breadcrumb-link:hover { background: var(--bg-panel); }
 .breadcrumb-link:active { transform: translateY(0.5px); }
 .breadcrumb-sep { color: var(--text-muted); }
@@ -106,7 +111,10 @@
 /* FILE TABLE */
 .file-table-header {
     position: relative;
-    display: grid; grid-template-columns: minmax(0, 2fr) minmax(96px, 1fr) minmax(84px, 1fr) minmax(100px, auto); padding: 15px 30px;
+    /* The rows sit inside a box padded 10px, then pad 20px themselves, with a
+       12px gap between cells: the header mirrors that exactly, or its labels
+       start a dozen pixels off the figures under them. */
+    display: grid; grid-template-columns: minmax(0, 2fr) minmax(96px, 1fr) minmax(84px, 1fr) minmax(100px, auto); padding: 15px 30px; column-gap: 12px;
     font-size: var(--type-xs); font-weight: var(--weight-semibold); color: var(--text-muted); letter-spacing: 0;
 }
 .col-name { padding-left: 10px; }
@@ -222,6 +230,21 @@
 @media (prefers-reduced-motion: reduce) { .file-state-skeleton-icon, .file-state-skeleton-bar, .file-state-skeleton-meta, .file-state-skeleton-action { animation: none; } }
 @media (max-width: 720px) { .file-state-skeleton-row { grid-template-columns: minmax(0, 2fr) minmax(76px, 1fr); gap: var(--space-4); } .file-state-skeleton-row > :nth-child(n + 3) { display: none; } }
 
+/* A row the app is working on: a delete runs item by item and only refreshes
+   the list at the end, so without this the list sits there looking untouched
+   between the confirmation and the rows disappearing.
+
+   It goes quiet rather than growing a spinner. The rows vanishing one by one as
+   the work lands is the progress report; a second indicator on each row would
+   be decoration over a list that is already telling the story. Taps are dropped
+   because the row is on its way out and there is nothing useful left to do to
+   it. */
+.file-row.is-busy {
+    opacity: 0.45;
+    pointer-events: none;
+    transition: opacity var(--motion-med) var(--ease-standard);
+}
+
 .file-row {
     display: grid; grid-template-columns: minmax(0, 2fr) minmax(96px, 1fr) minmax(84px, 1fr) minmax(100px, auto); padding: 12px 20px;
     align-items: center; border-radius: var(--radius-md); transition: background var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
@@ -277,8 +300,13 @@
  * pasted into the list.
  */
 .file-type-icon {
+    /* Square, not the 40x20 letterbox it used to be. The chip doubles as the
+       photo thumbnail, and a 2:1 crop of a portrait is a strip of somebody's
+       shirt -- unrecognisable, which is the one thing a thumbnail must not be.
+       Square costs 20px of row height and is what makes the picture readable.
+       The phone shell already had its own 44px square for the same reason. */
     width: 40px;
-    height: 20px;
+    height: 40px;
     margin-right: 12px;
     flex: 0 0 auto;
     display: inline-flex;
@@ -290,6 +318,42 @@
     /* The glyph is the only thing telling one file from another, so it sits at
        label weight. At muted it reads as a smudge and the type is lost. */
     color: var(--text-main);
+}
+
+/* The thumbnail paints inside the type chip's box and adds nothing of its own:
+   no width, no height, no aspect-ratio. That is the invariant -- the chip is
+   the same square whether the derivative arrives, fails, or never comes -- and
+   it is what keeps a photo loading mid-scroll from moving row height or the
+   virtual offsets under the reader. The icon remains underneath as the honest
+   fallback for locked, missing or failed derivatives. */
+.row-thumbnail {
+    position: relative;
+    overflow: hidden;
+    isolation: isolate;
+}
+.row-thumbnail-image {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 100ms var(--ease-standard);
+}
+.row-thumbnail-loaded .row-thumbnail-image { opacity: 1; }
+.row-thumbnail::after {
+    position: absolute;
+    inset: 0;
+    z-index: 2;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 1px var(--overlay-white-2);
+    content: "";
+    pointer-events: none;
+}
+@media (prefers-reduced-motion: reduce) {
+    .row-thumbnail-image { transition: none; }
 }
 
 
@@ -325,8 +389,10 @@
 
 .row-actions { min-width: 0; display: flex; gap: 8px; opacity: 1; justify-content: flex-end; }
 
+/* Tracks .file-type-icon exactly. The two chips share the leading column, so
+   any difference in box reads as one of them being misaligned. */
 .folder-chip {
-    width: 40px; height: 20px; margin-right: 12px;
+    width: 40px; height: 40px; margin-right: 12px;
     flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     background: var(--overlay-accent-1);
     border: 1px solid var(--overlay-accent-2);
@@ -334,9 +400,14 @@
 }
 /* One rule for both chips. A folder and a file type share a column, so any
    difference in size or stroke between them reads as one of the two being
-   wrong rather than as two kinds of thing. */
+   wrong rather than as two kinds of thing.
+
+   Half the chip, which is the ratio the phone shell already uses. The glyph
+   sat at 17px when the chip was a 40x20 letterbox and it filled that; in the
+   square it read as a small mark adrift in an empty tile, next to thumbnails
+   that reach the chip's own edges. */
 .folder-chip svg,
-.file-type-icon svg { width: 17px; height: 17px; stroke-width: 1.5; }
+.file-type-icon svg { width: 20px; height: 20px; stroke-width: 1.5; }
 
 .action-icon {
     width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
@@ -359,3 +430,411 @@
 .action-icon.del { color: var(--danger); border-color: var(--overlay-danger-2); }
 .action-icon.del:hover { background: var(--overlay-danger-1); }
 
+
+/* ====================== PHONE ROWS ====================== */
+/* Scoped to html.mobile, which the shell sets on iOS and Android. The list
+   becomes a two-line list: a 44px type icon, the name over one meta line, and
+   a trailing overflow button. The run of rows reads as one raised card inset
+   from the screen edges, divided by hairlines that start at the text column,
+   tinted for 80ms on press, and never hovering on touch. */
+/* overflow-x is clipped, not auto: an auto x-axis turns any stray pixel of
+   overflow into a horizontal scroller with a visible bar on Android. The
+   pull indicator is positioned against this box. */
+html.mobile .file-list-box {
+    position: relative;
+    /* Breathing room above and below the card. Neither the tab bar nor the
+       upload button needs an allowance: the bar sits below the body and the
+       button is docked into it. */
+    padding: var(--space-2) 0 var(--space-6);
+    overflow-x: hidden;
+    touch-action: pan-y;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+}
+/* Walking into a folder pushes the list in from the right, coming back pops it
+   in from the left. Short and transform-only, so it reads as depth rather than
+   as a page reload, and never blocks the rows becoming tappable. */
+html.mobile .file-list-box[data-nav="forward"] { animation: tdrive-nav-push var(--motion-slow) var(--ease-enter) both; }
+html.mobile .file-list-box[data-nav="back"] { animation: tdrive-nav-pop var(--motion-slow) var(--ease-enter) both; }
+@keyframes tdrive-nav-push {
+    from { opacity: 0; transform: translateX(18px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+@keyframes tdrive-nav-pop {
+    from { opacity: 0; transform: translateX(-18px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+
+html.mobile .file-row {
+    position: relative;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 68px;
+    /* The side margin is what makes the run of rows read as a card rather than
+       a full-bleed list; the background is the card itself. */
+    margin: 0 var(--space-3);
+    /* 6px on the right: the overflow button's 44px hit area ends exactly at
+       the card edge instead of spilling into scrollable overflow. */
+    padding: 10px 6px 10px 12px;
+    background: var(--color-surface-0);
+    border-radius: 0;
+    transition: background-color 80ms var(--ease-standard);
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+/* The card's ends, marked by the list rather than read off the DOM. A sibling
+   selector can only see the rendered window, whose ends are the virtualiser's
+   spacers and not the list's -- so mid-list rows came out rounded while
+   scrolling. The two corner pairs stay independent so a single-row list still
+   rounds on both. */
+html.mobile .file-row.is-card-top {
+    border-top-left-radius: var(--radius-xl);
+    border-top-right-radius: var(--radius-xl);
+}
+html.mobile .file-row.is-card-bottom {
+    border-bottom-left-radius: var(--radius-xl);
+    border-bottom-right-radius: var(--radius-xl);
+}
+/* A phone has no persistent scrollbar. The classic one steals 8px from the
+   right, which pushes the card off-centre against a 12px margin on the left. */
+html.mobile .file-list-box {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+}
+html.mobile .file-list-box::-webkit-scrollbar { width: 0; height: 0; }
+html.mobile .file-row + .file-row::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    /* Starts at the text column: 12px padding + 44px icon + 12px gap. */
+    left: 68px;
+    right: 0;
+    height: 1px;
+    background: var(--color-border-soft);
+}
+/* Every row state has to keep the card's own fill. The desktop rules clear the
+   background to transparent for hover and keyboard focus, which is right when a
+   row sits on the canvas and wrong now that the row IS the card: a cleared
+   background punches a hole through the middle of it. These restate the fill at
+   a specificity that beats the desktop rules rather than weakening them. */
+html.mobile .file-row:hover:not(.is-selected) { background: var(--color-surface-0); }
+@media (hover: hover) {
+    html.mobile .file-row:hover:not(.is-selected) { background: var(--color-surface-1); }
+}
+html.mobile .file-row:active:not(.is-selected) { background: var(--color-surface-2); }
+/* Selected rows tint the card rather than laying a translucent overlay on it,
+   which would otherwise composite against the canvas and read as a hole too. */
+html.mobile .drive-row.is-selected {
+    background: color-mix(in srgb, var(--color-accent) 14%, var(--color-surface-0));
+    box-shadow: none;
+}
+html.mobile .file-row.is-keyboard-active:not(.is-selected) {
+    background: var(--color-surface-0);
+    box-shadow: none;
+}
+
+html.mobile .row-name {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 12px;
+    color: var(--color-text);
+    font-size: 15px;
+    font-weight: var(--weight-semibold);
+    line-height: 1.35;
+    user-select: none;
+    -webkit-user-select: none;
+}
+html.mobile .row-text {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+/* Middle truncation: the head gives way, the tail keeps the extension. */
+html.mobile .row-label {
+    display: flex;
+    min-width: 0;
+    overflow: visible;
+    text-overflow: clip;
+}
+/* pre, not nowrap: the seam between head and tail can be a space, and
+   nowrap would drop it as a hanging space at the end of the head. */
+html.mobile .row-label-head {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: pre;
+}
+/* The tail does not shrink, so the head is always the half that gives way
+   first -- but it is held to the column all the same. Without the cap a tail
+   wider than the name column has nowhere to go and paints over the status
+   badge and the overflow button instead of ellipsising. */
+html.mobile .row-label-tail {
+    flex: 0 0 auto;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: pre;
+}
+html.mobile .row-sub {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    color: var(--text-muted);
+    font-size: 13px;
+    font-weight: var(--weight-medium);
+    line-height: 1.35;
+}
+html.mobile .row-sub-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* The one line in the row that is a sentence, not a label, so it wraps instead
+   of inheriting .row-name's nowrap -- which cut "The last transfer did not
+   finish." off mid-sentence on a narrow phone, with no ellipsis to admit it. */
+html.mobile .row-explain {
+    white-space: normal;
+    text-wrap: pretty;
+}
+html.mobile .file-lock-badge { margin: 0; }
+html.mobile .file-lock-badge svg { width: 12px; height: 12px; }
+
+html.mobile .uploader-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    flex: 0 0 auto;
+    max-width: 12ch;
+    height: 20px;
+    margin: 0;
+    padding: 0 8px 0 2px;
+    border-radius: var(--radius-pill);
+    background: var(--overlay-neutral-2);
+    color: var(--text-main);
+    font-size: 12px;
+    font-weight: var(--weight-semibold);
+    line-height: 1;
+    vertical-align: baseline;
+}
+html.mobile .uploader-initials {
+    display: grid;
+    place-items: center;
+    width: 16px;
+    height: 16px;
+    border-radius: var(--radius-pill);
+    background: var(--overlay-accent-3);
+    color: var(--color-text);
+    font-size: 9px;
+    font-weight: var(--weight-strong);
+    letter-spacing: 0.02em;
+}
+
+html.mobile .file-type-icon,
+html.mobile .folder-chip {
+    width: 44px;
+    height: 44px;
+    margin: 0;
+    border-radius: var(--radius-lg);
+}
+/* Opaque chip colours. The Android WebView mistiles a rounded box whose
+   translucent border sits over a fill with an SVG inside, painting a stale
+   copy of the rows above it into the list. Mixing the overlay into the row's
+   own surface keeps the same tint without the alpha. */
+html.mobile .file-type-icon {
+    background: var(--color-surface-2);
+    border-color: transparent;
+    color: var(--color-text-muted);
+}
+/* Folders still need to read as containers before any text does, but they no
+   longer spend the accent to do it.
+
+   In a folder-heavy drive that tint covered most of the screen, and once the
+   accent is on most rows it has stopped marking anything -- it was competing
+   with the active tab, the upload action and the transfer states, all of which
+   need it to mean something. The distinction survives on the two channels that
+   were already carrying it: the glyph's shape, which is a folder, and its
+   brightness. A full-strength mark on a lighter tile reads as the structural
+   row; a muted mark on a darker tile reads as a leaf. */
+html.mobile .folder-chip {
+    background: var(--color-surface-1);
+    border-color: transparent;
+    color: var(--color-text);
+}
+html.mobile .folder-chip svg,
+html.mobile .file-type-icon svg { width: 22px; height: 22px; stroke-width: 1.75; }
+
+/* Selection mode: every row grows a check so a tap reads as a toggle. The
+   column slides open rather than popping in (motion-12). */
+html.mobile .row-check {
+    flex: 0 0 auto;
+    display: grid;
+    place-items: center;
+    width: 22px;
+    height: 22px;
+    border: 1.5px solid var(--color-border);
+    border-radius: var(--radius-pill);
+    color: var(--color-on-accent);
+    --motion-enter-x: -6px;
+    animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
+    transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
+}
+html.mobile .row-check svg { opacity: 0; }
+html.mobile .is-selected .row-check {
+    background: var(--accent);
+    border-color: var(--accent);
+}
+html.mobile .is-selected .row-check svg { opacity: 1; }
+
+html.mobile .row-actions { flex: 0 0 auto; gap: 0; }
+html.mobile .action-icon.row-more {
+    position: relative;
+    width: 32px;
+    height: 32px;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--text-muted);
+    -webkit-tap-highlight-color: transparent;
+}
+/* A 32px glyph with a 44px target (accessibility-7). */
+html.mobile .action-icon.row-more::after {
+    content: "";
+    position: absolute;
+    inset: -6px;
+}
+html.mobile .action-icon.row-more:hover { background: transparent; }
+@media (hover: hover) {
+    html.mobile .action-icon.row-more:hover { background: var(--overlay-neutral-2); color: var(--text-main); }
+}
+html.mobile .action-icon.row-more:active { background: var(--overlay-neutral-2); color: var(--text-main); transform: none; }
+html.mobile .action-icon.row-more svg { width: 20px; height: 20px; }
+html.mobile .pending-folder .pending-indicator { margin: 0; }
+
+/* Empty and error states: one sentence, then the next action. */
+html.mobile .file-state {
+    min-height: 60vh;
+    padding: 32px 24px;
+    gap: 6px;
+}
+html.mobile .file-state-icon {
+    width: 48px;
+    height: 48px;
+    margin-bottom: 6px;
+    border-radius: var(--radius-lg);
+}
+html.mobile .file-state-icon svg { width: 24px; height: 24px; }
+html.mobile .file-state-title {
+    font-size: 17px;
+    font-weight: var(--weight-strong);
+    text-wrap: balance;
+}
+html.mobile .file-state-body {
+    font-size: 15px;
+    line-height: 1.5;
+    text-wrap: pretty;
+}
+html.mobile .file-state-actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 14px;
+}
+html.mobile .file-state-actions .secondary-btn {
+    min-height: 44px;
+    padding: 0 18px;
+    font-size: 15px;
+}
+html.mobile .file-state-actions .secondary-btn:first-child {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--color-on-accent);
+}
+html.mobile .file-state-actions .secondary-btn:active { transform: scale(0.97); }
+
+/* First-load skeleton in the phone row's own shape. */
+html.mobile .file-state.is-loading { padding: 0; }
+html.mobile .file-state-skeleton-row {
+    position: relative;
+    grid-template-columns: 32px minmax(0, 1fr);
+    grid-template-areas: "icon bar" "icon meta";
+    gap: 4px 12px;
+    align-content: center;
+    min-height: 56px;
+    padding: 0 16px;
+    border-bottom: 0;
+}
+html.mobile .file-state-skeleton-row + .file-state-skeleton-row::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    left: 60px;
+    right: 0;
+    height: 1px;
+    background: var(--color-border-soft);
+}
+html.mobile .file-state-skeleton-name { display: contents; }
+html.mobile .file-state-skeleton-icon { grid-area: icon; align-self: center; width: 32px; height: 32px; border-radius: var(--radius-md); }
+html.mobile .file-state-skeleton-bar { grid-area: bar; align-self: end; height: 12px; }
+html.mobile .file-state-skeleton-meta { grid-area: meta; align-self: start; width: 38%; height: 9px; }
+html.mobile .file-state-skeleton-meta + .file-state-skeleton-meta,
+html.mobile .file-state-skeleton-action { display: none; }
+
+/* Pull to refresh: a small ring slides in over the first rows as the pull
+   grows, snaps to its resting spot once armed and spins until the refresh
+   settles. The rows never move, so the virtualised list stays untouched.
+   Absolute at the scroll origin rather than sticky: a pull only happens at
+   the top, and a sticky child inside the scroller costs the Android WebView
+   a compositing layer it mistiles. */
+html.mobile .pull-refresh {
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: 0;
+    z-index: 3;
+    display: flex;
+    justify-content: center;
+    height: 0;
+    overflow: visible;
+    pointer-events: none;
+}
+html.mobile .pull-refresh-disc {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-pill);
+    background: var(--color-surface-2);
+    color: var(--accent);
+    opacity: 0;
+    transform: translateY(calc(var(--pull, 0px) - 44px));
+    transition: transform var(--motion-med) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard);
+}
+html.mobile .pull-refresh.is-pulling .pull-refresh-disc { transition: opacity var(--motion-fast) var(--ease-standard); }
+html.mobile .pull-refresh.is-pulling .pull-refresh-disc,
+html.mobile .pull-refresh.is-refreshing .pull-refresh-disc { opacity: 1; }
+html.mobile .pull-refresh svg {
+    width: 18px;
+    height: 18px;
+    opacity: calc(0.35 + var(--pull-progress, 0) * 0.65);
+    transform: rotate(calc(var(--pull-progress, 0) * 360deg)) scale(calc(0.7 + var(--pull-progress, 0) * 0.3));
+}
+html.mobile .pull-refresh.is-refreshing svg {
+    opacity: 1;
+    animation: pull-refresh-spin 1.2s linear infinite;
+}
+@keyframes pull-refresh-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+    html.mobile .pull-refresh.is-refreshing svg { animation: none; transform: rotate(270deg); }
+    html.mobile .row-check { animation: none; }
+}

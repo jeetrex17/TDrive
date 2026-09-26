@@ -1,3 +1,6 @@
+// Type-only, so the state <-> folder-index cycle it would otherwise form is
+// erased before it reaches the bundler.
+import type { FolderIndex } from './modules/folder-index';
 import type { ImportProgress } from './modules/import-progress';
 import type { DriveChannel, DriveKind, PendingJoin, RootFile } from './types';
 import type { FileCommandItem, FileDragState } from './ui/file-list/types';
@@ -40,6 +43,9 @@ export const idleTransferActivity: TransferActivity = Object.freeze({
 
 type DownloadQueueBase = {
     key: string;
+    // The backend must never infer this from the currently selected drive:
+    // queued work can start after the user has changed drives.
+    channelId: number;
     name: string;
     size: number;
     progress: number;
@@ -69,6 +75,8 @@ export interface State {
     transferActivity: TransferActivity;
     downloadQueue: DownloadQueueItem[];
     activeDownloadId: string | null;
+    // Fresh for every backend dispatch, even when retrying the same queue key.
+    activeDownloadRequestId: string | null;
 
     transferPillEl: HTMLElement | null;
     transferSheetEl: HTMLElement | null;
@@ -93,8 +101,12 @@ export interface State {
     telegramRootCacheDriveKey: string | null;
     pendingFocus: { type: string; id: string | number } | null;
 
-    folderIndexCache: any;
-    folderIndexBuildPromise: any;
+    // The published index for `folderIndexCacheDriveKey`, and the in-flight
+    // build for `folderIndexBuildDriveKey`. Both are identity-compared against
+    // the promise that created them, so the field must hold the exact promise
+    // rather than a widened alias of it.
+    folderIndexCache: FolderIndex | null;
+    folderIndexBuildPromise: Promise<FolderIndex> | null;
 
     folderIndexCacheDriveKey: string | null;
     folderIndexBuildDriveKey: string | null;
@@ -114,7 +126,7 @@ export interface State {
 
     encryption: EncryptionState;
 
-    virtualView: "photos" | null;
+    virtualView: "photos" | "trash" | null;
 
     pendingFolderOps: Map<string, { parentId: string; name: string }>;
 
@@ -130,6 +142,7 @@ export const state: State = {
     transferActivity: idleTransferActivity,
     downloadQueue: [],
     activeDownloadId: null,
+    activeDownloadRequestId: null,
 
     transferPillEl: null,
     transferSheetEl: null,

@@ -7,12 +7,13 @@ import {
     THEME_TRANSITION_CLASS,
     themeController,
 } from '../theme/theme-controller';
+import { requestUpdatesPanel, updatesPanelRequest } from '../updates/update-store';
 import { encryptionEntryVisible, profileLoaded, profileUser } from './profile-store';
 
 let component: Record<string, unknown> | null = null;
 let host: HTMLElement | null = null;
 
-function setup(): void {
+function setup(extra: { updaterAvailable?: boolean } = {}): void {
     host = document.createElement('div');
     document.body.appendChild(host);
     component = mount(ProfileMenu, {
@@ -21,6 +22,7 @@ function setup(): void {
             onOpen: vi.fn(),
             onEncryptionSettings: vi.fn(),
             onLogout: vi.fn(),
+            ...extra,
         },
     });
     flushSync();
@@ -59,6 +61,7 @@ afterEach(async () => {
     profileUser.set(null);
     profileLoaded.set(false);
     encryptionEntryVisible.set(false);
+    updatesPanelRequest.set(0);
 });
 
 describe('ProfileMenu appearance navigation', () => {
@@ -72,7 +75,7 @@ describe('ProfileMenu appearance navigation', () => {
         const menu = host?.querySelector<HTMLElement>('#profile-menu');
         expect(menu?.getAttribute('role')).toBe('dialog');
         expect(menu?.getAttribute('aria-labelledby')).toBe('appearance-title');
-        expect(host?.textContent).not.toContain('System');
+        expect(host?.textContent).toContain('System');
         expect(host?.textContent).not.toContain('Automatic pair');
         expect(host?.querySelector('.appearance-back')).toBeNull();
         const selectedMode = host?.querySelector('[data-appearance-mode="dark"]');
@@ -133,5 +136,26 @@ describe('ProfileMenu appearance navigation', () => {
         expect(menu.getAttribute('role')).toBe('dialog');
         expect(host?.querySelector('#appearance-theme-nord')?.getAttribute('aria-checked')).toBe('true');
         expect(document.activeElement).toBe(host?.querySelector('#appearance-theme-nord'));
+    });
+});
+
+describe('ProfileMenu without an updater', () => {
+    it('ignores panel requests and omits the updates entry', async () => {
+        setup({ updaterAvailable: false });
+        requestUpdatesPanel();
+        flushSync();
+        await tick();
+
+        const menu = host?.querySelector<HTMLElement>('#profile-menu');
+        expect(menu?.hidden).toBe(true);
+
+        click('#profile-trigger');
+        await tick();
+        await Promise.resolve();
+
+        expect(menu?.hidden).toBe(false);
+        expect(menu?.getAttribute('role')).toBe('menu');
+        expect(host?.querySelector('#profile-menu-updates')).toBeNull();
+        expect(host?.querySelector('#profile-menu-appearance')).toBe(document.activeElement);
     });
 });

@@ -3,10 +3,15 @@
 import { state, resetFolderCaches } from '../state';
 import { splitNameAndExt, formatDate, formatBytes } from '../utils';
 import { isOffline } from './connectivity';
+import { humanizeBackendError } from './errors';
 import { tick } from 'svelte';
-import { clearSelection, handleRowSelection, reconcileSelection, selectRow, getRowKey } from './selection';
+import { get } from 'svelte/store';
+import { breadcrumbPath } from '../ui/chrome/breadcrumb-store';
+import type { ContextMenuDetail } from '../ui/menus/context-menu-store';
+import { clearSelection, deselectRow, handleRowSelection, isRowSelected, reconcileSelection, selectRow, getRowKey } from './selection';
 import { openRenameModal } from './modals/rename';
 import { openDeleteModal } from './modals/delete';
+import { openNewFolderModal } from './modals/folder';
 import { navigateToFolder } from './navigation';
 import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop';
 import {
@@ -14,18 +19,27 @@ import {
     getFileList,
     getFolderContents as apiGetFolderContents,
     getStorageUsed,
+    isMobilePlatform,
 } from '../api';
 import { calculateVisibleFolderStats } from './drive-data';
 import type { FileItem, FolderItem, FolderStat, RootFile } from '../types';
 import { refreshFolderIndex, collectDescendants } from './folder-index';
-import { chooseFilesForCurrentFolder, enqueueDownload, enqueueFolderDownload } from './transfers';
+import { chooseFilesForCurrentFolder, chooseFolderForCurrentFolder, enqueueDownload, enqueueFolderDownload } from './transfers';
 import { ensureUserNames, uploaderChipLabel } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
-import { canOpenFileViewer, isVideoFile } from './media-types';
+import { renderTrashRows, setTrashMode } from './trash/view';
+import { canOpenFileViewer, isImageFile, isVideoFile } from './media-types';
 import { appActions, type RefreshFilesOptions } from './app-actions';
-import { getInteractiveFileListRows, showFileListRows, showFileListState, updateFileListRows } from '../ui/file-list/file-list-store';
+import { getInteractiveFileListRows, showFileListRows, showFileListState, updateFileListRows, type InteractiveFileListRow } from '../ui/file-list/file-list-store';
+import type { FileListStateAction } from '../ui/file-list/types';
+import { fileListRowForElement } from '../ui/file-list/row-lookup';
 import { setActiveFileRowKey } from '../ui/file-list/row-state-store';
-import type { FileCommandItem, FileListAction, FileListFileRow, FileListRow, FolderCommandItem, FolderListRow, PendingFolderListRow } from '../ui/file-list/types';
+import { rowMetaLine } from '../ui/file-list/row-meta';
+import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
+import { bindSwipeActions } from '../ui/file-list/swipe-actions';
+import { openMoveModal } from './modals/move';
+import { showRowContextMenu } from './context-menu';
+import type { FileCommandItem, FileListAction, FileListFileRow, FileListRow, FileListUploaderChip, FileThumbnailIdentity, FolderCommandItem, FolderListRow, PendingFolderListRow } from '../ui/file-list/types';
 
 type FileRowInput = {
     id?: string | number;
@@ -66,6 +80,26 @@ type LoadedFileData = {
     folderStats: Map<string, FolderStat>;
 };
 
+/**
+ * What addresses a file's thumbnail, or undefined when the file has none to
+ * address. Videos count: the backend draws a frame for them at upload and
+ * serves it through the same rendition, so a row or an album cover that stops
+ * at images would be refusing a picture that already exists.
+ */
+export function fileThumbnailIdentity(
+    file: Pick<FileItem, 'msgId' | 'name' | 'revision'>,
+    channelId: number,
+): FileThumbnailIdentity | undefined {
+    if (!(isImageFile(file.name) || isVideoFile(file.name))
+        || !Number.isSafeInteger(channelId)
+        || channelId <= 0
+        || !Number.isSafeInteger(file.msgId)
+        || file.msgId <= 0
+        || !Number.isSafeInteger(file.revision)
+        || file.revision <= 0) return undefined;
+    return Object.freeze({ channelId, fileId: file.msgId, revision: file.revision });
+}
+
 // dragItemsFor returns the items to move for a drag started on `row`: the whole
 // current selection when the row is part of a multi-selection, else just the
 // row's own item.
@@ -79,6 +113,9 @@ function dragItemsFor(row: HTMLElement, fallback: FileCommandItem): FileCommandI
 // startDrag begins an internal drag-to-move, resolving multi-select and the set
 // of folders that can't be a drop target (a dragged folder or its own subtree).
 function startDrag(row: HTMLElement, fallback: FileCommandItem, parentId: string): void {
+    // Nothing in the trash has a parent to be dragged out of.
+    if (isTrashMode()) return;
+
     const items = dragItemsFor(row, fallback);
     const folderIds = items
         .filter((item): item is FolderCommandItem => item.type === 'folder')
@@ -133,15 +170,14 @@ export function renderFileState(
     kind: FileStateKind,
     title: string,
     body = "",
-    action?: { label: string; onClick: () => void },
+    ...actions: FileListStateAction[]
 ) {
     list.removeAttribute('aria-rowcount');
     showFileListState({
         stateKind: kind,
         title,
         body,
-        actionLabel: action?.label ?? '',
-        onAction: action?.onClick,
+        actions: Object.freeze(actions.map((action) => Object.freeze({ ...action }))),
     });
 }
 
@@ -158,12 +194,21 @@ export function renderFileListRows(list: HTMLElement, rows: FileListRow[], after
     if (afterRender) afterFileListPaint(list, afterRender);
 }
 
+// The phone row has no room for the "Name · 2h ago" label, so the chip also
+// carries the uploader's initials and first name from the same name cache.
+function uploaderChipFor(uploaderID: number, uploadTime: number): FileListUploaderChip | null {
+    const label = uploaderChipLabel({ uploaderID, uploadTime });
+    if (!label) return null;
+    const parts = (state.userNames.get(String(uploaderID)) ?? '').trim().split(/\s+/).filter(Boolean);
+    return {
+        label,
+        firstName: parts[0] ?? '',
+        initials: parts.slice(0, 2).map((part) => part[0]).join('').toUpperCase(),
+    };
+}
+
 function chipForFileRow(row: FileListFileRow) {
-    const label = uploaderChipLabel({
-        uploaderID: row.uploaderID,
-        uploadTime: row.uploadTime,
-    });
-    return label ? { label } : null;
+    return uploaderChipFor(row.uploaderID, row.uploadTime);
 }
 
 export function resolveUploaderChipsForRows(rows: FileListRow[], isCurrent: () => boolean) {
@@ -234,12 +279,15 @@ export function buildFolderRow(folder: FolderRowInput, parentId: string, overrid
         selectionKey: overrides.selectionKey || `folder:${id}`,
         id,
         name,
+        channelId: Number(overrides.channelId ?? state.activeChannel?.id ?? 0),
         parentId: String(overrides.parentId ?? folder.parentId ?? parentId ?? ''),
         metaLabel: overrides.metaLabel ?? '—',
         sizeLabel: overrides.sizeLabel ?? '…',
         size: overrides.size ?? 0,
         modifiedTime: overrides.modifiedTime ?? 0,
         ariaLabel: overrides.ariaLabel ?? `Folder: ${name}`,
+        timeLabel: overrides.timeLabel,
+        actionsInline: overrides.actionsInline,
         actions: overrides.actions ?? [folderAction()],
         onClick: overrides.onClick,
         onDoubleClick: overrides.onDoubleClick,
@@ -257,7 +305,6 @@ export function buildFileRow(file: FileRowInput, parentId: string, overrides: Pa
     const encrypted = Boolean(file.encrypted ?? overrides.encrypted ?? false);
     const canDelete = Boolean(file.canDelete ?? overrides.canDelete ?? canOwnerActOnFile(file));
     const canRename = Boolean(file.canRename ?? overrides.canRename ?? canDelete);
-    const uploaderLabel = uploaderChipLabel({ uploaderID, uploadTime });
 
     return {
         kind: 'file',
@@ -265,6 +312,7 @@ export function buildFileRow(file: FileRowInput, parentId: string, overrides: Pa
         selectionKey: overrides.selectionKey || `file:${id}`,
         id,
         name,
+        channelId: Number(overrides.channelId ?? state.activeChannel?.id ?? 0),
         baseName: overrides.baseName ?? base,
         ext: overrides.ext ?? ext,
         source,
@@ -273,14 +321,17 @@ export function buildFileRow(file: FileRowInput, parentId: string, overrides: Pa
         metaLabel: overrides.metaLabel ?? formatDate(uploadTime),
         sizeLabel: overrides.sizeLabel ?? formatBytes(size),
         ariaLabel: overrides.ariaLabel ?? `File: ${name}`,
+        timeLabel: overrides.timeLabel,
+        actionsInline: overrides.actionsInline,
         uploaderID,
         uploadTime,
         encrypted,
         canDelete,
         canRename,
+        thumbnail: overrides.thumbnail,
         uploaderChip: overrides.uploaderChip !== undefined
             ? overrides.uploaderChip
-            : uploaderLabel ? { label: uploaderLabel } : null,
+            : uploaderChipFor(uploaderID, uploadTime),
         actions: overrides.actions ?? fileActions(name),
         onClick: overrides.onClick,
         onDoubleClick: overrides.onDoubleClick,
@@ -363,69 +414,184 @@ function triggerRowContextMenu(row: HTMLElement) {
     }));
 }
 
-function deleteRow(row: HTMLElement) {
-    if (row.dataset.type === "folder") {
-        openDeleteModal({
-            type: "folder",
-            id: row.dataset.id,
-            name: row.dataset.name,
-            parentId: row.dataset.parentId || state.currentFolderId,
-        } as Parameters<typeof openDeleteModal>[0]);
+/** The folder path an item sits in, as the sheet's Location line shows it. */
+function rowLocationLabel(): string {
+    const trail = get(breadcrumbPath);
+    if (!trail.length) return state.activeChannel?.title || 'Drive';
+    return `/${trail.map((entry) => entry.name).join('/')}`;
+}
+
+/** The Type / Size / Added / Location lines under the sheet's actions. */
+function rowDetailLines(row: FolderListRow | FileListFileRow): ContextMenuDetail[] {
+    const added = row.kind === 'folder' ? row.modifiedTime : row.uploadTime;
+    const type = row.kind === 'folder'
+        ? 'Folder'
+        : row.ext ? `${row.ext.toUpperCase()} file` : 'File';
+    const lines: ContextMenuDetail[] = [{ label: 'Type', value: type, icon: 'type' }];
+    // A folder's size is an async subtree lookup that can still be zero, and a
+    // blank line reads better than claiming the folder holds nothing.
+    if (row.size > 0) lines.push({ label: 'Size', value: formatBytes(row.size), icon: 'size' });
+    if (added > 0) {
+        lines.push({ label: row.kind === 'folder' ? 'Updated' : 'Added', value: formatDate(added), icon: 'added' });
+    }
+    lines.push({ label: 'Location', value: rowLocationLabel(), icon: 'location' });
+    return lines;
+}
+
+// A long press or the overflow button opens the item's own action sheet. It
+// never selects the row: on a phone the selection belongs to the reader, not
+// the menu, and the sheet header names what the actions apply to.
+function openRowMenu(row: HTMLElement, clientX: number, clientY: number): void {
+    // Every item on the row menu (open, rename, move, download, delete) acts on
+    // a live file. The trash offers its two real actions on the row itself.
+    if (isTrashMode()) return;
+
+    const logical = fileListRowForElement(row);
+    showRowContextMenu(row, clientX, clientY, {
+        header: logical
+            ? {
+                title: logical.name,
+                meta: rowMetaLine(logical),
+                kind: logical.kind,
+                ext: logical.kind === 'file' ? logical.ext : undefined,
+                details: rowDetailLines(logical),
+            }
+            : undefined,
+    });
+}
+
+function toggleRowSelection(row: HTMLElement): void {
+    // The selection bar acts on live items -- move, download, delete. None of
+    // those mean anything for something already deleted, and the two that do
+    // are each row's own buttons, so the trash does not select at all.
+    if (isTrashMode()) return;
+    if (isRowSelected(row)) {
+        deselectRow(row);
         return;
     }
-    if (row.dataset.canDelete === "false") return;
+    const index = getInteractiveFileListRows().findIndex((candidate) => candidate.selectionKey === getRowKey(row));
+    selectRow(row, index);
+}
+
+// The phone previews an image in the context of its folder, so swiping moves
+// through the other images here in list order.
+async function openImagePreview(row: FileListFileRow): Promise<void> {
+    const images = getInteractiveFileListRows()
+        .filter((candidate): candidate is FileListFileRow => candidate.kind === 'file' && isImageFile(candidate.name))
+        .map((image) => ({
+            type: 'file',
+            id: Number(image.id),
+            name: image.name,
+            size: image.size,
+            encrypted: image.encrypted,
+            uploaderId: image.uploaderID,
+            uploadTime: image.uploadTime,
+        }));
+    const index = Math.max(0, images.findIndex((image) => String(image.id) === row.id));
+    const preview = await import('./modals/preview');
+    preview.activatePreviewModal();
+    await preview.openPreviewList(images, index);
+}
+
+/**
+ * The command payload for a file row. Spelled out per source because the
+ * command item is a discriminated union: a Telegram file has to carry the
+ * folder it came from, a projected one does not.
+ */
+function fileCommandFor(row: FileListFileRow, parentId: string): FileCommandItem {
+    const target = { type: 'file' as const, id: Number(row.id), name: row.name, size: row.size, parentId };
+    return row.source === 'tg' ? { ...target, source: 'tg' } : { ...target, source: 'fs' };
+}
+
+function deleteRow(row: InteractiveFileListRow) {
+    if (isTrashMode()) return;
+
+    if (row.kind === "folder") {
+        openDeleteModal({
+            type: "folder",
+            id: row.id,
+            name: row.name,
+            parentId: row.parentId || state.currentFolderId,
+        });
+        return;
+    }
+    if (!row.canDelete) return;
     openDeleteModal({
-        type: "file",
-        id: Number(row.dataset.id),
-        name: row.dataset.name,
-        size: Number(row.dataset.size || 0),
-        parentId: row.dataset.parentId || state.currentFolderId,
-        source: row.dataset.source || "fs",
-        canDelete: row.dataset.canDelete !== "false",
-    } as Parameters<typeof openDeleteModal>[0]);
+        ...fileCommandFor(row, row.parentId || state.currentFolderId),
+        canDelete: row.canDelete,
+    });
 }
 
-function renameRow(row: HTMLElement) {
-    if (row.dataset.canRename === "false") return;
-    openRenameModal({
-        type: row.dataset.type,
-        id: row.dataset.type === "folder" ? row.dataset.id : Number(row.dataset.id),
-        name: row.dataset.name,
-        size: Number(row.dataset.size || 0),
-        parentId: row.dataset.parentId || state.currentFolderId,
-        source: row.dataset.source || "fs",
-    } as Parameters<typeof openRenameModal>[0]);
+function renameRow(row: InteractiveFileListRow) {
+    if (isTrashMode()) return;
+
+    if (row.kind === "folder") {
+        openRenameModal({
+            type: "folder",
+            id: row.id,
+            name: row.name,
+            parentId: row.parentId || state.currentFolderId,
+        });
+        return;
+    }
+    if (!row.canRename) return;
+    openRenameModal(fileCommandFor(row, row.parentId || state.currentFolderId));
 }
 
-function fileTargetForRow(row: HTMLElement) {
+/**
+ * Opens the move picker for one row, whichever kind it is. Used by the swipe
+ * action, which shows a single verb and so must resolve the target itself
+ * rather than leaning on the menu's branching.
+ */
+function openMoveForRow(row: InteractiveFileListRow): void {
+    if (isTrashMode()) return;
+
+    if (row.kind === 'folder') {
+        openMoveModal({ type: 'folder', id: row.id, name: row.name, parentId: state.currentFolderId });
+        return;
+    }
+    // A search result sits in its own folder, not the one on screen, so the
+    // picker opens where the file actually lives -- including the root, which
+    // is an empty string and must not fall back to the current folder.
+    openMoveModal(fileCommandFor(row, row.parentId));
+}
+
+function fileTargetForRow(row: FileListFileRow) {
     return {
-        id: Number(row.dataset.id),
-        name: row.dataset.name || "File",
-        size: Number(row.dataset.size || 0),
-        encrypted: row.dataset.encrypted === "true",
+        id: Number(row.id),
+        // Captured when the row was rendered, so an action taken after a drive
+        // switch still reads from the drive the reader was looking at.
+        channelId: row.channelId ?? Number(state.activeChannel?.id),
+        name: row.name,
+        size: row.size,
+        encrypted: row.encrypted,
     };
 }
 
-function activateRow(row: HTMLElement) {
+function activateRow(element: HTMLElement, row: InteractiveFileListRow) {
+    if (isTrashMode()) return;
     if (isSearchMode()) {
-        row.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
+        element.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, cancelable: true }));
         return;
     }
-    if (row.dataset.type === "folder") {
-        navigateToFolder(row.dataset.id as string, row.dataset.name as string);
+    if (row.kind === "folder") {
+        navigateToFolder(row.id, row.name);
         return;
     }
-    if (row.dataset.type !== "file") return;
     const target = fileTargetForRow(row);
     if (isVideoFile(target.name)) {
         void appActions().playVideo(target);
+        return;
+    }
+    if (isMobilePlatform() && isImageFile(target.name)) {
+        void openImagePreview(row);
         return;
     }
     if (canOpenFileViewer(target.name)) {
         void appActions().openFile(target);
         return;
     }
-    enqueueDownload(target.id, target.name, target.size);
+    enqueueDownload(target.id, target.name, target.size, target.channelId);
 }
 
 
@@ -517,7 +683,11 @@ function rowsForLoadedData(data: LoadedFileData, view: FileViewIdentity): FileLi
         date: file.uploadTime,
         uploaderID: file.uploaderId,
         encrypted: file.encrypted,
-    }, view.folderId));
+    }, view.folderId, {
+        // Only the current folder's projected images opt in. This avoids a
+        // gallery-wide lookup and keeps raw Telegram/search rows icon-only.
+        thumbnail: fileThumbnailIdentity(file, view.channelId),
+    }));
     const telegramRows = data.telegramFiles
         .filter((file) => !data.filesystemMessageIds.has(file.msgId))
         .map((file) => buildFileRow({
@@ -536,17 +706,30 @@ function rowsForLoadedData(data: LoadedFileData, view: FileViewIdentity): FileLi
 function applyPendingFocus(list: HTMLElement): void {
     if (state.pendingFocus?.type !== 'file') return;
     const targetId = String(state.pendingFocus.id || '');
-    const target = targetId
-        ? list.querySelector<HTMLElement>(`.drive-row[data-type="file"][data-id="${CSS.escape(targetId)}"]`)
-        : null;
-    state.pendingFocus = null;
-    if (!target) return;
+    const logicalRows = getInteractiveFileListRows();
+    const targetRow = targetId
+        ? logicalRows.find((row): row is FileListFileRow => row.kind === 'file' && row.id === targetId)
+        : undefined;
+    // A virtual window does not mount every row. Do not consume navigation
+    // intent until the target exists logically and has actually mounted.
+    if (!targetRow) return;
 
-    const index = interactiveRows(list).indexOf(target);
-    clearSelection();
-    if (index >= 0) selectRow(target, index);
-    setFocusedRow(target);
-    target.scrollIntoView({ block: 'center' });
+    setActiveFileRowKey(targetRow.selectionKey);
+    window.dispatchEvent(new CustomEvent('tdrive:reveal-file-row', { detail: { key: targetRow.selectionKey } }));
+    void tick().then(() => {
+        requestAnimationFrame(() => {
+            if (state.pendingFocus?.type !== 'file' || String(state.pendingFocus.id || '') !== targetId) return;
+            const target = rowForSelectionKey(list, targetRow.selectionKey);
+            if (!target) return;
+            const index = getInteractiveFileListRows()
+                .findIndex((row) => row.selectionKey === targetRow.selectionKey);
+            if (index < 0) return;
+            clearSelection();
+            selectRow(target, index);
+            setFocusedRow(target, { preventScroll: true });
+            state.pendingFocus = null;
+        });
+    });
 }
 
 function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, data: LoadedFileData): void {
@@ -567,29 +750,42 @@ function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, d
         syncDriveRowTabStops(list);
         if (preserveScroll) list.scrollTop = scrollTop;
         applyPendingFocus(list);
+        // Opening a folder unmounts the row that had the keyboard, and with
+        // it the keyboard: focus fell to <body> and the arrows went dead.
+        // Only a view change, and only when nothing else has taken focus.
+        if (!preserveScroll && state.pendingFocus === null && document.activeElement === document.body && !isMobilePlatform()) {
+            list.focus({ preventScroll: true });
+        }
         resolveUploaderChipsForRows(rows, () => isCurrentFileRequest(request));
     };
 
     if (rows.length === 0) {
         // An empty folder is the one place a reader is certain to want the
         // upload picker, so it is offered here instead of only in the toolbar.
-        renderFileState(
-            list,
-            'empty',
-            'This folder is empty',
-            'Upload files or create a folder to start organizing this drive.',
-            { label: 'Upload files', onClick: () => chooseFilesForCurrentFolder() },
-        );
+        if (isMobilePlatform()) {
+            renderFileState(
+                list,
+                'empty',
+                'No files yet.',
+                '',
+                { label: 'Upload files', onClick: () => chooseFilesForCurrentFolder() },
+                { label: 'Upload folder', onClick: () => chooseFolderForCurrentFolder() },
+                { label: 'Create folder', onClick: openNewFolderModal },
+            );
+        } else {
+            renderFileState(
+                list,
+                'empty',
+                'This folder is empty',
+                'Upload files or create a folder to start organizing this drive.',
+                { label: 'Upload files', onClick: () => chooseFilesForCurrentFolder() },
+            );
+        }
         afterFileListPaint(list, afterPublish);
         return;
     }
 
     renderFileListRows(list, rows, afterPublish);
-}
-
-function refreshErrorMessage(error: unknown): string {
-    if (error instanceof Error && error.message) return error.message;
-    return String(error || 'Failed to load files');
 }
 
 function publishRefreshError(list: HTMLElement, request: FileRefreshRequest, error: unknown): void {
@@ -605,22 +801,35 @@ function publishRefreshError(list: HTMLElement, request: FileRefreshRequest, err
         list,
         'error',
         offline ? "You're offline" : 'Could not load this folder',
-        offline ? 'Reconnect to load this folder from Telegram.' : refreshErrorMessage(error),
+        offline ? 'Reconnect to load this folder from Telegram.' : humanizeBackendError(error),
         { label: 'Retry', onClick: () => appActions().refreshFiles() },
     );
 }
 
 export function refreshFiles({ background = false }: RefreshFilesOptions = {}): void {
-    if (state.virtualView === 'photos') {
+    // Both modes are set from the one value, before anything branches. They
+    // used to be cleared on the way past each other, so entering Photos from
+    // the trash returned before the line that turned the trash off: the drive
+    // chrome kept the trash's title and left both sidebar entries lit.
+    const destination = state.virtualView;
+    setPhotosMode(destination === 'photos');
+    setTrashMode(destination === 'trash');
+    if (destination === 'photos') {
         // A request that began before Photos is never permitted to republish
         // over the gallery or the preserved drive list on return.
         fileRefreshToken += 1;
         clearSelection();
-        setPhotosMode(true);
         void renderGallery({ background });
         return;
     }
-    setPhotosMode(false);
+    if (destination === 'trash') {
+        // Same reasoning as Photos: invalidate any drive load already in
+        // flight so it cannot republish a folder over the trash.
+        fileRefreshToken += 1;
+        clearSelection();
+        renderTrashRows();
+        return;
+    }
 
     const list = document.getElementById('file-list');
     if (!list) return;
@@ -652,47 +861,112 @@ export function refreshFiles({ background = false }: RefreshFilesOptions = {}): 
 }
 
 // Delegated row interactions. Listeners live on the #file-list container and
-// read each row's data-* attributes, so re-rendering rows costs no listener
-// churn and Svelte can freely replace keyed rows.
+// resolve each event back to its published row by key, so re-rendering rows
+// costs no listener churn and Svelte can freely replace keyed rows.
 function isSearchMode() {
     return String(state.searchQuery || "").trim() !== "";
 }
 
-function handleListClick(e: MouseEvent) {
-    // Search results still own their row handlers. Ignore those events here
-    // so downloads/open/double-click navigation do not fire twice.
-    if (isSearchMode()) return;
+// In the trash a row is a record of something deleted, not a live item: it
+// cannot be opened, renamed, moved, dragged or downloaded. The two things it
+// can do are its own buttons, so every drive interaction below checks this
+// first rather than each one deciding for itself.
+function isTrashMode() {
+    return state.virtualView === 'trash';
+}
 
-    const row = (e.target as HTMLElement).closest(".drive-row") as HTMLElement | null;
-    if (!row) return;
+// On a phone a tap opens the row (the desktop double click) unless something is
+// already selected, when it toggles the row instead, and the trailing button
+// opens the row's menu.
+function handleMobileRowAction(e: MouseEvent, row: HTMLElement): boolean {
+    const target = e.target as HTMLElement;
+    // The revealed swipe button commits and stops there: it must not also run
+    // the tap that would have opened the row underneath it.
+    const swipeAction = target.closest<HTMLButtonElement>('button[data-swipe-action]');
+    if (swipeAction) {
+        e.stopPropagation();
+        const swiped = fileListRowForElement(swipeAction);
+        if (swiped) openMoveForRow(swiped);
+        return true;
+    }
 
-    if (row.dataset.type === "folder") {
-        if ((e.target as HTMLElement).closest("button.download-folder")) {
-            enqueueFolderDownload(row.dataset.id, row.dataset.name);
-            return;
-        }
-        setFocusedRow(row, { preventScroll: true });
-        handleRowSelection(row, e, getInteractiveFileListRows());
+    const more = target.closest<HTMLButtonElement>('button.row-more');
+    if (more) {
+        const rect = more.getBoundingClientRect();
+        openRowMenu(row, rect.left + rect.width / 2, rect.bottom);
+        // This click is fully spent on opening the sheet. Left to bubble, it
+        // reaches the menu's own dismiss-on-outside-click handler on document,
+        // which sees a target outside a sheet that has not rendered yet and
+        // closes it again in the same tick. Long-press escaped that only
+        // because it fires on a timer with no click of its own.
+        e.stopPropagation();
+        return true;
+    }
+    if (target.closest('button')) return true;
+    return false;
+}
+
+function handleMobileTap(e: MouseEvent, element: HTMLElement, row: InteractiveFileListRow) {
+    if (handleMobileRowAction(e, element)) return;
+    setFocusedRow(element, { preventScroll: true });
+    if (state.selectedItems.size > 0) {
+        toggleRowSelection(element);
         return;
     }
-    if (row.dataset.type === "file") {
-        const target = fileTargetForRow(row);
-        if ((e.target as HTMLElement).closest("button.download")) {
-            enqueueDownload(target.id, target.name, target.size);
-            return;
-        }
-        if ((e.target as HTMLElement).closest("button.play-video")) {
-            void appActions().playVideo(target);
-            return;
-        }
-        if ((e.target as HTMLElement).closest("button.open-file")) {
-            void appActions().openFile(target);
-            return;
-        }
-        if ((e.target as HTMLElement).closest("button")) return;
-        setFocusedRow(row, { preventScroll: true });
-        handleRowSelection(row, e, getInteractiveFileListRows());
+    activateRow(element, row);
+}
+
+function handleListClick(e: MouseEvent) {
+    const element = (e.target as HTMLElement).closest(".drive-row") as HTMLElement | null;
+    // A row still being created, or one the list has already dropped, has
+    // nothing to act on.
+    const row = fileListRowForElement(element);
+    if (!element || !row) return;
+
+    // A trash row's only two operations are its own buttons, which Svelte binds
+    // directly. Everything this delegated layer would otherwise do -- select,
+    // focus, open -- has no meaning for a deleted item, so it stops here.
+    if (isTrashMode()) return;
+
+    // Search owns row activation so it can enter a result's folder before
+    // refreshing. The mobile action affordances still belong to this shared
+    // delegated layer, otherwise its overflow button is a dead end.
+    if (isSearchMode()) {
+        if (isMobilePlatform()) handleMobileRowAction(e, element);
+        return;
     }
+
+    if (isMobilePlatform()) {
+        handleMobileTap(e, element, row);
+        return;
+    }
+
+    if (row.kind === "folder") {
+        if ((e.target as HTMLElement).closest("button.download-folder")) {
+            enqueueFolderDownload(row.id, row.name, 0, row.channelId);
+            return;
+        }
+        setFocusedRow(element, { preventScroll: true });
+        handleRowSelection(element, e, getInteractiveFileListRows());
+        return;
+    }
+
+    const target = fileTargetForRow(row);
+    if ((e.target as HTMLElement).closest("button.download")) {
+        enqueueDownload(target.id, target.name, target.size, target.channelId);
+        return;
+    }
+    if ((e.target as HTMLElement).closest("button.play-video")) {
+        void appActions().playVideo(target);
+        return;
+    }
+    if ((e.target as HTMLElement).closest("button.open-file")) {
+        void appActions().openFile(target);
+        return;
+    }
+    if ((e.target as HTMLElement).closest("button")) return;
+    setFocusedRow(element, { preventScroll: true });
+    handleRowSelection(element, e, getInteractiveFileListRows());
 }
 
 function handleListKeyDown(e: KeyboardEvent) {
@@ -706,7 +980,7 @@ function handleListKeyDown(e: KeyboardEvent) {
         setFocusedRow(row, { preventScroll: true });
         return;
     }
-    if (isSearchMode() || target?.closest("input, textarea, select, [contenteditable='true']")) return;
+    if (target?.closest("input, textarea, select, [contenteditable='true']")) return;
 
     const list = document.getElementById('file-list') as HTMLElement | null;
     if (!list) return;
@@ -715,7 +989,8 @@ function handleListKeyDown(e: KeyboardEvent) {
     if (!renderedRows.length || !logicalRows.length) return;
 
     const current = activeRowFromEventTarget(e.target) || renderedRows[0];
-    const currentIndex = Math.max(0, logicalRows.findIndex((row) => row.selectionKey === getRowKey(current)));
+    const currentRow = fileListRowForElement(current);
+    const currentIndex = Math.max(0, logicalRows.findIndex((row) => row.selectionKey === currentRow?.selectionKey));
     let nextKey: string | null = null;
 
     switch (e.key) {
@@ -744,15 +1019,17 @@ function handleListKeyDown(e: KeyboardEvent) {
             return;
         case 'Enter':
             e.preventDefault();
-            activateRow(current);
+            if (currentRow) activateRow(current, currentRow);
             return;
         case 'F2':
             e.preventDefault();
-            renameRow(current);
+            if (currentRow) renameRow(currentRow);
             return;
         case 'Delete':
+        case 'Backspace':
+            // A Mac keyboard's Delete key is Backspace.
             e.preventDefault();
-            deleteRow(current);
+            if (currentRow) deleteRow(currentRow);
             return;
         case 'ContextMenu':
             e.preventDefault();
@@ -773,50 +1050,45 @@ function handleListKeyDown(e: KeyboardEvent) {
 }
 
 function handleListDblClick(e: MouseEvent) {
-    if (isSearchMode()) return;
+    // A phone tap already opened the row; the second tap of a quick pair is not
+    // a rename request.
+    if (isTrashMode() || isSearchMode() || isMobilePlatform()) return;
 
-    const row = (e.target as HTMLElement).closest(".drive-row") as HTMLElement | null;
+    const row = fileListRowForElement((e.target as HTMLElement).closest(".drive-row"));
     if (!row) return;
 
-    if (row.dataset.type === "folder") {
-        navigateToFolder(row.dataset.id as string, row.dataset.name as string);
+    if (row.kind === "folder") {
+        navigateToFolder(row.id, row.name);
         return;
     }
-    if (row.dataset.type === "file") {
-        // Rename only from the name area and only when allowed.
-        if (!(e.target as HTMLElement).closest(".row-name")) return;
-        const target = fileTargetForRow(row);
-        if (isVideoFile(target.name)) {
-            e.preventDefault();
-            window.getSelection?.()?.removeAllRanges();
-            void appActions().playVideo(target);
-            return;
-        }
-        if (canOpenFileViewer(target.name)) {
-            e.preventDefault();
-            window.getSelection?.()?.removeAllRanges();
-            void appActions().openFile(target);
-            return;
-        }
-        if (row.dataset.canRename !== "true") return;
+
+    // Rename only from the name area and only when allowed.
+    if (!(e.target as HTMLElement).closest(".row-name")) return;
+    const target = fileTargetForRow(row);
+    if (isVideoFile(target.name)) {
         e.preventDefault();
-        const selection = window.getSelection?.();
-        if (selection) selection.removeAllRanges();
-        openRenameModal({
-            type: "file",
-            id: Number(row.dataset.id),
-            name: row.dataset.name,
-            size: Number(row.dataset.size || 0),
-            parentId: state.currentFolderId,
-            source: row.dataset.source || "fs",
-        } as Parameters<typeof openRenameModal>[0]);
+        window.getSelection?.()?.removeAllRanges();
+        void appActions().playVideo(target);
+        return;
     }
+    if (canOpenFileViewer(target.name)) {
+        e.preventDefault();
+        window.getSelection?.()?.removeAllRanges();
+        void appActions().openFile(target);
+        return;
+    }
+    if (!row.canRename) return;
+    e.preventDefault();
+    const selection = window.getSelection?.();
+    if (selection) selection.removeAllRanges();
+    openRenameModal(fileCommandFor(row, state.currentFolderId));
 }
 
 function handleListDragStart(e: DragEvent) {
     const handle = (e.target as HTMLElement | null)?.closest?.(".row-name[draggable='true']") as HTMLElement | null;
-    const row = handle?.closest(".drive-row[data-type='folder'], .drive-row[data-type='file']") as HTMLElement | null;
-    if (!row) return;
+    const element = handle?.closest(".drive-row") as HTMLElement | null;
+    const row = fileListRowForElement(element);
+    if (!element || !row) return;
 
     const selection = window.getSelection?.();
     if (selection) selection.removeAllRanges();
@@ -828,61 +1100,56 @@ function handleListDragStart(e: DragEvent) {
         } catch {}
     }
 
-    if (row.dataset.type === "folder") {
-        startDrag(row, {
-            type: "folder",
-            id: String(row.dataset.id || ""),
-            name: row.dataset.name || "Folder",
-            parentId: row.dataset.parentId || state.currentFolderId,
-            row,
-        }, row.dataset.parentId || state.currentFolderId);
+    const parentId = row.parentId || state.currentFolderId;
+    if (row.kind === "folder") {
+        startDrag(element, { type: "folder", id: row.id, name: row.name, parentId, row: element }, parentId);
         return;
     }
+    startDrag(element, { ...fileCommandFor(row, parentId), row: element }, parentId);
+}
 
-    startDrag(row, {
-        type: "file",
-        id: Number(row.dataset.id || 0),
-        name: row.dataset.name || "File",
-        size: Number(row.dataset.size || 0),
-        parentId: row.dataset.parentId || state.currentFolderId,
-        source: row.dataset.source === 'tg' ? 'tg' : 'fs',
-        row,
-    }, row.dataset.parentId || state.currentFolderId);
+/**
+ * The folder a drag event is over, or null for anything else. A drop target has
+ * to be a folder the list is currently showing: a row left behind by the last
+ * render would name a folder the move could not land in.
+ */
+function dropTargetFolder(target: EventTarget | null): { element: HTMLElement; folder: FolderListRow } | null {
+    const element = (target as HTMLElement | null)?.closest?.(".drive-row") as HTMLElement | null;
+    const row = fileListRowForElement(element);
+    return element && row?.kind === 'folder' ? { element, folder: row } : null;
 }
 
 function handleListDragOver(e: DragEvent) {
     if (!state.dragState) return;
-    const row = (e.target as HTMLElement | null)?.closest?.(".drive-row[data-type='folder']") as HTMLElement | null;
-    if (!row) return;
-    const allowed = canDropOnFolder(row.dataset.id || "");
-    setDropHighlight(row, allowed);
+    const over = dropTargetFolder(e.target);
+    if (!over) return;
+    const allowed = canDropOnFolder(over.folder.id);
+    setDropHighlight(over.element, allowed);
     if (e.dataTransfer) e.dataTransfer.dropEffect = allowed ? "move" : "none";
     if (allowed) e.preventDefault();
 }
 
 function handleListDragLeave(e: DragEvent) {
-    const row = (e.target as HTMLElement | null)?.closest?.(".drive-row[data-type='folder']") as HTMLElement | null;
-    if (!row) return;
-    if (e.relatedTarget && row.contains(e.relatedTarget as Node)) return;
-    if (state.dragOverEl === row) {
-        row.classList.remove("drop-target");
-        row.classList.remove("drop-denied");
+    const over = dropTargetFolder(e.target);
+    if (!over) return;
+    if (e.relatedTarget && over.element.contains(e.relatedTarget as Node)) return;
+    if (state.dragOverEl === over.element) {
+        over.element.classList.remove("drop-target");
+        over.element.classList.remove("drop-denied");
         state.dragOverEl = null;
     }
 }
 
 async function handleListDrop(e: DragEvent) {
     if (!state.dragState) return;
-    const row = (e.target as HTMLElement | null)?.closest?.(".drive-row[data-type='folder']") as HTMLElement | null;
-    if (!row) return;
-    const folderID = row.dataset.id || "";
-    if (!canDropOnFolder(folderID)) return;
+    const over = dropTargetFolder(e.target);
+    if (!over || !canDropOnFolder(over.folder.id)) return;
     e.preventDefault();
     e.stopPropagation();
-    if (state.dragOverEl === row) state.dragOverEl = null;
-    row.classList.remove("drop-target");
-    row.classList.remove("drop-denied");
-    await performDropMove(folderID);
+    if (state.dragOverEl === over.element) state.dragOverEl = null;
+    over.element.classList.remove("drop-target");
+    over.element.classList.remove("drop-denied");
+    await performDropMove(over.folder.id);
 }
 
 export function activateFileList(): () => void {
@@ -902,7 +1169,30 @@ export function activateFileList(): () => void {
     list.addEventListener('dragleave', handleListDragLeave);
     list.addEventListener('drop', onDrop);
 
+    // Phone gestures: a long press selects the row, and a pull from the top
+    // refreshes.
+    //
+    // The press used to select only when it landed on the row's small leading
+    // icon and to open the menu anywhere else. Nobody found it: holding a row
+    // means "select this" on every phone anyone has used, and a target that
+    // narrow is not a gesture, it is a secret. The menu lost nothing by giving
+    // the press up, because every row already carries its own button for it.
+    const touchCleanups = isMobilePlatform()
+        ? [
+            bindLongPress(list, '.drive-row[data-type="folder"], .drive-row[data-type="file"]', (row) => {
+                toggleRowSelection(row);
+            }),
+            bindPullToRefresh(list, () => appActions().triggerRefresh()),
+            bindSwipeActions(list, '.drive-row[data-type="folder"], .drive-row[data-type="file"]', {
+                openWidth: (row) => row.querySelector<HTMLElement>('.row-swipe-actions')?.offsetWidth ?? 0,
+                // The class is what the row's own styling keys off; the binder
+                // owns the transform, so nothing else has to know the width.
+                onSettle: (row, open) => row.classList.toggle('is-swiped', open),
+            }),
+        ]
+        : [];
     return () => {
+        for (const cleanup of touchCleanups) cleanup();
         list.removeEventListener('click', handleListClick);
         list.removeEventListener('dblclick', handleListDblClick);
         list.removeEventListener('keydown', handleListKeyDown);

@@ -1,10 +1,10 @@
 <script lang="ts">
-    import { onDestroy, tick } from 'svelte';
+    import { onDestroy } from 'svelte';
     import ModalShell from './ModalShell.svelte';
     import { shareDriveModal } from './share-drive-modal-store';
 
-    let inputEl = $state<HTMLInputElement | null>(null);
-    let copied = $state(false);
+    let linkEl = $state<HTMLElement | null>(null);
+    let copyStatus = $state<'idle' | 'copied' | 'failed'>('idle');
     let copiedTimer: ReturnType<typeof setTimeout> | null = null;
     let wasOpen = false;
 
@@ -20,27 +20,39 @@
         shareDriveModal.close();
     }
 
+    function selectLink(): void {
+        if (!linkEl) return;
+        const selection = window.getSelection();
+        if (!selection) return;
+        const range = document.createRange();
+        range.selectNodeContents(linkEl);
+        selection.removeAllRanges();
+        selection.addRange(range);
+    }
+
     async function copy(): Promise<void> {
+        let succeeded = false;
         try {
             await navigator.clipboard.writeText(link);
+            succeeded = true;
         } catch {
             // Clipboard API can be unavailable in the webview; fall back to the
-            // selection-based copy.
-            inputEl?.select();
-            document.execCommand('copy');
+            // selection-based copy without focusing an editable control and
+            // summoning the software keyboard.
+            selectLink();
+            succeeded = typeof document.execCommand === 'function' && document.execCommand('copy');
         }
-        copied = true;
+        copyStatus = succeeded ? 'copied' : 'failed';
         if (copiedTimer) clearTimeout(copiedTimer);
         copiedTimer = setTimeout(() => {
-            copied = false;
+            copyStatus = 'idle';
             copiedTimer = null;
         }, 1200);
     }
 
     $effect(() => {
         if ($view.open && !wasOpen) {
-            copied = false;
-            void tick().then(() => inputEl?.select());
+            copyStatus = 'idle';
         }
         wasOpen = $view.open;
     });
@@ -56,16 +68,21 @@
     title="Invite link"
     titleId="share-drive-title"
     {subtitle}
-    initialFocus="#share-drive-link"
+    initialFocus="#share-drive-copy"
     restoreFocus="#drives-nav"
     onClose={close}
 >
-    <input id="share-drive-link" type="text" aria-label="Shared drive invite link" readonly value={link} bind:this={inputEl} />
+    <div
+        id="share-drive-link"
+        class="share-drive-link"
+        aria-label="Shared drive invite link"
+        bind:this={linkEl}
+    >{link}</div>
 
     {#snippet actions()}
         <button id="share-drive-close" class="secondary-btn" type="button" onclick={close}>Close</button>
         <button id="share-drive-copy" class="primary-btn" type="button" onclick={() => void copy()}>
-            {copied ? 'Copied!' : 'Copy link'}
+            {copyStatus === 'copied' ? 'Copied!' : copyStatus === 'failed' ? 'Copy failed' : 'Copy link'}
         </button>
     {/snippet}
 </ModalShell>

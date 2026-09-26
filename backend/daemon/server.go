@@ -1,3 +1,40 @@
+// Package daemon runs the headless TDrive backend and exposes it to the tdrive
+// CLI over a local socket. It is the sole holder of the core engine, the
+// Telegram session, the unlocked vault key, the mount controller and the
+// persisted CLI shell state — the CLI keeps nothing between invocations, which
+// is why pwd and cd are round trips rather than process state.
+//
+// Server and client live in the same package deliberately, so a protocol change
+// cannot land on one side only. There is no backward compatibility: every
+// request carries the protocol version and a mismatch is a hard error, because
+// an upgrade routinely leaves a new CLI talking to the daemon the previous
+// install left running.
+//
+// The wire is newline-delimited JSON. Exactly three commands stream — login,
+// upload and download — and a streaming request ends its connection. Events are
+// broadcast to all subscribers with a non-blocking send and dropped on
+// overflow: progress is best-effort, and a slow terminal must never stall a
+// transfer. Only one transfer runs at a time, not for throughput reasons but
+// because backend progress events carry no request id and could not otherwise
+// be attributed to a caller.
+//
+// Four locks with distinct jobs. A write lock makes the Telegram-send plus
+// local-projection sequence single-writer while reads stay concurrent; a second
+// guards only the persisted CLI state; a third enforces the single transfer;
+// and a mount lifecycle gate serializes mount start and stop against vault
+// unlock, lock and logout. That gate encodes the security-relevant ordering:
+// locking the vault or logging out must eject the mount first and clear the key
+// only after, and if ejecting fails the key is deliberately retained rather
+// than pulled out from under a live mount. Logout is terminal for the process —
+// the mount lifecycle is marked permanently unusable before caches are cleared,
+// so a queued start fails at the gate instead of part-way through.
+//
+// Only the socket path, listen, dial and cleanup are per-OS. Unix uses a 0600
+// socket inside a uid-checked 0700 directory, kept short because socket paths
+// have tight platform length limits. Windows uses a named pipe whose protected
+// ACL grants the current user's SID alone; the SID and descriptor string
+// handling is deliberately left untagged so that security boundary stays
+// testable on every development OS.
 package daemon
 
 import (
@@ -43,6 +80,12 @@ type Server struct {
 	mountLifecycleTerminal bool // guarded by mountLifecycle
 	warnf                  func(format string, args ...any)
 	state                  *state
+	// authMu serializes status checks with login startup so one auth key is
+	// never probed by multiple temporary clients in this daemon process.
+	authMu         sync.Mutex
+	authReady      bool
+	authFlowActive bool
+	drivePrepared  bool
 
 	mu        sync.Mutex
 	eventMu   sync.Mutex
@@ -143,10 +186,8 @@ func Run(ctx context.Context, cfg ServerConfig) error {
 			s.warnf("daemon: accept: %v\n", err)
 			continue
 		}
-		s.wg.Add(1)
-		go func() {
-			defer s.wg.Done()
+		s.wg.Go(func() {
 			s.handleConn(runCtx, conn)
-		}()
+		})
 	}
 }

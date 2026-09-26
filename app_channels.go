@@ -3,9 +3,31 @@ package main
 import (
 	"fmt"
 
+	"TDrive/backend/core"
 	"TDrive/backend/projection"
 	channelservice "TDrive/backend/services/channel"
 )
+
+// DriveService owns the set of drives themselves: which ones this client knows
+// about, how a shared one is created, joined, approved or left, and how the
+// personal one is first chosen or made.
+//
+// The line it draws is between a drive and its contents. Everything here
+// changes *which* drives exist or who may reach them; nothing here reads or
+// writes a file inside one. That matters because these are the only calls that
+// can run before a drive is selected at all -- a fresh install has no personal
+// channel, and a user recovering an old one has no projection yet -- so they
+// must not share a type with methods that assume an active drive is already
+// scoped. They are also the only calls that go to Telegram's channel and invite
+// APIs rather than to the local projection, which is why they fail in ways
+// (approval pending, admin-only, flood wait) no file operation ever produces.
+type DriveService struct {
+	host serviceHost
+}
+
+func newDriveService(host serviceHost) *DriveService {
+	return &DriveService{host: host}
+}
 
 // ChannelInfo is the Wails-bound DTO for a drive listed in the sidebar.
 type ChannelInfo struct {
@@ -44,15 +66,23 @@ type JoinRequestInfo struct {
 	About       string `json:"about,omitempty"`
 }
 
-func (a *App) channelService() *channelservice.Service {
-	if a.engine == nil {
-		return nil
-	}
-	return a.engine.ChannelService()
+// engine is the running engine, or nil until ServiceStartup has built one.
+// Drive listing is one of the first things the sidebar asks for, so it really
+// can arrive before there is an engine to answer with.
+func (s *DriveService) engine() *core.Engine {
+	return s.host.coreEngine()
 }
 
-func (a *App) requireChannelService() (*channelservice.Service, error) {
-	if svc := a.channelService(); svc != nil {
+func (s *DriveService) channelService() *channelservice.Service {
+	engine := s.engine()
+	if engine == nil {
+		return nil
+	}
+	return engine.ChannelService()
+}
+
+func (s *DriveService) requireChannelService() (*channelservice.Service, error) {
+	if svc := s.channelService(); svc != nil {
 		return svc, nil
 	}
 	return nil, fmt.Errorf("backend not ready")
@@ -60,8 +90,8 @@ func (a *App) requireChannelService() (*channelservice.Service, error) {
 
 // ListChannels returns every drive known to this client (personal first,
 // then shared in joined-at order). Used to render the sidebar.
-func (a *App) ListChannels() ([]ChannelInfo, error) {
-	svc, err := a.requireChannelService()
+func (s *DriveService) ListChannels() ([]ChannelInfo, error) {
+	svc, err := s.requireChannelService()
 	if err != nil {
 		return nil, err
 	}
@@ -69,7 +99,7 @@ func (a *App) ListChannels() ([]ChannelInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	active := a.ActiveChannelID()
+	active := s.host.activeChannelID()
 	out := make([]ChannelInfo, 0, len(rows))
 	for _, c := range rows {
 		out = append(out, channelInfo(c, active))
@@ -81,12 +111,12 @@ func (a *App) ListChannels() ([]ChannelInfo, error) {
 // inserts the channel row, and switches the active drive to it.
 //
 // Returns the new ChannelInfo with the invite link populated.
-func (a *App) CreateSharedDrive(title string, requireApproval bool) (ChannelInfo, error) {
-	svc, err := a.requireChannelService()
+func (s *DriveService) CreateSharedDrive(title string, requireApproval bool) (ChannelInfo, error) {
+	svc, err := s.requireChannelService()
 	if err != nil {
 		return ChannelInfo{}, err
 	}
-	row, err := svc.CreateSharedDrive(a.ctx, title, requireApproval)
+	row, err := svc.CreateSharedDrive(s.host.appContext(), title, requireApproval)
 	if err != nil {
 		return ChannelInfo{}, err
 	}
@@ -96,12 +126,12 @@ func (a *App) CreateSharedDrive(title string, requireApproval bool) (ChannelInfo
 // JoinSharedDrive imports an invite link. Immediate links return a joined
 // channel. Approval-required links send a Telegram join request and return a
 // durable pending record that can be checked later.
-func (a *App) JoinSharedDrive(inviteLink string) (JoinDriveResult, error) {
-	svc, err := a.requireChannelService()
+func (s *DriveService) JoinSharedDrive(inviteLink string) (JoinDriveResult, error) {
+	svc, err := s.requireChannelService()
 	if err != nil {
 		return JoinDriveResult{}, err
 	}
-	result, err := svc.JoinSharedDrive(a.ctx, inviteLink)
+	result, err := svc.JoinSharedDrive(s.host.appContext(), inviteLink)
 	if err != nil {
 		return JoinDriveResult{}, err
 	}
@@ -109,8 +139,8 @@ func (a *App) JoinSharedDrive(inviteLink string) (JoinDriveResult, error) {
 }
 
 // ListPendingJoins returns approval-required joins this client is waiting on.
-func (a *App) ListPendingJoins() ([]PendingJoinInfo, error) {
-	svc, err := a.requireChannelService()
+func (s *DriveService) ListPendingJoins() ([]PendingJoinInfo, error) {
+	svc, err := s.requireChannelService()
 	if err != nil {
 		return nil, err
 	}
@@ -128,12 +158,12 @@ func (a *App) ListPendingJoins() ([]PendingJoinInfo, error) {
 // CheckPendingJoin checks whether a prior approval-required request has now
 // become a membership. Users call this manually from the sidebar; no realtime
 // Telegram update stream is required for v1.
-func (a *App) CheckPendingJoin(inviteHash string) (JoinDriveResult, error) {
-	svc, err := a.requireChannelService()
+func (s *DriveService) CheckPendingJoin(inviteHash string) (JoinDriveResult, error) {
+	svc, err := s.requireChannelService()
 	if err != nil {
 		return JoinDriveResult{}, err
 	}
-	result, err := svc.CheckPendingJoin(a.ctx, inviteHash)
+	result, err := svc.CheckPendingJoin(s.host.appContext(), inviteHash)
 	if err != nil {
 		return JoinDriveResult{}, err
 	}
@@ -142,8 +172,8 @@ func (a *App) CheckPendingJoin(inviteHash string) (JoinDriveResult, error) {
 
 // RemovePendingJoin forgets a local pending request. It does not revoke the
 // Telegram-side request; only a drive admin can reject it.
-func (a *App) RemovePendingJoin(inviteHash string) error {
-	svc, err := a.requireChannelService()
+func (s *DriveService) RemovePendingJoin(inviteHash string) error {
+	svc, err := s.requireChannelService()
 	if err != nil {
 		return err
 	}
@@ -154,31 +184,31 @@ func (a *App) RemovePendingJoin(inviteHash string) error {
 // only on the Telegram side; non-admin members will get an error from
 // MessagesExportChatInvite. (Step 4 doesn't gate this client-side; we
 // surface whatever Telegram returns.)
-func (a *App) GetInviteLink(channelID int64) (string, error) {
-	svc, err := a.requireChannelService()
+func (s *DriveService) GetInviteLink(channelID int64) (string, error) {
+	svc, err := s.requireChannelService()
 	if err != nil {
 		return "", err
 	}
-	return svc.ExportInviteLink(a.ctx, channelID, false)
+	return svc.ExportInviteLink(s.host.appContext(), channelID, false)
 }
 
 // GetApprovalInviteLink fetches an invite link where Telegram requires an
 // admin to approve each requester before they become a member.
-func (a *App) GetApprovalInviteLink(channelID int64) (string, error) {
-	svc, err := a.requireChannelService()
+func (s *DriveService) GetApprovalInviteLink(channelID int64) (string, error) {
+	svc, err := s.requireChannelService()
 	if err != nil {
 		return "", err
 	}
-	return svc.ExportInviteLink(a.ctx, channelID, true)
+	return svc.ExportInviteLink(s.host.appContext(), channelID, true)
 }
 
 // ListJoinRequests lists Telegram users waiting for admin approval on a drive.
-func (a *App) ListJoinRequests(channelID int64) ([]JoinRequestInfo, error) {
-	svc, err := a.requireChannelService()
+func (s *DriveService) ListJoinRequests(channelID int64) ([]JoinRequestInfo, error) {
+	svc, err := s.requireChannelService()
 	if err != nil {
 		return nil, err
 	}
-	reqs, err := svc.ListJoinRequests(a.ctx, channelID)
+	reqs, err := svc.ListJoinRequests(s.host.appContext(), channelID)
 	if err != nil {
 		return nil, err
 	}
@@ -196,31 +226,31 @@ func (a *App) ListJoinRequests(channelID int64) ([]JoinRequestInfo, error) {
 	return out, nil
 }
 
-func (a *App) ApproveJoinRequest(channelID, userID int64) error {
-	svc, err := a.requireChannelService()
+func (s *DriveService) ApproveJoinRequest(channelID, userID int64) error {
+	svc, err := s.requireChannelService()
 	if err != nil {
 		return err
 	}
-	return svc.HideJoinRequest(a.ctx, channelID, userID, true)
+	return svc.HideJoinRequest(s.host.appContext(), channelID, userID, true)
 }
 
-func (a *App) RejectJoinRequest(channelID, userID int64) error {
-	svc, err := a.requireChannelService()
+func (s *DriveService) RejectJoinRequest(channelID, userID int64) error {
+	svc, err := s.requireChannelService()
 	if err != nil {
 		return err
 	}
-	return svc.HideJoinRequest(a.ctx, channelID, userID, false)
+	return svc.HideJoinRequest(s.host.appContext(), channelID, userID, false)
 }
 
 // LeaveSharedDrive leaves the Telegram channel and drops every local row
 // scoped to it. If the active drive was this one, switches active to the
 // personal drive.
-func (a *App) LeaveSharedDrive(channelID int64) error {
-	svc, err := a.requireChannelService()
+func (s *DriveService) LeaveSharedDrive(channelID int64) error {
+	svc, err := s.requireChannelService()
 	if err != nil {
 		return err
 	}
-	return svc.LeaveSharedDrive(a.ctx, channelID)
+	return svc.LeaveSharedDrive(s.host.appContext(), channelID)
 }
 
 func channelInfo(c projection.Channel, active int64) ChannelInfo {

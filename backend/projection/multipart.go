@@ -93,8 +93,29 @@ func PartsForUUIDContext(ctx context.Context, db *sql.DB, channelID int64, uuid 
 // would corrupt that upload. A failed/canceled upload from this client cleans up
 // its own parts inline (see uploadMultipart's abort), so the only orphans we act
 // on here are the safe, definitely-dead ones behind a tombstone.
+//
+// A tombstone is not on its own proof that the bytes are dead: a trashed object
+// is tombstoned and still fully restorable. Everything a trash entry still
+// covers -- the entry's own file, and every file inside a trashed folder tree --
+// is therefore excluded. Over-protecting costs storage; under-protecting would
+// silently destroy the bytes behind a restorable file.
 func OrphanPartMessages(db *sql.DB, channelID int64) ([]int64, error) {
 	rows, err := db.Query(`
+		WITH RECURSIVE trashed_folders(id) AS (
+			SELECT object_id FROM trash_entries
+			WHERE channel_id=? AND object_kind='folder'
+			UNION
+			SELECT child.id FROM folders child
+			JOIN trashed_folders parent ON child.parent_id=parent.id
+			WHERE child.channel_id=?
+		),
+		restorable(msg_id) AS (
+			SELECT CAST(SUBSTR(object_id, 3) AS INTEGER) FROM trash_entries
+			WHERE channel_id=? AND object_kind='file'
+			UNION
+			SELECT msg_id FROM files
+			WHERE channel_id=? AND parent_id IN (SELECT id FROM trashed_folders)
+		)
 		SELECT fp.msg_id FROM file_parts fp
 		WHERE fp.channel_id = ?
 		  AND EXISTS (
@@ -102,9 +123,17 @@ func OrphanPartMessages(db *sql.DB, channelID int64) ([]int64, error) {
 			WHERE f.channel_id = fp.channel_id
 			  AND f.upload_uuid = fp.upload_uuid
 			  AND f.tombstoned = 1
+			  AND f.msg_id NOT IN (SELECT msg_id FROM restorable)
 		  )
-		ORDER BY fp.msg_id ASC
-	`, channelID)
+		UNION
+		SELECT r.msg_id FROM file_renditions r JOIN files f
+		  ON f.channel_id=r.channel_id AND f.msg_id=r.file_msg_id
+		WHERE r.channel_id=? AND f.tombstoned=1
+		  AND (EXISTS(SELECT 1 FROM channels c WHERE c.channel_id=r.channel_id AND c.kind='personal')
+		   OR (r.actor_user_id>0 AND r.actor_user_id=f.uploader_user_id))
+		  AND f.msg_id NOT IN (SELECT msg_id FROM restorable)
+		ORDER BY msg_id ASC
+	`, channelID, channelID, channelID, channelID, channelID, channelID)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +168,10 @@ func DeleteFileParts(db *sql.DB, channelID int64, uuid string) error {
 // Used by the GC sweep after the corresponding messages are deleted from
 // Telegram. Chunked to stay under SQLite's bound-variable limit.
 func DeleteFilePartsByMsgIDs(db *sql.DB, channelID int64, msgIDs []int64) error {
-	return deleteByMsgIDs(db, "file_parts", channelID, msgIDs)
+	if err := deleteByMsgIDs(db, "file_parts", channelID, msgIDs); err != nil {
+		return err
+	}
+	return deleteByMsgIDs(db, "file_renditions", channelID, msgIDs)
 }
 
 // MultipartPartMsgIDsForFiles returns all part document msg_ids behind the given

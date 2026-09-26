@@ -1,0 +1,1276 @@
+/*
+ * TDrive phone shell.
+ *
+ * Everything here is scoped to html.mobile, which main.ts stamps on iOS and
+ * Android (and on the ?mobile= browser/harness preview). Desktop never matches
+ * these rules, so the desktop UI stays byte-identical. Tokens only, opaque bars
+ * with a single hairline, no backdrop blur on scrolling chrome, and safe-area
+ * insets on the shell edges (spec 2.3, 2.11). Imported last in style.css.
+ */
+
+html.mobile {
+    /* Everything that floats above the tab bar measures from these, so the
+       bar's shape lives in one place. The slot adds the bottom inset on top. */
+    --tabbar-height: 64px;
+    /* How far the floating bar sits from the screen edges. */
+    --tabbar-inset: 12px;
+    /* The top of the tab bar: where anything floating over the content has to
+       stop. Every such surface measures from this one value, so the bar's shape
+       is stated once and they cannot drift apart. */
+    --mobile-overlay-bottom: calc(var(--tabbar-height) + var(--tabbar-inset) * 2 + var(--inset-bottom));
+    /* Raised by the shell to --context-action-clearance while the upload button
+       is showing, so nothing else settles on top of it. */
+    --mobile-fab-clearance: 0px;
+    --selection-bar-reserve: calc(76px + var(--inset-bottom));
+    --context-action-clearance: calc(52px + var(--space-4));
+    --mobile-type-caption: 0.75rem;
+    --mobile-type-meta: 0.8125rem;
+    --mobile-type-body: 0.9375rem;
+    --mobile-type-title: 1.375rem;
+    /* Seated inside the bar as a peer of the tabs rather than floating over
+       it, so 44 is the touch minimum, not a size chosen to be noticed. */
+
+    /* tokens.css folds the window insets the shell publishes into the top and
+       bottom edges; the sides need the same treatment and only a phone has
+       anything to add, so they are folded in here. A turned Android phone puts
+       the notch on one side and the navigation bar on the other, and its
+       WebView answers zero to env() for both. */
+    --inset-left: max(env(safe-area-inset-left, 0px), var(--mobile-inset-left, 0px));
+    --inset-right: max(env(safe-area-inset-right, 0px), var(--mobile-inset-right, 0px));
+}
+
+/* The shell root and the tab panels set display:flex, which would otherwise
+   beat the `hidden` attribute they toggle with; the [hidden] variants are more
+   specific than those rules, so the panels collapse without a broad !important. */
+html.mobile #success-screen.mobile-shell[hidden],
+html.mobile .mobile-panel[hidden] { display: none; }
+
+/* ============================ SHELL ============================ */
+html.mobile #success-screen.mobile-shell {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    background: var(--color-canvas);
+    overflow: hidden;
+}
+
+html.mobile .mobile-body {
+    position: relative;
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* The selection bar overlays the shell so it can replace the tab bar without a
+   layout jump. Reserve its final row-height while it is visible, otherwise the
+   last file or thumbnail looks reachable but lands underneath the actions. */
+html.mobile .mobile-shell.is-selecting .mobile-body {
+    padding-bottom: var(--selection-bar-reserve);
+}
+
+/* The contextual FAB overlaps only Files and Photos. Give those scrollports a
+   final thumb-sized runway, so the last row and gallery cell can scroll above
+   the action on a short phone or in landscape. Other tabs retain their dense
+   natural ending. */
+html.mobile .mobile-shell.has-context-action .file-list-box,
+html.mobile .mobile-shell.has-context-action .gallery-view {
+    padding-bottom: calc(var(--space-6) + var(--context-action-clearance));
+    scroll-padding-bottom: var(--context-action-clearance);
+}
+
+/* At accessibility text sizes a second label line would make the compact bar
+   taller than its safe-area slot. Icons remain named controls, so hide only
+   the redundant visual labels and keep all four 48px targets stable. */
+html.mobile[data-mobile-text-scale='large'] .tab-label {
+    display: none;
+}
+html.mobile[data-mobile-text-scale='large'] .tab-item {
+    min-height: 48px;
+}
+
+/* The narrowest phones and any short landscape window use the same compact
+   icon-only navigation. This is also the safe fallback while a host reports a
+   text preference before its native scale bridge has published the category. */
+@media (max-width: 360px), (max-height: 480px) {
+    html.mobile .tab-label { display: none; }
+    html.mobile .tab-item { min-height: 48px; }
+}
+
+html.mobile .mobile-panel {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+}
+
+/* The desktop .main-content keeps its flex column; only reset its desktop
+   chrome that has no place on a phone.
+   The side insets sit here rather than on the file list and the gallery inside
+   it, so one rule covers both surfaces and the canvas behind them still runs to
+   the glass. In portrait they are zero and nothing moves; turned, they are what
+   keeps the rows and the photo grid out from under the notch. */
+html.mobile .main-content {
+    min-height: 0;
+    padding: 0 var(--inset-right) 0 var(--inset-left);
+}
+
+html.mobile .mobile-scroll {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    -webkit-overflow-scrolling: touch;
+    padding:
+        var(--space-4)
+        calc(var(--space-4) + var(--inset-right))
+        calc(var(--space-6) + var(--inset-bottom))
+        calc(var(--space-4) + var(--inset-left));
+}
+
+/* ============================ TOP BAR ============================ */
+/* No divider at rest: the file card's own inset edge already separates content
+   from chrome, and a permanent hairline a few pixels above it draws the same
+   line twice. The rule appears only once content is actually passing under the
+   bar, which is the moment it has something to separate. */
+html.mobile .mobile-topbar {
+    flex: 0 0 auto;
+    background: var(--color-surface-0);
+    border-bottom: 1px solid transparent;
+    /* The bar's own fill runs to the glass; only its contents stand off the
+       edges, so the surface still reads as one band across the screen while
+       nothing lands under the island or the rounded corners. */
+    padding-top: var(--inset-top);
+    padding-right: var(--inset-right);
+    padding-left: var(--inset-left);
+    transition: border-color var(--motion-med) var(--ease-standard);
+}
+html.mobile .mobile-shell.is-scrolled .mobile-topbar {
+    border-bottom-color: var(--color-border-soft);
+}
+
+html.mobile .topbar-row {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    min-height: 44px;
+    padding: var(--space-2) var(--space-3) var(--space-2) var(--space-4);
+}
+
+html.mobile .topbar-plain .topbar-row { min-height: 52px; }
+
+html.mobile .topbar-title {
+    font-size: var(--mobile-type-title);
+    font-weight: var(--weight-strong);
+    color: var(--color-text);
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+}
+
+html.mobile .topbar-plain-titles { display: flex; flex-direction: column; gap: 1px; }
+html.mobile .topbar-subtitle { font-size: var(--mobile-type-meta); color: var(--color-text-muted); }
+
+/* Selection: the count and the only way out of the mode. The tab bar is gone
+   while selecting and the bottom bar keeps only Move and Delete, so Done has to
+   be on screen -- an iPhone has no hardware BACK to fall back on. */
+html.mobile .topbar-selection-count { flex: 1 1 auto; min-width: 0; }
+html.mobile .topbar-done {
+    display: inline-grid;
+    place-items: center;
+    min-width: 44px;
+    height: 44px;
+    padding: 0 var(--space-2);
+    border: 0;
+    background: transparent;
+    color: var(--color-accent);
+    font-size: 1rem;
+    font-weight: var(--weight-semibold);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+}
+html.mobile .topbar-done:active { background: var(--overlay-accent-1); }
+/* Empty trash is the bar's one destructive action, and reads as one. */
+html.mobile .topbar-done.topbar-danger { color: var(--color-danger); }
+html.mobile .topbar-done.topbar-danger:active { background: var(--overlay-danger-1); }
+html.mobile .topbar-trash .topbar-plain-titles { flex: 1 1 auto; min-width: 0; }
+
+/* Drive header: the one bold element (spec 2.2). Name, live sync ring, then the
+   kind and item count on a quiet second line. The name opens the switcher; the
+   ring beside it is the queue's own button, which is why the two are siblings
+   rather than one inside the other. */
+html.mobile .drive-header {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 4px 0;
+}
+html.mobile .drive-header-main { display: flex; align-items: center; gap: 8px; min-width: 0; }
+/* 44px tall, pulled back by the difference so the bar keeps the height the
+   name's own line gave it. The same trick the ring and the row badges use. */
+html.mobile .drive-header-btn {
+    display: flex;
+    align-items: center;
+    min-width: 44px;
+    min-height: 44px;
+    margin: -9px 0;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    text-align: left;
+    cursor: pointer;
+    color: inherit;
+}
+html.mobile .drive-header-btn:active { opacity: 0.7; }
+html.mobile .drive-header-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 1.375rem;
+    font-weight: var(--weight-strong);
+    color: var(--color-text);
+    letter-spacing: -0.01em;
+    line-height: 1.2;
+}
+html.mobile .drive-header-btn .drive-header-name { flex: 0 1 auto; }
+html.mobile .drive-header-chevron {
+    flex: 0 0 auto;
+    margin-left: 4px;
+    color: var(--color-text-muted);
+}
+html.mobile .drive-header-meta { font-size: var(--mobile-type-meta); color: var(--color-text-muted); }
+
+/* Folder header: the name over a count, matching the drive header's two-line
+   shape so the bar does not change height when you walk into a folder. */
+html.mobile .topbar-folder-titles {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+}
+html.mobile .topbar-folder-title {
+    min-width: 0;
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 1.25rem;
+    font-weight: var(--weight-strong);
+    color: var(--color-text);
+    letter-spacing: -0.01em;
+}
+html.mobile .topbar-folder-meta {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.8125rem;
+    font-weight: var(--weight-medium);
+    color: var(--color-text-muted);
+}
+
+html.mobile .topbar-back {
+    flex: 0 0 auto;
+    display: inline-grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    margin-left: -10px;
+    border: 0;
+    background: transparent;
+    color: var(--color-text);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+}
+html.mobile .topbar-back:active { background: var(--overlay-neutral-2); }
+
+html.mobile .topbar-actions { flex: 0 0 auto; display: flex; align-items: center; }
+html.mobile .topbar-menu-wrap { position: relative; }
+html.mobile .topbar-icon-btn {
+    display: inline-grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-soft);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+}
+html.mobile .topbar-icon-btn:active,
+html.mobile .topbar-icon-btn[aria-expanded='true'] { background: var(--overlay-neutral-2); color: var(--color-text); }
+
+/* Overflow menu (sort). Popover material, not a scrolling surface, so a shadow
+   is fine here. */
+html.mobile .topbar-menu {
+    position: absolute;
+    top: calc(100% + 4px);
+    right: 4px;
+    z-index: var(--z-popover);
+    min-width: 180px;
+    padding: var(--space-1);
+    background: var(--color-surface-1);
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-lg);
+    box-shadow: var(--shadow-md);
+}
+html.mobile .topbar-menu-label {
+    padding: 8px 12px 4px;
+    font-size: 0.75rem;
+    font-weight: var(--weight-semibold);
+    color: var(--color-text-muted);
+}
+html.mobile .topbar-menu-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    width: 100%;
+    min-height: 44px;
+    padding: 0 12px;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-soft);
+    font-size: 0.9375rem;
+    text-align: left;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+}
+html.mobile .topbar-menu-item[aria-checked='true'] { color: var(--color-accent); }
+html.mobile .topbar-menu-item:active { background: var(--overlay-neutral-2); }
+
+/* The search band collapses to nothing and grows back. Height is animated to a
+   known value rather than to `auto`, which no engine interpolates, and the
+   field itself fades and settles down so the two read as one movement. */
+html.mobile .topbar-search-shell {
+    height: 0;
+    overflow: hidden;
+    transition: height var(--motion-slow) var(--ease-enter);
+}
+html.mobile .topbar-search-shell[data-open="true"] { height: 52px; }
+html.mobile .topbar-search-shell .topbar-search {
+    opacity: 0;
+    transform: translateY(-6px);
+    transition: opacity var(--motion-med) var(--ease-standard),
+                transform var(--motion-med) var(--ease-standard);
+}
+html.mobile .topbar-search-shell[data-open="true"] .topbar-search {
+    opacity: 1;
+    transform: none;
+}
+
+/* Search field. 16px minimum so iOS does not zoom on focus (spec 2.3). */
+html.mobile .topbar-search {
+    position: relative;
+    padding: 0 var(--space-4) var(--space-3);
+}
+html.mobile .topbar-search-icon {
+    position: absolute;
+    left: calc(var(--space-4) + 12px);
+    top: 50%;
+    transform: translateY(calc(-50% - 6px));
+    color: var(--color-text-muted);
+    pointer-events: none;
+}
+html.mobile .topbar-search input {
+    width: 100%;
+    height: 40px;
+    margin: 0;
+    padding: 0 14px 0 40px;
+    font-size: 1rem;
+    color: var(--color-text);
+    background: var(--color-surface-2);
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+}
+html.mobile .topbar-search input::placeholder { color: var(--color-text-muted); }
+html.mobile .topbar-search input:focus-visible {
+    outline: none;
+    border-color: var(--color-accent);
+    box-shadow: var(--focus-ring);
+}
+
+/* ============================ TAB BAR ============================ */
+/* A floating bar rather than a full-bleed one: it reads as a control resting
+   on the content instead of a wall the content stops at, and the rounded ends
+   echo the file card above it. The upload action sits in the middle of the row
+   as a peer of the tabs, not on top of them. */
+html.mobile .mobile-tabbar-slot {
+    position: relative;
+    flex: 0 0 auto;
+    padding:
+        0
+        calc(var(--tabbar-inset) + var(--inset-right))
+        calc(var(--tabbar-inset) + var(--inset-bottom))
+        calc(var(--tabbar-inset) + var(--inset-left));
+}
+html.mobile .tab-bar {
+    position: relative;
+    display: flex;
+    align-items: stretch;
+    height: var(--tabbar-height);
+    background: var(--color-surface-1);
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-xl);
+    box-shadow: var(--shadow-lg);
+}
+/* The upload action is the middle cell and shares the tabs' sizing, so all
+   five centres land on the same rhythm. Given a width of its own it made the
+   two gaps beside it narrower than the two at the ends. */
+html.mobile .mobile-fab {
+    flex: 1 1 0;
+    position: relative;
+    display: grid;
+    place-items: center;
+    min-width: 0;
+}
+html.mobile .tab-item {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    min-width: 0;
+    padding: 6px 0;
+    border: 0;
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: color var(--motion-med) var(--ease-standard);
+}
+html.mobile .tab-item.active { color: var(--color-accent); }
+html.mobile .tab-icon {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    /* The press settles the icon rather than the whole button, so the label
+       underneath stays put and the target never appears to move away. */
+    transition: transform var(--motion-fast) var(--ease-standard);
+}
+html.mobile .tab-item:active .tab-icon { transform: scale(0.9); }
+/* Sized to the glyph it replaces, so the row keeps its rhythm. The hairline is
+   there because a dark photograph against a dark bar has no edge of its own. */
+html.mobile .tab-icon .profile-avatar {
+    width: 24px;
+    height: 24px;
+    font-size: 0.625rem;
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+/* A photograph cannot turn accent the way the other glyphs do, and a 48x32
+   pill behind a 24px circle reads as a badge behind a badge rather than as the
+   same highlight the other three wear. The avatar marks itself instead: the
+   ring follows its own shape, and the label under it turns accent like the
+   rest. */
+html.mobile .tab-icon.is-avatar .tab-pill { opacity: 0; }
+html.mobile .tab-item.active .tab-icon.is-avatar .profile-avatar {
+    box-shadow:
+        0 0 0 2px var(--color-accent),
+        inset 0 0 0 1px rgba(255, 255, 255, 0.14);
+}
+
+html.mobile .tab-label {
+    font-size: var(--mobile-type-caption);
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.01em;
+}
+
+/* The pill grows into place behind the active icon. Starting at 0.7 rather
+   than 0 keeps it an object that arrives, not one conjured from nothing. */
+html.mobile .tab-pill {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 48px;
+    height: 32px;
+    background: var(--overlay-accent-1);
+    border-radius: var(--radius-pill);
+    pointer-events: none;
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(0.7);
+    transition: opacity var(--motion-med) var(--ease-enter),
+                transform var(--motion-med) var(--ease-enter);
+}
+html.mobile .tab-item.active .tab-pill {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+}
+
+html.mobile .tab-badge {
+    position: absolute;
+    top: -4px;
+    left: 14px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    display: inline-grid;
+    place-items: center;
+    font-size: 0.625rem;
+    font-weight: var(--weight-strong);
+    line-height: 1;
+    color: var(--color-on-accent);
+    background: var(--color-accent);
+    border-radius: var(--radius-pill);
+}
+
+/* ============================ UPLOAD BUTTON ============================ */
+/* Docked into the middle of the tab bar. The Fab renders the upload menu
+   inside .mobile-fab; the rules below restyle the menu's own trigger into the
+   accent circle. It rides above the bar so its shadow reads against it. */
+/* The upload action sits in the bar's middle slot, level with the tab icons.
+   It used to float half outside the bar, which cost it on every count: a
+   circle overlapping a rounded rectangle put three different corner radii in
+   one control, the cut-out needed a canvas-coloured ring to fake a hole in the
+   bar's outline, and at 56px with a drop shadow it was the brightest and
+   largest object on the screen -- louder than the files, which are the actual
+   point of the app.
+
+   Seated and shrunk, it is still unmistakably the primary action, because
+   accent on dark does that at any size. It just no longer shouts. */
+html.mobile .mobile-fab .upload-btn,
+html.mobile .mobile-fab .primary-btn.upload-btn {
+    /* Built like a tab item, because it is standing in a row of them: same
+       stack, same gap, same padding, same label. What sets it apart is that its
+       pill is filled rather than tinted, which is the difference between acting
+       and navigating. */
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 6px 0;
+    border: 0;
+    border-radius: var(--radius-xl);
+    background: transparent;
+    color: var(--color-accent);
+    font-size: 0.6875rem;
+    font-weight: var(--weight-semibold);
+    letter-spacing: 0.01em;
+    box-shadow: none;
+}
+html.mobile .mobile-fab .upload-btn-pill {
+    /* The same 48x32 the active tab's pill grows into, so the two read as one
+       family rather than two unrelated shapes sharing a bar. */
+    width: 48px;
+    height: 32px;
+    display: grid;
+    place-items: center;
+    background: var(--color-accent);
+    color: var(--color-on-accent);
+    border-radius: var(--radius-pill);
+    transition: transform var(--motion-fast) var(--ease-standard);
+}
+html.mobile .mobile-fab .upload-btn:active .upload-btn-pill { transform: scale(0.9); }
+html.mobile .mobile-fab .upload-btn .btn-icon { width: 24px; height: 24px; }
+
+/* Contextual primary action. It is deliberately independent of the tab bar:
+   navigation has four equally weighted destinations, while creating content
+   only appears where it has somewhere to go. 52px gives Android's 48dp target
+   room and remains comfortably above iOS's 44pt floor. */
+html.mobile .mobile-context-action {
+    position: absolute;
+    right: calc(var(--space-4) + var(--inset-right));
+    bottom: var(--mobile-overlay-bottom);
+    z-index: var(--z-selection);
+}
+html.mobile .mobile-context-action .mobile-fab {
+    display: block;
+    width: 52px;
+    height: 52px;
+}
+html.mobile .mobile-context-action .mobile-fab .upload-btn,
+html.mobile .mobile-context-action .mobile-fab .primary-btn.upload-btn {
+    display: grid;
+    place-items: center;
+    width: 52px;
+    height: 52px;
+    padding: 0;
+    overflow: hidden;
+    border-radius: 50%;
+    background: var(--color-accent);
+    color: transparent;
+    box-shadow: var(--shadow-md);
+}
+html.mobile .mobile-context-action .mobile-fab .upload-btn-pill {
+    width: 52px;
+    height: 52px;
+    background: transparent;
+    color: var(--color-on-accent);
+}
+html.mobile .mobile-context-action .mobile-fab .upload-btn:active .upload-btn-pill {
+    transform: scale(0.94);
+}
+
+/* The upload menu is a bottom sheet on a phone, not a popover. The trigger is
+   docked in the middle of the tab bar against the bottom safe area, so there is
+   no room to anchor a popover to it without covering the bar. A sheet is also
+   the surface the row actions and the drive switcher already use, so the phone
+   keeps one way of asking a question. */
+html.mobile .upload-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-modal);
+    background: var(--scrim);
+    animation: tdrive-scrim-in var(--motion-med) var(--ease-standard) both;
+}
+html.mobile .mobile-fab .upload-menu.is-sheet {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    top: auto;
+    z-index: calc(var(--z-modal) + 1);
+    width: 100%;
+    max-width: 640px;
+    margin: 0 auto;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0 var(--space-4) calc(var(--space-4) + var(--inset-bottom));
+    background: var(--color-surface-0);
+    border: 0;
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    box-shadow: var(--shadow-lg);
+    animation: tdrive-sheet-enter var(--motion-slow) var(--ease-enter) both;
+}
+html.mobile .mobile-fab .upload-menu.is-sheet .sheet-handle {
+    display: grid;
+    place-items: center;
+    padding: var(--space-2) 0 var(--space-3);
+}
+html.mobile .mobile-fab .upload-menu.is-sheet .sheet-handle span {
+    display: block;
+    width: 36px;
+    height: 5px;
+    border-radius: var(--radius-pill);
+    background: var(--color-border);
+}
+html.mobile .mobile-fab .upload-menu.is-sheet .upload-menu-item {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    width: 100%;
+    min-height: 52px;
+    padding: 0 var(--space-2);
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-text);
+    font-size: var(--type-md);
+    font-weight: var(--weight-semibold);
+    text-align: left;
+    cursor: pointer;
+}
+html.mobile .mobile-fab .upload-menu.is-sheet .upload-menu-item:active {
+    background: var(--overlay-neutral-2);
+}
+/* ============================ SELECTION BAR ============================ */
+/* The controller flips display:flex/none inline; the shell only positions it as
+   a bottom bar that replaces the tab bar. */
+html.mobile .mobile-selection-bar {
+    position: absolute;
+    inset: auto 0 0 0;
+    z-index: var(--z-selection);
+    flex-wrap: wrap;
+    gap: var(--space-2);
+    padding: var(--space-3) var(--space-4) calc(var(--space-3) + var(--inset-bottom));
+    background: var(--color-surface-0);
+    border-top: 1px solid var(--color-border-soft);
+}
+
+/* ============================ TRANSFERS TAB ============================ */
+html.mobile .transfers-tab { padding-top: var(--space-2); }
+html.mobile .transfers-section-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    padding: var(--space-4) var(--space-1) var(--space-2);
+}
+html.mobile .transfers-section-head:first-child { padding-top: var(--space-1); }
+html.mobile .transfers-clear {
+    border: 0;
+    background: transparent;
+    color: var(--color-accent);
+    font-size: 0.8125rem;
+    font-weight: var(--weight-semibold);
+    padding: 6px 8px;
+    cursor: pointer;
+}
+html.mobile .transfers-group {
+    display: flex;
+    flex-direction: column;
+    background: var(--color-surface-1);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+}
+/* Notices in Recent, which are still the bell's own row: transfers have the
+   phone's row (ui/mobile/MobileTransferRow) and bring their own shape.
+
+   The group is the card, so the rows inside it stop being cards. On the
+   popover's glass each one stands alone and earns its border and corner;
+   stacked inside a surface that already has both, the same treatment reads as
+   chips rattling in a box. Here the surface separates them and the row just
+   holds content. */
+html.mobile .transfers-group .notif-row {
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 14px;
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+}
+html.mobile .transfers-group .notif-row:hover { background: transparent; }
+/* One line each, so every row is the same height whatever it is reporting. */
+html.mobile .transfers-group .notif-row-title,
+html.mobile .transfers-group .notif-row-sub {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+html.mobile .transfers-group .notif-row-sub { margin-top: 1px; }
+/* The time always sits in the same place, at the trailing edge, rather than
+   wherever the row's own content happens to leave it. */
+html.mobile .transfers-group .notif-row-meta {
+    flex: 0 0 auto;
+    align-self: center;
+    text-align: right;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+/* A copy action belongs under the row it explains, not in the column the time
+   owns, where it pushes every other row's time out of alignment. */
+html.mobile .transfers-group .notif-row-copy {
+    grid-column: 2 / -1;
+    justify-self: start;
+    margin-top: 2px;
+    min-height: 44px;
+    display: inline-flex;
+    align-items: center;
+}
+/* The notice's time stamp too: the shared rule parks it in the body column
+   under the text, which on a phone put it on a line of its own. */
+html.mobile .transfers-group .notif-row-event .notif-row-meta {
+    grid-column: 3;
+    grid-row: 1;
+    margin-left: 0;
+}
+
+/* ============================ ACCOUNT TAB ============================ */
+html.mobile .account-identity {
+    display: flex;
+    align-items: center;
+    gap: var(--space-3);
+    padding: var(--space-3) var(--space-2) var(--space-5);
+}
+html.mobile .account-identity-meta { min-width: 0; }
+html.mobile .account-name {
+    font-size: 1.25rem;
+    font-weight: var(--weight-strong);
+    color: var(--color-text);
+    line-height: 1.2;
+}
+html.mobile .account-handle { font-size: 0.875rem; color: var(--color-text-muted); }
+
+html.mobile .account-group { margin-bottom: var(--space-6); }
+html.mobile .mobile-section-label {
+    padding: 0 var(--space-2) var(--space-2);
+    font-size: 0.8125rem;
+    font-weight: var(--weight-semibold);
+    color: var(--color-text-muted);
+}
+html.mobile .account-card {
+    display: flex;
+    flex-direction: column;
+    background: var(--color-surface-1);
+    border-radius: var(--radius-lg);
+    overflow: hidden;
+}
+html.mobile .account-row {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    min-height: 52px;
+    padding: 0 14px;
+    border: 0;
+    background: transparent;
+    color: var(--color-text);
+    font-size: var(--mobile-type-body);
+    text-align: left;
+    cursor: pointer;
+}
+html.mobile .account-row + .account-row { border-top: 1px solid var(--color-border-soft); }
+html.mobile .account-row:active { background: var(--overlay-neutral-2); }
+html.mobile .account-row .account-row-icon { flex: 0 0 auto; color: var(--color-text-muted); }
+html.mobile .account-row-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+html.mobile .account-row-static .account-row-label {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    white-space: normal;
+}
+html.mobile .account-row-detail {
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: 0.75rem;
+    line-height: 1.2;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* The value keeps its width: shrinking both sides let a long drive title
+   crush the kind beside it to "S…". */
+html.mobile .account-row-value {
+    flex: 0 0 auto;
+    max-width: 42%;
+    overflow: hidden;
+    color: var(--color-text-muted);
+    font-size: var(--mobile-type-meta);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+html.mobile .account-row .account-row-chevron { flex: 0 0 auto; color: var(--color-text-subtle); }
+
+html.mobile .account-about { padding: 16px; gap: 4px; }
+html.mobile .account-about-name { font-size: 1rem; font-weight: var(--weight-strong); color: var(--color-text); }
+html.mobile .account-about-tagline { font-size: 0.875rem; color: var(--color-text-muted); }
+
+html.mobile .account-logout {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 52px;
+    border: 0;
+    background: var(--color-surface-1);
+    color: var(--color-danger);
+    font-size: 0.9375rem;
+    font-weight: var(--weight-semibold);
+    border-radius: var(--radius-lg);
+    cursor: pointer;
+}
+html.mobile .account-logout:active { background: var(--overlay-danger-1); }
+
+/* Appearance and backup are drill-ins, leaving Account a fast, scannable list. */
+html.mobile .account-detail { min-width: 0; }
+html.mobile .account-detail-back {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    min-width: 44px;
+    min-height: 44px;
+    margin: -8px 0 var(--space-3) -8px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: var(--radius-md);
+    background: transparent;
+    color: var(--color-accent);
+    font-size: 0.9375rem;
+    font-weight: var(--weight-semibold);
+    cursor: pointer;
+}
+html.mobile .account-detail-back:active { background: var(--overlay-accent-1); }
+html.mobile .account-detail .appearance-panel {
+    width: auto;
+    max-height: none;
+    padding: 0;
+    background: transparent;
+    border: 0;
+    box-shadow: none;
+}
+html.mobile .account-detail .appearance-header {
+    padding: 0 var(--space-2) var(--space-2);
+    border: 0;
+}
+html.mobile .account-detail #appearance-title {
+    font-size: 0.8125rem;
+    font-weight: var(--weight-semibold);
+    color: var(--color-text-muted);
+    letter-spacing: 0;
+}
+
+
+/* ============================ DRIVE SWITCHER SHEET ============================ */
+html.mobile .sheet-scrim {
+    position: fixed;
+    inset: 0;
+    z-index: var(--z-modal);
+    background: var(--scrim);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity var(--motion-med) var(--ease-standard);
+}
+html.mobile .sheet-scrim.open { opacity: 1; pointer-events: auto; }
+
+html.mobile .mobile-sheet {
+    position: fixed;
+    inset: auto 0 0 0;
+    z-index: var(--z-modal);
+    display: flex;
+    flex-direction: column;
+    max-height: 88dvh;
+    margin: 0 auto;
+    max-width: 640px;
+    padding: 0 var(--space-4) calc(var(--space-4) + var(--inset-bottom));
+    background: var(--color-surface-1);
+    border-radius: var(--radius-xl) var(--radius-xl) 0 0;
+    box-shadow: var(--shadow-lg);
+    transform: translateY(100%);
+    transition: transform var(--motion-slow) var(--ease-enter);
+}
+html.mobile .mobile-sheet.open { transform: translateY(0); }
+
+/* The grip plus the title row. touch-action: none so the drag is ours rather
+   than the page's, and cursor: grab so a pointer says the same thing the mark
+   does. */
+html.mobile .switcher-grab {
+    flex: 0 0 auto;
+    touch-action: none;
+    cursor: grab;
+}
+html.mobile .switcher-grab:active { cursor: grabbing; }
+
+html.mobile .switcher-grip {
+    flex: 0 0 auto;
+    display: flex;
+    justify-content: center;
+    padding: 8px 0 6px;
+}
+html.mobile .switcher-grip span {
+    width: 36px;
+    height: 5px;
+    border-radius: var(--radius-pill);
+    background: var(--color-border);
+}
+html.mobile .switcher-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 0 12px;
+}
+html.mobile .switcher-title { font-size: 1.0625rem; font-weight: var(--weight-strong); color: var(--color-text); }
+/* A 32px disc inside a 44px target: the margins give back what the box gained,
+   so the header keeps its height and the disc stays exactly where it was. */
+html.mobile .switcher-close {
+    position: relative;
+    display: inline-grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    margin: -6px;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: none;
+    color: var(--color-text-soft);
+    cursor: pointer;
+}
+html.mobile .switcher-close::before {
+    content: '';
+    position: absolute;
+    inset: 6px;
+    border-radius: inherit;
+    background: var(--overlay-neutral-2);
+}
+html.mobile .switcher-close:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -6px;
+    border-radius: var(--radius-pill);
+}
+html.mobile .switcher-list {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    outline: none;
+}
+html.mobile .switcher-group { display: flex; flex-direction: column; gap: 2px; }
+html.mobile .switcher-group:empty { display: none; }
+/* Touch-size the portaled drive rows without touching the desktop chrome. */
+html.mobile .switcher-list .drive-item {
+    min-height: 52px;
+    padding: 10px 12px;
+    border-radius: var(--radius-md);
+    font-size: 1rem;
+    color: var(--color-text);
+}
+html.mobile .switcher-list .drive-item.active { background: var(--overlay-accent-1); color: var(--color-accent); }
+html.mobile .switcher-list .sidebar-drive-row {
+    grid-template-columns: minmax(0, 1fr) 44px;
+    width: 100%;
+    min-width: 0;
+}
+html.mobile .switcher-list .drive-actions-trigger {
+    width: 44px;
+    height: 44px;
+    margin-right: 0;
+}
+
+html.mobile .switcher-actions {
+    flex: 0 0 auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding-top: var(--space-3);
+    margin-top: var(--space-2);
+    border-top: 1px solid var(--color-border-soft);
+}
+html.mobile .switcher-action {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    width: 100%;
+    min-height: 52px;
+    padding: 0 12px;
+    border: 0;
+    background: transparent;
+    color: var(--color-text);
+    font-size: 0.9375rem;
+    text-align: left;
+    border-radius: var(--radius-md);
+    cursor: pointer;
+}
+html.mobile .switcher-action svg { color: var(--color-text-muted); }
+html.mobile .switcher-action:active { background: var(--overlay-neutral-2); }
+
+/* ============================ SHARED PIECES ============================ */
+html.mobile .mobile-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: min(420px, calc(100dvh - 196px));
+    text-align: center;
+    gap: 6px;
+    padding: var(--space-6);
+}
+html.mobile .mobile-empty-glyph { color: var(--color-border); margin-bottom: 4px; }
+html.mobile .mobile-empty-title { font-size: 1.0625rem; font-weight: var(--weight-strong); color: var(--color-text); }
+html.mobile .mobile-empty-body { font-size: 0.875rem; color: var(--color-text-muted); max-width: 36ch; }
+
+/* ============================ TOASTS ============================ */
+/* The stack clears the tab bar and, where one is showing, the upload button
+   too: the toast a tap on Upload raises used to land on the button that
+   raised it. --mobile-fab-clearance is published by the shell and is 0 on the
+   tabs that carry no action.
+
+   Gutters match the content cards rather than a viewport percentage, so a
+   toast lines up with the list underneath instead of floating at its own
+   width. */
+html.mobile #toast-stack.toast-stack {
+    left: calc(var(--space-4) + var(--inset-left));
+    right: calc(var(--space-4) + var(--inset-right));
+    bottom: calc(var(--mobile-overlay-bottom) + var(--mobile-fab-clearance));
+    width: auto;
+    max-width: none;
+    align-items: stretch;
+}
+
+/* A toast is the one surface that covers content it did not replace, so it has
+   to read as something on top: its own fill, a border and a real shadow. The
+   bars elsewhere in the shell are opaque and flat because they own their strip
+   of the screen; this one is borrowing it. */
+html.mobile .toast {
+    background: var(--color-surface-2);
+    border-color: var(--color-border);
+    box-shadow: var(--shadow-md);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    /* The whole surface is a drag target (see swipe-dismiss.ts); without this
+       the page underneath scrolls instead. */
+    touch-action: none;
+    /* backwards, not both: a filled-forwards animation keeps its final
+       transform applied, and a CSS animation outranks an inline style, so the
+       swipe's own translate would be silently ignored. */
+    animation: tdrive-toast-enter var(--motion-med) var(--ease-enter) backwards;
+}
+
+/* It arrives from the edge it lives on. The desktop toast scales out of the
+   bottom-right corner it is anchored to; this one is anchored to the bottom of
+   the screen, and rising from there is the same idea told honestly. */
+@keyframes tdrive-toast-enter {
+    from { opacity: 0; transform: translateY(12px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    html.mobile .toast { animation: none; }
+}
+
+/* Two lines each. One was not enough for the two things a failure has to say
+   -- what broke and what to do -- and clamping both to one line reliably lost
+   the end of each. Three would start to be a screen. */
+html.mobile .toast-title,
+html.mobile .toast-body {
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+/* Focus rings stay visible for keyboard users on tablets and hardware keyboards
+   (accessibility-1). */
+html.mobile .tab-item:focus-visible,
+html.mobile .drive-header-btn:focus-visible,
+html.mobile .topbar-back:focus-visible,
+html.mobile .topbar-done:focus-visible,
+html.mobile .topbar-icon-btn:focus-visible,
+html.mobile .account-row:focus-visible,
+html.mobile .account-logout:focus-visible,
+html.mobile .switcher-action:focus-visible,
+html.mobile .transfers-clear:focus-visible,
+html.mobile .topbar-menu-item:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -2px;
+    border-radius: var(--radius-md);
+}
+
+/* ============================ ITEM STATUS ============================ */
+/* The offline/sync badge at a row's trailing edge (ui/mobile/item-state.ts).
+   It sits in its own cell between the name and the overflow button, so it can
+   never take width from the name: a long filename ellipsises against a column
+   that is always the same width, rather than jumping as a transfer starts and
+   stops. */
+html.mobile .row-status {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    /* Matches the overflow button's box so the two trailing controls line up
+       down the list even though only one of them is always present. */
+    width: 28px;
+}
+
+html.mobile .item-status {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    background: none;
+    color: var(--color-text-muted);
+}
+
+/* Three tones, each meaning one thing. Anything not moving and not broken
+   stays muted, so the eye only stops where something is actually happening. */
+html.mobile .item-status[data-tone="accent"] { color: var(--color-accent); }
+html.mobile .item-status[data-tone="danger"] { color: var(--color-danger); }
+
+/* Only the badge that opens the queue is a button, and only it grows a touch
+   target; the inert ones must not look pressable. */
+html.mobile .item-status.is-tappable {
+    width: 44px;
+    height: 44px;
+    margin: -8px -8px -8px 0;
+    cursor: pointer;
+}
+
+html.mobile .item-status[data-spins="true"] svg {
+    animation: tdrive-item-status-spin 1.4s linear infinite;
+}
+
+@keyframes tdrive-item-status-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* The second line only the two states that need a decision get. Everything
+   else stays on the standard row height, which is what keeps an ordinary list
+   scanning evenly. */
+html.mobile .row-explain {
+    display: block;
+    margin-top: 2px;
+    font-size: var(--type-xs);
+    line-height: 1.35;
+    color: var(--color-text-muted);
+}
+
+html.mobile .row-explain[data-tone="danger"] { color: var(--color-danger); }
+
+html.mobile .file-row.needs-explanation { min-height: 84px; }
+
+html.mobile .item-status.is-tappable:focus-visible {
+    outline: 2px solid var(--color-accent);
+    outline-offset: -6px;
+    border-radius: var(--radius-md);
+}
+
+/* ============================ ROW SWIPE ============================ */
+/* The strip lives just past the row's trailing edge and travels with it, so a
+   swipe reveals the action rather than pushing it in from nowhere. The list
+   clips horizontally, which is what keeps it invisible until it is wanted. */
+html.mobile .row-swipe-actions {
+    position: absolute;
+    /* Starts at the LIST's right edge, not the row's. The row is inset from
+       the list by the card margin, so a strip parked at the row's edge leaves
+       that margin's worth of itself showing past the list's clip -- a coloured
+       stripe down the whole screen, on every row, at rest. Pushing it out by
+       the same margin puts its resting position exactly on the clip boundary.
+       The open distance is unchanged: moving the row by the strip's own width
+       still lands the strip flush inside the list. */
+    left: calc(100% + var(--space-3));
+    top: 0;
+    bottom: 0;
+    display: flex;
+    align-items: stretch;
+    /* Sits behind the row's own surface while closed. */
+    z-index: -1;
+}
+
+html.mobile .row-swipe-btn {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    /* Wide enough that the thumb cannot miss it once revealed, and the number
+       the binder measures for the open position. */
+    width: 88px;
+    border: none;
+    /* Not accent: accent means "bytes are moving" everywhere else in this app,
+       and a stationary button borrowing it would blunt that. */
+    background: var(--color-surface-2);
+    color: var(--color-text-soft);
+    font-family: var(--font-ui);
+    font-size: var(--type-xs);
+    font-weight: var(--weight-semibold);
+}
+
+html.mobile .row-swipe-btn:active { background: var(--color-surface-1); }
+
+/* The row paints over the strip while closed, so the strip cannot show through
+   the gap between cards. */
+html.mobile .file-row { background-clip: padding-box; }
+
+@media (prefers-reduced-motion: reduce) {
+    /* The settle is travel, so it goes; the row still arrives where the
+       gesture asked, just without the glide. */
+    html.mobile .file-row { transition: none !important; }
+}
+
+/* ============================ REDUCED MOTION ============================ */
+@media (prefers-reduced-motion: reduce) {
+    html.mobile .tab-pill,
+    html.mobile .tab-icon,
+    html.mobile .mobile-sheet,
+    html.mobile .sheet-scrim,
+    html.mobile .topbar-search-shell,
+    html.mobile .topbar-search-shell .topbar-search,
+    html.mobile .mobile-fab .upload-btn { transition: none; }
+    /* The pill still needs to mark the active tab, so only its movement goes;
+       opacity carries the meaning and stays (design-taste: keep comprehension). */
+    html.mobile .tab-item.active .tab-pill { transform: translate(-50%, -50%) scale(1); }
+    html.mobile .mobile-fab .upload-menu,
+    html.mobile .upload-scrim,
+    html.mobile .file-list-box[data-nav] { animation: none; }
+    /* The status glyph stops turning; its shape and tone already say which
+       state it is, so nothing is lost by holding it still. */
+    html.mobile .item-status[data-spins="true"] svg { animation: none; }
+}

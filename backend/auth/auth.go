@@ -1,3 +1,35 @@
+// Package auth owns Telegram identity and TDrive's private on-disk secrets: the
+// API credentials, the gotd session, the saved personal channel id, and the raw
+// channel and invite calls those need.
+//
+// Despite the name it sits below backend/tgclient rather than above it, and it
+// is not the login state machine the UI talks to — that is
+// backend/services/auth, which implements the small callback interface this
+// package asks a code or a password from. Personal-drive creation belongs to
+// backend/services/personaldrive.
+//
+// The login flow is hand-rolled rather than gotd's one-shot helper for one
+// reason: holding the phone code hash across attempts makes an invalid code
+// retryable in place instead of restarting from the phone number. Everything
+// else — expired code, flood wait, unregistered number — is terminal, and the
+// two-factor hint is best-effort so a failed lookup never blocks the prompt.
+//
+// Every secret is written through one primitive: a temp file in the destination
+// directory, chmodded 0600 before any secret byte is written, synced, renamed,
+// and followed by an fsync of the parent directory. A failed rename leaves the
+// old file intact. The session file is chmodded when it exists but is never
+// created empty, because an empty session file reads as a corrupt one.
+//
+// Loading the config distinguishes three states and callers must too: a missing
+// file means unconfigured, a parse failure is an explicit error, and nothing
+// may create or overwrite a drive on that error.
+//
+// Logout is a local data-deletion contract, not a Telegram call. Soft removes
+// only the session, so the same user signs back in without re-downloading the
+// projection; full additionally removes the config, the database, the API
+// credentials and the backup ledgers and caches. It is idempotent, it never
+// touches user-selected source folders, and the caller must close the ledger
+// database and drain background workers before invoking it.
 package auth
 
 import (
@@ -7,6 +39,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+
+	"TDrive/backend/datadir"
 
 	"github.com/gotd/td/telegram"
 	"github.com/gotd/td/telegram/auth"
@@ -35,11 +69,11 @@ type getChannel interface {
 }
 
 func GetConfigPath() string {
-	path, err := os.UserConfigDir()
+	dir, err := datadir.Dir()
 	if err != nil {
 		return err.Error()
 	}
-	return filepath.Join(path, "TDrive", "imp_config.json")
+	return filepath.Join(dir, "imp_config.json")
 }
 
 func SaveImpCredentials(id int, hash string) error {
@@ -87,17 +121,9 @@ func ConnectWithOptions(options telegram.Options) (*telegram.Client, error) {
 		return nil, fmt.Errorf("API credentials are not configured")
 	}
 
-	path, err := os.UserConfigDir()
+	dir, err := datadir.Dir()
 	if err != nil {
 		return nil, fmt.Errorf("error getting config dir for session: %v", err)
-	}
-
-	dir := filepath.Join(path, "TDrive")
-	if err := os.MkdirAll(dir, privateDirMode); err != nil {
-		return nil, fmt.Errorf("could not create config folder: %v", err)
-	}
-	if err := os.Chmod(dir, privateDirMode); err != nil {
-		return nil, fmt.Errorf("could not secure config folder: %w", err)
 	}
 
 	sessionPath := filepath.Join(dir, "session.json")

@@ -9,12 +9,13 @@
 package personaldrive
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 	"strings"
 	"sync"
 
@@ -110,9 +111,10 @@ func NewService(config Config) *Service {
 	}
 }
 
-// Prepare activates the saved drive when config.json names one. It never
-// touches Telegram: without a usable config it reports that the user must
-// choose a drive, and the caller runs Discover to list the options.
+// Prepare activates the saved drive when config.json names one. Callers run it
+// only after login verification because activation may start background sync.
+// Without a usable config it reports that the user must choose a drive, and
+// the caller runs Discover to list the options.
 func (s *Service) Prepare(ctx context.Context) (State, error) {
 	channelID, err := s.loadConfiguredChannel()
 	if err != nil {
@@ -386,21 +388,27 @@ func candidatesFromOwned(channels []tgclient.OwnedBroadcastChannel) []Candidate 
 		channel.Title = strings.TrimSpace(channel.Title)
 		ordered = append(ordered, channel)
 	}
-	sort.SliceStable(ordered, func(i, j int) bool {
-		left, right := ordered[i], ordered[j]
-		if leftDefault, rightDefault := isDefaultTitle(left.Title), isDefaultTitle(right.Title); leftDefault != rightDefault {
-			return leftDefault
+	slices.SortStableFunc(ordered, func(a, b tgclient.OwnedBroadcastChannel) int {
+		// A default-titled drive, then one that has been used, lead the list.
+		if aDefault, bDefault := isDefaultTitle(a.Title), isDefaultTitle(b.Title); aDefault != bDefault {
+			if aDefault {
+				return -1
+			}
+			return 1
 		}
-		if left.HasActivity != right.HasActivity {
-			return left.HasActivity
+		if a.HasActivity != b.HasActivity {
+			if a.HasActivity {
+				return -1
+			}
+			return 1
 		}
-		if left.CreatedAt != right.CreatedAt {
-			return left.CreatedAt < right.CreatedAt
+		if c := cmp.Compare(a.CreatedAt, b.CreatedAt); c != 0 {
+			return c
 		}
-		if leftTitle, rightTitle := strings.ToLower(left.Title), strings.ToLower(right.Title); leftTitle != rightTitle {
-			return leftTitle < rightTitle
+		if c := cmp.Compare(strings.ToLower(a.Title), strings.ToLower(b.Title)); c != 0 {
+			return c
 		}
-		return left.ID < right.ID
+		return cmp.Compare(a.ID, b.ID)
 	})
 
 	result := make([]Candidate, len(ordered))

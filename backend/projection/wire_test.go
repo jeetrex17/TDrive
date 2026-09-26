@@ -29,6 +29,13 @@ func TestParseFileUpload(t *testing.T) {
 	}
 }
 
+func TestParseRejectsUploadTimeOutsideSQLiteRange(t *testing.T) {
+	_, err := Parse("TDX1|t=f|p=|n=sunset.jpg|sz=1|ts=253402300800")
+	if !errors.Is(err, ErrWireMalformed) {
+		t.Fatalf("Parse error = %v, want ErrWireMalformed", err)
+	}
+}
+
 func TestParseFileUploadRoot(t *testing.T) {
 	op, err := Parse("TDX1|t=f|p=|n=hello.txt")
 	if err != nil {

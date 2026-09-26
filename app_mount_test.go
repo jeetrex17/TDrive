@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -99,6 +100,40 @@ func TestResolveActiveMountDrivePropagatesEncryptedEligibility(t *testing.T) {
 	}
 	if !drive.Encrypted || !drive.EncryptionUnlocked {
 		t.Fatalf("resolveActiveMountDrive() after unlock = %#v", drive)
+	}
+}
+
+func TestAppEncryptedMountRequestsPasswordForSingleAndSelectedDrives(t *testing.T) {
+	for _, selected := range []bool{false, true} {
+		name := "single drive"
+		if selected {
+			name = "selected drives"
+		}
+		t.Run(name, func(t *testing.T) {
+			controller := &fakeAppMountController{
+				startErr: fmt.Errorf("mount: %w", mountcontroller.ErrEncryptionPasswordRequired),
+			}
+			app := &App{
+				ctx:             context.Background(),
+				mountController: controller,
+				mountDriveResolver: func() (mountcontroller.Drive, error) {
+					return mountcontroller.Drive{ID: 42, Kind: mountcontroller.DriveKindPersonal, Encrypted: true}, nil
+				},
+				mountDrivesResolver: func([]int64) ([]mountcontroller.Drive, error) {
+					return []mountcontroller.Drive{{ID: 42, Kind: mountcontroller.DriveKindPersonal, Encrypted: true}}, nil
+				},
+			}
+
+			var result MountResult
+			if selected {
+				result = app.MountDrives([]int64{42})
+			} else {
+				result = app.MountDrive()
+			}
+			if result.Result.OK || result.Result.Error == nil || result.Result.Error.Code != OperationCodeEncryptionPasswordRequired {
+				t.Fatalf("mount result = %#v, want password-required code", result)
+			}
+		})
 	}
 }
 
@@ -245,6 +280,7 @@ func TestAppShutdownClosesMountController(t *testing.T) {
 
 	controller := &fakeAppMountController{}
 	app := &App{ctx: context.Background(), mountController: controller}
+	app.initServices("dev")
 	app.ServiceShutdown()
 	if controller.closeCalls != 1 {
 		t.Fatalf("Close calls = %d, want 1", controller.closeCalls)
