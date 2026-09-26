@@ -56,7 +56,7 @@
     open={$view.open}
     title="Enter encryption password"
     titleId="encryption-password-title"
-    subtitle="Needed for encrypted uploads, downloads, and previews. TDrive remembers it until you close the app."
+    subtitle="Needed to mount and access encrypted files. TDrive remembers it until you close the app."
     initialFocus="#encryption-password-input"
     restoreFocus="#file-list"
     onClose={cancel}
