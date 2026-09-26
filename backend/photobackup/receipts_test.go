@@ -111,7 +111,7 @@ func TestReceiptSweepIsBoundedResumableAndIdempotent(t *testing.T) {
 	configure(t, e, scope)
 	ctx := context.Background()
 	names := make([]string, 0, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		names = append(names, fmt.Sprintf("photo-%d.jpg", i))
 	}
 	ids := completeReceipts(t, e, scope, names...)
@@ -127,7 +127,7 @@ func TestReceiptSweepIsBoundedResumableAndIdempotent(t *testing.T) {
 		seen = append(seen, batch...)
 		return nil, nil
 	}
-	for round := 0; round < 3; round++ {
+	for round := range 3 {
 		sweep, err := e.ReconcileReceipts(ctx, scope, index, 2)
 		if err != nil {
 			t.Fatal(err)
@@ -151,7 +151,7 @@ func TestReceiptSweepIsBoundedResumableAndIdempotent(t *testing.T) {
 	}
 
 	// Repeating the sweep changes nothing, including the maintained counters.
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if _, err := e.ReconcileReceipts(ctx, scope, lost(ids[0], ids[1]), 0); err != nil {
 			t.Fatal(err)
 		}

@@ -31,16 +31,14 @@ func TestCacheConcurrentWritesNeverExceedBudgetIncludingTemps(t *testing.T) {
 	const writers = 16
 	start := make(chan struct{})
 	var wait sync.WaitGroup
-	wait.Add(writers)
-	for i := 0; i < writers; i++ {
-		go func(i int) {
-			defer wait.Done()
+	for i := range writers {
+		wait.Go(func() {
 			<-start
 			err := cache.Put(string(rune('a'+i)), bytes.Repeat([]byte{byte(i)}, 32))
 			if err != nil && !errors.Is(err, ErrCacheFull) {
 				t.Errorf("Put: %v", err)
 			}
-		}(i)
+		})
 	}
 	close(start)
 	wait.Wait()
@@ -168,16 +166,14 @@ func TestCacheConcurrentSameKeyWritesKeepAccurateAccounting(t *testing.T) {
 	const writers = 64
 	start := make(chan struct{})
 	var wait sync.WaitGroup
-	wait.Add(writers)
 	for i := 1; i <= writers; i++ {
 		data := bytes.Repeat([]byte{byte(i)}, i*17)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			<-start
 			if err := cache.Put("shared", data); err != nil {
 				t.Errorf("Put: %v", err)
 			}
-		}()
+		})
 	}
 	close(start)
 	wait.Wait()

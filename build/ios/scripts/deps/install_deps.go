@@ -131,10 +131,9 @@ func main() {
 					return false, "Cannot access simulator"
 				}
 				// Count iOS runtimes
-				lines := strings.Split(string(out), "\n")
 				count := 0
 				var versions []string
-				for _, line := range lines {
+				for line := range strings.SplitSeq(string(out), "\n") {
 					if strings.Contains(line, "iOS") && !strings.Contains(line, "unavailable") {
 						count++
 						// Extract version number
@@ -221,9 +220,8 @@ func main() {
 			if err != nil {
 				fmt.Println("   Failed to get iOS runtimes:", err)
 			} else {
-				lines := strings.Split(string(runtimeOut), "\n")
 				var latestRuntime string
-				for _, line := range lines {
+				for line := range strings.SplitSeq(string(runtimeOut), "\n") {
 					if strings.Contains(line, "iOS") && !strings.Contains(line, "unavailable") {
 						// Extract runtime identifier
 						parts := strings.Fields(line)
@@ -258,8 +256,7 @@ func main() {
 		} else {
 			// Count iPhone devices
 			count := 0
-			lines := strings.Split(string(out), "\n")
-			for _, line := range lines {
+			for line := range strings.SplitSeq(string(out), "\n") {
 				if strings.Contains(line, "iPhone") && !strings.Contains(line, "unavailable") {
 					count++
 				}

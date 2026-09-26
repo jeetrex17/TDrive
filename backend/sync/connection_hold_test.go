@@ -63,7 +63,7 @@ func TestFullHistoryScanLeavesReadsUnblockedDuringFetches(t *testing.T) {
 	db, fake, probing, engine := newPooledSyncEnv(t)
 	// More than one page, so the plan has an interior fetch as well as the
 	// first one and the regression cannot hide behind a single-page scan.
-	for i := 0; i < defaultPageSize+20; i++ {
+	for i := range defaultPageSize + 20 {
 		sendOp(t, fake, projection.Op{Type: projection.OpMkdir, Obj: folderObj(i), Parent: projection.RootParent, Name: folderObj(i)})
 	}
 
@@ -85,7 +85,7 @@ func TestFullHistoryScanLeavesReadsUnblockedDuringFetches(t *testing.T) {
 	if !channel.InitialSyncDone {
 		t.Fatal("scan completed without marking the channel authoritative")
 	}
-	for i := 0; i < defaultPageSize+20; i++ {
+	for i := range defaultPageSize + 20 {
 		if !projection.FolderExists(db, testChan, folderObj(i)) {
 			t.Fatalf("folder %s missing after full scan", folderObj(i))
 		}
@@ -94,7 +94,7 @@ func TestFullHistoryScanLeavesReadsUnblockedDuringFetches(t *testing.T) {
 
 func TestInitialSyncOfEmptyChannelLeavesReadsUnblockedDuringFetches(t *testing.T) {
 	_, fake, probing, engine := newPooledSyncEnv(t)
-	for i := 0; i < defaultPageSize+20; i++ {
+	for i := range defaultPageSize + 20 {
 		sendOp(t, fake, projection.Op{Type: projection.OpMkdir, Obj: folderObj(i), Parent: projection.RootParent, Name: folderObj(i)})
 	}
 
@@ -112,7 +112,7 @@ func folderObj(i int) string {
 
 func seedScanHistory(t *testing.T, fake *tgclient.Fake, n int) {
 	t.Helper()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		sendOp(t, fake, projection.Op{Type: projection.OpMkdir, Obj: folderObj(i), Parent: projection.RootParent, Name: folderObj(i)})
 	}
 }
@@ -220,7 +220,7 @@ func TestInterruptedFullHistoryScanLeavesNoProjectionState(t *testing.T) {
 	if err := NewEngine(db, fake, fakePeers{}).EnsureAuthoritative(context.Background(), testChan); err != nil {
 		t.Fatalf("retry after interruption: %v", err)
 	}
-	for i := 0; i < defaultPageSize+20; i++ {
+	for i := range defaultPageSize + 20 {
 		if !projection.FolderExists(db, testChan, folderObj(i)) {
 			t.Fatalf("folder %s missing after the retried scan", folderObj(i))
 		}

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"testing"
 
 	"TDrive/backend/projection"
@@ -190,10 +191,8 @@ func TestPurgeResumesAfterTheMarkerIsAlreadyProjected(t *testing.T) {
 
 func sawDeletedMessage(fakeTG *tgclient.Fake, msgID int64) bool {
 	for _, batch := range fakeTG.DeletedBatches() {
-		for _, id := range batch {
-			if id == msgID {
-				return true
-			}
+		if slices.Contains(batch, msgID) {
+			return true
 		}
 	}
 	return false

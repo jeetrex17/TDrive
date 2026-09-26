@@ -419,7 +419,7 @@ func packetTimes(t *testing.T, path, stream string) []float64 {
 		t.Fatalf("ffprobe packet times of %s: %v", stream, err)
 	}
 	var times []float64
-	for _, line := range strings.Fields(string(out)) {
+	for line := range strings.FieldsSeq(string(out)) {
 		at, err := strconv.ParseFloat(line, 64)
 		if err != nil {
 			t.Fatalf("ffprobe returned %q for a timestamp", line)

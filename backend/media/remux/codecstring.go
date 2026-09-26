@@ -87,7 +87,7 @@ func hevcCodecString(config []byte) string {
 // wants, which is the reverse of the order they are stored in.
 func reverseBits(value uint32) uint32 {
 	var out uint32
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		out = out<<1 | (value>>i)&1
 	}
 	return out

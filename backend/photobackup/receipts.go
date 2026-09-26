@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
+	"slices"
 	"strings"
 )
 
@@ -179,14 +180,7 @@ func exclude(sorted, drop []int64) []int64 {
 	}
 	out := make([]int64, 0, len(sorted)-len(drop))
 	for _, id := range sorted {
-		dropped := false
-		for _, gone := range drop {
-			if gone == id {
-				dropped = true
-				break
-			}
-		}
-		if !dropped {
+		if !slices.Contains(drop, id) {
 			out = append(out, id)
 		}
 	}

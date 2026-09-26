@@ -117,7 +117,7 @@ func photoBackupSafeRelDir(value string) string {
 		return ""
 	}
 	components := make([]string, 0, 8)
-	for _, component := range strings.Split(filepath.ToSlash(value), "/") {
+	for component := range strings.SplitSeq(filepath.ToSlash(value), "/") {
 		if component == "" || component == "." || component == ".." {
 			continue
 		}
@@ -154,7 +154,7 @@ func (r *photoBackupDestinationResolver) resolve(ctx context.Context, channelID 
 		photoBackupFolderName(deviceName, photoBackupDeviceFallback()),
 		photoBackupFolderName(sourceName, "Photos"),
 	}
-	for _, component := range strings.Split(relativeDir, "/") {
+	for component := range strings.SplitSeq(relativeDir, "/") {
 		if component == "" || component == "." {
 			continue
 		}

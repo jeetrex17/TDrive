@@ -167,7 +167,7 @@ func TestSweepLoopRunsEveryTickAndStopsOnlyOnStop(t *testing.T) {
 		runTrashSweeps(stop, nil, tick, func() { passes.Add(1) })
 	}()
 
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		tick <- time.Now()
 	}
 	close(stop)

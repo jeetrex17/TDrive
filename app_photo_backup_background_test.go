@@ -18,7 +18,7 @@ func TestPhotoBackupBackgroundFailsClosedWithoutLease(t *testing.T) {
 
 func TestPhotoBackupDeadlineCancelsActiveWorker(t *testing.T) {
 	a := &App{photoBackupWaiters: make(map[string]chan photoBackupMaterialization)}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})
 	close(done)
 	a.photoBackupCancel = cancel

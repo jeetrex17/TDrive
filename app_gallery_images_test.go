@@ -1,15 +1,14 @@
 package main
 
 import (
-	"context"
 	"errors"
 	"testing"
 	"time"
 )
 
 func TestGalleryImagesQueuedOpenCannotRecreateLoggedOutScope(t *testing.T) {
-	app := &App{ctx: context.Background()}
-	if err := app.mountLifecycle.Lock(context.Background()); err != nil {
+	app := &App{ctx: t.Context()}
+	if err := app.mountLifecycle.Lock(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	done := make(chan error, 1)

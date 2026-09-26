@@ -463,7 +463,7 @@ func TestNativePageCarriesCaptureTimeAndIsBounded(t *testing.T) {
 		t.Fatalf("every item in a watched folder is backed up: added=%d err=%v", n, err)
 	}
 	seen := map[string]time.Time{}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		if _, err := e.RunOnce(context.Background(), scope, func(_ context.Context, r UploadRequest) (UploadResult, error) {
 			seen[r.Asset.ID] = r.Asset.CapturedAt
 			return UploadResult{RemoteMessageID: int64(i + 1)}, nil

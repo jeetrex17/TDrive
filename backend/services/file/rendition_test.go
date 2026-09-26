@@ -123,7 +123,7 @@ func TestRenditionLastSubscriberCancelsTransfer(t *testing.T) {
 		close(stopped)
 		return ctx.Err()
 	}
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
 	go func() { _, err := s.Rendition(ctx, personalChannelID, 91, 1, "thumbnail"); done <- err }()
 	select {
@@ -164,7 +164,7 @@ func TestRenditionSharedSubscriberSurvivesPeerCancellation(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	finished := make(chan error, 2)
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	load := func(ctx context.Context) (Rendition, error) {
 		calls.Add(1)
 		close(started)
@@ -177,7 +177,8 @@ func TestRenditionSharedSubscriberSurvivesPeerCancellation(t *testing.T) {
 	}
 	go func() { _, err := group.do(ctx, "key", load); finished <- err }()
 	<-started
-	go func() { _, err := group.do(context.Background(), "key", load); finished <- err }()
+	peerCtx := t.Context()
+	go func() { _, err := group.do(peerCtx, "key", load); finished <- err }()
 	deadline := time.Now().Add(time.Second)
 	for {
 		group.mu.Lock()
@@ -416,7 +417,7 @@ func TestOriginalRenditionRequiresExplicitClassAndSizeAdmission(t *testing.T) {
 }
 func TestRenditionQueueHasHardBound(t *testing.T) {
 	group := renditionFlightGroup{flights: make(map[string]*renditionFlight)}
-	for i := 0; i < maxRenditionFlights; i++ {
+	for i := range maxRenditionFlights {
 		group.flights[strconv.Itoa(i)] = &renditionFlight{}
 	}
 	_, err := group.do(context.Background(), "overflow", func(context.Context) (Rendition, error) {

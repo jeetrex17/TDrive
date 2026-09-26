@@ -217,7 +217,7 @@ func TestDesktopDiscoveryRetainsCursorReconcilesAndRestarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	root := t.TempDir()
-	for index := 0; index < 300; index++ {
+	for index := range 300 {
 		path := filepath.Join(root, fmt.Sprintf("%03d.jpg", index))
 		if err := os.WriteFile(path, []byte("x"), 0o600); err != nil {
 			t.Fatal(err)

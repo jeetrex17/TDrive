@@ -93,10 +93,7 @@ func PlanSegments(cues []CuePoint, end int64, total time.Duration) []Segment {
 		// A cue index that is not sorted, or one whose last entry sits past the
 		// declared duration, would otherwise produce a negative length that the
 		// playlist cannot express.
-		duration := finish - cues[start].Time
-		if duration <= 0 {
-			duration = 0
-		}
+		duration := max(0, finish-cues[start].Time)
 
 		segments = append(segments, Segment{
 			Index:    len(segments),

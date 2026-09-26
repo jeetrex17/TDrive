@@ -39,7 +39,7 @@ func validatePhotoBackupDeviceFolderRoot(root string) (string, error) {
 	// the ledger with "." or ".." still in it would make the prefix test below
 	// answer about a folder that does not exist.
 	components := make([]string, 0, 8)
-	for _, component := range strings.Split(relative, "/") {
+	for component := range strings.SplitSeq(relative, "/") {
 		if component == "" || component == "." || component == ".." {
 			continue
 		}

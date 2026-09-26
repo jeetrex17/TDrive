@@ -53,7 +53,7 @@ func ffprobePackets(t *testing.T, fixture string, stream int) []packet {
 		t.Fatalf("read ground truth: %v", err)
 	}
 	var packets []packet
-	for _, line := range strings.Split(strings.TrimSpace(string(raw)), "\n") {
+	for line := range strings.SplitSeq(strings.TrimSpace(string(raw)), "\n") {
 		fields := strings.Split(line, ",")
 		if len(fields) < 5 {
 			t.Fatalf("ground truth row %q has %d fields, want 5", line, len(fields))
