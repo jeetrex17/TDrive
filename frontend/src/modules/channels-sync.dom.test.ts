@@ -26,6 +26,7 @@ vi.mock('../api', () => ({
 }));
 
 vi.mock('./search', () => ({ runGlobalSearch: vi.fn() }));
+vi.mock('./renditions/runtime', () => ({ resetRenditions: vi.fn() }));
 
 import { state } from '../state';
 import { driveSyncStatus } from '../ui/mobile/mobile-shell-store';
