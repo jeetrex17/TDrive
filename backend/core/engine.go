@@ -234,13 +234,9 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 	e.startLiveSync(liveActivity)
 
 	if savedID, err := auth.LoadConfig(); err == nil && savedID != 0 {
-		if err := e.lifecycle.UsePersonalChannel(e.ctx, savedID); err != nil {
+		if err := e.lifecycle.RestorePersonalChannel(savedID); err != nil {
 			e.warnf("Warning: migration failed: %v\n", err)
 		}
-		// Telegram answers the first file read of a run with FILE_MIGRATE, and
-		// reaching the file data center costs seconds. Pay it here, in the
-		// background, rather than when someone opens their first video.
-		go e.media.WarmTransport(e.ctx, savedID)
 	}
 
 	return e, nil
@@ -307,7 +303,6 @@ func (e *Engine) startLiveSync(activity *livesync.TelegramActivity) {
 			return ids, nil
 		},
 	})
-	e.liveSync.Start(e.ctx)
 }
 
 // PauseLiveSync stops the live-sync coordinator so a backgrounded mobile app
@@ -882,7 +877,13 @@ func (e *Engine) newPersonalDriveService() *personaldriveservice.Service {
 		Telegram: e.tg,
 		Sync:     e.syncEngine,
 		UseSaved: func(ctx context.Context, channelID int64) error {
-			return e.LifecycleService().UsePersonalChannel(ctx, channelID)
+			if err := e.LifecycleService().UsePersonalChannel(ctx, channelID); err != nil {
+				return err
+			}
+			// Prepare runs after login verification, so the transport may now
+			// warm without racing the temporary authentication client.
+			go e.media.WarmTransport(e.ctx, channelID)
+			return nil
 		},
 		SetActive: e.SetActiveChannelID,
 	})

@@ -111,9 +111,10 @@ func NewService(config Config) *Service {
 	}
 }
 
-// Prepare activates the saved drive when config.json names one. It never
-// touches Telegram: without a usable config it reports that the user must
-// choose a drive, and the caller runs Discover to list the options.
+// Prepare activates the saved drive when config.json names one. Callers run it
+// only after login verification because activation may start background sync.
+// Without a usable config it reports that the user must choose a drive, and
+// the caller runs Discover to list the options.
 func (s *Service) Prepare(ctx context.Context) (State, error) {
 	channelID, err := s.loadConfiguredChannel()
 	if err != nil {

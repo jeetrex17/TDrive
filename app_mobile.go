@@ -70,6 +70,9 @@ func (a *App) mobileEnterForeground() {
 		return
 	}
 	a.leavePhotoBackupBackground()
+	if !a.authReady.Load() {
+		return
+	}
 	a.engine.ResumeLiveSync()
 	// The durable queue may have been interrupted by process suspension or an
 	// OS background deadline. A manual pause remains sticky in startPhotoBackup,

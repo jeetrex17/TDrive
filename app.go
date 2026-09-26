@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 
 	"TDrive/backend"
 	"TDrive/backend/applog"
@@ -39,6 +41,7 @@ type App struct {
 	// it. Dialogs, events, the browser opener and Quit all go through it.
 	wails           *application.App
 	engine          *core.Engine
+	authReady       atomic.Bool
 	Client          *telegram.Client
 	backendLock     *processlock.Lock
 	galleryImagesMu sync.Mutex
@@ -112,7 +115,20 @@ type runtimeEventSink struct {
 }
 
 func (s runtimeEventSink) Emit(name string, args ...any) {
+	if name == "login-success" {
+		s.app.markAuthenticated()
+	}
 	s.app.emit(name, args...)
+}
+
+func (a *App) markAuthenticated() {
+	a.authReady.Store(true)
+	if a.engine != nil {
+		a.engine.ResumeLiveSync()
+	}
+	if runtime.GOOS != "ios" && runtime.GOOS != "android" {
+		go func() { _ = a.startPhotoBackup() }()
+	}
 }
 
 // emit forwards an event to the webview. It is a no-op until main has wired
@@ -178,8 +194,17 @@ type PreviewPayload struct {
 }
 
 func (a *App) CheckLoginStatus() bool {
+	if a.authReady.Load() {
+		return true
+	}
 	svc := a.authService()
-	return svc != nil && svc.IsLoggedIn(a.ctx)
+	loggedIn := svc != nil && svc.IsLoggedIn(a.ctx)
+	if loggedIn {
+		a.markAuthenticated()
+	} else {
+		a.authReady.Store(false)
+	}
+	return loggedIn
 }
 
 func (a *App) SelectFiles() ([]string, error) {

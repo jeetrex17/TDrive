@@ -75,6 +75,9 @@ func runTrashSweeps(stop <-chan struct{}, startup, tick <-chan time.Time, pass f
 // that cannot be purged now stays in the trash for the next pass rather than
 // stopping the ones behind it.
 func (a *App) sweepExpiredTrash() {
+	if !a.authReady.Load() {
+		return
+	}
 	svc, err := a.requireFileService()
 	if err != nil {
 		return

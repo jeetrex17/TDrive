@@ -117,6 +117,16 @@ func NewService(c Config) *Service {
 }
 
 func (s *Service) UsePersonalChannel(ctx context.Context, channelID int64) error {
+	if err := s.RestorePersonalChannel(channelID); err != nil {
+		return err
+	}
+	s.kickoffPersonalBackfill(ctx, channelID)
+	return nil
+}
+
+// RestorePersonalChannel applies saved local state without opening Telegram.
+// Network work resumes only after the caller has verified the login session.
+func (s *Service) RestorePersonalChannel(channelID int64) error {
 	if channelID == 0 || s.DB == nil {
 		return nil
 	}
@@ -126,7 +136,6 @@ func (s *Service) UsePersonalChannel(ctx context.Context, channelID int64) error
 	}
 	s.Active.Set(channelID)
 	slog.Info("lifecycle: active drive set", "channel_id", channelID)
-	s.kickoffPersonalBackfill(ctx, channelID)
 	return nil
 }
 

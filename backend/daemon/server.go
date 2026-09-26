@@ -80,6 +80,12 @@ type Server struct {
 	mountLifecycleTerminal bool // guarded by mountLifecycle
 	warnf                  func(format string, args ...any)
 	state                  *state
+	// authMu serializes status checks with login startup so one auth key is
+	// never probed by multiple temporary clients in this daemon process.
+	authMu         sync.Mutex
+	authReady      bool
+	authFlowActive bool
+	drivePrepared  bool
 
 	mu        sync.Mutex
 	eventMu   sync.Mutex

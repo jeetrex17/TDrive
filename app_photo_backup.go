@@ -143,19 +143,18 @@ func (a *App) initPhotoBackup() error {
 	if runtime.GOOS != "ios" && runtime.GOOS != "android" {
 		a.photoBackupStop = make(chan struct{})
 		go a.photoBackupDesktopLoop(a.photoBackupStop)
-		go func() { _ = a.startPhotoBackup() }()
 	}
 	return nil
 }
 
 func (a *App) photoBackupScope(ctx context.Context) (photobackup.Scope, error) {
-	actor, err := a.actorID(ctx)
-	if err != nil || actor <= 0 {
-		return photobackup.Scope{}, fmt.Errorf("photo backup: account unavailable")
-	}
 	drive := a.ActiveChannelID()
 	if drive <= 0 {
 		return photobackup.Scope{}, fmt.Errorf("photo backup: drive unavailable")
+	}
+	actor, err := a.actorID(ctx)
+	if err != nil || actor <= 0 {
+		return photobackup.Scope{}, fmt.Errorf("photo backup: account unavailable")
 	}
 	return photobackup.Scope{AccountID: strconv.FormatInt(actor, 10), DriveID: drive}, nil
 }
@@ -739,7 +738,7 @@ func (a *App) photoBackupDesktopLoop(stop <-chan struct{}) {
 		case <-stop:
 			return
 		case <-ticker.C:
-			if !a.photoBackupIsRunning() {
+			if a.authReady.Load() && !a.photoBackupIsRunning() {
 				_ = a.runPhotoBackup()
 			}
 		}

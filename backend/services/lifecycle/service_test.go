@@ -157,6 +157,43 @@ func TestUsePersonalChannelMigratesAndSetsActive(t *testing.T) {
 	}
 }
 
+func TestRestorePersonalChannelDefersBackfillUntilUse(t *testing.T) {
+	db := testDB(t)
+	active := NewActiveDrive()
+	backfiller := newFakeBackfiller()
+	defer close(backfiller.release)
+	svc := NewService(Config{DB: db, Active: active, Backfill: backfiller})
+
+	if err := svc.RestorePersonalChannel(12345); err != nil {
+		t.Fatalf("RestorePersonalChannel: %v", err)
+	}
+	if got := active.ID(); got != 12345 {
+		t.Fatalf("active = %d, want 12345", got)
+	}
+	var kind string
+	if err := db.QueryRow(`SELECT kind FROM channels WHERE channel_id = ?`, int64(12345)).Scan(&kind); err != nil {
+		t.Fatalf("channel row missing: %v", err)
+	}
+	if kind != projection.KindPersonal {
+		t.Fatalf("kind = %q, want %q", kind, projection.KindPersonal)
+	}
+	svc.backfillMu.Lock()
+	queued := len(svc.backfilling)
+	svc.backfillMu.Unlock()
+	if queued != 0 {
+		t.Fatalf("backfill queued before login: %d", queued)
+	}
+
+	if err := svc.UsePersonalChannel(context.Background(), 12345); err != nil {
+		t.Fatalf("UsePersonalChannel: %v", err)
+	}
+	select {
+	case <-backfiller.startedCh:
+	case <-time.After(time.Second):
+		t.Fatal("backfill did not start after drive preparation")
+	}
+}
+
 func TestKickoffBackfillRunsOnce(t *testing.T) {
 	db := testDB(t)
 	backfiller := newFakeBackfiller()

@@ -16,6 +16,22 @@ import (
 	_ "modernc.org/sqlite"
 )
 
+func TestPhotoBackupScopeDoesNotQueryTelegramBeforeDriveSelection(t *testing.T) {
+	app, _, telegram := setupEncryptionAppWithPolicyRefresh(t, nil)
+	t.Cleanup(app.engine.Close)
+	app.engine.SetActiveChannelID(0)
+	telegram.SetSelfID(0)
+
+	if _, err := app.photoBackupScope(context.Background()); err == nil || err.Error() != "photo backup: drive unavailable" {
+		t.Fatalf("scope before drive selection error = %v, want drive unavailable", err)
+	}
+
+	app.engine.SetActiveChannelID(testEncryptionChannelID)
+	if _, err := app.photoBackupScope(context.Background()); err == nil || err.Error() != "photo backup: account unavailable" {
+		t.Fatalf("scope with selected drive error = %v, want account unavailable", err)
+	}
+}
+
 func TestPhotoBackupAcceptsAndroidNamedStage(t *testing.T) {
 	datadir.SetCache(t.TempDir())
 	t.Cleanup(func() { datadir.SetCache("") })
