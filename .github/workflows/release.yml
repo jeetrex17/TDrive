@@ -392,12 +392,13 @@ jobs:
             echo "TDRIVE_ANDROID_CERT_SHA256 must be the release certificate's SHA-256 fingerprint" >&2
             exit 1
           fi
-          certificates="$("$tools_dir/apksigner" verify --print-certs "$apk")"
+          certificates="$("$tools_dir/apksigner" verify --verbose --print-certs "$apk")"
           actual="$(printf '%s\n' "$certificates" | bash scripts/android-signer-digests.sh)"
           if [ "$actual" != "$expected" ] || [[ "$certificates" == *"CN=Android Debug"* ]]; then
             echo "Android APK was not signed with the expected release certificate" >&2
             printf 'Expected signer SHA-256: %s\nActual signer SHA-256: %s\n' "$expected" "${actual:-unavailable}" >&2
-            printf '%s\n' "$certificates" | sed -n '/^Signer /p' >&2
+            printf 'Android build-tools: %s\napksigner output (%s characters):\n' "$(basename "$tools_dir")" "${#certificates}" >&2
+            printf '%s\n' "${certificates:-<empty>}" | sed -n '1,80p' >&2
             exit 1
           fi
 
@@ -527,12 +528,13 @@ jobs:
             echo "TDRIVE_ANDROID_CERT_SHA256 must be the release certificate's SHA-256 fingerprint" >&2
             exit 1
           fi
-          certificates="$("$tools_dir/apksigner" verify --print-certs "$apk")"
+          certificates="$("$tools_dir/apksigner" verify --verbose --print-certs "$apk")"
           actual="$(printf '%s\n' "$certificates" | bash scripts/android-signer-digests.sh)"
           if [ "$actual" != "$expected" ] || [[ "$certificates" == *"CN=Android Debug"* ]]; then
             echo "Android APK was not signed with the expected release certificate" >&2
             printf 'Expected signer SHA-256: %s\nActual signer SHA-256: %s\n' "$expected" "${actual:-unavailable}" >&2
-            printf '%s\n' "$certificates" | sed -n '/^Signer /p' >&2
+            printf 'Android build-tools: %s\napksigner output (%s characters):\n' "$(basename "$tools_dir")" "${#certificates}" >&2
+            printf '%s\n' "${certificates:-<empty>}" | sed -n '1,80p' >&2
             exit 1
           fi
 
