@@ -65,6 +65,14 @@ afterEach(async () => {
 });
 
 describe('ProfileMenu appearance navigation', () => {
+    it('omits local cache details from the account menu', () => {
+        setup();
+        click('#profile-trigger');
+
+        expect(host?.querySelector('#profile-menu-storage')).toBeNull();
+        expect(host?.querySelector('.photo-cache-panel')).toBeNull();
+    });
+
     it('uses Escape to return to the account menu before closing the popover', async () => {
         setup();
         click('#profile-trigger');

@@ -440,7 +440,7 @@ test('prefers-reduced-motion disables entrance motion in Chromium', async ({ pag
 });
 
 for (const platform of ['desktop', 'android', 'ios'] as const) {
-    test(`photo cache is managed automatically on ${platform}`, async ({ page }, testInfo) => {
+    test(`local cache details stay out of the UI on ${platform}`, async ({ page }) => {
         if (platform !== 'desktop') {
             await page.setViewportSize({ width: 390, height: 844 });
             await page.addInitScript((mobile) => history.replaceState(null, '', `/?mobile=${mobile}`), platform);
@@ -448,18 +448,15 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
         const mock = await bootTDrive(page);
         if (platform === 'desktop') {
             await page.locator('#profile-trigger').click();
-            await page.getByRole('menuitem', { name: 'Local storage' }).click();
+            await expect(page.getByRole('menuitem', { name: 'Local storage' })).toHaveCount(0);
         } else {
             await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Account', exact: true }).click();
         }
-        const panel = page.getByRole('region', { name: 'Local photo storage' });
-        await expect(panel).toContainText('2 KB');
-        await expect(panel).toContainText('removed automatically');
-        await expect(page.getByRole('button', { name: /clear.*cache/i })).toHaveCount(0);
+        await expect(page.getByRole('region', { name: 'Local photo storage' })).toHaveCount(0);
+        await expect(page.getByText('Photo cache', { exact: true })).toHaveCount(0);
+        await expect(page.getByText('Local catalog', { exact: true })).toHaveCount(0);
+        expect(await mock.calls('GetGalleryStorage')).toHaveLength(0);
         expect(await mock.calls('ClearGalleryCache')).toHaveLength(0);
-        const shot = testInfo.outputPath(`storage-${platform}.png`);
-        await page.screenshot({ path: shot });
-        await testInfo.attach(`Storage ${platform}`, { path: shot, contentType: 'image/png' });
     });
 
     test(`1M photo gallery stays bounded while scrolling, reversing and keyboard jumping on ${platform}`, async ({ page }, testInfo) => {

@@ -5,7 +5,6 @@
     import LogOutIcon from '@lucide/svelte/icons/log-out';
     import PaletteIcon from '@lucide/svelte/icons/palette';
     import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
-    import PhotoCachePanel from '../gallery/PhotoCachePanel.svelte';
     import PhotoBackupPanel from '../gallery/PhotoBackupPanel.svelte';
     import { tick } from 'svelte';
     import { checkForUpdates } from '../../modules/updates';
@@ -28,7 +27,7 @@
 
     let { onOpen, onEncryptionSettings, onLogout, updaterAvailable = true }: Props = $props();
 
-    type MenuView = 'account' | 'appearance' | 'updates' | 'storage' | 'backup';
+    type MenuView = 'account' | 'appearance' | 'updates' | 'backup';
 
     let open = $state(false);
     let view = $state<MenuView>('account');
@@ -106,17 +105,6 @@
         menuEl?.querySelector<HTMLElement>('#profile-menu-updates')?.focus();
     }
 
-    async function openStorage(): Promise<void> {
-        view = 'storage';
-        await tick();
-        menuEl?.querySelector<HTMLElement>('#photo-storage-back')?.focus();
-    }
-
-    async function closeStorage(): Promise<void> {
-        view = 'account';
-        await tick();
-        menuEl?.querySelector<HTMLElement>('#profile-menu-storage')?.focus();
-    }
     async function openBackup(): Promise<void> { view = 'backup'; await tick(); menuEl?.querySelector<HTMLElement>('#photo-backup-back')?.focus(); }
     async function closeBackup(): Promise<void> { view = 'account'; await tick(); menuEl?.querySelector<HTMLElement>('#profile-menu-photo-backup')?.focus(); }
 
@@ -135,7 +123,6 @@
             // Keep the window-level Escape handler from also closing the
             // popover after this view has handled the first navigation step.
             event.stopPropagation();
-            if (view === 'storage') { void closeStorage(); return; }
             if (view === 'backup') { void closeBackup(); return; }
             if (view === 'appearance') {
                 void closeAppearance();
@@ -189,7 +176,6 @@
     }
 
     function labelledBy(currentView: MenuView): string {
-        if (currentView === 'storage') return 'photo-storage-back';
         if (currentView === 'backup') return 'photo-backup-back';
         if (currentView === 'appearance') return 'appearance-title';
         if (currentView === 'updates') return 'updates-title';
@@ -235,10 +221,7 @@
     hidden={!open}
     onkeydown={onMenuKeydown}
 >
-    {#if view === 'storage'}
-        <button id="photo-storage-back" class="profile-menu-item" type="button" onclick={() => void closeStorage()}>Back to account</button>
-        <PhotoCachePanel />
-    {:else if view === 'backup'}
+    {#if view === 'backup'}
         <button id="photo-backup-back" class="profile-menu-item" type="button" onclick={() => void closeBackup()}>Back to account</button>
         <PhotoBackupPanel />
     {:else if view === 'appearance'}
@@ -280,9 +263,6 @@
         >
             <PaletteIcon size={20} strokeWidth={2} aria-hidden="true" />
             <span>Appearance</span>
-        </button>
-        <button id="profile-menu-storage" class="profile-menu-item" type="button" role="menuitem" onclick={() => void openStorage()}>
-            <HardDriveIcon size={20} strokeWidth={2} aria-hidden="true" /><span>Local storage</span>
         </button>
         <button id="profile-menu-photo-backup" class="profile-menu-item" type="button" role="menuitem" onclick={() => void openBackup()}>
             <HardDriveIcon size={20} strokeWidth={2} aria-hidden="true" /><span>Photo &amp; video backup</span>

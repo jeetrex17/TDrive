@@ -17,7 +17,6 @@
     import { encryptionEntryVisible, profileLoaded, profileUser } from '../chrome/profile-store';
     import { sidebarState } from '../sidebar/sidebar-store';
     import AppearancePanel from '../theme/AppearancePanel.svelte';
-    import PhotoCachePanel from '../gallery/PhotoCachePanel.svelte';
     import PhotoBackupPanel from '../gallery/PhotoBackupPanel.svelte';
     import { getThemeDefinition } from '../theme/theme-model';
     import { themeState } from '../theme/theme-controller';
@@ -212,7 +211,6 @@
                 <span class="account-row-label">Trash</span>
                 <ChevronRightIcon class="account-row-chevron" size={18} strokeWidth={2} aria-hidden="true" />
             </button>
-            {#if $activeTab === 'account'}<PhotoCachePanel />{/if}
             <button
                 bind:this={backupOpener}
                 type="button"

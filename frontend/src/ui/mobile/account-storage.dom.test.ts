@@ -18,7 +18,6 @@ vi.mock('../../modules/modals/new-drive', () => ({ openNewDriveModal: vi.fn() })
 vi.mock('../../modules/modals/logout', () => ({ openLogoutModal: vi.fn() }));
 vi.mock('../theme/AppearancePanel.svelte', () => ({ default: function noop() {} }));
 vi.mock('../gallery/PhotoBackupPanel.svelte', () => ({ default: function noop() {} }));
-vi.mock('../gallery/PhotoCachePanel.svelte', () => ({ default: function noop() {} }));
 vi.mock('../chrome/Avatar.svelte', () => ({ default: function noop() {} }));
 
 import AccountTab from './AccountTab.svelte';
