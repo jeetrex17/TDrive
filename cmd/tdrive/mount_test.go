@@ -2,10 +2,13 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"fmt"
 	"strings"
 	"testing"
 
 	"TDrive/backend/daemon"
+	"TDrive/backend/mountcontroller"
 )
 
 func TestParseMountStartArgs(t *testing.T) {
@@ -17,6 +20,7 @@ func TestParseMountStartArgs(t *testing.T) {
 		wantSelector string
 		wantDrive    string
 		wantMode     string
+		wantStdin    bool
 		wantErr      bool
 	}{
 		{name: "server applies default", wantDrive: ""},
@@ -33,7 +37,10 @@ func TestParseMountStartArgs(t *testing.T) {
 			wantDrive:    "S:",
 			wantMode:     "read-only",
 		},
+		{name: "password from stdin", args: []string{"--password-stdin"}, wantStdin: true},
+		{name: "duplicate password flag", args: []string{"--password-stdin", "--password-stdin"}, wantErr: true},
 		{name: "missing selected drive", args: []string{"--drive"}, wantErr: true},
+		{name: "option is not drive", args: []string{"--drive", "--password-stdin"}, wantErr: true},
 		{name: "missing Windows letter", args: []string{"--windows-drive"}, wantErr: true},
 		{name: "invalid Windows path", args: []string{"--windows-drive", `T:\`}, wantErr: true},
 		{name: "invalid multi-letter drive", args: []string{"--windows-drive", "TT:"}, wantErr: true},
@@ -41,10 +48,9 @@ func TestParseMountStartArgs(t *testing.T) {
 	}
 
 	for _, test := range tests {
-		test := test
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			selector, drive, mode, err := parseMountStartArgs(test.args)
+			options, err := parseMountStartArgs(test.args)
 			if test.wantErr {
 				if err == nil {
 					t.Fatalf("parseMountStartArgs(%q) error = nil", test.args)
@@ -54,20 +60,117 @@ func TestParseMountStartArgs(t *testing.T) {
 			if err != nil {
 				t.Fatalf("parseMountStartArgs(%q): %v", test.args, err)
 			}
-			if selector != test.wantSelector || drive != test.wantDrive || mode != test.wantMode {
+			if options.selector != test.wantSelector || options.windowsDrive != test.wantDrive || options.mode != test.wantMode || options.passwordStdin != test.wantStdin {
 				t.Fatalf(
-					"parseMountStartArgs(%q) = (%q, %q, %q), want (%q, %q, %q)",
+					"parseMountStartArgs(%q) = %+v, want (%q, %q, %q, %v)",
 					test.args,
-					selector,
-					drive,
-					mode,
+					options,
 					test.wantSelector,
 					test.wantDrive,
 					test.wantMode,
+					test.wantStdin,
 				)
 			}
 		})
 	}
+}
+
+func TestMountStartWithUnlockRetriesLockedDriveOnce(t *testing.T) {
+	t.Parallel()
+	client := &fakeMountStartClient{startErrors: []error{mountcontroller.ErrEncryptionPasswordRequired, nil}}
+	reads := 0
+	out, err := mountStartWithUnlock(client, mountStartOptions{selector: "42"}, false, func() (string, error) {
+		reads++
+		return "secret", nil
+	})
+	if err != nil {
+		t.Fatalf("mountStartWithUnlock() error = %v", err)
+	}
+	if !out.Mounted || client.starts != 2 || client.unlocks != 1 || client.password != "secret" || reads != 1 {
+		t.Fatalf("out=%+v starts=%d unlocks=%d password=%q reads=%d", out, client.starts, client.unlocks, client.password, reads)
+	}
+}
+
+func TestMountStartWithUnlockDoesNotPromptOnUnrelatedFailure(t *testing.T) {
+	t.Parallel()
+	want := errors.New("mount device unavailable")
+	client := &fakeMountStartClient{startErrors: []error{want}}
+	_, err := mountStartWithUnlock(client, mountStartOptions{}, false, func() (string, error) {
+		t.Fatal("password prompt on unrelated failure")
+		return "", nil
+	})
+	if !errors.Is(err, want) || client.unlocks != 0 {
+		t.Fatalf("error=%v unlocks=%d, want original error and no unlock", err, client.unlocks)
+	}
+}
+
+func TestMountStartWithUnlockNonInteractiveFailsBeforePrompt(t *testing.T) {
+	t.Parallel()
+	client := &fakeMountStartClient{startErrors: []error{mountcontroller.ErrEncryptionPasswordRequired}}
+	_, err := mountStartWithUnlock(client, mountStartOptions{}, true, func() (string, error) {
+		t.Fatal("password prompt in non-interactive mode")
+		return "", nil
+	})
+	if err == nil || client.unlocks != 0 {
+		t.Fatalf("error=%v unlocks=%d, want interaction required and no unlock", err, client.unlocks)
+	}
+}
+
+func TestMountStartWithUnlockAcceptsExplicitStdinNonInteractive(t *testing.T) {
+	t.Parallel()
+	client := &fakeMountStartClient{startErrors: []error{mountcontroller.ErrEncryptionPasswordRequired}}
+	_, err := mountStartWithUnlock(client, mountStartOptions{passwordStdin: true}, true, func() (string, error) {
+		return "secret", nil
+	})
+	if err != nil || client.starts != 2 || client.unlocks != 1 {
+		t.Fatalf("error=%v starts=%d unlocks=%d, want successful retry", err, client.starts, client.unlocks)
+	}
+}
+
+func TestMountStartWithUnlockStopsAfterUnlockFailure(t *testing.T) {
+	t.Parallel()
+	want := errors.New("incorrect password")
+	client := &fakeMountStartClient{startErrors: []error{mountcontroller.ErrEncryptionPasswordRequired}, unlockError: want}
+	_, err := mountStartWithUnlock(client, mountStartOptions{}, false, func() (string, error) {
+		return "wrong", nil
+	})
+	if !errors.Is(err, want) || client.starts != 1 || client.unlocks != 1 {
+		t.Fatalf("error=%v starts=%d unlocks=%d, want unlock error and no retry", err, client.starts, client.unlocks)
+	}
+}
+
+func TestMountNeedsPasswordRecognizesRemoteCode(t *testing.T) {
+	t.Parallel()
+	err := fmt.Errorf("remote mount: %w", &daemon.RemoteError{Code: "encryption_password_required", Message: "locked"})
+	if !mountNeedsPassword(err) {
+		t.Fatalf("mountNeedsPassword(%v) = false", err)
+	}
+	if mountNeedsPassword(&daemon.RemoteError{Code: "permission_denied", Message: "locked"}) {
+		t.Fatal("mountNeedsPassword() treated an unrelated remote code as a password prompt")
+	}
+}
+
+type fakeMountStartClient struct {
+	startErrors []error
+	starts      int
+	unlocks     int
+	password    string
+	unlockError error
+}
+
+func (f *fakeMountStartClient) MountStart(_, _, _ string) (daemon.MountResponse, error) {
+	index := f.starts
+	f.starts++
+	if index < len(f.startErrors) && f.startErrors[index] != nil {
+		return daemon.MountResponse{}, f.startErrors[index]
+	}
+	return daemon.MountResponse{Mounted: true}, nil
+}
+
+func (f *fakeMountStartClient) VaultUnlock(password string) (daemon.VaultResponse, error) {
+	f.unlocks++
+	f.password = password
+	return daemon.VaultResponse{}, f.unlockError
 }
 
 func TestRunMountRejectsInvalidCommandsBeforeConnecting(t *testing.T) {

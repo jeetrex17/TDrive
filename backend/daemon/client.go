@@ -3,11 +3,18 @@ package daemon
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"net"
+	"time"
 )
+
+var ErrDaemonUnavailable = errors.New("daemon is not running")
 
 type Client struct {
 	socketPath string
+	timeout    time.Duration
+	dial       func() (net.Conn, error)
 }
 
 type EventHandler func(Event)
@@ -18,6 +25,44 @@ func NewClient() (*Client, error) {
 		return nil, err
 	}
 	return &Client{socketPath: path}, nil
+}
+
+// WithTimeout returns an independent client with one deadline for socket I/O.
+// The deadline is calculated before dialing; non-positive durations disable it.
+func (c *Client) WithTimeout(timeout time.Duration) *Client {
+	client := *c
+	client.timeout = timeout
+	return &client
+}
+
+func (c *Client) connect() (net.Conn, error) {
+	var deadline time.Time
+	if c.timeout > 0 {
+		deadline = time.Now().Add(c.timeout)
+	}
+	dial := c.dial
+	if dial == nil {
+		dial = func() (net.Conn, error) { return dialSocket(c.socketPath) }
+	}
+	conn, err := dial()
+	if err != nil {
+		return nil, err
+	}
+	if !deadline.IsZero() {
+		if err := conn.SetDeadline(deadline); err != nil {
+			_ = conn.Close()
+			return nil, fmt.Errorf("daemon deadline: %w", err)
+		}
+	}
+	return conn, nil
+}
+
+func (c *Client) Ping() (PingResponse, error) {
+	var out PingResponse
+	if err := c.call(CommandPing, nil, &out); err != nil {
+		return PingResponse{}, err
+	}
+	return out, nil
 }
 
 func (c *Client) Status() (Status, error) {
@@ -221,40 +266,60 @@ func (c *Client) CD(path string) (PathResponse, error) {
 }
 
 func (c *Client) List(path string) (ListResponse, error) {
+	return c.ListInDrive(0, path)
+}
+
+func (c *Client) ListInDrive(driveID int64, path string) (ListResponse, error) {
 	var out ListResponse
-	if err := c.call(CommandList, PathRequest{Path: path}, &out); err != nil {
+	if err := c.call(CommandList, PathRequest{Path: path, DriveID: driveID}, &out); err != nil {
 		return ListResponse{}, err
 	}
 	return out, nil
 }
 
 func (c *Client) Find(query string, limit int) (FindResponse, error) {
+	return c.FindInDrive(0, query, limit)
+}
+
+func (c *Client) FindInDrive(driveID int64, query string, limit int) (FindResponse, error) {
 	var out FindResponse
-	if err := c.call(CommandFind, FindRequest{Query: query, Limit: limit}, &out); err != nil {
+	if err := c.call(CommandFind, FindRequest{Query: query, Limit: limit, DriveID: driveID}, &out); err != nil {
 		return FindResponse{}, err
 	}
 	return out, nil
 }
 
 func (c *Client) Mkdir(path string, parents bool) (EntryResponse, error) {
+	return c.MkdirInDrive(0, path, parents)
+}
+
+func (c *Client) MkdirInDrive(driveID int64, path string, parents bool) (EntryResponse, error) {
 	var out EntryResponse
-	if err := c.call(CommandMkdir, MkdirRequest{Path: path, Parents: parents}, &out); err != nil {
+	if err := c.call(CommandMkdir, MkdirRequest{Path: path, Parents: parents, DriveID: driveID}, &out); err != nil {
 		return EntryResponse{}, err
 	}
 	return out, nil
 }
 
 func (c *Client) Remove(path string, recursive bool) (EntryResponse, error) {
+	return c.RemoveInDrive(0, path, recursive)
+}
+
+func (c *Client) RemoveInDrive(driveID int64, path string, recursive bool) (EntryResponse, error) {
 	var out EntryResponse
-	if err := c.call(CommandRemove, RemoveRequest{Path: path, Recursive: recursive}, &out); err != nil {
+	if err := c.call(CommandRemove, RemoveRequest{Path: path, Recursive: recursive, DriveID: driveID}, &out); err != nil {
 		return EntryResponse{}, err
 	}
 	return out, nil
 }
 
 func (c *Client) Move(source string, destination string) (EntryResponse, error) {
+	return c.MoveInDrive(0, source, destination)
+}
+
+func (c *Client) MoveInDrive(driveID int64, source string, destination string) (EntryResponse, error) {
 	var out EntryResponse
-	if err := c.call(CommandMove, MoveRequest{Source: source, Destination: destination}, &out); err != nil {
+	if err := c.call(CommandMove, MoveRequest{Source: source, Destination: destination, DriveID: driveID}, &out); err != nil {
 		return EntryResponse{}, err
 	}
 	return out, nil
@@ -285,12 +350,17 @@ func (c *Client) VaultLock() (VaultResponse, error) {
 }
 
 func (c *Client) Upload(localPath string, remotePath string, encrypt bool, extract bool, onEvent EventHandler) (UploadResponse, error) {
+	return c.UploadInDrive(0, localPath, remotePath, encrypt, extract, onEvent)
+}
+
+func (c *Client) UploadInDrive(driveID int64, localPath string, remotePath string, encrypt bool, extract bool, onEvent EventHandler) (UploadResponse, error) {
 	var out UploadResponse
 	err := c.stream(CommandUpload, UploadRequest{
 		LocalPath:  localPath,
 		RemotePath: remotePath,
 		Encrypt:    encrypt,
 		Extract:    extract,
+		DriveID:    driveID,
 	}, &out, onEvent)
 	if err != nil {
 		return UploadResponse{}, err
@@ -299,10 +369,15 @@ func (c *Client) Upload(localPath string, remotePath string, encrypt bool, extra
 }
 
 func (c *Client) Download(remotePath string, localPath string, onEvent EventHandler) (DownloadResponse, error) {
+	return c.DownloadInDrive(0, remotePath, localPath, onEvent)
+}
+
+func (c *Client) DownloadInDrive(driveID int64, remotePath string, localPath string, onEvent EventHandler) (DownloadResponse, error) {
 	var out DownloadResponse
 	err := c.stream(CommandDownload, DownloadRequest{
 		RemotePath: remotePath,
 		LocalPath:  localPath,
+		DriveID:    driveID,
 	}, &out, onEvent)
 	if err != nil {
 		return DownloadResponse{}, err
@@ -340,7 +415,7 @@ func (c *Client) call(command string, payload any, out any) error {
 		return err
 	}
 
-	conn, err := dialSocket(c.socketPath)
+	conn, err := c.connect()
 	if err != nil {
 		return err
 	}
@@ -357,10 +432,7 @@ func (c *Client) call(command string, payload any, out any) error {
 		return fmt.Errorf("daemon response: %w", err)
 	}
 	if !frame.OK {
-		if frame.Error == "" {
-			frame.Error = "daemon request failed"
-		}
-		return fmt.Errorf("%s", frame.Error)
+		return errorFromFrame(frame)
 	}
 	if out != nil && len(frame.Payload) > 0 {
 		if err := json.Unmarshal(frame.Payload, out); err != nil {
@@ -376,7 +448,7 @@ func (c *Client) stream(command string, payload any, out any, onEvent EventHandl
 		return err
 	}
 
-	conn, err := dialSocket(c.socketPath)
+	conn, err := c.connect()
 	if err != nil {
 		return err
 	}
@@ -410,10 +482,7 @@ func (c *Client) stream(command string, payload any, out any, onEvent EventHandl
 			onEvent(event)
 		case "response", "":
 			if !frame.OK {
-				if frame.Error == "" {
-					frame.Error = "daemon request failed"
-				}
-				return fmt.Errorf("%s", frame.Error)
+				return errorFromFrame(frame)
 			}
 			if out != nil && len(frame.Payload) > 0 {
 				if err := json.Unmarshal(frame.Payload, out); err != nil {

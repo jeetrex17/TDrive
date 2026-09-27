@@ -10,6 +10,11 @@ $ErrorActionPreference = "Stop"
 $safeVersion = $Version -replace '[^0-9A-Za-z._-]', '-'
 $name = "TDrive-$safeVersion-windows-amd64-cli"
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$commit = & git -C $repositoryRoot rev-parse --verify HEAD
+if ($LASTEXITCODE -ne 0 -or $commit -notmatch '^[0-9a-fA-F]{40,64}$') {
+    throw "Could not determine the Git commit for CLI version stamping"
+}
+$linkerFlags = "-X main.buildVersion=$safeVersion -X main.buildCommit=$commit"
 $distDirectory = Join-Path $repositoryRoot "dist"
 $workDirectory = Join-Path $distDirectory $name
 $archivePath = Join-Path $distDirectory "$name.zip"
@@ -31,7 +36,7 @@ try {
 
     Push-Location $repositoryRoot
     try {
-        & go build -trimpath -o $executablePath ./cmd/tdrive
+        & go build -trimpath -ldflags $linkerFlags -o $executablePath ./cmd/tdrive
         if ($LASTEXITCODE -ne 0) {
             throw "go build failed with exit code $LASTEXITCODE"
         }
@@ -47,13 +52,15 @@ TDrive CLI for Windows (amd64)
 1. Extract this folder to a location owned by your Windows user.
 2. Open PowerShell in the extracted folder.
 3. Run: .\tdrive.exe help
-4. Sign in, then start the read-only drive mount:
+4. Sign in, then start the drive mount:
      .\tdrive.exe login
      .\tdrive.exe mount --windows-drive T:
 5. Follow the command's Windows mapping instructions if prompted.
 
-The first mount release is read-only. Keep the localhost WebDAV URL private:
-it contains a per-process capability token. Stop the background process with:
+Eligible personal drives support writes; shared drives are read-only. An
+encrypted drive asks for its existing vault password if locked. Keep the
+localhost WebDAV URL private: it contains a per-process capability token.
+Stop the background process with:
   .\tdrive.exe daemon stop
 
 No driver, installer, registry change, or system service is included.

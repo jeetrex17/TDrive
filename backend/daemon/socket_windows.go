@@ -52,7 +52,7 @@ func dialSocket(path string) (net.Conn, error) {
 	conn, err := winio.DialPipe(path, &timeout)
 	if err != nil {
 		slog.Debug("daemon: windows named pipe dial failed", "error", err)
-		return nil, fmt.Errorf("daemon is not running. Run: tdrive daemon start: %w", err)
+		return nil, fmt.Errorf("%w. Run: tdrive daemon start", ErrDaemonUnavailable)
 	}
 	return conn, nil
 }

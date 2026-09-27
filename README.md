@@ -182,7 +182,7 @@ cd TDrive-*-cli
 Reload the shell if the installer updated its configuration, then set up and log in:
 
 ```bash
-tdrive setup --api-id YOUR_ID --api-hash YOUR_HASH
+tdrive setup --api-id YOUR_ID --api-hash-stdin
 tdrive login +15551234567
 tdrive whoami
 tdrive ls
@@ -193,7 +193,7 @@ tdrive ls
 Extract the `*-windows-amd64-cli.zip` release asset and run `tdrive.exe` from PowerShell:
 
 ```powershell
-.\tdrive.exe setup --api-id YOUR_ID --api-hash YOUR_HASH
+.\tdrive.exe setup --api-id YOUR_ID --api-hash-stdin
 .\tdrive.exe login +15551234567
 .\tdrive.exe whoami
 ```
@@ -222,9 +222,28 @@ Folder and archive imports require the destination folder to exist. Single-file 
 
 Shared-drive commands include `drive create`, `drive link`, `drive join`, `drive requests`, `drive approve`, `drive deny`, and `drive leave`. Run `tdrive help` or `tdrive <command> --help` for the complete command reference.
 
+### Automation and agent use
+
+`tdrive version --json` and `tdrive commands --json` work without a daemon or Telegram connection. The latter is the authoritative manifest of JSON-supported commands and flags. Human-readable output remains the default; `--json` (or `--output json`) is opt-in and rejects unsupported commands. For example:
+
+```bash
+tdrive commands --json
+tdrive drives --json
+tdrive ls /Photos --drive-id 123456789 --json --non-interactive
+tdrive put photo.jpg /Photos/photo.jpg --drive-id 123456789 --json --non-interactive
+```
+
+Use the numeric drive ID returned by `tdrive drives --json`. Drive-scoped JSON commands require `--drive-id` and canonical absolute remote paths. They do not change the daemon's shared active drive or working directory, so concurrent scripts can target different drives safely. JSON `put` accepts one regular local file and JSON `get` requires an explicit local file path; the human CLI still supports folder and archive imports. `--timeout 30s` bounds a daemon RPC after startup, not daemon startup itself.
+
+Each successful JSON command writes one schema-versioned object to stdout (`schema_version`, `ok`, `command`, `data`), with no progress text. An error writes one object to stderr (`schema_version`, `ok: false`, `error` with `code`, `message`, `retryable`, and optional `hint`). Exit codes are 0 for success, 1 for other operation failures, 2 for invalid/unsupported commands, 3 for required input or authentication, 4 for not found, 5 for conflicts/required confirmation, and 6 for timeout/unavailability. Branch on `error.code`, not the message.
+
+`--non-interactive` never prompts. `rm` and `rebuild` in JSON mode require `--yes`; non-interactive text mode also requires it for destructive drive actions and full logout. JSON `get` refuses to overwrite an existing local target unless `--yes` is given. That local no-clobber check is best-effort, not atomic with other writers. Vault unlock requires `--password-stdin` in JSON or non-interactive mode. Interactive Telegram login is still required, and setup is text-only; `setup --api-id ID --api-hash-stdin` avoids putting the API hash in shell history or process arguments. The `cat` command emits raw file bytes and does not support JSON. There is no dry-run option. `cat` verifies downloads in a private temporary directory rather than streaming directly; a crash can leave plaintext there.
+
 ## Desktop mount
 
 Use **Mount** in the app, or close the GUI and run `tdrive mount`. TDrive starts a private localhost WebDAV endpoint and attaches the selected drive to the operating system until it is ejected.
+
+If the selected encrypted drive is locked, the CLI prompts for its existing vault password and retries the mount. Scripts can supply the password through stdin with `tdrive mount --password-stdin --non-interactive`; mount start does not support JSON mode.
 
 - **macOS:** appears in Finder as **Tdrive personal**.
 - **Windows:** defaults to drive `T:`. Windows WebDAV has a default 50,000,000-byte file-size limit that must be changed in the OS for larger files.

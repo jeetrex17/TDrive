@@ -3,15 +3,15 @@
 // It is deliberately stateless: nearly every subcommand parses argv by hand,
 // makes one daemon RPC and prints the result. The remote working directory, the
 // active drive and the vault all live in the daemon, so pwd and cd are RPCs.
-// The only things this binary genuinely owns are supervising the daemon and
-// installing itself onto PATH.
+// Explicit --drive-id commands bypass that shared drive and cwd. The binary
+// also supervises the daemon and installs itself onto PATH.
 //
 // Any command that needs the backend starts it on demand: probe the socket with
-// a status call, and if that fails consult the process lock. A lock held by the
+// a policy-free ping, and if that fails consult the process lock. A lock held by the
 // GUI is a hard error — one TDrive backend per user — while a lock held by a
 // daemon means one is still booting and is waited on. Only otherwise does the
-// CLI re-exec itself detached as a daemon. Readiness is a successful status
-// call, never the mere presence of the lock file.
+// CLI re-exec itself detached as a daemon. Readiness is a successful ping,
+// never the mere presence of the lock file.
 //
 // Help is intercepted before dispatch, so a help flag anywhere in the argument
 // list short-circuits the command rather than being parsed as one of its
@@ -24,8 +24,8 @@
 package main
 
 import (
-	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -44,21 +44,50 @@ import (
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		os.Exit(writeCommandError(os.Stderr, err, wantsJSON(os.Args[1:])))
 	}
 }
 
 func run(args []string) error {
+	opts, command, err := parseCLIOptions(args)
+	if err != nil {
+		return &CLIError{Code: "invalid_argument", Message: err.Error()}
+	}
+	previous := currentCLIOptions.Swap(&opts)
+	defer currentCLIOptions.Store(previous)
+	args = command
 	if len(args) == 0 {
+		if opts.JSON {
+			return &CLIError{Code: "invalid_argument", Message: "missing command; run tdrive commands --json"}
+		}
 		printUsage()
 		return nil
 	}
 	if topic, ok := requestedHelp(args); ok {
+		if opts.JSON {
+			return &CLIError{Code: "unsupported", Message: "help is text-only; use tdrive commands --json for the machine-readable command list"}
+		}
 		return printHelp(topic)
 	}
+	if opts.DriveID != 0 && !supportsExplicitDrive(args[0]) {
+		return &CLIError{Code: "invalid_argument", Message: "--drive-id is not supported by this command"}
+	}
+	if opts.JSON {
+		return runMachine(args, opts)
+	}
+	args = stripCommandTerminator(args)
 
 	switch args[0] {
+	case "version":
+		if len(args) != 1 {
+			return fmt.Errorf("usage: tdrive version")
+		}
+		info := cliBuildInfo()
+		fmt.Printf("tdrive %s (%s), daemon protocol %d\n", info.Version, info.Commit, info.Protocol)
+		return nil
+	case "commands":
+		printUsage()
+		return nil
 	case "daemon":
 		return runDaemon(args[1:])
 	case "install-cli":
@@ -114,6 +143,24 @@ func run(args []string) error {
 	}
 }
 
+func stripCommandTerminator(args []string) []string {
+	for index, arg := range args {
+		if arg == "--" {
+			return append(append([]string{}, args[:index]...), args[index+1:]...)
+		}
+	}
+	return args
+}
+
+func supportsExplicitDrive(command string) bool {
+	switch command {
+	case "ls", "find", "mkdir", "rm", "mv", "put", "get", "cat", "sync", "rebuild":
+		return true
+	default:
+		return false
+	}
+}
+
 func runDrive(args []string) error {
 	if len(args) == 0 {
 		return fmt.Errorf("missing drive command\n\nRun: tdrive drive list|use <name|id>")
@@ -133,8 +180,8 @@ func runDrive(args []string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Printf("drive: %s (%d)\n", out.Drive.Title, out.Drive.ID)
-		fmt.Printf("cwd:   %s\n", out.CurrentPath)
+		fmt.Printf("drive: %s (%d)\n", terminalSafeText(out.Drive.Title), out.Drive.ID)
+		fmt.Printf("cwd:   %s\n", terminalSafeText(out.CurrentPath))
 		return nil
 	case "create":
 		return runDriveCreate(args[1:])
@@ -184,7 +231,7 @@ func runDaemon(args []string) error {
 		if err != nil {
 			return err
 		}
-		if err := c.Shutdown(); err != nil {
+		if err := c.WithTimeout(cliCurrentOptions().Timeout).Shutdown(); err != nil {
 			return err
 		}
 		fmt.Println("TDrive daemon stopping")
@@ -229,7 +276,7 @@ func printDaemonStatus() error {
 	if err != nil {
 		return err
 	}
-	status, err := c.Status()
+	status, err := c.WithTimeout(cliCurrentOptions().Timeout).Status()
 	if err != nil {
 		return err
 	}
@@ -241,7 +288,7 @@ func printDaemonStatus() error {
 		fmt.Println("drive:  none")
 	}
 	if status.CurrentPath != "" {
-		fmt.Printf("cwd:    %s\n", status.CurrentPath)
+		fmt.Printf("cwd:    %s\n", terminalSafeText(status.CurrentPath))
 	}
 	switch {
 	case !status.VaultAvailable:
@@ -274,7 +321,7 @@ func printDrives() error {
 		if drive.Active {
 			marker = "*"
 		}
-		fmt.Printf("%s %-8s %-14d %s\n", marker, drive.Kind, drive.ID, drive.Title)
+		fmt.Printf("%s %-8s %-14d %s\n", marker, terminalSafeText(drive.Kind), drive.ID, terminalSafeText(drive.Title))
 	}
 	return nil
 }
@@ -288,7 +335,7 @@ func printPWD() error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(out.CurrentPath)
+	fmt.Println(terminalSafeText(out.CurrentPath))
 	return nil
 }
 
@@ -304,7 +351,7 @@ func runCD(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(out.CurrentPath)
+	fmt.Println(terminalSafeText(out.CurrentPath))
 	return nil
 }
 
@@ -327,7 +374,7 @@ func runLS(args []string) error {
 	if err != nil {
 		return err
 	}
-	out, err := c.List(target)
+	out, err := c.ListInDrive(cliCurrentOptions().DriveID, target)
 	if err != nil {
 		return err
 	}
@@ -371,12 +418,12 @@ func runFind(args []string) error {
 	if err != nil {
 		return err
 	}
-	out, err := c.Find(query, limit)
+	out, err := c.FindInDrive(cliCurrentOptions().DriveID, query, limit)
 	if err != nil {
 		return err
 	}
 	for _, entry := range out.Results {
-		fmt.Printf("%-6s %10s  %s\n", entryKind(entry), entrySize(entry), entry.Path)
+		fmt.Printf("%-6s %10s  %s\n", entryKind(entry), entrySize(entry), terminalSafeText(entry.Path))
 	}
 	return nil
 }
@@ -403,11 +450,11 @@ func runMkdir(args []string) error {
 	if err != nil {
 		return err
 	}
-	out, err := c.Mkdir(target, parents)
+	out, err := c.MkdirInDrive(cliCurrentOptions().DriveID, target, parents)
 	if err != nil {
 		return err
 	}
-	fmt.Println(out.Entry.Path)
+	fmt.Println(terminalSafeText(out.Entry.Path))
 	return nil
 }
 
@@ -428,16 +475,19 @@ func runRM(args []string) error {
 	if target == "" {
 		return fmt.Errorf("usage: tdrive rm [-r] <remote-path>")
 	}
+	if cliNonInteractive() && !cliCurrentOptions().Yes {
+		return &CLIError{Code: "confirmation_required", Message: "rm requires --yes in non-interactive mode"}
+	}
 
 	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
-	out, err := c.Remove(target, recursive)
+	out, err := c.RemoveInDrive(cliCurrentOptions().DriveID, target, recursive)
 	if err != nil {
 		return err
 	}
-	fmt.Println(out.Entry.Path)
+	fmt.Println(terminalSafeText(out.Entry.Path))
 	return nil
 }
 
@@ -449,11 +499,11 @@ func runMV(args []string) error {
 	if err != nil {
 		return err
 	}
-	out, err := c.Move(args[0], args[1])
+	out, err := c.MoveInDrive(cliCurrentOptions().DriveID, args[0], args[1])
 	if err != nil {
 		return err
 	}
-	fmt.Println(out.Entry.Path)
+	fmt.Println(terminalSafeText(out.Entry.Path))
 	return nil
 }
 
@@ -542,12 +592,12 @@ func runPut(args []string) error {
 	if err != nil {
 		return err
 	}
-	out, err := c.Upload(localPath, remotePath, encrypt, extract, printTransferEvent)
+	out, err := c.UploadInDrive(cliCurrentOptions().DriveID, localPath, remotePath, encrypt, extract, printTransferEvent)
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
 		return err
 	}
-	fmt.Println(out.Entry.Path)
+	fmt.Println(terminalSafeText(out.Entry.Path))
 	return nil
 }
 
@@ -560,48 +610,24 @@ func runGet(args []string) error {
 		return err
 	}
 
+	if cliNonInteractive() && !cliCurrentOptions().Yes {
+		if _, statErr := os.Lstat(localPath); statErr == nil {
+			return &CLIError{Code: "confirmation_required", Message: "get would overwrite the local target; pass --yes to allow it"}
+		} else if !errors.Is(statErr, os.ErrNotExist) {
+			return statErr
+		}
+	}
 	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
-	out, err := c.Download(args[0], localPath, printTransferEvent)
+	out, err := c.DownloadInDrive(cliCurrentOptions().DriveID, args[0], localPath, printTransferEvent)
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
 		return err
 	}
-	fmt.Println(out.SavedPath)
+	fmt.Println(terminalSafeText(out.SavedPath))
 	return nil
-}
-
-func runCat(args []string) error {
-	if len(args) != 1 {
-		return fmt.Errorf("usage: tdrive cat <remote-file>")
-	}
-	tmp, err := os.CreateTemp("", "tdrive-cat-*")
-	if err != nil {
-		return err
-	}
-	tmpPath := tmp.Name()
-	_ = tmp.Close()
-	defer func() { _ = os.Remove(tmpPath) }()
-
-	c, err := newDaemonClient()
-	if err != nil {
-		return err
-	}
-	if _, err := c.Download(args[0], tmpPath, printTransferEvent); err != nil {
-		fmt.Fprintln(os.Stderr)
-		return err
-	}
-	fmt.Fprintln(os.Stderr)
-
-	f, err := os.Open(tmpPath)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = io.Copy(os.Stdout, f)
-	return err
 }
 
 func printVault(status daemon.VaultStatus) {
@@ -616,7 +642,7 @@ func printVault(status daemon.VaultStatus) {
 		fmt.Println("vault: locked")
 	}
 	if status.Hint != "" {
-		fmt.Println("hint:  " + status.Hint)
+		fmt.Println("hint:  " + terminalSafeText(status.Hint))
 	}
 }
 
@@ -632,17 +658,23 @@ func passwordFromArgs(args []string) (string, error) {
 		if err != nil {
 			return "", err
 		}
-		return strings.TrimRight(string(b), "\r\n"), nil
+		password := strings.TrimRight(string(b), "\r\n")
+		if password == "" {
+			return "", interactionRequired("password stdin was empty")
+		}
+		return password, nil
+	}
+	if cliNonInteractive() {
+		return "", interactionRequired("vault unlock requires --password-stdin in non-interactive mode")
 	}
 	fmt.Fprint(os.Stderr, "Password: ")
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return readStdinLine()
+	}
 	b, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Fprintln(os.Stderr)
 	if err != nil {
-		line, readErr := bufio.NewReader(os.Stdin).ReadString('\n')
-		if readErr != nil && readErr != io.EOF {
-			return "", err
-		}
-		return strings.TrimRight(line, "\r\n"), nil
+		return "", err
 	}
 	return string(b), nil
 }
@@ -674,7 +706,7 @@ func printTransferEvent(event daemon.Event) {
 	case "upload_start":
 		name := eventArgString(event, 1)
 		if name != "" {
-			fmt.Fprintf(os.Stderr, "upload %s\n", name)
+			fmt.Fprintf(os.Stderr, "upload %s\n", terminalSafeText(name))
 		}
 	case "upload_progress":
 		fmt.Fprintf(os.Stderr, "\rupload %.1f%%", eventArgFloat(event, 1))
@@ -684,7 +716,7 @@ func printTransferEvent(event daemon.Event) {
 		fmt.Fprintf(os.Stderr, "\rdownload %.1f%%", eventArgFloat(event, 0))
 	case "import_progress":
 		if label := eventArgMapString(event, 0, "label"); label != "" {
-			fmt.Fprintf(os.Stderr, "%s\n", label)
+			fmt.Fprintf(os.Stderr, "%s\n", terminalSafeText(label))
 		}
 	case "import_uploading":
 		files := eventArgMapFloat(event, 0, "files")
@@ -773,9 +805,9 @@ func eventArgMap(event daemon.Event, index int) map[string]any {
 
 func entryDisplayName(entry daemon.Entry) string {
 	if entry.Type == "folder" {
-		return entry.Name + "/"
+		return terminalSafeText(entry.Name) + "/"
 	}
-	return entry.Name
+	return terminalSafeText(entry.Name)
 }
 
 func entryKind(entry daemon.Entry) string {
@@ -818,13 +850,15 @@ func printUsage() {
 	fmt.Print(`TDrive CLI
 
 Usage:
+  tdrive version            Print CLI version and daemon protocol
+  tdrive commands --json    List machine-readable command capabilities
   tdrive daemon start       Run the daemon in the foreground
   tdrive daemon start -b    Run the daemon in the background
   tdrive daemon status      Show daemon status
   tdrive daemon stop        Ask the daemon to stop
   tdrive install-cli        Install tdrive into ~/.local/bin
   tdrive uninstall-cli      Remove ~/.local/bin/tdrive
-  tdrive setup [--api-id ID --api-hash HASH]
+  tdrive setup [--api-id ID --api-hash HASH|--api-hash-stdin]
   tdrive login <phone>
   tdrive logout [--soft|--full]
   tdrive whoami
@@ -858,6 +892,7 @@ Usage:
   tdrive rebuild [name|id]
 
 Most commands auto-start the local daemon in the background when needed.
+Agent mode: --json --non-interactive --drive-id ID --timeout 30s [--yes].
 Run: tdrive help <command> or tdrive <command> --help
 `)
 }

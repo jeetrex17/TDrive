@@ -2,8 +2,13 @@ package daemon
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
+
+	"TDrive/backend/mountcontroller"
 )
+
+var ErrInvalidRequest = errors.New("invalid request")
 
 // ProtocolVersion gates every request frame. The CLI reuses an already
 // running daemon, so an upgrade can leave a new CLI talking to a daemon from
@@ -11,11 +16,12 @@ import (
 // change, so that pairing fails with a clear version error instead of an
 // obscure unknown-command one.
 //
-// 2: personal-drive setup commands, and AuthLoginResponse carries the setup
-// state instead of an InitDrive string (v1.7.1).
-const ProtocolVersion = 2
+// 2: personal-drive setup commands (v1.7.1).
+// 3: request-scoped drive IDs, ping, and machine-readable error codes.
+const ProtocolVersion = 3
 
 const (
+	CommandPing               = "daemon.ping"
 	CommandStatus             = "daemon.status"
 	CommandShutdown           = "daemon.shutdown"
 	CommandAuthSetup          = "auth.setup"
@@ -69,13 +75,14 @@ type Request struct {
 }
 
 type Frame struct {
-	ID      string          `json:"id,omitempty"`
-	Version int             `json:"version"`
-	Type    string          `json:"type"`
-	OK      bool            `json:"ok,omitempty"`
-	Event   string          `json:"event,omitempty"`
-	Error   string          `json:"error,omitempty"`
-	Payload json.RawMessage `json:"payload,omitempty"`
+	ID        string          `json:"id,omitempty"`
+	Version   int             `json:"version"`
+	Type      string          `json:"type"`
+	OK        bool            `json:"ok,omitempty"`
+	Event     string          `json:"event,omitempty"`
+	Error     string          `json:"error,omitempty"`
+	ErrorCode string          `json:"error_code,omitempty"`
+	Payload   json.RawMessage `json:"payload,omitempty"`
 }
 
 type Status struct {
@@ -87,6 +94,17 @@ type Status struct {
 	VaultUnlocked   bool   `json:"vault_unlocked"`
 	VaultHint       string `json:"vault_hint,omitempty"`
 }
+
+type PingResponse struct {
+	PID int `json:"pid"`
+}
+
+type RemoteError struct {
+	Code    string
+	Message string
+}
+
+func (err *RemoteError) Error() string { return err.Message }
 
 type Drive struct {
 	ID         int64  `json:"id"`
@@ -247,7 +265,8 @@ type MaintenanceResponse struct {
 }
 
 type PathRequest struct {
-	Path string `json:"path"`
+	Path    string `json:"path"`
+	DriveID int64  `json:"drive_id,omitzero"`
 }
 
 type PathResponse struct {
@@ -273,8 +292,9 @@ type ListResponse struct {
 }
 
 type FindRequest struct {
-	Query string `json:"query"`
-	Limit int    `json:"limit,omitempty"`
+	Query   string `json:"query"`
+	Limit   int    `json:"limit,omitempty"`
+	DriveID int64  `json:"drive_id,omitzero"`
 }
 
 type FindResponse struct {
@@ -285,16 +305,19 @@ type FindResponse struct {
 type MkdirRequest struct {
 	Path    string `json:"path"`
 	Parents bool   `json:"parents,omitempty"`
+	DriveID int64  `json:"drive_id,omitzero"`
 }
 
 type RemoveRequest struct {
 	Path      string `json:"path"`
 	Recursive bool   `json:"recursive,omitempty"`
+	DriveID   int64  `json:"drive_id,omitzero"`
 }
 
 type MoveRequest struct {
 	Source      string `json:"source"`
 	Destination string `json:"destination"`
+	DriveID     int64  `json:"drive_id,omitzero"`
 }
 
 type EntryResponse struct {
@@ -322,6 +345,7 @@ type UploadRequest struct {
 	RemotePath string `json:"remote_path,omitempty"`
 	Encrypt    bool   `json:"encrypt,omitempty"`
 	Extract    bool   `json:"extract,omitempty"`
+	DriveID    int64  `json:"drive_id,omitzero"`
 }
 
 type UploadResponse struct {
@@ -332,6 +356,7 @@ type UploadResponse struct {
 type DownloadRequest struct {
 	RemotePath string `json:"remote_path"`
 	LocalPath  string `json:"local_path"`
+	DriveID    int64  `json:"drive_id,omitzero"`
 }
 
 type DownloadResponse struct {
@@ -409,16 +434,36 @@ func EventFrame(id string, event Event) (Frame, error) {
 
 func ErrorResponse(id string, err error) Frame {
 	msg := ""
+	code := "operation_failed"
 	if err != nil {
 		msg = err.Error()
+		switch {
+		case errors.Is(err, ErrInvalidRequest):
+			code = "invalid_request"
+		case errors.Is(err, mountcontroller.ErrEncryptionPasswordRequired):
+			code = "encryption_password_required"
+		}
 	}
 	return Frame{
-		ID:      id,
-		Version: ProtocolVersion,
-		Type:    "response",
-		OK:      false,
-		Error:   msg,
+		ID:        id,
+		Version:   ProtocolVersion,
+		Type:      "response",
+		OK:        false,
+		Error:     msg,
+		ErrorCode: code,
 	}
+}
+
+func errorFromFrame(frame Frame) error {
+	message := frame.Error
+	if message == "" {
+		message = "daemon request failed"
+	}
+	code := frame.ErrorCode
+	if code == "" {
+		code = "operation_failed"
+	}
+	return &RemoteError{Code: code, Message: message}
 }
 
 func validateRequest(req Request) error {

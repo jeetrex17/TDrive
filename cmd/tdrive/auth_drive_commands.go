@@ -2,11 +2,13 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 	"unicode"
 
@@ -33,14 +35,15 @@ func runSetup(args []string) error {
 }
 
 func runLogin(args []string) error {
-	if len(args) > 1 {
-		return fmt.Errorf("usage: tdrive login <phone>")
+	options, err := parseLoginArgs(args)
+	if err != nil {
+		return err
 	}
-	phone := ""
-	var err error
-	if len(args) == 1 {
-		phone = strings.TrimSpace(args[0])
-	} else {
+	if cliNonInteractive() {
+		return interactionRequired("Telegram login requires an interactive code or two-factor password")
+	}
+	phone := options.phone
+	if phone == "" {
 		phone, err = promptLine("Phone: ")
 		if err != nil {
 			return err
@@ -63,17 +66,74 @@ func runLogin(args []string) error {
 	}
 	setup := out.PersonalDrive
 	if setup.Status == "selection_required" {
-		setup, err = choosePersonalDrive(c, setup, os.Stdin, os.Stderr)
+		if options.personalDriveID != "" || options.createPersonalDrive {
+			setup, err = chooseExplicitPersonalDrive(c, setup, options.personalDriveID, options.createPersonalDrive)
+		} else {
+			setup, err = choosePersonalDrive(c, setup, os.Stdin, os.Stderr)
+		}
 		if err != nil {
 			return err
 		}
 	}
 	if setup.ActiveChannelID != "" {
-		fmt.Printf("drive: %s\n", setup.ActiveChannelID)
+		fmt.Printf("drive: %s\n", terminalSafeText(setup.ActiveChannelID))
 	} else if out.ActiveChannelID != 0 {
 		fmt.Printf("drive: %d\n", out.ActiveChannelID)
 	}
 	return nil
+}
+
+type loginOptions struct {
+	phone               string
+	personalDriveID     string
+	createPersonalDrive bool
+}
+
+func parseLoginArgs(args []string) (loginOptions, error) {
+	const usage = "usage: tdrive login [phone] [--personal-drive-id ID|--create-personal-drive]"
+	var options loginOptions
+	for index := 0; index < len(args); index++ {
+		switch args[index] {
+		case "--personal-drive-id":
+			index++
+			if index >= len(args) || strings.TrimSpace(args[index]) == "" || strings.HasPrefix(args[index], "-") || options.personalDriveID != "" {
+				return loginOptions{}, errors.New(usage)
+			}
+			options.personalDriveID = strings.TrimSpace(args[index])
+		case "--create-personal-drive":
+			if options.createPersonalDrive {
+				return loginOptions{}, errors.New(usage)
+			}
+			options.createPersonalDrive = true
+		default:
+			if strings.HasPrefix(args[index], "-") || options.phone != "" {
+				return loginOptions{}, errors.New(usage)
+			}
+			options.phone = strings.TrimSpace(args[index])
+		}
+	}
+	if options.personalDriveID != "" && options.createPersonalDrive {
+		return loginOptions{}, errors.New(usage)
+	}
+	return options, nil
+}
+
+func chooseExplicitPersonalDrive(client personalDriveSetupClient, setup daemon.PersonalDriveSetup, channelID string, create bool) (daemon.PersonalDriveSetup, error) {
+	if setup.Status != "selection_required" {
+		return setup, nil
+	}
+	if client == nil {
+		return daemon.PersonalDriveSetup{}, fmt.Errorf("personal drive picker is unavailable")
+	}
+	if create {
+		return client.CreatePersonalDrive()
+	}
+	for _, candidate := range setup.Candidates {
+		if candidate.ID == channelID {
+			return client.SelectPersonalDrive(channelID)
+		}
+	}
+	return daemon.PersonalDriveSetup{}, fmt.Errorf("personal drive %q is not among the offered channels", channelID)
 }
 
 type personalDriveSetupClient interface {
@@ -96,7 +156,16 @@ func choosePersonalDrive(
 		return daemon.PersonalDriveSetup{}, fmt.Errorf("personal drive picker is unavailable")
 	}
 
-	scanner := bufio.NewScanner(reader)
+	if cliNonInteractive() {
+		return daemon.PersonalDriveSetup{}, interactionRequired("personal drive selection requires --personal-drive-id or --create-personal-drive")
+	}
+	buffered := bufio.NewReader(reader)
+	readChoice := func() (string, error) {
+		if reader == os.Stdin {
+			return readStdinLine()
+		}
+		return readBufferedLine(buffered)
+	}
 	fmt.Fprintln(writer, "Choose the Telegram channel to use as your personal TDrive:")
 	for i, candidate := range setup.Candidates {
 		title := terminalSafeTitle(candidate.Title)
@@ -110,28 +179,24 @@ func choosePersonalDrive(
 		if candidate.Recommended {
 			details += ", Recommended"
 		}
-		fmt.Fprintf(writer, "  %d. %s - %s (Channel ID %s)\n", i+1, title, details, candidate.ID)
+		fmt.Fprintf(writer, "  %d. %s - %s (Channel ID %s)\n", i+1, title, details, terminalSafeText(candidate.ID))
 	}
 	fmt.Fprintln(writer, "  c. Create New TDrive")
 
 	for {
 		fmt.Fprint(writer, "Selection: ")
-		if !scanner.Scan() {
-			if err := scanner.Err(); err != nil {
-				return daemon.PersonalDriveSetup{}, err
-			}
-			return daemon.PersonalDriveSetup{}, io.EOF
+		line, err := readChoice()
+		if err != nil {
+			return daemon.PersonalDriveSetup{}, err
 		}
-		choice := strings.TrimSpace(scanner.Text())
+		choice := strings.TrimSpace(line)
 		if strings.EqualFold(choice, "c") {
 			fmt.Fprint(writer, "Create one new empty Telegram channel? [y/N]: ")
-			if !scanner.Scan() {
-				if err := scanner.Err(); err != nil {
-					return daemon.PersonalDriveSetup{}, err
-				}
-				return daemon.PersonalDriveSetup{}, io.EOF
+			answer, err := readChoice()
+			if err != nil {
+				return daemon.PersonalDriveSetup{}, err
 			}
-			if strings.EqualFold(strings.TrimSpace(scanner.Text()), "y") {
+			if strings.EqualFold(strings.TrimSpace(answer), "y") {
 				return client.CreatePersonalDrive()
 			}
 			fmt.Fprintln(writer, "Creation cancelled.")
@@ -153,6 +218,7 @@ func terminalSafeTitle(title string) string {
 		}
 		return r
 	}, title)
+	cleaned = terminalSafeText(cleaned)
 	cleaned = strings.Join(strings.Fields(cleaned), " ")
 	const maxTitleRunes = 80
 	runes := []rune(cleaned)
@@ -172,6 +238,11 @@ func runLogout(args []string) error {
 			mode = "full"
 		default:
 			return fmt.Errorf("usage: tdrive logout [--soft|--full]")
+		}
+	}
+	if mode == "full" {
+		if err := requireNonInteractiveConfirmation(cliCurrentOptions(), "full logout"); err != nil {
+			return err
 		}
 	}
 	c, err := newDaemonClient()
@@ -199,10 +270,10 @@ func printWhoami() error {
 		return err
 	}
 	if out.User.DisplayName != "" {
-		fmt.Println(out.User.DisplayName)
+		fmt.Println(terminalSafeText(out.User.DisplayName))
 	}
 	if out.User.Username != "" {
-		fmt.Println("@" + out.User.Username)
+		fmt.Println("@" + terminalSafeText(out.User.Username))
 	}
 	fmt.Printf("id: %d\n", out.User.UserID)
 	return nil
@@ -227,7 +298,7 @@ func runDriveCreate(args []string) error {
 	}
 	printDriveUse(out)
 	if out.Drive.InviteLink != "" {
-		fmt.Println(out.Drive.InviteLink)
+		fmt.Println(terminalSafeText(out.Drive.InviteLink))
 	}
 	return nil
 }
@@ -249,6 +320,14 @@ func runDriveJoin(args []string) error {
 }
 
 func runDrivePending(args []string) error {
+	if len(args) > 0 && (args[0] == "rm" || args[0] == "remove") {
+		if len(args) != 2 {
+			return fmt.Errorf("usage: tdrive drive pending rm <invite-hash>")
+		}
+		if err := requireNonInteractiveConfirmation(cliCurrentOptions(), "removing a pending join"); err != nil {
+			return err
+		}
+	}
 	c, err := newDaemonClient()
 	if err != nil {
 		return err
@@ -272,7 +351,7 @@ func runDrivePending(args []string) error {
 			for _, p := range out.Pending {
 				result, err := c.CheckPendingJoin(p.InviteHash)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "%s: %v\n", p.InviteHash, err)
+					fmt.Fprintf(os.Stderr, "%s: %v\n", terminalSafeText(p.InviteHash), err)
 					continue
 				}
 				printJoinResult(result)
@@ -288,9 +367,6 @@ func runDrivePending(args []string) error {
 		}
 		return nil
 	case "rm", "remove":
-		if len(args) != 2 {
-			return fmt.Errorf("usage: tdrive drive pending rm <invite-hash>")
-		}
 		if err := c.RemovePendingJoin(args[1]); err != nil {
 			return err
 		}
@@ -318,7 +394,7 @@ func runDriveLink(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Println(out.Link)
+	fmt.Println(terminalSafeText(out.Link))
 	return nil
 }
 
@@ -350,6 +426,9 @@ func runDriveJoinAction(args []string, approve bool) error {
 	if err != nil || userID <= 0 {
 		return fmt.Errorf("invalid user id %q", args[0])
 	}
+	if err := requireNonInteractiveConfirmation(cliCurrentOptions(), "resolving a join request"); err != nil {
+		return err
+	}
 	selector := optionalString(args, 1)
 	c, err := newDaemonClient()
 	if err != nil {
@@ -372,6 +451,9 @@ func runDriveLeave(args []string) error {
 	if len(args) != 1 {
 		return fmt.Errorf("usage: tdrive drive leave <name|id>")
 	}
+	if err := requireNonInteractiveConfirmation(cliCurrentOptions(), "leaving a drive"); err != nil {
+		return err
+	}
 	c, err := newDaemonClient()
 	if err != nil {
 		return err
@@ -386,34 +468,60 @@ func runDriveLeave(args []string) error {
 }
 
 func runSync(args []string) error {
-	if len(args) > 1 {
-		return fmt.Errorf("usage: tdrive sync [name|id]")
+	selector, err := driveSelectorForCommand(args, cliCurrentOptions().DriveID, "usage: tdrive sync [name|id]")
+	if err != nil {
+		return err
 	}
 	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
-	out, err := c.Sync(optionalString(args, 0))
+	out, err := c.Sync(selector)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("synced: %s (%d)\n", out.Drive.Title, out.Drive.ID)
+	fmt.Printf("synced: %s (%d)\n", terminalSafeText(out.Drive.Title), out.Drive.ID)
 	return nil
 }
 
 func runRebuild(args []string) error {
-	if len(args) > 1 {
-		return fmt.Errorf("usage: tdrive rebuild [name|id]")
+	options := cliCurrentOptions()
+	selector, err := driveSelectorForCommand(args, options.DriveID, "usage: tdrive rebuild [name|id]")
+	if err != nil {
+		return err
+	}
+	if err := validateRebuildOptions(options); err != nil {
+		return err
 	}
 	c, err := newDaemonClient()
 	if err != nil {
 		return err
 	}
-	out, err := c.Rebuild(optionalString(args, 0))
+	out, err := c.Rebuild(selector)
 	if err != nil {
 		return err
 	}
-	fmt.Printf("rebuilt: %s (%d)\n", out.Drive.Title, out.Drive.ID)
+	fmt.Printf("rebuilt: %s (%d)\n", terminalSafeText(out.Drive.Title), out.Drive.ID)
+	return nil
+}
+
+func driveSelectorForCommand(args []string, driveID int64, usage string) (string, error) {
+	if len(args) > 1 || driveID < 0 {
+		return "", errors.New(usage)
+	}
+	if driveID > 0 {
+		if len(args) != 0 {
+			return "", errors.New("cannot combine --drive-id with a positional drive selector")
+		}
+		return strconv.FormatInt(driveID, 10), nil
+	}
+	return optionalString(args, 0), nil
+}
+
+func validateRebuildOptions(options cliOptions) error {
+	if options.NonInteractive && !options.Yes {
+		return interactionRequired("rebuild requires --yes in non-interactive mode")
+	}
 	return nil
 }
 
@@ -443,20 +551,23 @@ func loginEventHandler(c *daemon.Client) daemon.EventHandler {
 		case "gothint":
 			hint := eventArgString(event, 0)
 			if hint != "" && !strings.Contains(strings.ToLower(hint), "no hint") {
-				fmt.Fprintln(os.Stderr, hint)
+				fmt.Fprintln(os.Stderr, terminalSafeText(hint))
 			}
 		}
 	}
 }
 
 func parseSetupArgs(args []string) (int, string, error) {
+	const usage = "usage: tdrive setup [--api-id ID] [--api-hash HASH|--api-hash-stdin]"
 	var apiID int
 	var apiHash string
+	var apiHashStdin bool
+	var apiHashArg bool
 	for i := 0; i < len(args); i++ {
 		switch args[i] {
 		case "--api-id":
-			if i+1 >= len(args) {
-				return 0, "", fmt.Errorf("usage: tdrive setup [--api-id ID --api-hash HASH]")
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") || apiID != 0 {
+				return 0, "", errors.New(usage)
 			}
 			n, err := strconv.Atoi(args[i+1])
 			if err != nil || n <= 0 {
@@ -465,14 +576,23 @@ func parseSetupArgs(args []string) (int, string, error) {
 			apiID = n
 			i++
 		case "--api-hash":
-			if i+1 >= len(args) {
-				return 0, "", fmt.Errorf("usage: tdrive setup [--api-id ID --api-hash HASH]")
+			if i+1 >= len(args) || strings.HasPrefix(args[i+1], "-") || apiHashArg {
+				return 0, "", errors.New(usage)
 			}
 			apiHash = strings.TrimSpace(args[i+1])
+			apiHashArg = true
 			i++
+		case "--api-hash-stdin":
+			if apiHashStdin {
+				return 0, "", errors.New(usage)
+			}
+			apiHashStdin = true
 		default:
-			return 0, "", fmt.Errorf("usage: tdrive setup [--api-id ID --api-hash HASH]")
+			return 0, "", errors.New(usage)
 		}
+	}
+	if apiHashArg && apiHashStdin {
+		return 0, "", fmt.Errorf("choose either --api-hash or --api-hash-stdin")
 	}
 	var err error
 	if apiID == 0 {
@@ -485,7 +605,13 @@ func parseSetupArgs(args []string) (int, string, error) {
 			return 0, "", fmt.Errorf("invalid api id %q", raw)
 		}
 	}
-	if apiHash == "" {
+	if apiHashStdin {
+		apiHash, err = readStdinLine()
+		if err != nil {
+			return 0, "", fmt.Errorf("read API hash from stdin: %w", err)
+		}
+		apiHash = strings.TrimSpace(apiHash)
+	} else if apiHash == "" {
 		apiHash, err = promptLine("API Hash: ")
 		if err != nil {
 			return 0, "", err
@@ -513,7 +639,7 @@ func splitApprovalFlag(args []string) (bool, []string, error) {
 }
 
 func printAuthStatus(status daemon.AuthStatus) {
-	fmt.Printf("setup: %s\n", status.SystemStatus)
+	fmt.Printf("setup: %s\n", terminalSafeText(status.SystemStatus))
 	if status.LoggedIn {
 		fmt.Println("login: yes")
 	} else {
@@ -522,26 +648,26 @@ func printAuthStatus(status daemon.AuthStatus) {
 }
 
 func printDriveUse(out daemon.DriveUseResponse) {
-	fmt.Printf("drive: %s (%d)\n", out.Drive.Title, out.Drive.ID)
-	fmt.Printf("cwd:   %s\n", out.CurrentPath)
+	fmt.Printf("drive: %s (%d)\n", terminalSafeText(out.Drive.Title), out.Drive.ID)
+	fmt.Printf("cwd:   %s\n", terminalSafeText(out.CurrentPath))
 }
 
 func printJoinResult(out daemon.DriveJoinResponse) {
 	switch out.Status {
 	case "joined":
 		if out.Drive != nil {
-			fmt.Printf("joined: %s (%d)\n", out.Drive.Title, out.Drive.ID)
+			fmt.Printf("joined: %s (%d)\n", terminalSafeText(out.Drive.Title), out.Drive.ID)
 		} else {
 			fmt.Println("joined")
 		}
 	case "pending":
 		if out.Pending != nil {
-			fmt.Printf("pending: %s (%s)\n", out.Pending.Title, out.Pending.InviteHash)
+			fmt.Printf("pending: %s (%s)\n", terminalSafeText(out.Pending.Title), terminalSafeText(out.Pending.InviteHash))
 		} else {
 			fmt.Println("pending")
 		}
 	default:
-		fmt.Println(out.Status)
+		fmt.Println(terminalSafeText(out.Status))
 	}
 }
 
@@ -551,9 +677,9 @@ func printPendingJoins(rows []daemon.PendingJoin) {
 		return
 	}
 	for _, row := range rows {
-		fmt.Printf("%-10s %-24s %s\n", row.Status, row.InviteHash, row.Title)
+		fmt.Printf("%-10s %-24s %s\n", terminalSafeText(row.Status), terminalSafeText(row.InviteHash), terminalSafeText(row.Title))
 		if row.LastError != "" {
-			fmt.Printf("  error: %s\n", row.LastError)
+			fmt.Printf("  error: %s\n", terminalSafeText(row.LastError))
 		}
 	}
 }
@@ -576,30 +702,56 @@ func printJoinRequests(rows []daemon.JoinRequest) {
 		if row.Username != "" {
 			user += " @" + row.Username
 		}
-		fmt.Printf("%-14d %-20s %s\n", row.UserID, when, user)
+		fmt.Printf("%-14d %-20s %s\n", row.UserID, when, terminalSafeText(user))
 		if row.About != "" {
-			fmt.Printf("  %s\n", row.About)
+			fmt.Printf("  %s\n", terminalSafeText(row.About))
 		}
 	}
 }
 
-func promptLine(prompt string) (string, error) {
-	fmt.Fprint(os.Stderr, prompt)
-	line, err := bufio.NewReader(os.Stdin).ReadString('\n')
-	if err != nil && err != io.EOF {
+var promptInput struct {
+	mu     sync.Mutex
+	file   *os.File
+	reader *bufio.Reader
+}
+
+func readStdinLine() (string, error) {
+	promptInput.mu.Lock()
+	defer promptInput.mu.Unlock()
+	if promptInput.file != os.Stdin {
+		promptInput.file = os.Stdin
+		promptInput.reader = bufio.NewReader(os.Stdin)
+	}
+	return readBufferedLine(promptInput.reader)
+}
+
+func readBufferedLine(reader *bufio.Reader) (string, error) {
+	line, err := reader.ReadString('\n')
+	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
 		return "", err
 	}
 	return strings.TrimRight(line, "\r\n"), nil
 }
 
-func promptSecret(prompt string) (string, error) {
+func promptLine(prompt string) (string, error) {
+	if cliNonInteractive() {
+		return "", interactionRequired("this command requires input; provide explicit options")
+	}
 	fmt.Fprint(os.Stderr, prompt)
+	return readStdinLine()
+}
+
+func promptSecret(prompt string) (string, error) {
+	if cliNonInteractive() {
+		return "", interactionRequired("this command requires a password; provide it through a supported stdin option")
+	}
+	fmt.Fprint(os.Stderr, prompt)
+	if !term.IsTerminal(int(os.Stdin.Fd())) {
+		return readStdinLine()
+	}
 	b, err := term.ReadPassword(int(os.Stdin.Fd()))
 	fmt.Fprintln(os.Stderr)
-	if err != nil {
-		return promptLine("")
-	}
-	return string(b), nil
+	return string(b), err
 }
 
 func optionalString(args []string, index int) string {

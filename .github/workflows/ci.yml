@@ -346,6 +346,25 @@ jobs:
           mkdir -p .ci-bin
           go build -trimpath -o .ci-bin/tdrive ./cmd/tdrive
 
+      # These commands must work before login and without starting the daemon.
+      # Reuse the native build matrix so the contract is checked on all targets.
+      - name: Smoke test offline CLI JSON (Linux and macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          .ci-bin/tdrive version --json | jq -s -e '
+            length == 1 and .[0].schema_version == 1 and .[0].ok == true and
+            .[0].command == "version" and (.[0].data.version | type == "string") and
+            (.[0].data.commit | type == "string") and (.[0].data.protocol | type == "number")
+          '
+          .ci-bin/tdrive commands --json | jq -s -e '
+            length == 1 and .[0].schema_version == 1 and .[0].ok == true and
+            .[0].command == "commands" and
+            (.[0].data.global_flags | index("--json") != null) and
+            (.[0].data.commands | any(.name == "ls"))
+          '
+
       - name: Build and verify Windows CLI package
         if: runner.os == 'Windows'
         shell: pwsh
@@ -361,6 +380,32 @@ jobs:
             if (-not (Test-Path -LiteralPath (Join-Path $packageDirectory $file) -PathType Leaf)) {
               throw "Windows CLI package is missing $file"
             }
+          }
+
+      - name: Smoke test offline CLI JSON (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $executable = Join-Path $env:RUNNER_TEMP "tdrive-cli-package/TDrive-ci-windows-amd64-cli/tdrive.exe"
+          $versionOutput = @(& $executable version --json)
+          if ($LASTEXITCODE -ne 0 -or $versionOutput.Count -ne 1) {
+            throw "version --json failed or emitted more than one line"
+          }
+          $version = $versionOutput[0] | ConvertFrom-Json
+          if ($version.schema_version -ne 1 -or $version.ok -ne $true -or $version.command -ne "version" -or
+              $version.data.version -isnot [string] -or $version.data.commit -isnot [string] -or
+              ($version.data.protocol -isnot [int] -and $version.data.protocol -isnot [long])) {
+            throw "version --json has an unexpected schema"
+          }
+
+          $commandsOutput = @(& $executable commands --json)
+          if ($LASTEXITCODE -ne 0 -or $commandsOutput.Count -ne 1) {
+            throw "commands --json failed or emitted more than one line"
+          }
+          $commands = $commandsOutput[0] | ConvertFrom-Json
+          if ($commands.schema_version -ne 1 -or $commands.ok -ne $true -or $commands.command -ne "commands" -or
+              "--json" -notin $commands.data.global_flags -or "ls" -notin $commands.data.commands.name) {
+            throw "commands --json has an unexpected schema"
           }
 
       - name: Setup Node

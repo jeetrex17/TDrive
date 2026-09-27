@@ -9,6 +9,9 @@ func requestedHelp(args []string) ([]string, bool) {
 	if len(args) == 0 {
 		return nil, false
 	}
+	if args[0] == "--" {
+		return nil, false
+	}
 	if isHelpFlag(args[0]) {
 		return nil, true
 	}
@@ -20,6 +23,9 @@ func requestedHelp(args []string) ([]string, bool) {
 		return topic, true
 	}
 	for _, arg := range args[1:] {
+		if arg == "--" {
+			break
+		}
 		if isHelpFlag(arg) {
 			return cleanHelpTopic(args), true
 		}
@@ -100,6 +106,42 @@ func canonicalHelpKey(topic []string) string {
 }
 
 var helpTopics = map[string]string{
+	"version": `
+tdrive version [--json]
+
+Print the CLI version, Git commit, and daemon protocol version without starting
+the daemon. Release packages embed their version and commit at build time.
+`,
+	"commands": `
+tdrive commands --json
+
+Print the machine-readable command manifest without starting the daemon.
+It lists supported JSON commands, arguments, global flags, and whether each
+command mutates data or needs an explicit drive ID. Plain "tdrive commands"
+prints the human command summary.
+
+JSON mode is opt-in and supports only commands in this manifest. For drive-
+scoped commands, pass --drive-id ID and canonical absolute remote paths. This
+does not change the daemon's shared active drive or working directory.
+
+Global options:
+  --json, --output json  Return a single JSON result, or JSON error on stderr
+  --non-interactive     Never prompt; fail when required input is missing
+  --drive-id ID         Select a positive numeric drive ID for this operation
+  --yes                 Allow supported destructive or overwrite operations
+  --timeout DURATION    Bound a daemon RPC after startup (for example, 30s)
+
+Success: {"schema_version":1,"ok":true,"command":"...","data":{...}}
+Failure: {"schema_version":1,"ok":false,"error":{"code":"...",
+         "message":"...","retryable":false,"hint":"..."}}
+Success is written to stdout; errors are written to stderr. Exit codes are
+0 success, 1 operation failure, 2 invalid or unsupported command, 3 input or
+authentication required, 4 not found, 5 conflict or confirmation required,
+and 6 timeout or unavailable. Treat error.code as the stable error identity.
+
+JSON mode does not support interactive login, setup, mount start, or cat.
+No dry-run mode or streaming cat implementation is available.
+`,
 	"daemon": `
 tdrive daemon <command>
 
@@ -159,23 +201,26 @@ Options:
   --target PATH  Remove PATH instead of ~/.local/bin/tdrive
 `,
 	"setup": `
-tdrive setup [--api-id ID --api-hash HASH]
+tdrive setup [--api-id ID] [--api-hash HASH|--api-hash-stdin]
 
 Save Telegram API credentials used by TDrive.
 
 Options:
   --api-id ID      Telegram API ID from https://my.telegram.org/apps
   --api-hash HASH  Telegram API hash from https://my.telegram.org/apps
+  --api-hash-stdin Read the API hash from stdin, keeping it out of arguments
 
-Without flags, setup prompts for both values interactively.
+Without flags, setup prompts for both values interactively. Non-interactive
+setup requires both --api-id and either --api-hash or --api-hash-stdin.
 `,
 	"login": `
-tdrive login [phone]
+tdrive login [phone] [--personal-drive-id ID|--create-personal-drive]
 
 Log in to Telegram. If phone is omitted, the CLI prompts for it.
 The CLI will ask for the login code and optional 2FA password.
 If no personal drive is configured, it then lists channels you created and
 asks you to choose one, or explicitly create a new TDrive channel.
+Telegram code and optional 2FA password still require interactive login.
 `,
 	"logout": `
 tdrive logout [--soft|--full]
@@ -284,11 +329,14 @@ Change the current remote directory for the active drive.
 `,
 	"ls": `
 tdrive ls [-l|--long] [remote-path]
+tdrive ls /Photos --drive-id ID --json
 
 List remote files and folders.
 
 Options:
   -l, --long  Show type, size, date, and name
+
+JSON mode requires --drive-id and one canonical absolute remote path.
 `,
 	"find": `
 tdrive find [-n limit|--limit limit] <query>
@@ -344,6 +392,7 @@ Options:
   --password-stdin  Read the password from stdin
 
 The vault key is kept only in daemon memory.
+Non-interactive and JSON mode require --password-stdin.
 `,
 	"vault lock": `
 tdrive vault lock
@@ -351,7 +400,7 @@ tdrive vault lock
 Forget the in-memory vault key from the daemon.
 `,
 	"mount start": `
-tdrive mount [start] [--drive <name|id>] [--windows-drive T:] [--read-only]
+tdrive mount [start] [--drive <name|id>] [--windows-drive T:] [--read-only] [--password-stdin]
 
 Attach one TDrive as a desktop drive. Eligible personal plaintext drives use
 read/write mode when the installed backend supports safe writes.
@@ -360,6 +409,11 @@ Options:
   --drive <name|id>       Pin this drive; defaults to the current active drive
   --windows-drive T:      Windows Explorer drive letter, default T:
   --read-only             Always mount without write access
+  --password-stdin        Read an encrypted-drive password from stdin if locked
+
+If an encrypted drive is locked, mount prompts for its existing vault password.
+With --non-interactive, provide --password-stdin instead. Mount start does not
+support JSON mode.
 
 Selecting --drive does not change the active drive used by other CLI commands.
 TDrive attaches the drive automatically: Finder on macOS, T: in Windows
@@ -407,7 +461,9 @@ tdrive cat <remote-file>
 
 Write a remote file to stdout.
 
-Encrypted files may be staged through a temporary file before stdout.
+Files are verified in a private temporary directory before stdout. A crash
+can leave plaintext there, so do not use cat when disk staging is unacceptable.
+Cat writes raw bytes and does not support JSON mode.
 `,
 	"sync": `
 tdrive sync [name|id]

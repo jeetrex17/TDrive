@@ -19,7 +19,11 @@ func newDaemonClient() (*daemon.Client, error) {
 	if err := ensureDaemonRunning(); err != nil {
 		return nil, err
 	}
-	return daemon.NewClient()
+	c, err := daemon.NewClient()
+	if err != nil {
+		return nil, err
+	}
+	return c.WithTimeout(cliCurrentOptions().Timeout), nil
 }
 
 func ensureDaemonRunning() error {
@@ -29,7 +33,9 @@ func ensureDaemonRunning() error {
 	if ok, err := waitForExistingBackend(); ok || err != nil {
 		return err
 	}
-	fmt.Fprintln(os.Stderr, "starting TDrive daemon...")
+	if !cliCurrentOptions().JSON {
+		fmt.Fprintln(os.Stderr, "starting TDrive daemon...")
+	}
 	if err := startDaemonBackground(false); err != nil {
 		return err
 	}
@@ -112,7 +118,7 @@ func waitForDaemon(timeout time.Duration) error {
 	for time.Now().Before(deadline) {
 		c, err := daemon.NewClient()
 		if err == nil {
-			if _, err = c.Status(); err == nil {
+			if _, err = c.WithTimeout(time.Second).Ping(); err == nil {
 				return nil
 			}
 		}
@@ -142,7 +148,7 @@ func daemonIsReady() bool {
 	if err != nil {
 		return false
 	}
-	_, err = c.Status()
+	_, err = c.WithTimeout(time.Second).Ping()
 	return err == nil
 }
 

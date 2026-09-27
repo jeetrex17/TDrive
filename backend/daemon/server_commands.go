@@ -64,12 +64,13 @@ func (s *Server) cd(input string) (PathResponse, error) {
 	return PathResponse{Drive: drive, CurrentPath: resolved.Path}, nil
 }
 
-func (s *Server) listPath(input string) (ListResponse, error) {
-	drive, err := s.activeDrive()
+func (s *Server) listPath(input string, driveID int64) (ListResponse, error) {
+	scope, err := s.scopeForRequest(driveID, input)
 	if err != nil {
 		return ListResponse{}, err
 	}
-	resolved, err := s.engine.ResolveFolderPath(drive.ID, s.currentPath(), input)
+	drive := scope.drive
+	resolved, err := s.engine.ResolveFolderPath(drive.ID, scope.cwd, input)
 	if err != nil {
 		return ListResponse{}, err
 	}
@@ -102,15 +103,16 @@ func (s *Server) listPath(input string) (ListResponse, error) {
 	return ListResponse{Drive: drive, Path: resolved.Path, Entries: entries}, nil
 }
 
-func (s *Server) find(query string, limit int) (FindResponse, error) {
+func (s *Server) find(query string, limit int, driveID int64) (FindResponse, error) {
 	query = strings.TrimSpace(query)
 	if query == "" {
 		return FindResponse{}, fmt.Errorf("query required")
 	}
-	drive, err := s.activeDrive()
+	scope, err := s.scopeForRequest(driveID)
 	if err != nil {
 		return FindResponse{}, err
 	}
+	drive := scope.drive
 	if limit <= 0 {
 		limit = 50
 	}
@@ -148,23 +150,24 @@ func (s *Server) find(query string, limit int) (FindResponse, error) {
 	return out, nil
 }
 
-func (s *Server) mkdir(input string, parents bool) (EntryResponse, error) {
+func (s *Server) mkdir(input string, parents bool, driveID int64) (EntryResponse, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	drive, err := s.activeDrive()
+	scope, err := s.scopeForRequest(driveID, input)
 	if err != nil {
 		return EntryResponse{}, err
 	}
+	drive := scope.drive
 	if parents {
-		entry, err := s.ensureFolderPath(drive.ID, s.currentPath(), input)
+		entry, err := s.ensureFolderPath(drive.ID, scope.cwd, input)
 		if err != nil {
 			return EntryResponse{}, err
 		}
 		return EntryResponse{Drive: drive, Entry: entry}, nil
 	}
 
-	parent, err := s.engine.ResolveParentPath(drive.ID, s.currentPath(), input)
+	parent, err := s.engine.ResolveParentPath(drive.ID, scope.cwd, input)
 	if err != nil {
 		return EntryResponse{}, err
 	}
@@ -184,15 +187,16 @@ func (s *Server) mkdir(input string, parents bool) (EntryResponse, error) {
 	return EntryResponse{Drive: drive, Entry: entry}, nil
 }
 
-func (s *Server) remove(ctx context.Context, input string, recursive bool) (EntryResponse, error) {
+func (s *Server) remove(ctx context.Context, input string, recursive bool, driveID int64) (EntryResponse, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	drive, err := s.activeDrive()
+	scope, err := s.scopeForRequest(driveID, input)
 	if err != nil {
 		return EntryResponse{}, err
 	}
-	entry, err := s.engine.ResolveEntryPath(drive.ID, s.currentPath(), input)
+	drive := scope.drive
+	entry, err := s.engine.ResolveEntryPath(drive.ID, scope.cwd, input)
 	if err != nil {
 		return EntryResponse{}, err
 	}
@@ -218,15 +222,16 @@ func (s *Server) remove(ctx context.Context, input string, recursive bool) (Entr
 	return EntryResponse{Drive: drive, Entry: entryFromResolved(entry)}, nil
 }
 
-func (s *Server) move(ctx context.Context, source string, destination string) (EntryResponse, error) {
+func (s *Server) move(ctx context.Context, source string, destination string, driveID int64) (EntryResponse, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
-	drive, err := s.activeDrive()
+	scope, err := s.scopeForRequest(driveID, source, destination)
 	if err != nil {
 		return EntryResponse{}, err
 	}
-	src, err := s.engine.ResolveEntryPath(drive.ID, s.currentPath(), source)
+	drive := scope.drive
+	src, err := s.engine.ResolveEntryPath(drive.ID, scope.cwd, source)
 	if err != nil {
 		return EntryResponse{}, err
 	}
@@ -234,7 +239,7 @@ func (s *Server) move(ctx context.Context, source string, destination string) (E
 		return EntryResponse{}, fmt.Errorf("refusing to move root")
 	}
 
-	dstAbs, err := core.NormalizeRemotePath(s.currentPath(), destination)
+	dstAbs, err := core.NormalizeRemotePath(scope.cwd, destination)
 	if err != nil {
 		return EntryResponse{}, err
 	}
@@ -282,7 +287,7 @@ func (s *Server) move(ctx context.Context, source string, destination string) (E
 	return EntryResponse{Drive: drive, Entry: entry}, nil
 }
 
-func (s *Server) upload(ctx context.Context, localPath string, remotePath string, encrypt bool, extract bool) (UploadResponse, error) {
+func (s *Server) upload(ctx context.Context, localPath string, remotePath string, encrypt bool, extract bool, driveID int64) (UploadResponse, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -298,12 +303,13 @@ func (s *Server) upload(ctx context.Context, localPath string, remotePath string
 		return UploadResponse{}, err
 	}
 
-	drive, err := s.activeDrive()
+	scope, err := s.scopeForRequest(driveID, remotePath)
 	if err != nil {
 		return UploadResponse{}, err
 	}
+	drive := scope.drive
 	if info.IsDir() || extract {
-		parentID, parentPath, err := s.importTarget(drive.ID, remotePath)
+		parentID, parentPath, err := s.importTarget(drive.ID, scope.cwd, remotePath)
 		if err != nil {
 			return UploadResponse{}, err
 		}
@@ -313,7 +319,7 @@ func (s *Server) upload(ctx context.Context, localPath string, remotePath string
 		return UploadResponse{Drive: drive, Entry: folderEntry(parentID, parentPath)}, nil
 	}
 
-	parentID, parentPath, targetName, err := s.uploadTarget(drive.ID, remotePath, filepath.Base(localPath))
+	parentID, parentPath, targetName, err := s.uploadTarget(drive.ID, scope.cwd, remotePath, filepath.Base(localPath))
 	if err != nil {
 		return UploadResponse{}, err
 	}
@@ -348,7 +354,7 @@ func (s *Server) upload(ctx context.Context, localPath string, remotePath string
 	return UploadResponse{Drive: drive, Entry: entry}, nil
 }
 
-func (s *Server) download(ctx context.Context, remotePath string, localPath string) (DownloadResponse, error) {
+func (s *Server) download(ctx context.Context, remotePath string, localPath string, driveID int64) (DownloadResponse, error) {
 	s.writeMu.Lock()
 	defer s.writeMu.Unlock()
 
@@ -359,20 +365,20 @@ func (s *Server) download(ctx context.Context, remotePath string, localPath stri
 	if !filepath.IsAbs(localPath) {
 		return DownloadResponse{}, fmt.Errorf("local path must be absolute")
 	}
-	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
-		return DownloadResponse{}, err
-	}
-
-	drive, err := s.activeDrive()
+	scope, err := s.scopeForRequest(driveID, remotePath)
 	if err != nil {
 		return DownloadResponse{}, err
 	}
-	resolved, err := s.engine.ResolveEntryPath(drive.ID, s.currentPath(), remotePath)
+	drive := scope.drive
+	resolved, err := s.engine.ResolveEntryPath(drive.ID, scope.cwd, remotePath)
 	if err != nil {
 		return DownloadResponse{}, err
 	}
 	if resolved.Type != "file" {
 		return DownloadResponse{}, fmt.Errorf("%s is not a file", resolved.Path)
+	}
+	if err := os.MkdirAll(filepath.Dir(localPath), 0o755); err != nil {
+		return DownloadResponse{}, err
 	}
 
 	entry := entryFromResolved(resolved)
@@ -470,17 +476,17 @@ func (s *Server) moveTarget(channelID int64, dstAbs string, sourceName string) (
 
 // importTarget resolves the destination folder for directory and archive
 // imports. RunImport owns creating the imported top-level folders beneath it.
-func (s *Server) importTarget(channelID int64, remotePath string) (folderID string, folderPath string, err error) {
+func (s *Server) importTarget(channelID int64, cwd string, remotePath string) (folderID string, folderPath string, err error) {
 	remotePath = strings.TrimSpace(remotePath)
 	if remotePath == "" {
-		folder, err := s.engine.ResolveFolderPath(channelID, s.currentPath(), ".")
+		folder, err := s.engine.ResolveFolderPath(channelID, cwd, ".")
 		if err != nil {
 			return "", "", err
 		}
 		return folder.ID, folder.Path, nil
 	}
 
-	dstAbs, err := core.NormalizeRemotePath(s.currentPath(), remotePath)
+	dstAbs, err := core.NormalizeRemotePath(cwd, remotePath)
 	if err != nil {
 		return "", "", err
 	}
@@ -497,10 +503,10 @@ func (s *Server) importTarget(channelID int64, remotePath string) (folderID stri
 	return "", "", fmt.Errorf("destination folder not found: %s", dstAbs)
 }
 
-func (s *Server) uploadTarget(channelID int64, remotePath string, defaultName string) (parentID string, parentPath string, name string, err error) {
+func (s *Server) uploadTarget(channelID int64, cwd string, remotePath string, defaultName string) (parentID string, parentPath string, name string, err error) {
 	remotePath = strings.TrimSpace(remotePath)
 	if remotePath == "" {
-		folder, err := s.engine.ResolveFolderPath(channelID, s.currentPath(), ".")
+		folder, err := s.engine.ResolveFolderPath(channelID, cwd, ".")
 		if err != nil {
 			return "", "", "", err
 		}
@@ -508,7 +514,7 @@ func (s *Server) uploadTarget(channelID int64, remotePath string, defaultName st
 	}
 	mustBeFolder := strings.HasSuffix(remotePath, "/")
 
-	dstAbs, err := core.NormalizeRemotePath(s.currentPath(), remotePath)
+	dstAbs, err := core.NormalizeRemotePath(cwd, remotePath)
 	if err != nil {
 		return "", "", "", err
 	}

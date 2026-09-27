@@ -177,6 +177,35 @@ func (s *Server) activeDrive() (Drive, error) {
 	return Drive{}, fmt.Errorf("active drive %d is not available", active)
 }
 
+type driveScope struct {
+	drive Drive
+	cwd   string
+}
+
+// A specified drive is resolved per request and never changes daemon CLI state.
+func (s *Server) scopeForRequest(driveID int64, paths ...string) (driveScope, error) {
+	if driveID < 0 {
+		return driveScope{}, fmt.Errorf("%w: drive id must be positive", ErrInvalidRequest)
+	}
+	if driveID == 0 {
+		drive, err := s.activeDrive()
+		if err != nil {
+			return driveScope{}, err
+		}
+		return driveScope{drive: drive, cwd: s.currentPath()}, nil
+	}
+	for _, path := range paths {
+		if !strings.HasPrefix(path, "/") {
+			return driveScope{}, fmt.Errorf("%w: explicit drive requires absolute remote paths", ErrInvalidRequest)
+		}
+	}
+	drive, err := s.resolveDrive(strconv.FormatInt(driveID, 10))
+	if err != nil {
+		return driveScope{}, err
+	}
+	return driveScope{drive: drive, cwd: "/"}, nil
+}
+
 func (s *Server) currentPath() string {
 	active := s.engine.ActiveChannelID()
 	if active == 0 {

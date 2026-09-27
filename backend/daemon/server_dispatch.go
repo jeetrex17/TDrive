@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"os"
 	"time"
 )
 
@@ -67,6 +68,12 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 	slog.Debug("daemon: dispatching command", "command", req.Command)
 
 	switch req.Command {
+	case CommandPing:
+		frame, err := Response(req.ID, PingResponse{PID: os.Getpid()})
+		if err != nil {
+			return ErrorResponse(req.ID, err)
+		}
+		return frame
 	case CommandStatus:
 		out, err := s.status(ctx)
 		if err != nil {
@@ -392,6 +399,9 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		if err := decodePayload(req.Payload, &in); err != nil {
 			return ErrorResponse(req.ID, err)
 		}
+		if in.DriveID != 0 {
+			return ErrorResponse(req.ID, fmt.Errorf("%w: cd cannot select a drive; use drive.use", ErrInvalidRequest))
+		}
 		out, err := s.cd(in.Path)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
@@ -406,7 +416,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		if err := decodePayload(req.Payload, &in); err != nil {
 			return ErrorResponse(req.ID, err)
 		}
-		out, err := s.listPath(in.Path)
+		out, err := s.listPath(in.Path, in.DriveID)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
@@ -420,7 +430,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		if err := decodePayload(req.Payload, &in); err != nil {
 			return ErrorResponse(req.ID, err)
 		}
-		out, err := s.find(in.Query, in.Limit)
+		out, err := s.find(in.Query, in.Limit, in.DriveID)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
@@ -434,7 +444,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		if err := decodePayload(req.Payload, &in); err != nil {
 			return ErrorResponse(req.ID, err)
 		}
-		out, err := s.mkdir(in.Path, in.Parents)
+		out, err := s.mkdir(in.Path, in.Parents, in.DriveID)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
@@ -448,7 +458,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		if err := decodePayload(req.Payload, &in); err != nil {
 			return ErrorResponse(req.ID, err)
 		}
-		out, err := s.remove(ctx, in.Path, in.Recursive)
+		out, err := s.remove(ctx, in.Path, in.Recursive, in.DriveID)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
@@ -462,7 +472,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		if err := decodePayload(req.Payload, &in); err != nil {
 			return ErrorResponse(req.ID, err)
 		}
-		out, err := s.move(ctx, in.Source, in.Destination)
+		out, err := s.move(ctx, in.Source, in.Destination, in.DriveID)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
@@ -510,7 +520,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		if err := decodePayload(req.Payload, &in); err != nil {
 			return ErrorResponse(req.ID, err)
 		}
-		out, err := s.upload(ctx, in.LocalPath, in.RemotePath, in.Encrypt, in.Extract)
+		out, err := s.upload(ctx, in.LocalPath, in.RemotePath, in.Encrypt, in.Extract, in.DriveID)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}
@@ -524,7 +534,7 @@ func (s *Server) handleRequest(ctx context.Context, req Request) Frame {
 		if err := decodePayload(req.Payload, &in); err != nil {
 			return ErrorResponse(req.ID, err)
 		}
-		out, err := s.download(ctx, in.RemotePath, in.LocalPath)
+		out, err := s.download(ctx, in.RemotePath, in.LocalPath, in.DriveID)
 		if err != nil {
 			return ErrorResponse(req.ID, err)
 		}

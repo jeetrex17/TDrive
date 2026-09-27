@@ -44,7 +44,7 @@ func listenSocket(path string) (net.Listener, error) {
 func dialSocket(path string) (net.Conn, error) {
 	conn, err := net.Dial("unix", path)
 	if err != nil {
-		return nil, fmt.Errorf("daemon is not running. Run: tdrive daemon start")
+		return nil, fmt.Errorf("%w. Run: tdrive daemon start", ErrDaemonUnavailable)
 	}
 	return conn, nil
 }
