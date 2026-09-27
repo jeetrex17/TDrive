@@ -509,6 +509,7 @@
     min-width: 160px;
     cursor: pointer;
     outline: none;
+    touch-action: none;
 }
 
 .video-scrubber.is-disabled {

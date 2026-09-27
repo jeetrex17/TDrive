@@ -80,6 +80,8 @@ export class VideoTransportController {
     private skipFeedbackTimer: ReturnType<typeof setTimeout> | null = null;
     private lastBufferedSignature = '';
     private seekingWithPointer = false;
+    private scrubPointerId: number | null = null;
+    private scrubPreviewSeconds: number | null = null;
     private volumeDragging = false;
     private pendingVolumeValue: number | null = null;
     private volumeCommandFrame = 0;
@@ -128,6 +130,7 @@ export class VideoTransportController {
     }
 
     resetSession(): void {
+        this.cancelScrub();
         this.resetEndTime();
         this.clearVolumeCommandFrame();
         this.clearSkipFeedback();
@@ -258,20 +261,21 @@ export class VideoTransportController {
 
     private syncTimeline(state: PlayerState): void {
         const { dom } = this.context;
+        const timelineTime = this.scrubPreviewSeconds ?? state.currentTime;
         this.syncEndTime(state);
-        if (dom.time) dom.time.textContent = formatTime(state.currentTime);
+        if (dom.time) dom.time.textContent = formatTime(timelineTime);
         if (dom.duration) dom.duration.textContent = state.duration > 0 ? formatTime(state.duration) : '--:--';
 
-        const played = percent(state.currentTime, state.duration);
-        if (dom.scrubberPlayed && !this.seekingWithPointer) dom.scrubberPlayed.style.width = `${played}%`;
-        if (dom.scrubberThumb && !this.seekingWithPointer) dom.scrubberThumb.style.left = `${played}%`;
+        const played = percent(timelineTime, state.duration);
+        if (dom.scrubberPlayed) dom.scrubberPlayed.style.width = `${played}%`;
+        if (dom.scrubberThumb) dom.scrubberThumb.style.left = `${played}%`;
         this.renderBuffered(state);
         setSliderARIA(
             dom.scrubber,
-            state.currentTime,
+            timelineTime,
             0,
             Math.max(0, state.duration),
-            `${formatTime(state.currentTime)} of ${state.duration > 0 ? formatTime(state.duration) : 'unknown'}`,
+            `${formatTime(timelineTime)} of ${state.duration > 0 ? formatTime(state.duration) : 'unknown'}`,
         );
     }
 
@@ -346,38 +350,44 @@ export class VideoTransportController {
             this.previewScrubber(event);
         });
         scrubber?.addEventListener('pointermove', (event) => {
+            if (this.seekingWithPointer && event.pointerId !== this.scrubPointerId) return;
             this.previewScrubber(event);
             if (this.seekingWithPointer) this.updateScrubVisual(this.scrubberSecondsFromEvent(event));
         });
         scrubber?.addEventListener('pointerleave', () => {
+            if (this.seekingWithPointer) return;
             this.currentPreviewBucket = -1;
             this.clearThumbnailDwellTimer();
             this.hideNativeSeekPreview();
-            if (!this.seekingWithPointer) scrubber.classList.remove('is-hovered');
+            scrubber.classList.remove('is-hovered');
             this.context.scheduleChromeHide();
         });
         scrubber?.addEventListener('pointerdown', (event) => {
-            if (!this.context.getAdapter() || this.context.getState().duration <= 0) return;
+            if (this.seekingWithPointer || !event.isPrimary || !this.context.getAdapter() || this.context.getState().duration <= 0) return;
             this.seekingWithPointer = true;
+            this.scrubPointerId = event.pointerId;
             scrubber.setPointerCapture(event.pointerId);
             scrubber.classList.add('is-dragging', 'is-hovered');
             this.updateScrubVisual(this.scrubberSecondsFromEvent(event));
             this.context.revealChrome();
         });
         scrubber?.addEventListener('pointerup', (event) => {
+            if (!this.seekingWithPointer || event.pointerId !== this.scrubPointerId) return;
             const adapter = this.context.getAdapter();
-            if (!adapter || this.context.getState().duration <= 0) return;
             const seconds = this.scrubberSecondsFromEvent(event);
-            this.seekingWithPointer = false;
-            if (scrubber.hasPointerCapture(event.pointerId)) scrubber.releasePointerCapture(event.pointerId);
-            scrubber.classList.remove('is-dragging');
-            adapter.seekAbsolute(seconds);
+            this.cancelScrub(event.pointerId);
+            if (adapter && this.context.getState().duration > 0) adapter.seekAbsolute(seconds);
+            this.syncTimeline(this.context.getState());
             this.context.revealChrome();
         });
         scrubber?.addEventListener('pointercancel', (event) => {
-            this.seekingWithPointer = false;
-            if (scrubber.hasPointerCapture(event.pointerId)) scrubber.releasePointerCapture(event.pointerId);
-            scrubber.classList.remove('is-dragging', 'is-hovered');
+            if (event.pointerId !== this.scrubPointerId) return;
+            this.cancelScrub(event.pointerId);
+            this.syncTimeline(this.context.getState());
+        });
+        scrubber?.addEventListener('lostpointercapture', () => {
+            if (!this.seekingWithPointer) return;
+            this.cancelScrub();
             this.syncTimeline(this.context.getState());
         });
         scrubber?.addEventListener('keydown', (event) => {
@@ -392,6 +402,15 @@ export class VideoTransportController {
             else if (event.key === 'Home') adapter.seekAbsolute(0);
             else adapter.seekAbsolute(state.duration);
         });
+    }
+
+    private cancelScrub(pointerId: number | null = this.scrubPointerId): void {
+        const scrubber = this.context.dom.scrubber;
+        this.seekingWithPointer = false;
+        this.scrubPointerId = null;
+        this.scrubPreviewSeconds = null;
+        if (pointerId !== null && scrubber?.hasPointerCapture(pointerId)) scrubber.releasePointerCapture(pointerId);
+        scrubber?.classList.remove('is-dragging', 'is-hovered');
     }
 
     private bindVolume(): void {
@@ -774,11 +793,14 @@ export class VideoTransportController {
     }
 
     private updateScrubVisual(seconds: number): void {
+        this.scrubPreviewSeconds = seconds;
         const played = percent(seconds, this.context.getState().duration);
-        const { scrubberPlayed, scrubberThumb, time } = this.context.dom;
+        const { scrubber, scrubberPlayed, scrubberThumb, time } = this.context.dom;
         if (scrubberPlayed) scrubberPlayed.style.width = `${played}%`;
         if (scrubberThumb) scrubberThumb.style.left = `${played}%`;
         if (time) time.textContent = formatTime(seconds);
+        setSliderARIA(scrubber, seconds, 0, Math.max(0, this.context.getState().duration),
+            `${formatTime(seconds)} of ${formatTime(this.context.getState().duration)}`);
     }
 
     private volumeFromEvent(event: PointerEvent | MouseEvent): number {

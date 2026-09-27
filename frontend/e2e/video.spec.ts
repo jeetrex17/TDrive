@@ -61,13 +61,33 @@ function opened(overrides: Record<string, unknown> = {}) {
     };
 }
 
-/** Serves the fixture, so the element loads bytes rather than a 404. */
+/** Serves the fixture with byte ranges, as the real streaming endpoint does. */
 async function serveFixture(page: Page): Promise<void> {
-    await page.route('**/__fixtures__/tiny.mp4', (route) => route.fulfill({
-        status: 200,
-        contentType: 'video/mp4',
-        body: FIXTURE,
-    }));
+    await page.route('**/__fixtures__/tiny.mp4', (route) => {
+        const range = route.request().headers()['range'];
+        const match = /^bytes=(\d+)-(\d*)$/.exec(range ?? '');
+        if (!match) return route.fulfill({
+            status: 200,
+            contentType: 'video/mp4',
+            headers: { 'Accept-Ranges': 'bytes' },
+            body: FIXTURE,
+        });
+
+        const start = Number(match[1]);
+        const end = match[2] ? Number(match[2]) : FIXTURE.byteLength - 1;
+        if (start >= FIXTURE.byteLength || end < start || end >= FIXTURE.byteLength) {
+            return route.fulfill({ status: 416, headers: { 'Content-Range': `bytes */${FIXTURE.byteLength}` } });
+        }
+        return route.fulfill({
+            status: 206,
+            contentType: 'video/mp4',
+            headers: {
+                'Accept-Ranges': 'bytes',
+                'Content-Range': `bytes ${start}-${end}/${FIXTURE.byteLength}`,
+            },
+            body: FIXTURE.subarray(start, end + 1),
+        });
+    });
 }
 
 /**
@@ -126,6 +146,59 @@ test('plays a real file, and closing it releases the backend session', async ({ 
     // a connection pool for the life of the process.
     await expect.poll(async () => (await mock.calls('CloseMedia')).length).toBeGreaterThan(0);
 });
+
+for (const platform of ['android', 'ios'] as const) {
+    test(`a touch drag scrubs the mobile timeline on ${platform}`, async ({ page, browserName }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await serveFixture(page);
+        await bootTDrive(page, {
+            GetFolderContents: resolves({ folders: [], files: [VIDEO_FILE] }),
+            OpenMedia: resolves(opened()),
+        }, { url: `/?mobile=${platform}` });
+        await openTheVideo(page);
+
+        const player = page.locator('#video-player');
+        await expect.poll(() => player.evaluate((el: HTMLVideoElement) => el.duration)).toBeGreaterThan(0);
+        await player.evaluate((el: HTMLVideoElement) => { el.pause(); el.currentTime = 0; });
+
+        const scrubber = page.getByRole('slider', { name: 'Seek' });
+        await expect(scrubber).toHaveCSS('touch-action', 'none');
+        const bounds = await scrubber.boundingBox();
+        if (!bounds) throw new Error('video scrubber is not visible');
+        const y = bounds.y + bounds.height / 2;
+        const start = bounds.x + bounds.width * 0.1;
+        const end = bounds.x + bounds.width * 0.75;
+
+        if (browserName === 'chromium') {
+            const client = await page.context().newCDPSession(page);
+            await client.send('Emulation.setTouchEmulationEnabled', { enabled: true });
+            await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: start, y, id: 1 }] });
+            for (let step = 1; step <= 8; step += 1) {
+                await client.send('Input.dispatchTouchEvent', {
+                    type: 'touchMove',
+                    touchPoints: [{ x: start + (end - start) * step / 8, y, id: 1 }],
+                });
+            }
+            await expect(page.locator('#video-time')).toHaveText('0:01');
+            await player.evaluate((el: HTMLVideoElement) => el.dispatchEvent(new Event('timeupdate')));
+            await expect(page.locator('#video-time')).toHaveText('0:01');
+            await expect(scrubber).toHaveAttribute('aria-valuetext', '0:01 of 0:02');
+            await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+            await client.detach();
+        } else {
+            await page.mouse.move(start, y);
+            await page.mouse.down();
+            await page.mouse.move(end, y, { steps: 8 });
+            await expect(page.locator('#video-time')).toHaveText('0:01');
+            await player.evaluate((el: HTMLVideoElement) => el.dispatchEvent(new Event('timeupdate')));
+            await expect(page.locator('#video-time')).toHaveText('0:01');
+            await expect(scrubber).toHaveAttribute('aria-valuetext', '0:01 of 0:02');
+            await page.mouse.up();
+        }
+
+        await expect.poll(() => player.evaluate((el: HTMLVideoElement) => el.currentTime)).toBeGreaterThan(0.7);
+    });
+}
 
 test('surfaces a failed open instead of leaving a dead player on screen', async ({ page }) => {
     await serveFixture(page);
