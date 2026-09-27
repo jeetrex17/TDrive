@@ -20,9 +20,7 @@ export const THEME_IDS = [
 
 export type ThemeId = (typeof THEME_IDS)[number];
 export type ThemeAppearance = 'light' | 'dark';
-/** "system" preserves the user's chosen light/dark pair and resolves it from
- * the device at runtime. */
-export type ThemeMode = ThemeAppearance | 'system';
+export type ThemeMode = ThemeAppearance;
 export type ThemePreview = readonly [canvas: string, surface: string, accent: string, text: string];
 
 export interface ThemeDefinition {
@@ -175,7 +173,7 @@ export function isThemeAppearance(value: unknown): value is ThemeAppearance {
 }
 
 export function isThemeMode(value: unknown): value is ThemeMode {
-    return isThemeAppearance(value) || value === 'system';
+    return isThemeAppearance(value);
 }
 
 export function isThemeId(value: unknown): value is ThemeId {
@@ -196,9 +194,14 @@ export function isThemeForAppearance(value: unknown, appearance: ThemeAppearance
 }
 
 /** Returns a fresh, validated preference suitable for application state. */
-export function normalizeThemePreference(value: unknown): ThemePreference {
+export function normalizeThemePreference(
+    value: unknown,
+    legacySystemAppearance: ThemeAppearance = 'dark',
+): ThemePreference {
     const candidate = isRecord(value) ? value : {};
-    const mode = isThemeMode(candidate.mode) ? candidate.mode : DEFAULT_THEME_PREFERENCE.mode;
+    const mode = isThemeMode(candidate.mode)
+        ? candidate.mode
+        : candidate.mode === 'system' ? legacySystemAppearance : DEFAULT_THEME_PREFERENCE.mode;
     const lightThemeId = isThemeForAppearance(candidate.lightThemeId, 'light')
         ? candidate.lightThemeId
         : DEFAULT_THEME_PREFERENCE.lightThemeId;
@@ -209,12 +212,8 @@ export function normalizeThemePreference(value: unknown): ThemePreference {
     return Object.freeze({ mode, lightThemeId, darkThemeId });
 }
 
-export function resolveThemeId(
-    preference: ThemePreference,
-    systemAppearance: ThemeAppearance = 'dark',
-): ThemeId {
-    const appearance = preference.mode === 'system' ? systemAppearance : preference.mode;
-    return appearance === 'light'
+export function resolveThemeId(preference: ThemePreference): ThemeId {
+    return preference.mode === 'light'
         ? preference.lightThemeId
         : preference.darkThemeId;
 }

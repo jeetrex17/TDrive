@@ -33,7 +33,7 @@ describe('pre-paint theme bootstrap', () => {
         }
     });
 
-    it('uses the device appearance for a saved System pair before application boot', () => {
+    it('uses the current device appearance when booting a legacy System pair', () => {
         const saved = JSON.stringify({
             mode: 'system',
             lightThemeId: 'catppuccin-latte',

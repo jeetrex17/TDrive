@@ -56,9 +56,6 @@
     let appearanceOpener = $state<HTMLButtonElement | null>(null);
     let backupOpener = $state<HTMLButtonElement | null>(null);
     const currentThemeName = $derived(getThemeDefinition($themeState.resolvedThemeId).name);
-    const appearanceSummary = $derived(
-        $themeState.preference.mode === 'system' ? `System · ${currentThemeName}` : currentThemeName,
-    );
     // What the row says without opening it: off, or whatever the backup is
     // doing right now, in the same words the page itself uses.
     const backupSummary = $derived(
@@ -278,7 +275,7 @@
             >
                 <PaletteIcon class="account-row-icon" size={20} strokeWidth={1.9} aria-hidden="true" />
                 <span class="account-row-label">Appearance</span>
-                <span class="account-row-value">{appearanceSummary}</span>
+                <span class="account-row-value">{currentThemeName}</span>
                 <ChevronRightIcon class="account-row-chevron" size={18} strokeWidth={2} aria-hidden="true" />
             </button>
         </div>

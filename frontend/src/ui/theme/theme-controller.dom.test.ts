@@ -90,7 +90,7 @@ describe('theme controller', () => {
         controller.destroy();
     });
 
-    it('follows a persisted System preference when device appearance changes', () => {
+    it('migrates a persisted System preference once and stops following device changes', () => {
         storage.setItem(THEME_STORAGE_KEY, JSON.stringify({
             mode: 'system',
             lightThemeId: 'catppuccin-latte',
@@ -107,7 +107,7 @@ describe('theme controller', () => {
         controller.start();
 
         expect(get(controller.state).preference).toEqual({
-            mode: 'system',
+            mode: 'light',
             lightThemeId: 'catppuccin-latte',
             darkThemeId: 'nord',
         });
@@ -117,8 +117,8 @@ describe('theme controller', () => {
         );
 
         systemAppearance.setMatches(true);
-        expect(get(controller.state).resolvedAppearance).toBe('dark');
-        expect(document.documentElement.dataset.theme).toBe('nord');
+        expect(get(controller.state).resolvedAppearance).toBe('light');
+        expect(document.documentElement.dataset.theme).toBe('catppuccin-latte');
         controller.destroy();
     });
 

@@ -3,15 +3,14 @@ import { render } from 'svelte/server';
 import AppearancePanel from './AppearancePanel.svelte';
 
 describe('AppearancePanel', () => {
-    it('exposes Light, Dark, and System appearance modes', () => {
+    it('exposes only Light and Dark appearance modes', () => {
         const { body } = render(AppearancePanel);
 
         expect(body).toContain('Appearance');
         expect(body).toContain('Light');
         expect(body).toContain('Dark');
-        expect(body).toContain('System');
+        expect(body).not.toContain('System');
         expect(body).not.toContain('>Mode<');
-        expect(body).toContain('System');
         expect(body).not.toContain('Always bright');
         expect(body).not.toContain('Always dim');
         expect(body).not.toContain('Personalize');

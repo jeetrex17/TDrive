@@ -70,19 +70,20 @@ describe('theme model', () => {
         expect(normalizeThemePreference(persisted)).toEqual(persisted);
     });
 
-    it('keeps System mode so the selected pair can follow the device', () => {
+    it('migrates a saved System pair to the current appearance without losing palettes', () => {
         expect(
             normalizeThemePreference({
                 mode: 'system',
                 lightThemeId: 'catppuccin-latte',
                 darkThemeId: 'nord',
-            }),
+            }, 'light'),
         ).toEqual({
-            mode: 'system',
+            mode: 'light',
             lightThemeId: 'catppuccin-latte',
             darkThemeId: 'nord',
         });
-        expect(isThemeMode('system')).toBe(true);
+        expect(normalizeThemePreference({ mode: 'system' }, 'dark').mode).toBe('dark');
+        expect(isThemeMode('system')).toBe(false);
     });
 
     it('preserves valid preferences without mutating the source value', () => {
@@ -107,7 +108,5 @@ describe('theme model', () => {
 
         expect(resolveThemeId(preference)).toBe('solarized-light');
         expect(resolveThemeId({ ...preference, mode: 'dark' })).toBe('nord');
-        expect(resolveThemeId({ ...preference, mode: 'system' }, 'light')).toBe('solarized-light');
-        expect(resolveThemeId({ ...preference, mode: 'system' }, 'dark')).toBe('nord');
     });
 });

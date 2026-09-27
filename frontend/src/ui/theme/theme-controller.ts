@@ -82,8 +82,6 @@ export function createThemeController(
     let started = false;
     let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
     let transitionGeneration = 0;
-    let systemAppearance: ThemeAppearance = 'dark';
-    let systemAppearanceListener: ((event: MediaQueryListEvent) => void) | undefined;
     const store = writable<ThemeState>(currentState);
 
     function applyState(nextState: ThemeState): void {
@@ -196,24 +194,14 @@ export function createThemeController(
 
         activeEnvironment = resolved;
         started = true;
-        systemAppearance = appearanceFromSystem(resolved.systemAppearance);
-        systemAppearanceListener = (event) => {
-            systemAppearance = event.matches ? 'dark' : 'light';
-            if (latestPreference.mode === 'system') {
-                transitionTo(createThemeState(latestPreference, systemAppearance));
-            }
-        };
-        addMediaListener(resolved.systemAppearance, systemAppearanceListener);
         resolved.document?.documentElement.classList.toggle(LINUX_WEBKIT_CLASS, isLinuxWebKit(resolved.userAgent));
-        const preference = readPreference(resolved.storage);
+        const preference = readPreference(resolved.storage, appearanceFromSystem(resolved.systemAppearance));
         latestPreference = preference;
-        applyInstantly(createThemeState(preference, systemAppearance));
+        applyInstantly(createThemeState(preference));
     }
 
     function destroy(): void {
         stopTransition();
-        removeMediaListener(activeEnvironment?.systemAppearance, systemAppearanceListener);
-        systemAppearanceListener = undefined;
         activeEnvironment?.document?.documentElement.classList.remove(LINUX_WEBKIT_CLASS);
         activeEnvironment = undefined;
         started = false;
@@ -224,7 +212,7 @@ export function createThemeController(
 
         latestPreference = preference;
         writePreference(activeEnvironment?.storage, preference);
-        transitionTo(createThemeState(preference, systemAppearance), origin);
+        transitionTo(createThemeState(preference), origin);
     }
 
     function setMode(mode: ThemeMode, origin?: ThemeChangeOrigin): void {
@@ -276,15 +264,11 @@ export function createThemeController(
     }
 }
 
-function createThemeState(
-    preference: ThemePreference,
-    systemAppearance: ThemeAppearance = 'dark',
-): ThemeState {
-    const resolvedAppearance = preference.mode === 'system' ? systemAppearance : preference.mode;
+function createThemeState(preference: ThemePreference): ThemeState {
     return Object.freeze({
         preference,
-        resolvedAppearance,
-        resolvedThemeId: resolveThemeId(preference, systemAppearance),
+        resolvedAppearance: preference.mode,
+        resolvedThemeId: resolveThemeId(preference),
     });
 }
 
@@ -369,7 +353,7 @@ function hasRuntimeEnvironment(environment: ResolvedEnvironment): boolean {
     return Boolean(environment.document || environment.storage || environment.reducedMotion);
 }
 
-function readPreference(storage?: ThemeStorage): ThemePreference {
+function readPreference(storage: ThemeStorage | undefined, legacySystemAppearance: ThemeAppearance): ThemePreference {
     let serialized: string | null | undefined;
     try {
         serialized = storage?.getItem(THEME_STORAGE_KEY);
@@ -380,7 +364,7 @@ function readPreference(storage?: ThemeStorage): ThemePreference {
     if (!serialized) return normalizeThemePreference(null);
 
     try {
-        const preference = normalizeThemePreference(JSON.parse(serialized) as unknown);
+        const preference = normalizeThemePreference(JSON.parse(serialized) as unknown, legacySystemAppearance);
         if (serialized !== JSON.stringify(preference)) writePreference(storage, preference);
         return preference;
     } catch {
@@ -406,28 +390,10 @@ function prefersReducedMotion(reducedMotion?: MediaQueryList): boolean {
 
 function appearanceFromSystem(query?: MediaQueryList): ThemeAppearance {
     try {
-        return query?.matches ? 'dark' : 'light';
+        return query && !query.matches ? 'light' : 'dark';
     } catch {
         return 'dark';
     }
-}
-
-function addMediaListener(query: MediaQueryList | undefined, listener: ((event: MediaQueryListEvent) => void) | undefined): void {
-    if (!query || !listener) return;
-    if (typeof query.addEventListener === 'function') {
-        query.addEventListener('change', listener);
-        return;
-    }
-    query.addListener?.(listener);
-}
-
-function removeMediaListener(query: MediaQueryList | undefined, listener: ((event: MediaQueryListEvent) => void) | undefined): void {
-    if (!query || !listener) return;
-    if (typeof query.removeEventListener === 'function') {
-        query.removeEventListener('change', listener);
-        return;
-    }
-    query.removeListener?.(listener);
 }
 
 function applyThemeAttributes(targetDocument: Document | undefined, state: ThemeState): void {

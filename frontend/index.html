@@ -29,7 +29,15 @@
                 // fallback below still guarantees a deterministic first paint.
             }
 
-            const mode = ['light', 'dark', 'system'].includes(saved.mode) ? saved.mode : fallback.mode;
+            let appearance = ['light', 'dark'].includes(saved.mode) ? saved.mode : fallback.mode;
+            if (saved.mode === 'system') {
+                try {
+                    appearance = typeof matchMedia === 'function'
+                        && !matchMedia('(prefers-color-scheme: dark)').matches ? 'light' : 'dark';
+                } catch {
+                    // Keep the dark fallback if the device appearance cannot be read.
+                }
+            }
             const lightThemeId = lightThemes.includes(saved.lightThemeId)
                 ? saved.lightThemeId
                 : fallback.lightThemeId;
@@ -37,11 +45,6 @@
                 ? saved.darkThemeId
                 : fallback.darkThemeId;
 
-            const systemAppearance = typeof matchMedia === 'function'
-                && matchMedia('(prefers-color-scheme: dark)').matches
-                ? 'dark'
-                : 'light';
-            const appearance = mode === 'system' ? systemAppearance : mode;
             document.documentElement.dataset.theme = appearance === 'dark' ? darkThemeId : lightThemeId;
             document.documentElement.dataset.themeAppearance = appearance;
         })();
