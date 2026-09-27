@@ -393,11 +393,11 @@ jobs:
             exit 1
           fi
           certificates="$("$tools_dir/apksigner" verify --print-certs "$apk")"
-          actual="$(printf '%s\n' "$certificates" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+          actual="$(printf '%s\n' "$certificates" | bash scripts/android-signer-digests.sh)"
           if [ "$actual" != "$expected" ] || [[ "$certificates" == *"CN=Android Debug"* ]]; then
             echo "Android APK was not signed with the expected release certificate" >&2
             printf 'Expected signer SHA-256: %s\nActual signer SHA-256: %s\n' "$expected" "${actual:-unavailable}" >&2
-            printf '%s\n' "$certificates" | sed -n '/^Signer #/p' >&2
+            printf '%s\n' "$certificates" | sed -n '/^Signer /p' >&2
             exit 1
           fi
 
@@ -528,11 +528,11 @@ jobs:
             exit 1
           fi
           certificates="$("$tools_dir/apksigner" verify --print-certs "$apk")"
-          actual="$(printf '%s\n' "$certificates" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+          actual="$(printf '%s\n' "$certificates" | bash scripts/android-signer-digests.sh)"
           if [ "$actual" != "$expected" ] || [[ "$certificates" == *"CN=Android Debug"* ]]; then
             echo "Android APK was not signed with the expected release certificate" >&2
             printf 'Expected signer SHA-256: %s\nActual signer SHA-256: %s\n' "$expected" "${actual:-unavailable}" >&2
-            printf '%s\n' "$certificates" | sed -n '/^Signer #/p' >&2
+            printf '%s\n' "$certificates" | sed -n '/^Signer /p' >&2
             exit 1
           fi
 

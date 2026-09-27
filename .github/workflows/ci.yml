@@ -64,10 +64,11 @@ jobs:
       - name: Run macOS media packaging contract tests
         run: bash scripts/test-package-mpv-darwin.sh
 
-      - name: Validate Android release version codes
+      - name: Validate Android release helpers
         run: |
-          bash -n scripts/android-version-code.sh scripts/test-android-version-code.sh
+          bash -n scripts/android-version-code.sh scripts/test-android-version-code.sh scripts/android-signer-digests.sh scripts/test-android-signer-digests.sh
           bash scripts/test-android-version-code.sh
+          bash scripts/test-android-signer-digests.sh
 
       - name: Typecheck frontend
         working-directory: frontend
