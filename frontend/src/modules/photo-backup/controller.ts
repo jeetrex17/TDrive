@@ -136,7 +136,7 @@ async function runDiscoveryScheduler(): Promise<void> {
         manuallyPaused = current.manualPaused;
         if (!current.settings.enabled || epoch !== schedulerEpoch || manuallyPaused) return;
         if (current.encryptionRequired) {
-            photoBackupError.set(UNLOCK_MESSAGE);
+            photoBackupError.set(current.status.message || UNLOCK_MESSAGE);
             return;
         }
         await refreshNativePolicy();

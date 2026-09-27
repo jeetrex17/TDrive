@@ -15,6 +15,7 @@ import { accessEncryptedResource } from './encryption';
 describe('encrypted resource access', () => {
     beforeEach(() => {
         vi.clearAllMocks();
+        mocks.getStatus.mockResolvedValue({ available: true, passwordSet: true, passwordRemembered: false, hint: '' });
         state.encryption = {
             available: true,
             passwordSet: true,

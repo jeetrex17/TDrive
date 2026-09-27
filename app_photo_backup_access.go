@@ -18,7 +18,8 @@ func (a *App) photoBackupAccessState(state PhotoBackupState) PhotoBackupState {
 		return state
 	}
 	status, err := a.encryption.EncryptionStatus()
-	if err != nil {
+	if err != nil || !status.Available {
+		state.EncryptionRequired = true
 		state.Status.Phase = "paused"
 		state.Status.Message = "Could not check encryption. Try again when connected."
 		return state

@@ -42,6 +42,18 @@ func TestPhotoBackupPreservesExplicitPauseWhenEncryptionIsLocked(t *testing.T) {
 	}
 }
 
+func TestPhotoBackupDoesNotOfferPasswordSetupBeforeDriveIsAvailable(t *testing.T) {
+	app := NewApp("test")
+	app.encryption.override = backupEncryptionStatusService{status: encservice.Status{}}
+	initial := PhotoBackupState{Settings: PhotoBackupSettings{Enabled: true, Encrypt: true}, Status: PhotoBackupStatus{Phase: "idle"}}
+
+	got := app.photoBackupAccessState(initial)
+
+	if !got.EncryptionRequired || got.Status.Phase != "paused" || got.Status.Message != "Could not check encryption. Try again when connected." {
+		t.Fatalf("unverified encryption status: %+v", got)
+	}
+}
+
 func TestPhotoBackupRequiresPasswordForLegacyUnencryptedSettings(t *testing.T) {
 	app := NewApp("test")
 	app.encryption.override = backupEncryptionStatusService{status: encservice.Status{Available: true}}

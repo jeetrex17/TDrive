@@ -256,6 +256,7 @@ describe('the picker window', () => {
             // serialized on the snapshot this would deadlock the flow.
             await vi.waitFor(() => expect(planStarted).toBe(true));
             encryptionSettled = true;
+            return null;
         });
         app.SelectFiles.mockResolvedValue(['/tmp/report.pdf']);
         app.PlanImport.mockImplementation(async () => {

@@ -176,6 +176,18 @@ describe('photo backup controller scheduler', () => {
         expect(get(photoBackupError)).toBe('Unlock encryption to continue photo backup.');
     });
 
+    it('keeps the backend reason when encryption status could not be verified', async () => {
+        await flush(); mocks.run.mockClear();
+        const message = 'Could not check encryption. Try again when connected.';
+        mocks.state = { ...state(), encryptionRequired: true, status: { ...state().status, phase: 'paused', message } };
+        mocks.events.get('android:PhotoBackupMediaChanged')?.({});
+        await flush();
+
+        expect(mocks.unlock).not.toHaveBeenCalled();
+        expect(mocks.run).not.toHaveBeenCalled();
+        expect(get(photoBackupError)).toBe(message);
+    });
+
     it('does not prompt when the backend reports a locked vault to the automatic scheduler', async () => {
         await flush(); mocks.list.mockClear();
         mocks.run.mockResolvedValue(locked);
