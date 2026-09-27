@@ -64,6 +64,11 @@ jobs:
       - name: Run macOS media packaging contract tests
         run: bash scripts/test-package-mpv-darwin.sh
 
+      - name: Validate Android release version codes
+        run: |
+          bash -n scripts/android-version-code.sh scripts/test-android-version-code.sh
+          bash scripts/test-android-version-code.sh
+
       - name: Typecheck frontend
         working-directory: frontend
         run: npm run typecheck
@@ -633,6 +638,16 @@ jobs:
 
       - name: Assemble the APK
         run: wails3 task android:assemble:apk
+
+      - name: Require a keystore for release signing
+        working-directory: build/android
+        run: |
+          set -euo pipefail
+          if ANDROID_REQUIRE_RELEASE_SIGNING=true ./gradlew help > "$RUNNER_TEMP/android-signing-guard.log" 2>&1; then
+            echo "Gradle accepted release signing without a keystore" >&2
+            exit 1
+          fi
+          grep -Fq 'Android release signing is required' "$RUNNER_TEMP/android-signing-guard.log"
 
       # Gradle reports success while packaging a .so it built earlier, so a
       # frontend-only change can produce an APK that still serves the previous

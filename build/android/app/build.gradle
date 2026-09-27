@@ -14,8 +14,8 @@ android {
         applicationId "com.jeetraj.tdrive"
         minSdk 21
         targetSdk 35
-        versionCode 1
-        versionName "1.0"
+        versionCode Integer.parseInt(System.getenv("ANDROID_VERSION_CODE") ?: "1")
+        versionName System.getenv("ANDROID_VERSION_NAME") ?: "1.0"
 
         // Configure supported ABIs
         ndk {
@@ -25,6 +25,14 @@ android {
 
     def keystoreFile = System.getenv("ANDROID_KEYSTORE_FILE")
     def hasKeystore = keystoreFile != null && !keystoreFile.trim().isEmpty()
+    if (System.getenv("ANDROID_REQUIRE_RELEASE_SIGNING") == "true" && !hasKeystore) {
+        throw new GradleException("Android release signing is required but ANDROID_KEYSTORE_FILE is unset")
+    }
+    if (hasKeystore && ["ANDROID_KEYSTORE_PASSWORD", "ANDROID_KEY_ALIAS", "ANDROID_KEY_PASSWORD"].any {
+        !System.getenv(it)?.trim()
+    }) {
+        throw new GradleException("Android release signing credentials are incomplete")
+    }
 
     signingConfigs {
         // A real keystore can be provided via environment variables; without

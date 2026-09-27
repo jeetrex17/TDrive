@@ -17,8 +17,20 @@ env:
   GOFLAGS: "-tags=gtk3"
 
 jobs:
+  validate-release-ref:
+    name: Validate release ref
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Validate stable release tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: bash scripts/android-version-code.sh "$GITHUB_REF_NAME" >/dev/null
+
   build:
     name: Build (${{ matrix.platform }})
+    needs: validate-release-ref
     # Pinning to ubuntu-22.04 ensures webkit2gtk-4.1 is available (see the
     # gtk3 build tag note on GOFLAGS above).
     runs-on: ${{ matrix.os }}
@@ -123,9 +135,9 @@ jobs:
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "macOS" ]; then
-            wails3 task package VERSION="${{ github.ref_name }}"
+            wails3 task package VERSION="$TDRIVE_ARTIFACT_VERSION"
           else
-            wails3 task build VERSION="${{ github.ref_name }}"
+            wails3 task build VERSION="$TDRIVE_ARTIFACT_VERSION"
           fi
 
       - name: Acquire AppImage tool
@@ -244,7 +256,7 @@ jobs:
       - name: Package CLI (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
-        run: ./scripts/package-cli-release-windows.ps1 -Version "${{ github.ref_name }}"
+        run: ./scripts/package-cli-release-windows.ps1 -Version $env:TDRIVE_ARTIFACT_VERSION
 
       - name: Package (macOS)
         if: runner.os == 'macOS'
@@ -261,7 +273,7 @@ jobs:
         if: runner.os != 'Windows'
         shell: bash
         run: |
-          ./scripts/package-cli-release.sh "${{ github.ref_name }}"
+          ./scripts/package-cli-release.sh "$TDRIVE_ARTIFACT_VERSION"
 
       - name: Upload Artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
@@ -273,7 +285,8 @@ jobs:
 
   release:
     name: Create GitHub Release
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    timeout-minutes: 45
     needs: build
     if: startsWith(github.ref, 'refs/tags/')
     environment: release-signing
@@ -289,11 +302,121 @@ jobs:
           go-version-file: go.mod
           cache: true
 
+      - name: Setup Node
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Java
+        uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: Install frontend dependencies
+        working-directory: frontend
+        run: npm ci
+
+      - name: Install Wails CLI
+        env:
+          CGO_ENABLED: 0
+          GOFLAGS: ""
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: Point the build at the Android NDK
+        run: echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+
       - name: Download Artifacts
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           path: dist
           merge-multiple: true
+
+      - name: Build Android library
+        env:
+          GOFLAGS: ""
+        run: wails3 task android:build PRODUCTION=true ARCH=arm64 VERSION="$GITHUB_REF_NAME"
+
+      - name: Assemble signed Android APK
+        env:
+          GOFLAGS: ""
+          TDRIVE_ANDROID_KEYSTORE_BASE64: ${{ secrets.TDRIVE_ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.TDRIVE_ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.TDRIVE_ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.TDRIVE_ANDROID_KEY_PASSWORD }}
+          ANDROID_REQUIRE_RELEASE_SIGNING: "true"
+        run: |
+          set -euo pipefail
+          for name in TDRIVE_ANDROID_KEYSTORE_BASE64 ANDROID_KEYSTORE_PASSWORD ANDROID_KEY_ALIAS ANDROID_KEY_PASSWORD; do
+            if [ -z "${!name:-}" ]; then
+              echo "Missing Android release-signing secret: $name" >&2
+              exit 1
+            fi
+          done
+
+          keystore="$RUNNER_TEMP/tdrive-release.keystore"
+          umask 077
+          trap 'rm -f "$keystore"' EXIT
+          printf '%s' "$TDRIVE_ANDROID_KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          test -s "$keystore"
+          export ANDROID_KEYSTORE_FILE="$keystore"
+          export ANDROID_VERSION_NAME="${GITHUB_REF_NAME#v}"
+          export ANDROID_VERSION_CODE="$(bash scripts/android-version-code.sh "$GITHUB_REF_NAME")"
+          wails3 task android:assemble:apk:release
+
+      - name: Verify and stage Android APK
+        env:
+          TDRIVE_ANDROID_CERT_SHA256: ${{ vars.TDRIVE_ANDROID_CERT_SHA256 }}
+        run: |
+          set -euo pipefail
+          apk="build/bin/TDrive.apk"
+          test -s "$apk"
+          tools_dir="$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort -V | tail -1)"
+          test -x "$tools_dir/apksigner"
+          test -x "$tools_dir/aapt"
+
+          expected="$(printf '%s' "$TDRIVE_ANDROID_CERT_SHA256" | tr '[:upper:]' '[:lower:]' | tr -d ':')"
+          if [[ ! "$expected" =~ ^[0-9a-f]{64}$ ]]; then
+            echo "TDRIVE_ANDROID_CERT_SHA256 must be the release certificate's SHA-256 fingerprint" >&2
+            exit 1
+          fi
+          certificates="$("$tools_dir/apksigner" verify --print-certs "$apk")"
+          actual="$(printf '%s\n' "$certificates" | sed -n 's/^Signer #1 certificate SHA-256 digest: //p')"
+          if [ "$actual" != "$expected" ] || [[ "$certificates" == *"CN=Android Debug"* ]]; then
+            echo "Android APK was not signed with the expected release certificate" >&2
+            exit 1
+          fi
+
+          code="$(bash scripts/android-version-code.sh "$GITHUB_REF_NAME")"
+          package="$("$tools_dir/aapt" dump badging "$apk" | sed -n '1p')"
+          if [[ "$package" != *"name='com.jeetraj.tdrive'"* \
+             || "$package" != *"versionCode='$code'"* \
+             || "$package" != *"versionName='${GITHUB_REF_NAME#v}'"* ]]; then
+            echo "Android APK package or version does not match $GITHUB_REF_NAME: $package" >&2
+            exit 1
+          fi
+
+          unzip -Z1 "$apk" > "$RUNNER_TEMP/tdrive-apk-entries.txt"
+          grep -Fxq 'lib/arm64-v8a/libwails.so' "$RUNNER_TEMP/tdrive-apk-entries.txt"
+          if grep -Fxq 'lib/x86_64/libwails.so' "$RUNNER_TEMP/tdrive-apk-entries.txt"; then
+            echo "The arm64 Android APK unexpectedly contains an x86_64 library" >&2
+            exit 1
+          fi
+          unzip -p "$apk" lib/arm64-v8a/libwails.so > "$RUNNER_TEMP/tdrive-libwails.so"
+          strings -a "$RUNNER_TEMP/tdrive-libwails.so" > "$RUNNER_TEMP/tdrive-libwails.strings"
+          for built in frontend/dist/assets/main-*.css frontend/dist/assets/video-*.js; do
+            test -f "$built"
+            if ! grep -qF "$(basename "$built")" "$RUNNER_TEMP/tdrive-libwails.strings"; then
+              echo "Android APK does not embed $(basename "$built")" >&2
+              exit 1
+            fi
+          done
+
+          cp "$apk" "dist/TDrive-${GITHUB_REF_NAME}-android-arm64.apk"
 
       - name: Create source archive
         shell: bash

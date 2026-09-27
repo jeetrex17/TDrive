@@ -98,13 +98,16 @@
 
 Get the newest build from [**GitHub Releases**](https://github.com/jeetrex17/TDrive/releases/latest).
 
-| Platform | Desktop app | CLI | Native media | Desktop mount |
+| Platform | App | CLI | Media playback | Desktop mount |
 | --- | --- | --- | --- | --- |
 | macOS Apple silicon | Yes | Yes | Yes | Finder |
 | Windows amd64 | Installer, portable zip | Portable beta | Yes | Explorer |
 | Linux amd64 | AppImage | Yes | Yes | GIO/GVfs file managers |
+| Android arm64 (v2.0.0+) | APK | No | Built-in | No |
 
-Release assets contain the supported packages for each version. The Windows `*-setup.exe` installs per user without admin rights; the zip is the same build unpacked. TDrive currently does not publish macOS Intel or Linux ARM desktop builds.
+Release assets contain the supported packages for each version. The Windows `*-setup.exe` installs per user without admin rights; the zip is the same build unpacked. The Android APK is downloaded from the same release page; iOS is not distributed publicly yet. TDrive currently does not publish macOS Intel or Linux ARM desktop builds.
+
+An Android debug test APK cannot be updated in place to the release-signed APK. Remove the test build before installing a release build; uninstalling clears that app's local data, so finish pending transfers and have your Telegram login available first.
 
 ## Quick start
 
@@ -296,6 +299,10 @@ wails3 task package    # + platform packaging (.app / NSIS installer / AppImage)
 ```
 
 Native playback packaging is handled by the scripts under `scripts/` and the release workflow. When a bundled runtime is unavailable, TDrive can fall back to `mpv` from `PATH`; `TDRIVE_MPV_BIN` overrides that binary.
+
+### Android release signing
+
+The tag-based release workflow builds an arm64 APK and includes it in the signed checksum manifest. Configure the `release-signing` GitHub environment with `TDRIVE_ANDROID_KEYSTORE_BASE64`, `TDRIVE_ANDROID_KEYSTORE_PASSWORD`, `TDRIVE_ANDROID_KEY_ALIAS`, and `TDRIVE_ANDROID_KEY_PASSWORD` secrets, plus a `TDRIVE_ANDROID_CERT_SHA256` variable containing the release certificate fingerprint. Keep the original keystore backed up securely: Android updates must be signed with the same certificate. The release workflow fails rather than publishing a debug-signed APK when these values are missing or do not match.
 
 <details>
 <summary><strong>Local data locations</strong></summary>
