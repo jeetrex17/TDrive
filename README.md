@@ -128,7 +128,7 @@ TDrive stores your API credentials locally; it does not ship a shared project-wi
 
 ### Back up photos and videos
 
-- Encrypted backup to **My Drive** from selected desktop folders or permitted mobile photo-library sources.
+- Encrypted backup to **My Drive** from selected desktop folders or folders on Android device storage.
 - A persistent queue with pause, resume, retries, and upload progress.
 - Original files stay on your device. See [Photo and video backup](#photo-and-video-backup) for permissions and background limits.
 
@@ -166,13 +166,13 @@ TDrive stores your API credentials locally; it does not ship a shared project-wi
 
 ## Photo and video backup
 
-Open **Photo & video backup** from the desktop account menu or the mobile **Account** tab. Choose your sources and start backup. Files go into `Photo backup / <device> / <source>` inside **My Drive**, under your selected destination parent if configured.
+Open **Photo & video backup** from the desktop account menu or the Android **Account** tab. Choose your folders and start backup. Files go into `Photo backup / <device> / <source>` inside **My Drive**, under your selected destination parent if configured.
 
 | Device | Sources |
 | --- | --- |
 | Desktop | Selected local folders, including subfolders |
-| Android | Permitted photos and videos from the library, albums, or selected folders on device storage |
-| iOS source build | Authorized photo-library resources |
+| Android | Permitted photos and videos in selected folders on device storage |
+| iOS source build | Backup source selection is not available |
 
 Backup is encrypted and personal-drive-only. It reuses your drive's existing vault: unlock it with the same password used on your other devices. If that drive has no vault yet, TDrive asks you to set one up.
 
@@ -339,7 +339,7 @@ Linux mount behavior depends on the desktop's GIO/GVfs integration and should st
 - Folder and archive import is copy-style import, not synchronization or merge; importing the same folder repeatedly may create numbered names.
 - `tdrive cat` may stage decrypted content in a temporary file before writing it to standard output.
 - Mobile backup stages originals locally, requires available device storage, and rejects resources larger than 4 GiB. It cannot keep running after the app process is terminated.
-- Backup does not deduplicate content across devices or mirror cloud albums. iOS Live Photo components are uploaded as separate originals, not reconstructed compound assets.
+- Backup does not deduplicate content across devices or mirror cloud albums. Album and whole-library backup sources are not available.
 - iOS can be built from source but has no public App Store, TestFlight, or installable release download yet.
 
 ## Build from source

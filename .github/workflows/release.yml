@@ -649,11 +649,21 @@ jobs:
           TDRIVE_RELEASE_SIGNING_KEY_IDS="${embedded_key_ids}" \
             go test ./backend/updater -run '^TestReleaseSigningArtifactsUseEmbeddedKeys$' -count=1
 
+      - name: Select reviewed release notes
+        id: release_notes
+        run: |
+          set -euo pipefail
+          notes=".github/release-notes/${GITHUB_REF_NAME}.md"
+          if [ -f "$notes" ]; then
+            printf 'path=%s\n' "$notes" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Publish Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2
         with:
           files: |
             dist/*
           draft: true
-          generate_release_notes: true
+          body_path: ${{ steps.release_notes.outputs.path }}
+          generate_release_notes: ${{ steps.release_notes.outputs.path == '' }}
           fail_on_unmatched_files: true

@@ -11,20 +11,23 @@ The app resolves that scope; native adapters cannot choose an account.
   bounded interval and after starting backup. A scan uses `ReadDir(128)` with a
   bounded directory stack, excludes application data, and skips symlinks.
 - Android reads authorized MediaStore images/videos through native paged
-  queries. iOS reads authorized PhotoKit resources, including the paired video
-  of a Live Photo. Neither adapter reads other applications' private files.
+  queries. The iOS adapter supports PhotoKit resources, including the paired
+  video of a Live Photo, but the current UI has no supported iOS backup source
+  picker. Neither adapter reads other applications' private files.
 - An Android folder source is a place, not a document tree. The system picker
   chooses the folder; the tree it returns is converted to a media volume and a
   path on it, and the folder is then read through the same paged MediaStore
-  query every other Android source uses. Nothing holds a URI permission, so a
-  folder source cannot be lost to a revoked grant, and a photo reached through
-  both a folder and an album keeps one identity and uploads once. The cost is
-  that such a source covers the photos and videos MediaStore indexes, not every
+  query. Nothing holds a URI permission, so a folder source cannot be lost to a
+  revoked tree grant. Media permissions still determine which items can be read.
+  Such a source covers the photos and videos MediaStore indexes, not every
   file in the folder, and only folders on the device's own storage: one from a
   cloud provider is refused where it is picked. Overlapping folders are refused
   for the same reason -- both would dedupe to one upload whose destination
-  depended on scan order. iOS has no equivalent: the photo library is the unit
-  there, and the sandbox exposes no user-visible tree to watch.
+  depended on scan order. iOS has no equivalent folder picker, and the sandbox
+  exposes no user-visible tree to watch. Only `folder` and `device-folder`
+  sources are accepted; retired album and whole-library sources and their
+  unfinished work are removed on startup. Completed receipts and uploaded files
+  are kept.
 - The frontend enumerates mobile sources a page at a time. The Go worker
   uploads one queued resource at a time using the shared file service. Opening
   the gallery does not start an original-library download.
@@ -51,9 +54,9 @@ the item's failure retry budget.
 
 ## Identity and completion
 
-Native identity is account/drive + asset ID + version + resource ID. Selecting
-several albums containing the same resource does not duplicate its upload. A
-completed receipt remains useful after its original source selection is removed.
+Native identity is account/drive + asset ID + version + resource ID. Repeated
+discovery of the same resource does not duplicate its upload. A completed
+receipt remains useful after its original source selection is removed.
 Desktop identity uses the selected source and relative file path/version.
 
 Only a positive remote receipt marks a resource complete. A local file-index
@@ -79,9 +82,9 @@ from, because the bytes are staged in the app's cache, so the host reports the
 folder chain with each discovered item and the ledger carries it. Either way
 the chain is sanitized component by component before it becomes a folder name.
 
-Live Photo components are separate uploaded files and separate resource counts.
-This version does not publish a compound-asset manifest or reconstruct Live
-Photos on restore. It preserves the original resource bytes. Cross-device
+The iOS adapter models Live Photo components as separate files and resource
+counts, but they are not selectable backup sources in the current app.
+There is no compound-asset manifest or Live Photo reconstruction. Cross-device
 content deduplication and cloud album mirroring are not implemented.
 
 ## Resource limits and deletion
@@ -116,12 +119,11 @@ from v1/v2 databases without discarding sources, receipts, or queued work.
 
 ## User-visible limits
 
-Backup source selection is available in the desktop profile menu and mobile
-Account tab. Android offers both: albums and the whole library, and a folder
-picked from system storage. Under Android's partial photo access MediaStore
-answers only with the items the user selected, so the album list is short for a
-real reason; the panel says so and choosing sources again reopens the system
-dialog that can widen the grant. New uploads go to `Photo backup / <device> / <source>` in the
+Backup source selection is available in the desktop profile menu and Android
+Account tab. Desktop and Android offer selected folders only; iOS has no source
+picker. Under Android's partial photo access, MediaStore answers only with the
+items the user authorized. Adding a folder requests media access as well as
+the folder location. New uploads go to `Photo backup / <device> / <source>` in the
 current drive (under a configured destination parent when present). Device names
 are persisted with an installation-specific suffix. Indexed folder lookup reuses
 the hierarchy across restarts; existing completed uploads are not moved or sent
