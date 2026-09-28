@@ -1,7 +1,25 @@
 # Build Directory
 
 Houses the build assets consumed by the Taskfile-based Wails v3 build
-(`../Taskfile.yml` + `Taskfile.yml` + `darwin/`, `linux/`, `windows/` here).
+(`../Taskfile.yml` + `Taskfile.yml` and the platform directories here).
+
+## Prerequisites
+
+- The Go version declared in [go.mod](../go.mod).
+- Node.js 22 with npm for the frontend.
+- The Wails CLI version used by this repository:
+
+  ```bash
+  go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
+  ```
+
+Install the native platform dependencies from the [Wails installation guide](https://v3.wails.io/getting-started/installation/), then run `wails3 doctor` to check your environment.
+
+macOS desktop builds and tests also need libmpv headers and libraries, with `pkg-config` able to resolve `mpv`.
+
+This project's Linux desktop build uses GTK3 and WebKit2GTK 4.1; on Debian or Ubuntu, the development packages are `libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, and `libx11-dev`. Add `-tags=gtk3` to direct Go build, test, and vet commands on Linux.
+
+## Desktop tasks
 
 Common commands (run from the repo root):
 
@@ -46,3 +64,36 @@ Categories) and is never regenerated automatically - see
 - `linux/TDrive.desktop` - the `.desktop` entry, packaged into the AppImage.
 - `linux/appimage/` - working directory for `wails3 task linux:package`
   (AppImage build); the produced `.AppImage` goes to `build/bin`.
+
+## Mobile
+
+Run the mobile tasks from the repository root. They build the shared frontend and mobile Go libraries; they do not package the desktop executable.
+
+### Android
+
+Use a macOS or Linux host with JDK 21, the Android SDK, and an Android NDK. Set `JAVA_HOME` and `ANDROID_HOME` for your installation; set `ANDROID_NDK_HOME` if the NDK is outside the SDK's `ndk/` directory. `wails3 task android:install:deps` checks dependencies and prompts before installing missing tools.
+
+```bash
+# Development in an emulator
+wails3 task android:run
+
+# Development on a connected phone with USB debugging enabled
+wails3 task android:run:device
+
+# ARM64 test APK in build/bin/TDrive.apk
+wails3 task android:package ARCH=arm64
+```
+
+### iOS
+
+Use macOS with full Xcode and the iOS SDK installed. TDrive targets iOS 16 or newer.
+
+```bash
+# Development in the iOS Simulator
+wails3 task ios:run
+
+# Production-mode simulator .app in build/bin
+wails3 task ios:package
+```
+
+Physical-device builds require a signing identity and provisioning profile; see [ios/Taskfile.yml](ios/Taskfile.yml) for device and IPA tasks. CI checks simulator and device builds, but there is no public iOS distribution yet.

@@ -2,6 +2,8 @@
   <img src="assets/tdrive-banner-loop-main.gif" alt="TDrive: your Telegram-powered drive" width="100%">
 </p>
 
+<h1 align="center">TDrive</h1>
+
 <p align="center">
   <a href="https://github.com/jeetrex17/TDrive/releases/latest"><img src="https://img.shields.io/github/v/release/jeetrex17/TDrive?style=flat-square&color=0e6ba8" alt="Latest release"></a>
   <a href="https://github.com/jeetrex17/TDrive/actions/workflows/ci.yml"><img src="https://github.com/jeetrex17/TDrive/actions/workflows/ci.yml/badge.svg" alt="CI status"></a>
@@ -10,23 +12,78 @@
 </p>
 
 <p align="center">
-  <strong>A private, cross-platform drive powered by your own Telegram account.</strong>
+  <strong>Your files, organized around your own Telegram account.</strong>
 </p>
 
 <p align="center">
-  Organize files in a desktop app, stream Telegram media, mount your drive in the OS, or manage it from the command line.
+  A desktop and mobile file manager with media streaming, encrypted photo and video backup, shared drives, and a scriptable CLI.
 </p>
 
 <p align="center">
   <a href="https://github.com/jeetrex17/TDrive/releases/latest"><strong>Download TDrive</strong></a>
-  · <a href="#quick-start">Quick start</a>
-  · <a href="#features">Features</a>
-  · <a href="#how-it-works">How it works</a>
-  · <a href="#command-line-interface">CLI</a>
+  &middot; <a href="#quick-start">Get started</a>
+  &middot; <a href="#features">Features</a>
+  &middot; <a href="#photo-and-video-backup">Photo backup</a>
+  &middot; <a href="#command-line-interface">CLI and agents</a>
+  &middot; <a href="#build-from-source">Build</a>
 </p>
 
 > [!IMPORTANT]
 > TDrive is an independent educational project and is not affiliated with Telegram. Use it responsibly and follow Telegram's terms. Do not treat Telegram or TDrive as the only copy of irreplaceable data.
+
+## Download
+
+Download packages from [**GitHub Releases**](https://github.com/jeetrex17/TDrive/releases/latest), not from unofficial mirrors. Open the release's **Assets** list and choose the package for your device.
+
+| Platform | App package | CLI | Distribution |
+| --- | --- | --- | --- |
+| macOS Apple silicon | `*-macos-arm64.zip` | `*-darwin-arm64-cli.tar.gz` | GitHub Releases |
+| Windows amd64 | `*-windows-amd64-setup.exe` or portable `.zip` | `*-windows-amd64-cli.zip` | GitHub Releases |
+| Linux amd64 | `*-linux-amd64.AppImage` | `*-linux-amd64-cli.tar.gz` | GitHub Releases |
+| Android ARM64 | `*-android-arm64.apk` when published | Not available | GitHub only, not the Play Store |
+| iOS | No public download yet | Not available | Source builds only |
+
+The Windows installer runs per user without administrator rights. The portable zip contains the same application without the installer.
+
+### Android installation
+
+1. Download the signed ARM64 APK from a release that includes it.
+2. Open the APK and allow installation from your browser or file manager if Android asks.
+3. Install TDrive, then follow [Quick start](#quick-start).
+
+Updates are manual: download a newer APK from GitHub and install it over the existing release build. Official release updates use the same signing certificate.
+
+<details>
+<summary><strong>macOS first-launch warning</strong></summary>
+
+TDrive is not notarized by Apple. If macOS cannot verify the developer, proceed only after checking that you downloaded the app from this repository's releases and trust it.
+
+1. Try opening TDrive and dismiss the warning.
+2. Open **System Settings > Privacy & Security**.
+3. Under **Security**, select **Open Anyway**.
+4. Authenticate and confirm **Open**.
+
+This adds an exception for the app; it does not require disabling Gatekeeper. See [Apple's explanation of these warnings](https://support.apple.com/en-gb/102445).
+
+<p align="center">
+  <img src="notopen_mac_err.png" alt="macOS cannot verify the TDrive developer" width="45%">
+  <img src="fix_open_err_mac.png" alt="Open Anyway in macOS Privacy & Security" width="45%">
+</p>
+
+</details>
+
+## Quick start
+
+1. Install the app for your platform.
+2. Create your own Telegram **API ID** and **API hash** at [my.telegram.org/apps](https://my.telegram.org/apps). Telegram provides [setup instructions](https://core.telegram.org/api/obtaining_api_id).
+3. Enter those credentials in TDrive's setup screen.
+4. Sign in with your phone number, Telegram login code, and 2FA password if enabled.
+5. Choose the Telegram channel containing your existing **My Drive**, or create a new empty drive if this is your first setup.
+6. Upload a file, create a folder, open the gallery, or join a shared drive.
+
+TDrive stores your API credentials locally; it does not ship a shared project-wide Telegram credential. Keep the API hash, login session, and vault password private.
+
+**Already use TDrive on another device?** Sign into the same Telegram account and select the same personal-drive channel. If encryption is configured, unlock it with your existing vault password. A new device does not need a new encryption password for that drive.
 
 ## Screenshots
 
@@ -51,6 +108,7 @@
 - Nested folders with rename, move, drag-and-drop, search, and delete.
 - Files larger than 2 GB, automatically split across Telegram messages and presented as one file.
 - Recursive folder downloads with transactional publishing to the destination.
+- Light and dark themes on desktop and mobile.
 
 ### Import and transfer
 
@@ -64,14 +122,15 @@
 - Browse photos in a drive-wide gallery.
 - Preview images, PDF, text, code, audio, and video without leaving the app.
 - Stream media directly from Telegram, including encrypted personal-drive media.
-- Native mpv playback for formats the system webview cannot decode, including MKV and HEVC.
+- Desktop mpv playback for formats the system webview cannot decode, including MKV and HEVC.
 - Audio-track, subtitle, playback-speed, picture-fit, and subtitle-appearance controls.
+- Drag or swipe the video timeline to seek. Available codecs and playback controls depend on the platform and player.
 
-### Desktop accessibility
+### Back up photos and videos
 
-- The file grid supports keyboard navigation: **Up/Down/Home/End** move focus; **Space** selects, toggles, or range-selects with **Shift**; **Enter** opens a folder, previews a file, or downloads when preview is unavailable.
-- **Right** enters row actions; **Left** or **Escape** returns to the row. **F2**, **Delete**, **Menu**, or **Shift+F10** exposes the selected row’s action menu.
-- Dialogs keep keyboard focus in the active dialog and restore it to the invoking control when closed.
+- Encrypted backup to **My Drive** from selected desktop folders or permitted mobile photo-library sources.
+- A persistent queue with pause, resume, retries, and upload progress.
+- Original files stay on your device. See [Photo and video backup](#photo-and-video-backup) for permissions and background limits.
 
 ### Share and collaborate
 
@@ -92,49 +151,36 @@
 - Optional client-side XChaCha20-Poly1305 encryption for personal-drive file contents.
 - Live synchronization while Telegram activity arrives.
 - Local SQLite state can be rebuilt from Telegram history after cache or configuration loss.
-- Application updates are verified with an Ed25519-signed checksum manifest before installation.
 
-## Download
+<details>
+<summary><strong>Desktop keyboard navigation</strong></summary>
 
-Get the newest build from [**GitHub Releases**](https://github.com/jeetrex17/TDrive/releases/latest).
+- **Up/Down/Home/End** move focus in the file grid.
+- **Space** selects or toggles a row; **Shift + Space** selects a range.
+- **Enter** opens a folder, previews a file, or downloads it when no preview is available.
+- **Right** enters row actions; **Left** or **Escape** returns to the row.
+- **F2**, **Delete**, **Menu**, or **Shift + F10** opens the selected row's action menu.
+- Dialogs keep focus inside the active dialog and restore it when closed.
 
-| Platform | App | CLI | Media playback | Desktop mount |
-| --- | --- | --- | --- | --- |
-| macOS Apple silicon | Yes | Yes | Yes | Finder |
-| Windows amd64 | Installer, portable zip | Portable beta | Yes | Explorer |
-| Linux amd64 | AppImage | Yes | Yes | GIO/GVfs file managers |
-| Android arm64 (v2.0.0+) | APK | No | Built-in | No |
+</details>
 
-Release assets contain the supported packages for each version. The Windows `*-setup.exe` installs per user without admin rights; the zip is the same build unpacked. The Android APK is downloaded from the same release page; iOS is not distributed publicly yet. TDrive currently does not publish macOS Intel or Linux ARM desktop builds.
+## Photo and video backup
 
-An Android debug test APK cannot be updated in place to the release-signed APK. Remove the test build before installing a release build; uninstalling clears that app's local data, so finish pending transfers and have your Telegram login available first.
+Open **Photo & video backup** from the desktop account menu or the mobile **Account** tab. Choose your sources and start backup. Files go into `Photo backup / <device> / <source>` inside **My Drive**, under your selected destination parent if configured.
 
-## Quick start
+| Device | Sources |
+| --- | --- |
+| Desktop | Selected local folders, including subfolders |
+| Android | Permitted photos and videos from the library, albums, or selected folders on device storage |
+| iOS source build | Authorized photo-library resources |
 
-1. Download and install the latest build for your platform.
-2. Create your own Telegram API ID and hash at [my.telegram.org/apps](https://my.telegram.org/apps).
-3. Start TDrive and enter those credentials in the setup screen.
-4. Sign in with your phone number, Telegram login code, and optional 2FA password.
-5. Let TDrive create or rediscover **My Drive**.
-6. Upload your first file, create a folder, or join a shared drive.
+Backup is encrypted and personal-drive-only. It reuses your drive's existing vault: unlock it with the same password used on your other devices. If that drive has no vault yet, TDrive asks you to set one up.
 
-TDrive stores the API ID and hash locally after setup. It never includes a shared project-wide Telegram credential.
+Backup never deletes device originals. Removing a source does not delete files already uploaded to TDrive. Pause, queue state, and confirmed uploads are remembered across restarts.
 
-### macOS installation
+Mobile permissions determine which media TDrive can see. Discovery runs while the app is active; an in-flight upload may continue with a native background allowance. Backup is not a continuously scheduled uploader and cannot continue after the app process is terminated. Keep the app open for the initial backup of a large library.
 
-The macOS app is not notarized with a paid Apple Developer certificate. On the first launch, macOS may report that the developer cannot be verified.
-
-1. Try to open TDrive and dismiss the warning.
-2. Open **System Settings → Privacy & Security**.
-3. Scroll to **Security** and click **Open Anyway**.
-4. Authenticate and confirm **Open**.
-
-<p align="center">
-  <img src="notopen_mac_err.png" alt="macOS cannot verify the TDrive developer" width="45%">
-  <img src="fix_open_err_mac.png" alt="Open Anyway in macOS Privacy & Security" width="45%">
-</p>
-
-This approval is normally required only for the first manual installation. Later in-app updates replace the application in place.
+For the detailed recovery, staging, and platform limits, see the [backup documentation](backend/photobackup/README.md).
 
 ## How it works
 
@@ -149,7 +195,7 @@ This approval is normally required only for the first manual installation. Later
 
 ## Privacy and encryption
 
-Encryption is optional and selected per upload on **My Drive**. TDrive encrypts file contents before sending them to Telegram and decrypts them after the correct vault password is entered.
+Manual uploads on **My Drive** can use client-side XChaCha20-Poly1305 encryption. Photo and video backup always uses encryption. TDrive encrypts file contents before sending them to Telegram and decrypts them after the correct vault password is entered.
 
 Important limits:
 
@@ -176,15 +222,16 @@ The GUI and CLI daemon cannot use the same backend state simultaneously. Close t
 
 ### Install on macOS or Linux
 
+Download and extract the CLI archive for your platform. Open a terminal in the extracted `TDrive-...-cli` directory, then run:
+
 ```bash
-tar -xzf TDrive-*-cli.tar.gz
-cd TDrive-*-cli
 ./install-cli.sh
 ```
 
 Reload the shell if the installer updated its configuration, then set up and log in:
 
 ```bash
+tdrive version
 tdrive setup --api-id YOUR_ID --api-hash-stdin
 tdrive login +15551234567
 tdrive whoami
@@ -210,6 +257,7 @@ tdrive ls -l
 tdrive mkdir -p /Photos
 tdrive put photo.jpg /Photos/
 tdrive get /Photos/photo.jpg .
+tdrive mkdir -p /Imports
 tdrive put --extract archive.zip /Imports/
 tdrive mv /old /new
 tdrive rm -r /folder
@@ -227,20 +275,46 @@ Shared-drive commands include `drive create`, `drive link`, `drive join`, `drive
 
 ### Automation and agent use
 
-`tdrive version --json` and `tdrive commands --json` work without a daemon or Telegram connection. The latter is the authoritative manifest of JSON-supported commands and flags. Human-readable output remains the default; `--json` (or `--output json`) is opt-in and rejects unsupported commands. For example:
+Start with the offline version and command manifest. Neither needs a daemon or Telegram connection. `tdrive commands --json` is the authoritative list of JSON-supported commands, flags, and mutation behavior.
 
 ```bash
+tdrive version --json
 tdrive commands --json
+```
+
+After interactive setup and login, use JSON output and explicit drive IDs for scripts:
+
+```bash
 tdrive drives --json
 tdrive ls /Photos --drive-id 123456789 --json --non-interactive
 tdrive put photo.jpg /Photos/photo.jpg --drive-id 123456789 --json --non-interactive
 ```
 
-Use the numeric drive ID returned by `tdrive drives --json`. Drive-scoped JSON commands require `--drive-id` and canonical absolute remote paths. They do not change the daemon's shared active drive or working directory, so concurrent scripts can target different drives safely. JSON `put` accepts one regular local file and JSON `get` requires an explicit local file path; the human CLI still supports folder and archive imports. `--timeout 30s` bounds a daemon RPC after startup, not daemon startup itself.
+Use the numeric drive ID returned by `tdrive drives --json`, replacing the example ID above. Drive-scoped JSON commands require `--drive-id` and canonical absolute remote paths. They do not change the daemon's shared active drive or working directory, so concurrent scripts can target different drives safely. Human-readable output remains the default; `--json` (or `--output json`) is opt-in and rejects unsupported commands.
 
-Each successful JSON command writes one schema-versioned object to stdout (`schema_version`, `ok`, `command`, `data`), with no progress text. An error writes one object to stderr (`schema_version`, `ok: false`, `error` with `code`, `message`, `retryable`, and optional `hint`). Exit codes are 0 for success, 1 for other operation failures, 2 for invalid/unsupported commands, 3 for required input or authentication, 4 for not found, 5 for conflicts/required confirmation, and 6 for timeout/unavailability. Branch on `error.code`, not the message.
+<details>
+<summary><strong>JSON contract, exit codes, and automation limits</strong></summary>
 
-`--non-interactive` never prompts. `rm` and `rebuild` in JSON mode require `--yes`; non-interactive text mode also requires it for destructive drive actions and full logout. JSON `get` refuses to overwrite an existing local target unless `--yes` is given. That local no-clobber check is best-effort, not atomic with other writers. Vault unlock requires `--password-stdin` in JSON or non-interactive mode. Interactive Telegram login is still required, and setup is text-only; `setup --api-id ID --api-hash-stdin` avoids putting the API hash in shell history or process arguments. The `cat` command emits raw file bytes and does not support JSON. There is no dry-run option. `cat` verifies downloads in a private temporary directory rather than streaming directly; a crash can leave plaintext there.
+Each successful JSON command writes one schema-versioned object to stdout (`schema_version`, `ok`, `command`, `data`), with no progress text. An error writes one object to stderr (`schema_version`, `ok: false`, `error` with `code`, `message`, `retryable`, and optional `hint`). Branch on `error.code`, not the message.
+
+| Exit code | Meaning |
+| --- | --- |
+| `0` | Success |
+| `1` | Other operation failure |
+| `2` | Invalid or unsupported command |
+| `3` | Required input or authentication |
+| `4` | Not found |
+| `5` | Conflict or required confirmation |
+| `6` | Timeout or unavailability |
+
+- `--non-interactive` never prompts. Vault unlock requires `--password-stdin` in JSON or non-interactive mode.
+- JSON `rm` and `rebuild` require `--yes`. Non-interactive text mode also requires it for destructive drive actions and full logout. There is no dry-run option.
+- JSON `put` accepts one regular local file. JSON `get` requires an explicit local file path and refuses to overwrite it unless `--yes` is given. The no-clobber check is best-effort, not atomic with other writers.
+- Interactive Telegram login is still required, and setup is text-only. `setup --api-id ID --api-hash-stdin` avoids putting the API hash in shell history or process arguments.
+- `--timeout 30s` bounds a daemon RPC after startup, not daemon startup itself.
+- `cat` emits raw file bytes and does not support JSON. It verifies downloads in a private temporary directory before writing them to stdout; a crash can leave plaintext there.
+
+</details>
 
 ## Desktop mount
 
@@ -256,14 +330,6 @@ Personal-drive mounts support create, replace, rename, move, and delete. Encrypt
 
 Linux mount behavior depends on the desktop's GIO/GVfs integration and should still be treated as beta.
 
-## Updating
-
-TDrive checks GitHub Releases shortly after launch and once each day. Downloads happen in the background, but installation is allowed only after the release checksum manifest passes Ed25519 signature verification using a public key embedded in TDrive.
-
-Open **Check for updates** from the account menu. When an update is ready, select **Restart to update**. On macOS, the same action is available under **Help → Check for Updates…**.
-
-You can disable automatic downloads or skip a version. Update checks contact only `api.github.com` using an anonymous request with no Telegram account data. Development builds created with `wails3 dev` do not check for updates.
-
 ## Known limitations
 
 - TDrive depends on Telegram availability, account access, API behavior, and rate limits.
@@ -272,25 +338,25 @@ You can disable automatic downloads or skip a version. Update checks contact onl
 - The Windows CLI is a portable beta without an installer or background system service.
 - Folder and archive import is copy-style import, not synchronization or merge; importing the same folder repeatedly may create numbered names.
 - `tdrive cat` may stage decrypted content in a temporary file before writing it to standard output.
-- macOS Intel, Linux ARM desktop packages, and Apple notarization are not currently provided.
+- Mobile backup stages originals locally, requires available device storage, and rejects resources larger than 4 GiB. It cannot keep running after the app process is terminated.
+- Backup does not deduplicate content across devices or mirror cloud albums. iOS Live Photo components are uploaded as separate originals, not reconstructed compound assets.
+- iOS can be built from source but has no public App Store, TestFlight, or installable release download yet.
 
 ## Build from source
 
-Requirements include Go 1.25, Node.js with npm, [Wails v3](https://v3.wails.io) (`go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22`), and the platform dependencies required by Wails.
+Use the Go version declared in [go.mod](go.mod), Node.js 22 with npm, and the pinned Wails v3 CLI below. Install the native dependencies for your platform first; see the [build guide](build/README.md) and [Wails installation guide](https://v3.wails.io/getting-started/installation/).
+
+Run these commands from the repository root:
 
 ```bash
-# Backend and CLI
-go test ./...
-go vet ./...
-go build -o tdrive ./cmd/tdrive
+go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
 
-# Frontend
-cd frontend
-npm ci
-npm run typecheck
-npm run lint
-npm test
-npm run build
+# Dependencies and embedded frontend
+npm --prefix frontend ci
+npm --prefix frontend run build
+
+# CLI
+go build -o build/bin/tdrive ./cmd/tdrive
 
 # Desktop development/build
 wails3 dev
@@ -298,16 +364,42 @@ wails3 task build      # binary only, into build/bin
 wails3 task package    # + platform packaging (.app / NSIS installer / AppImage)
 ```
 
+Android and iOS build commands are in the [mobile build guide](build/README.md#mobile).
+
+<details>
+<summary><strong>Run checks and tests</strong></summary>
+
+After installing the platform build dependencies, run from the repository root:
+
+```bash
+go test ./...
+go vet ./...
+npm --prefix frontend run typecheck
+npm --prefix frontend run lint
+npm --prefix frontend run test:coverage
+npm --prefix frontend run build
+bash scripts/test-android-version-code.sh
+bash scripts/test-android-signer-digests.sh
+```
+
+On Linux, add `-tags=gtk3` to Go build, test, and vet commands to match this project's desktop configuration.
+
+Browser tests run from `frontend/`:
+
+```bash
+npx playwright install --with-deps chromium webkit
+npm run test:e2e
+npx playwright test --config playwright.gallery-webkit.config.ts
+```
+
+</details>
+
 Native playback packaging is handled by the scripts under `scripts/` and the release workflow. When a bundled runtime is unavailable, TDrive can fall back to `mpv` from `PATH`; `TDRIVE_MPV_BIN` overrides that binary.
-
-### Android release signing
-
-The tag-based release workflow builds an arm64 APK and includes it in the signed checksum manifest. Configure the `release-signing` GitHub environment with `TDRIVE_ANDROID_KEYSTORE_BASE64`, `TDRIVE_ANDROID_KEYSTORE_PASSWORD`, `TDRIVE_ANDROID_KEY_ALIAS`, and `TDRIVE_ANDROID_KEY_PASSWORD` secrets, plus a `TDRIVE_ANDROID_CERT_SHA256` variable containing the release certificate fingerprint. Keep the original keystore backed up securely: Android updates must be signed with the same certificate. The release workflow fails rather than publishing a debug-signed APK when these values are missing or do not match.
 
 <details>
 <summary><strong>Local data locations</strong></summary>
 
-Persistent files live in the operating system's user-config directory:
+Desktop persistent files live in the operating system's user-config directory:
 
 - macOS: `~/Library/Application Support/TDrive/`
 - Linux: `~/.config/TDrive/`
@@ -319,11 +411,14 @@ Important files include:
 - `session.json`: Telegram login session
 - `config.json`: personal-drive channel configuration
 - `tdrive.db`: local projection, sync log, and encryption metadata
+- `photo-backup.db`: backup sources, settings, and queue
 - `cli.json`: CLI drive and working-directory state
 - `daemon.log`: CLI daemon log
 - `backend.lock`: prevents concurrent GUI and daemon ownership
 
 The Unix daemon socket is runtime-only under `$XDG_RUNTIME_DIR` or `/tmp/tdrive-<uid>`. Windows uses a per-user named pipe restricted to the current Windows SID.
+
+Mobile builds use app-private storage. Configuration and session files contain sensitive account data; do not attach them to public bug reports.
 
 </details>
 
@@ -338,6 +433,8 @@ TDrive began as my first Go project and a way to learn Go, Wails, and Telegram A
 - [Telegram community](https://t.me/Tdrive_community): questions, feedback, and discussion
 - [Report a problem](https://github.com/jeetrex17/TDrive/issues)
 
+For bug reports, include the TDrive version, operating system, expected behavior, and steps to reproduce. Redact API hashes, passwords, session data, private filenames, and invite links from logs and screenshots.
+
 ## License
 
-See [LICENSE](LICENSE).
+TDrive is licensed under the [MIT License](LICENSE).
