@@ -351,6 +351,58 @@ func TestMissingPlatformAssetIsNotInstallable(t *testing.T) {
 	}
 }
 
+func TestCheckLinuxAppImageNames(t *testing.T) {
+	const preferred = "TDrive-v2.0.2-x86_64.AppImage"
+	const legacy = "TDrive-v2.0.2-linux-amd64.AppImage"
+	cases := []struct {
+		name   string
+		assets []string
+		want   string
+	}{
+		{"renamed AppImage", []string{preferred}, preferred},
+		{"legacy AppImage", []string{legacy}, legacy},
+		{"prefer renamed regardless of order", []string{legacy, preferred}, preferred},
+		{"reject different tag and CLI", []string{"TDrive-v2.0.1-x86_64.AppImage", "TDrive-v2.0.2-linux-amd64-cli.AppImage"}, ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newFixture(t, "2.0.1", "2.0.2")
+			release := f.source.release
+			release.Assets = []Asset{}
+			for _, name := range tc.assets {
+				release.Assets = append(release.Assets, Asset{Name: name, Size: int64(len(f.payload)), URL: f.server.URL + "/" + name})
+			}
+			release.Assets = append(release.Assets, f.source.release.Assets[2:]...)
+			f.setManifest(sha256Hex(f.payload) + "  " + tc.want + "\n")
+			if tc.want != "" {
+				if err := os.WriteFile(filepath.Join(f.cacheDir, tc.want), f.payload, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			opts := f.service.opts
+			opts.Platform = Platform{OS: "linux", Arch: "amd64"}
+			opts.Source = &fakeSource{release: release}
+			opts.manifestPublicKeys = []ed25519.PublicKey{f.signingKey.publicKey}
+			opts.OnChange = nil
+			service := New(opts)
+			t.Cleanup(service.Close)
+			got := service.Check(t.Context())
+			if got.Latest == nil || got.Latest.AssetName != tc.want || got.Error != "" {
+				t.Fatalf("selected release = %+v", got)
+			}
+			if tc.want == "" {
+				if got.Installable || got.Phase != PhaseAvailable {
+					t.Fatalf("unmatched assets must require a manual update: %+v", got)
+				}
+				return
+			}
+			if !got.Installable || got.Phase != PhaseReady {
+				t.Fatalf("signed checksum and cached payload must use the selected name: %+v", got)
+			}
+		})
+	}
+}
+
 func TestUnsupportedPlatformIsNotInstallable(t *testing.T) {
 	f := newFixture(t, "1.6.0", "1.7.0")
 	f.service.opts.Platform = Platform{OS: "linux", Arch: "arm64"}

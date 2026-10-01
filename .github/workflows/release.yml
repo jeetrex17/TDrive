@@ -92,7 +92,7 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev mpv
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev mpv imagemagick librsvg2-dev libgirepository1.0-dev
 
       # Uses the checksum-pinned runtime archive when the repository variables
       # are set and the runner's package-manager mpv otherwise; the bundle
@@ -150,87 +150,39 @@ jobs:
             wails3 task build VERSION="$TDRIVE_ARTIFACT_VERSION"
           fi
 
-      - name: Acquire AppImage tool
+      - name: Acquire pinned AppImage tools
         if: runner.os == 'Linux'
         shell: bash
         env:
           APPIMAGETOOL_URL: ${{ vars.TDRIVE_APPIMAGETOOL_URL }}
           APPIMAGETOOL_SHA256: ${{ vars.TDRIVE_APPIMAGETOOL_SHA256 }}
         run: |
-          set -euo pipefail
-          appimagetool="$RUNNER_TEMP/tdrive-appimagetool"
-          if [ -z "$APPIMAGETOOL_URL" ] || [ -z "$APPIMAGETOOL_SHA256" ]; then
-            echo "::warning::TDRIVE_APPIMAGETOOL_URL and TDRIVE_APPIMAGETOOL_SHA256 are not set; using the continuous appimagetool build."
-            curl --fail --location --silent --show-error \
-              https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage \
-              --output "$appimagetool"
-            chmod 755 "$appimagetool"
-            echo "TDRIVE_APPIMAGETOOL=$appimagetool" >> "$GITHUB_ENV"
-            exit 0
-          fi
-          expected_sha256="$(printf '%s' "$APPIMAGETOOL_SHA256" | tr '[:upper:]' '[:lower:]')"
-          case "$expected_sha256" in
-            *[!0-9a-f]*|'') echo "TDRIVE_APPIMAGETOOL_SHA256 must be a SHA-256 value" >&2; exit 1 ;;
-          esac
-          if [ "${#expected_sha256}" -ne 64 ]; then
-            echo "TDRIVE_APPIMAGETOOL_SHA256 must contain exactly 64 hexadecimal characters" >&2
-            exit 1
-          fi
-          curl --fail --location --silent --show-error "$APPIMAGETOOL_URL" --output "$appimagetool"
-          actual_sha256="$(sha256sum "$appimagetool" | awk '{print $1}')"
-          if [ "$actual_sha256" != "$expected_sha256" ]; then
-            echo "appimagetool checksum mismatch: expected $expected_sha256, got $actual_sha256" >&2
-            exit 1
-          fi
-          chmod 755 "$appimagetool"
-          echo "TDRIVE_APPIMAGETOOL=$appimagetool" >> "$GITHUB_ENV"
+          bash scripts/acquire-appimage-tools.sh "$RUNNER_TEMP/appimage-tools"
+          echo "TDRIVE_LINUXDEPLOY=$RUNNER_TEMP/appimage-tools/linuxdeploy-x86_64.AppImage" >> "$GITHUB_ENV"
+          echo "TDRIVE_APPIMAGETOOL=$RUNNER_TEMP/appimage-tools/appimagetool-x86_64.AppImage" >> "$GITHUB_ENV"
 
-      - name: Package (Linux AppImage)
-        if: matrix.os == 'ubuntu-22.04'
-        shell: bash
+      - name: Package Linux AppImage
+        if: runner.os == 'Linux'
+        run: bash scripts/package-appimage.sh build/bin/TDrive "$TDRIVE_ARTIFACT_VERSION" dist
+
+      - name: Smoke test AppImage without host WebKitGTK
+        if: runner.os == 'Linux'
         run: |
-          set -euo pipefail
-          sudo apt-get install -y imagemagick
+          docker build -f .github/appimage-smoke.Dockerfile -t tdrive-appimage-smoke scripts
+          mkdir -p appimage-smoke-artifacts
+          chmod 777 appimage-smoke-artifacts
+          docker run --rm --network none --security-opt seccomp=unconfined \
+            -v "$PWD/appimage-smoke-artifacts:/output" -e TDRIVE_SMOKE_ARTIFACTS=/output \
+            -v "$PWD/dist:/input:ro" tdrive-appimage-smoke \
+            "/input/TDrive-$TDRIVE_ARTIFACT_VERSION-x86_64.AppImage"
 
-          APPDIR=TDrive.AppDir
-          rm -rf "$APPDIR"
-          mkdir -p "$APPDIR/usr/bin" \
-                   "$APPDIR/usr/share/applications" \
-                   "$APPDIR/usr/share/icons/hicolor/256x256/apps"
-
-          # App binary
-          cp "build/bin/TDrive" "$APPDIR/usr/bin/TDrive"
-          chmod +x "$APPDIR/usr/bin/TDrive"
-
-          # Icon from the canonical appicon.png (AppDir root + hicolor theme path)
-          convert build/appicon.png -resize 256x256 \
-            "$APPDIR/usr/share/icons/hicolor/256x256/apps/TDrive.png"
-          cp "$APPDIR/usr/share/icons/hicolor/256x256/apps/TDrive.png" "$APPDIR/TDrive.png"
-
-          # Desktop entry (AppDir root + standard location)
-          cp build/linux/TDrive.desktop "$APPDIR/usr/share/applications/TDrive.desktop"
-          cp build/linux/TDrive.desktop "$APPDIR/TDrive.desktop"
-
-          # Launcher
-          cat > "$APPDIR/AppRun" <<'SH'
-          #!/bin/bash
-          HERE="$(dirname "$(readlink -f "${0}")")"
-          exec "${HERE}/usr/bin/TDrive" "$@"
-          SH
-          chmod +x "$APPDIR/AppRun"
-
-          # package-mpv-linux validates the runtime's version, architecture,
-          # license/source metadata, and a deterministic headless decode. The
-          # version override is only set for the package-manager fallback.
-          if [ -n "${TDRIVE_MPV_TEST_VERSION:-}" ]; then
-            TDRIVE_MPV_ALLOW_TEST_VERSION=1 ./scripts/package-mpv-linux.sh "$APPDIR" "$TDRIVE_MPV_TEST_VERSION"
-          else
-            ./scripts/package-mpv-linux.sh "$APPDIR"
-          fi
-
-          mkdir -p dist
-          APPIMAGE_EXTRACT_AND_RUN=1 ARCH=x86_64 \
-            "$TDRIVE_APPIMAGETOOL" "$APPDIR" "dist/TDrive-${TDRIVE_ARTIFACT_VERSION}-linux-amd64.AppImage"
+      - name: Upload AppImage smoke artifacts
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: appimage-smoke-${{ github.run_id }}
+          path: appimage-smoke-artifacts/
+          if-no-files-found: ignore
 
       # The runner image has no NSIS; the Chocolatey package installs under
       # Program Files (x86) without touching PATH. Keep in sync with ci.yml.

@@ -262,6 +262,12 @@ func (s *Service) resolve(ctx context.Context, release Release) (resolution, err
 		return res, nil
 	}
 	asset, ok := release.asset(name)
+	if !ok && s.opts.Platform == (Platform{OS: "linux", Arch: "amd64"}) {
+		// Releases before v2.0.1 used the GOOS/GOARCH filename. Prefer the
+		// catalog-compatible name when a release happens to contain both.
+		name = "TDrive-" + release.Tag + "-linux-amd64.AppImage"
+		asset, ok = release.asset(name)
+	}
 	if !ok {
 		res.hint = fmt.Sprintf("This release has no %s %s build yet.", displayOS(s.opts.Platform.OS), s.opts.Platform.Arch)
 		return res, nil

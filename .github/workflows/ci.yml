@@ -58,6 +58,12 @@ jobs:
       - name: Run media runtime acquisition tests
         run: bash scripts/test-acquire-mpv-runtime.sh
 
+      - name: Test AppImage launcher
+        run: |
+          bash -n scripts/acquire-appimage-tools.sh scripts/package-appimage.sh scripts/smoke-appimage.sh build/linux/AppRun
+          bash scripts/test-appimage-launcher.sh
+          bash scripts/test-acquire-appimage-tools.sh
+
       - name: Run Linux media dependency tests
         run: bash scripts/test-mpv-linux-libraries.sh
 
@@ -425,7 +431,7 @@ jobs:
         if: matrix.os == 'ubuntu-22.04'
         run: |
           sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev mpv
+          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.1-dev libx11-dev mpv imagemagick librsvg2-dev libgirepository1.0-dev
 
       # Uses the checksum-pinned runtime archive when the repository variables
       # are set and the runner's package-manager mpv otherwise. Keep in sync
@@ -453,9 +459,8 @@ jobs:
 
       # macOS needs the .app bundle (`package`) since the media-bundle contract
       # check below looks for build/bin/TDrive.app. Linux/Windows only need the
-      # bare binary (`build`): CI hand-rolls its own AppDir/zip below rather
-      # than using the real linux:package (AppImage) / windows:package (NSIS)
-      # tasks, which need tools (appimagetool / makensis) not installed here.
+      # bare binary (`build`); CI and release use the same AppImage packaging
+      # script below. Windows packaging also verifies the NSIS installer.
       - name: Build Wails app
         shell: bash
         run: |
@@ -466,27 +471,29 @@ jobs:
             wails3 task build VERSION=ci
           fi
 
-      - name: Package and validate Linux media runtime contract
+      - name: Package and smoke test Linux AppImage
         if: runner.os == 'Linux'
         shell: bash
         run: |
           set -euo pipefail
-          app_dir="$RUNNER_TEMP/tdrive-ci.AppDir"
-          mkdir -p "$app_dir/usr/bin"
+          bash scripts/acquire-appimage-tools.sh "$RUNNER_TEMP/appimage-tools"
+          export TDRIVE_LINUXDEPLOY="$RUNNER_TEMP/appimage-tools/linuxdeploy-x86_64.AppImage"
+          export TDRIVE_APPIMAGETOOL="$RUNNER_TEMP/appimage-tools/appimagetool-x86_64.AppImage"
+          bash scripts/package-appimage.sh build/bin/TDrive ci dist
+          docker build -f .github/appimage-smoke.Dockerfile -t tdrive-appimage-smoke scripts
+          mkdir -p appimage-smoke-artifacts
+          chmod 777 appimage-smoke-artifacts
+          docker run --rm --network none --security-opt seccomp=unconfined \
+            -v "$PWD/appimage-smoke-artifacts:/output" -e TDRIVE_SMOKE_ARTIFACTS=/output \
+            -v "$PWD/dist:/input:ro" tdrive-appimage-smoke /input/TDrive-ci-x86_64.AppImage
 
-          app_binary="$(find build/bin -maxdepth 1 -type f -perm -111 -print -quit)"
-          [ -n "$app_binary" ] || { echo "no Linux Wails executable found" >&2; exit 1; }
-          cp "$app_binary" "$app_dir/usr/bin/TDrive"
-          chmod 755 "$app_dir/usr/bin/TDrive"
-          if [ -n "${TDRIVE_MPV_TEST_VERSION:-}" ]; then
-            TDRIVE_MPV_ALLOW_TEST_VERSION=1 ./scripts/package-mpv-linux.sh "$app_dir" "$TDRIVE_MPV_TEST_VERSION"
-          else
-            ./scripts/package-mpv-linux.sh "$app_dir"
-          fi
-          (
-            cd "$app_dir/usr/bin/media"
-            sha256sum -c media-runtime.sha256
-          )
+      - name: Upload AppImage smoke artifacts
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: appimage-smoke-${{ github.run_id }}
+          path: appimage-smoke-artifacts/
+          if-no-files-found: ignore
 
       - name: Package and validate macOS media bundle contract
         if: runner.os == 'macOS'

@@ -10,7 +10,7 @@ func TestAppAssetName(t *testing.T) {
 	}{
 		{Platform{"darwin", "arm64"}, "TDrive-v1.7.0-macos-arm64.zip", true},
 		{Platform{"windows", "amd64"}, "TDrive-v1.7.0-windows-amd64.zip", true},
-		{Platform{"linux", "amd64"}, "TDrive-v1.7.0-linux-amd64.AppImage", true},
+		{Platform{"linux", "amd64"}, "TDrive-v1.7.0-x86_64.AppImage", true},
 		{Platform{"darwin", "amd64"}, "", false},
 		{Platform{"linux", "arm64"}, "", false},
 	}

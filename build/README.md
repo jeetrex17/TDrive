@@ -62,8 +62,26 @@ Categories) and is never regenerated automatically - see
 ## Linux
 
 - `linux/TDrive.desktop` - the `.desktop` entry, packaged into the AppImage.
-- `linux/appimage/` - working directory for `wails3 task linux:package`
-  (AppImage build); the produced `.AppImage` goes to `build/bin`.
+- `linux/AppRun` - relocatable launcher for the bundled GUI runtime.
+- `wails3 task linux:package VERSION=v2.0.1` - build and package the application
+  with the same scripts used by CI; the AppImage goes to `build/bin`.
+
+Release AppImages use `scripts/package-appimage.sh` to bundle GTK3, WebKitGTK 4.1, WebKit helpers, GTK/GIO resources, and the mpv media runtime. Build on Ubuntu 22.04 amd64 to preserve the glibc 2.35 minimum. In addition to the native build dependencies above, install `mpv`, `imagemagick`, `librsvg2-dev`, and `libgirepository1.0-dev`.
+
+Run from the repository root on a Linux host:
+
+```bash
+wails3 task linux:package VERSION=v2.0.1
+```
+
+The acquisition script downloads checksum-pinned linuxdeploy, its GTK plugin, and appimagetool. The task also prepares the mpv runtime, using the configured runtime archive or the installed `mpv`. Release jobs stage `dist/TDrive-v2.0.1-x86_64.AppImage`. CI and release builds check it in an Ubuntu 22.04 container with no host GTK or WebKit installed:
+
+```bash
+docker build -f .github/appimage-smoke.Dockerfile -t tdrive-appimage-smoke scripts
+docker run --rm --network none --security-opt seccomp=unconfined \
+  -v "$PWD/dist:/input:ro" tdrive-appimage-smoke \
+  /input/TDrive-v2.0.1-x86_64.AppImage
+```
 
 ## Mobile
 

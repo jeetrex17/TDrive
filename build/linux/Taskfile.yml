@@ -58,30 +58,32 @@ tasks:
 
   package:
     summary: Packages the application for Linux (AppImage only)
-    deps:
-      - task: build
-        vars:
-          VERSION: '{{.VERSION}}'
     cmds:
       - task: create:appimage
+        vars:
+          VERSION: '{{.VERSION}}'
 
   create:appimage:
-    summary: Creates an AppImage
-    dir: build/linux/appimage
+    summary: Creates the same self-contained AppImage used by CI and releases
+    dir: '{{.ROOT_DIR}}'
     deps:
       - task: build
         vars:
           VERSION: '{{.VERSION}}'
     cmds:
-      - cp "{{.APP_BINARY}}" "{{.APP_NAME}}"
-      - cp ../../appicon.png "{{.APP_NAME}}.png"
-      - wails3 generate appimage -binary "{{.APP_NAME}}" -icon {{.ICON}} -desktopfile {{.DESKTOP_FILE}} -outputdir {{.OUTPUT_DIR}} -builddir {{.ROOT_DIR}}/build/linux/appimage/build
-    vars:
-      APP_NAME: '{{.APP_NAME}}'
-      APP_BINARY: '{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}'
-      ICON: '{{.APP_NAME}}.png'
-      DESKTOP_FILE: '../{{.APP_NAME}}.desktop'
-      OUTPUT_DIR: '{{.ROOT_DIR}}/{{.BIN_DIR}}'
+      - |
+        set -eu
+        tools="$(mktemp -d /tmp/tdrive-appimage-tools.XXXXXX)"
+        trap 'rm -rf "$tools"' EXIT
+        bash scripts/acquire-appimage-tools.sh "$tools"
+        export TDRIVE_LINUXDEPLOY="$tools/linuxdeploy-x86_64.AppImage"
+        export TDRIVE_APPIMAGETOOL="$tools/appimagetool-x86_64.AppImage"
+        touch "$tools/runtime.env"
+        RUNNER_TEMP="$tools" GITHUB_ENV="$tools/runtime.env" bash scripts/prepare-mpv-runtime.sh
+        while IFS='=' read -r name value; do
+          export "$name=$value"
+        done < "$tools/runtime.env"
+        bash scripts/package-appimage.sh "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.VERSION | default "dev"}}" "{{.BIN_DIR}}"
 
   generate:dotdesktop:
     summary: Regenerates build/linux/TDrive.desktop from scratch (NOT run automatically - see note)

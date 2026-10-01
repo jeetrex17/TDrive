@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -e
+# WebKit's GTK plugin relocates /usr paths to ././. Its helper processes
+# therefore need the AppDir's usr directory as their working directory.
+APPDIR="$(cd "$(dirname "$(readlink -f "$0")")" && pwd -P)"
+export APPDIR
+export LD_LIBRARY_PATH="$APPDIR/usr/lib:$APPDIR/usr/lib/x86_64-linux-gnu"
+for hook in "$APPDIR"/apprun-hooks/*.sh; do
+  [ ! -r "$hook" ] || . "$hook"
+done
+cd "$APPDIR/usr"
+exec "$APPDIR/usr/bin/TDrive" "$@"

@@ -39,11 +39,13 @@ Download packages from [**GitHub Releases**](https://github.com/jeetrex17/TDrive
 | --- | --- | --- | --- |
 | macOS Apple silicon | `*-macos-arm64.zip` | `*-darwin-arm64-cli.tar.gz` | GitHub Releases |
 | Windows amd64 | `*-windows-amd64-setup.exe` or portable `.zip` | `*-windows-amd64-cli.zip` | GitHub Releases |
-| Linux amd64 | `*-linux-amd64.AppImage` | `*-linux-amd64-cli.tar.gz` | GitHub Releases |
+| Linux amd64 | `*-x86_64.AppImage` | `*-linux-amd64-cli.tar.gz` | GitHub Releases |
 | Android ARM64 | `*-android-arm64.apk` when published | Not available | GitHub only, not the Play Store |
 | iOS | No public download yet | Not available | Source builds only |
 
 The Windows installer runs per user without administrator rights. The portable zip contains the same application without the installer.
+
+Linux AppImages require glibc 2.35 or newer (Ubuntu 22.04 or a compatible distribution). For the first upgrade from v2.0.0 or earlier, download `TDrive-v2.0.1-x86_64.AppImage` manually, make it executable, and launch it. Earlier versions' in-app updater expects the old filename; v2.0.1 recognizes the new name for subsequent updates. Your existing account and drive data are retained.
 
 ### Android installation
 
