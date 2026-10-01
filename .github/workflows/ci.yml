@@ -44,6 +44,15 @@ jobs:
         working-directory: frontend
         run: npm ci
 
+      - name: Use Ubuntu archive mirror
+        if: runner.os == 'Linux'
+        run: |
+          for sources in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            if [ -f "$sources" ]; then
+              sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' "$sources"
+            fi
+          done
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
@@ -105,7 +114,7 @@ jobs:
   browser-contracts:
     name: Browser frontend contracts
     runs-on: ubuntu-22.04
-    timeout-minutes: 15
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
@@ -120,6 +129,15 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
+
+      - name: Use Ubuntu archive mirror
+        if: runner.os == 'Linux'
+        run: |
+          for sources in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            if [ -f "$sources" ]; then
+              sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' "$sources"
+            fi
+          done
 
       - name: Install Chromium and WebKit
         working-directory: frontend
@@ -188,6 +206,15 @@ jobs:
         working-directory: frontend
         run: npm run build
 
+      - name: Use Ubuntu archive mirror
+        if: runner.os == 'Linux'
+        run: |
+          for sources in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            if [ -f "$sources" ]; then
+              sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' "$sources"
+            fi
+          done
+
       - name: Install Linux dependencies
         run: |
           sudo apt-get update
@@ -255,6 +282,15 @@ jobs:
       - name: Build embedded frontend
         working-directory: frontend
         run: npm run build
+
+      - name: Use Ubuntu archive mirror
+        if: runner.os == 'Linux'
+        run: |
+          for sources in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            if [ -f "$sources" ]; then
+              sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' "$sources"
+            fi
+          done
 
       - name: Install Linux dependencies
         run: |
@@ -426,6 +462,15 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
+
+      - name: Use Ubuntu archive mirror
+        if: runner.os == 'Linux'
+        run: |
+          for sources in /etc/apt/sources.list /etc/apt/sources.list.d/*.list /etc/apt/sources.list.d/*.sources; do
+            if [ -f "$sources" ]; then
+              sudo sed -i 's|azure\.archive\.ubuntu\.com|archive.ubuntu.com|g' "$sources"
+            fi
+          done
 
       - name: Install Linux dependencies
         if: matrix.os == 'ubuntu-22.04'
