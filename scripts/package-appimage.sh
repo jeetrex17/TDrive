@@ -48,9 +48,16 @@ export PATH="$(dirname "$TDRIVE_LINUXDEPLOY"):$PATH"
 # linuxdeploy excludes these text-rendering libraries as common host files,
 # but hosts without GTK (including the catalog runner) need them in the bundle.
 gtk_libdir="$(pkg-config --variable=libdir gtk+-3.0)"
+# libepoxy dlopens this vendor-neutral GLES interface at runtime. Keep the
+# graphics driver/dispatch stack host-provided, as linuxdeploy's blacklist does.
 "$TDRIVE_LINUXDEPLOY" --appdir "$appdir" --plugin gtk \
   --library "$gtk_libdir/libharfbuzz.so.0" \
-  --library "$gtk_libdir/libfribidi.so.0"
+  --library "$gtk_libdir/libfribidi.so.0" \
+  --library "$gtk_libdir/libGLESv2.so.2" \
+  --exclude-library 'libGLdispatch.so*'
+if find "$appdir/usr/lib" -name 'libGLdispatch.so*' -print -quit | grep -q .; then
+  die 'graphics dispatch library must remain host-provided'
+fi
 # Capture redistribution notices before adding the separately qualified mpv
 # runtime. Each copied library retains its distro package's copyright file.
 while IFS= read -r -d '' library; do
