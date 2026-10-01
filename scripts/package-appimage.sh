@@ -45,7 +45,12 @@ done
 
 export APPIMAGE_EXTRACT_AND_RUN=1 DEPLOY_GTK_VERSION=3 NO_STRIP=1
 export PATH="$(dirname "$TDRIVE_LINUXDEPLOY"):$PATH"
-"$TDRIVE_LINUXDEPLOY" --appdir "$appdir" --plugin gtk
+# linuxdeploy excludes these text-rendering libraries as common host files,
+# but hosts without GTK (including the catalog runner) need them in the bundle.
+gtk_libdir="$(pkg-config --variable=libdir gtk+-3.0)"
+"$TDRIVE_LINUXDEPLOY" --appdir "$appdir" --plugin gtk \
+  --library "$gtk_libdir/libharfbuzz.so.0" \
+  --library "$gtk_libdir/libfribidi.so.0"
 # Capture redistribution notices before adding the separately qualified mpv
 # runtime. Each copied library retains its distro package's copyright file.
 while IFS= read -r -d '' library; do
