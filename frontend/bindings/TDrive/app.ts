@@ -45,6 +45,14 @@ export function CancelDownload(): $CancellablePromise<void> {
 }
 
 /**
+ * CancelResumableUpload abandons a job and removes only the remote parts that
+ * the backend has verified belong to that job.
+ */
+export function CancelResumableUpload(jobID: string): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(2256464164, jobID);
+}
+
+/**
  * CancelUpload cancels the in-flight upload or import: in-flight sends abort and
  * the rest are skipped. The frontend marks the affected transfers canceled.
  */
@@ -224,6 +232,14 @@ export function ListMediaPage(cursor: string, limit: number): $CancellablePromis
 }
 
 /**
+ * ListResumableUploads returns backend-confirmed multipart upload checkpoints
+ * for the selected drive. The frontend's transfer history is not a receipt.
+ */
+export function ListResumableUploads(): $CancellablePromise<file$0.ResumableUpload[] | null> {
+    return $Call.ByID(2971753207);
+}
+
+/**
  * ListTrash returns everything still restorable, most recently deleted first.
  * 
  * It is a pure read: purging is the background sweep's job (app_trash_sweep.go)
@@ -333,6 +349,14 @@ export function PausePhotoBackup(): $CancellablePromise<$models.OperationResult>
 }
 
 /**
+ * PauseResumableUpload stops the current attempt while retaining its durable
+ * Telegram message checkpoints.
+ */
+export function PauseResumableUpload(jobID: string): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(830918266, jobID);
+}
+
+/**
  * PlanImport scans the selected paths and returns the counts shown in the
  * import dialog (files, folders, total size, archives, oversize-skipped). It
  * mutates nothing.
@@ -393,6 +417,15 @@ export function RestoreFromTrash(objectID: string): $CancellablePromise<$models.
 
 export function ResumePhotoBackup(): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(1448669500);
+}
+
+/**
+ * ResumeResumableUpload continues one paused multipart upload. An empty source
+ * path reuses the original path; a selected replacement is verified by the
+ * service before it can contribute bytes to an existing upload.
+ */
+export function ResumeResumableUpload(jobID: string, sourcePath: string): $CancellablePromise<$models.UploadResult> {
+    return $Call.ByID(1690114899, jobID, sourcePath);
 }
 
 export function RetryPhotoBackup(): $CancellablePromise<$models.OperationResult> {

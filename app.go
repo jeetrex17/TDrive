@@ -246,6 +246,21 @@ func (a *App) beginUpload() context.Context {
 	return ctx
 }
 
+// beginResumeUpload refuses to replace another active upload. The normal
+// picker flow deliberately cancels its predecessor, but resuming a saved job
+// must not surprise the user by stopping an unrelated batch.
+func (a *App) beginResumeUpload() (context.Context, error) {
+	a.transferMu.Lock()
+	defer a.transferMu.Unlock()
+	if a.uploadCancel != nil {
+		return nil, fmt.Errorf("another upload is already running")
+	}
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.uploadCancel = cancel
+	a.syncTransferKeepAwakeLocked()
+	return ctx, nil
+}
+
 func (a *App) endUpload() {
 	a.transferMu.Lock()
 	a.uploadCancel = nil
@@ -347,6 +362,62 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bo
 		return UploadResult{Result: operationFailure(err), Files: out}
 	}
 	return UploadResult{Result: operationSuccess(), Files: out}
+}
+
+// ListResumableUploads returns backend-confirmed multipart upload checkpoints
+// for the selected drive. The frontend's transfer history is not a receipt.
+func (a *App) ListResumableUploads() ([]fileservice.ResumableUpload, error) {
+	svc, err := a.requireFileService()
+	if err != nil {
+		return nil, err
+	}
+	return svc.ListResumableUploads(a.ctx, a.ActiveChannelID())
+}
+
+// ResumeResumableUpload continues one paused multipart upload. An empty source
+// path reuses the original path; a selected replacement is verified by the
+// service before it can contribute bytes to an existing upload.
+func (a *App) ResumeResumableUpload(jobID, sourcePath string) UploadResult {
+	svc, err := a.requireFileService()
+	if err != nil {
+		return UploadResult{Result: operationFailure(err)}
+	}
+	ctx, err := a.beginResumeUpload()
+	if err != nil {
+		return UploadResult{Result: operationFailure(err)}
+	}
+	defer a.endUpload()
+	meta, err := svc.ResumeUpload(ctx, a.ActiveChannelID(), jobID, sourcePath)
+	if err != nil {
+		return UploadResult{Result: operationFailure(err)}
+	}
+	return UploadResult{Result: operationSuccess(), Files: []backend.FileMetaData{uploadMetaToBackend(meta)}}
+}
+
+// PauseResumableUpload stops the current attempt while retaining its durable
+// Telegram message checkpoints.
+func (a *App) PauseResumableUpload(jobID string) OperationResult {
+	svc, err := a.requireFileService()
+	if err != nil {
+		return operationFailure(err)
+	}
+	if !svc.PauseUpload(a.ActiveChannelID(), jobID) {
+		return operationFailure(fmt.Errorf("resumable upload is not running"))
+	}
+	return operationSuccess()
+}
+
+// CancelResumableUpload abandons a job and removes only the remote parts that
+// the backend has verified belong to that job.
+func (a *App) CancelResumableUpload(jobID string) OperationResult {
+	svc, err := a.requireFileService()
+	if err != nil {
+		return operationFailure(err)
+	}
+	if err := svc.CancelResumableUpload(a.ctx, a.ActiveChannelID(), jobID); err != nil {
+		return operationFailure(err)
+	}
+	return operationSuccess()
 }
 
 // PlanImport scans the selected paths and returns the counts shown in the

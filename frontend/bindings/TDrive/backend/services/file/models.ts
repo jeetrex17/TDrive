@@ -57,3 +57,20 @@ export interface ImportPlan {
      */
     "errors": string[] | null;
 }
+
+/**
+ * ResumableUpload is the public, path-free view of a local multipart job.
+ * ConfirmedBytes counts durable part receipts, not bytes in the current send.
+ */
+export interface ResumableUpload {
+    "job_id": string;
+    "channel_id": number;
+    "name": string;
+    "parent_id": string;
+    "size": number;
+    "stored_size": number;
+    "confirmed_bytes": number;
+    "status": string;
+    "error": string;
+    "upload_id"?: number | null;
+}
