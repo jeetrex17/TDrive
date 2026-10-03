@@ -3,6 +3,8 @@
     import BellIcon from '@lucide/svelte/icons/bell';
     import EventRow from './EventRow.svelte';
     import TransferRow from './TransferRow.svelte';
+    import ResumableUploadRow from './ResumableUploadRow.svelte';
+    import { resumableUploads } from '../../modules/resumable-uploads';
     import { hasActiveModal } from '../modals/modal-a11y';
     import { portal } from './portal';
     import {
@@ -53,11 +55,19 @@
      * this before, which says nothing to a screen reader and little to anyone
      * who cannot separate the accent from the danger hue.
      */
+    const resumableIds = $derived(new Set($resumableUploads.map((job) => job.jobId)));
+    const visibleActive = $derived($activeTransfers.filter((transfer) => !transfer.resumableJobId || !resumableIds.has(transfer.resumableJobId)));
+    const visibleRecent = $derived($recentEvents.filter((entry) =>
+        entry.kind !== 'transfer' || !entry.resumableJobId || !resumableIds.has(entry.resumableJobId)
+    ));
+    const activeCount = $derived(visibleActive.length + $resumableUploads.length);
     const bellLabel = $derived(
         $bellMode === 'error'
             ? `Notifications, ${$notifUnreadErrors} ${$notifUnreadErrors === 1 ? 'error' : 'errors'}`
-            : $bellMode === 'active'
-              ? `Notifications, ${$activeTransfers.length} transfer${$activeTransfers.length === 1 ? '' : 's'} in progress`
+            : activeCount > 0
+              ? $resumableUploads.length > 0
+                  ? `Notifications, ${activeCount} transfer${activeCount === 1 ? '' : 's'} in progress or waiting`
+                  : `Notifications, ${activeCount} transfer${activeCount === 1 ? '' : 's'} in progress`
               : 'Notifications',
     );
 
@@ -212,7 +222,7 @@
     <span class="notif-bell-icon" aria-hidden="true">
         <BellIcon size={18} strokeWidth={1.8} aria-hidden="true" />
     </span>
-    <span class="notif-bell-dot" data-mode={$bellMode} aria-hidden="true"></span>
+    <span class="notif-bell-dot" data-mode={$bellMode === 'idle' && activeCount > 0 ? 'active' : $bellMode} aria-hidden="true"></span>
 </button>
 
 
@@ -238,7 +248,7 @@
                 <button
                     class="notif-panel-clear"
                     type="button"
-                    disabled={$recentEvents.length === 0}
+                    disabled={visibleRecent.length === 0}
                     onclick={onClearHistory}
                 >
                     Clear
@@ -246,10 +256,13 @@
             </div>
         </div>
         <div class="notif-panel-body">
-            {#if $activeTransfers.length > 0}
-                <h3 id="notif-section-active" class="notif-section-label">Active</h3>
+            {#if activeCount > 0}
+                <h3 id="notif-section-active" class="notif-section-label">{$resumableUploads.length > 0 ? 'Transfers' : 'Active'}</h3>
                 <div class="notif-section" role="list" aria-labelledby="notif-section-active">
-                    {#each $activeTransfers as transfer (transfer.id)}
+                    {#each $resumableUploads as job (job.jobId)}
+                        <div role="listitem"><ResumableUploadRow {job} /></div>
+                    {/each}
+                    {#each visibleActive as transfer (transfer.id)}
                         <!-- TransferRow carries no role of its own, unlike its
                              phone twin; the wrapper supplies one until it grows
                              EventRow's `listItem` prop. -->
@@ -259,10 +272,10 @@
                     {/each}
                 </div>
             {/if}
-            {#if $recentEvents.length > 0}
+            {#if visibleRecent.length > 0}
                 <h3 id="notif-section-recent" class="notif-section-label">Recent</h3>
                 <div class="notif-section" role="list" aria-labelledby="notif-section-recent">
-                    {#each $recentEvents.slice(0, 50) as entry (entry.id)}
+                    {#each visibleRecent.slice(0, 50) as entry (entry.id)}
                         {#if entry.kind === 'transfer'}
                             <div role="listitem"><TransferRow transfer={entry} /></div>
                         {:else}
@@ -270,7 +283,7 @@
                         {/if}
                     {/each}
                 </div>
-            {:else if $activeTransfers.length === 0}
+            {:else if activeCount === 0}
                 <div class="notif-empty">
                     <div class="notif-empty-glyph">
                         <BellIcon size={48} strokeWidth={1.8} aria-hidden="true" />

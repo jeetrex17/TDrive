@@ -51,4 +51,30 @@ func TestPlanUpload(t *testing.T) {
 	if _, multi, err := (&Service{}).planUpload("g.bin", 1<<30, false); err != nil || multi {
 		t.Errorf("1 GiB default should be single, got multi=%v err=%v", multi, err)
 	}
+	if got := (&Service{}).minResumableUploadBytes(); got != 2_000_000_000 || got <= MaxPartBytes {
+		t.Errorf("default recovery threshold = %d, want 2 GB above the multipart boundary", got)
+	}
+	if got := s.minResumableUploadBytes(); got != s.MaxUploadBytes {
+		t.Errorf("test recovery threshold = %d, want %d", got, s.MaxUploadBytes)
+	}
+}
+
+func TestResumablePartPlan(t *testing.T) {
+	s := &Service{}
+	for _, size := range []int64{MaxPartBytes + 1, 10 << 30, LargeFileMaxBytes} {
+		plan, err := s.buildResumablePartPlan(size)
+		if err != nil {
+			t.Fatalf("size %d: %v", size, err)
+		}
+		if plan.partCount < 2 || plan.partCount > MaxParts || plan.partSize > MaxPartBytes {
+			t.Fatalf("size %d: invalid plan %+v", size, plan)
+		}
+		if size == MaxPartBytes+1 && plan.partSize != 512<<20 {
+			t.Fatalf("small large file: part size %d, want 512 MiB", plan.partSize)
+		}
+		last, length, err := plan.window(size, plan.partCount-1)
+		if err != nil || last+length != size || length <= 0 {
+			t.Fatalf("size %d: final window %d+%d, err %v", size, last, length, err)
+		}
+	}
 }

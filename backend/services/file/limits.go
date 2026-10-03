@@ -17,6 +17,11 @@ const (
 	// encryption overhead never pushes a part over the wire limit.
 	MaxPartBytes int64 = 1900 * 1024 * 1024 // ~1.855 GiB
 
+	// MinResumableUploadBytes keeps recovery limited to files larger than
+	// 2 GB. Multipart files in the narrow gap above MaxPartBytes still use
+	// the regular upload path.
+	MinResumableUploadBytes int64 = 2_000_000_000
+
 	// LargeFileMaxBytes is the largest stored size we will split and upload.
 	// Beyond this a file is rejected rather than producing an unwieldy number
 	// of parts.
@@ -38,6 +43,13 @@ func (s *Service) maxPartBytes() int64 {
 		return s.MaxUploadBytes
 	}
 	return MaxPartBytes
+}
+
+func (s *Service) minResumableUploadBytes() int64 {
+	if s.MaxUploadBytes > 0 {
+		return s.MaxUploadBytes // Test override for small multipart fixtures.
+	}
+	return MinResumableUploadBytes
 }
 
 // largeFileMaxBytes is the active hard cap on a file's stored size. With a part

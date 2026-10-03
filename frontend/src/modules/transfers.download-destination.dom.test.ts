@@ -42,6 +42,7 @@ vi.mock('../ui/mobile/mobile-shell-store', () => ({
     rememberDownloadSharePath: mocks.rememberDownloadSharePath,
 }));
 vi.mock('./notif-bell', () => ({
+    forgetResumableUpload: vi.fn(),
     markTransferDone: mocks.markTransferDone,
     setTransferNote: mocks.setTransferNote,
     pushQueuedTransfer: vi.fn(),

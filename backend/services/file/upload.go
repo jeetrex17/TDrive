@@ -20,7 +20,8 @@ import (
 
 func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []string, parentIDs []string, encrypt bool) ([]Metadata, error) {
 	return s.upload(ctx, channelID, filePaths, parentIDs, encrypt, uploadOptions{
-		observer: detailedUploadObserver{service: s},
+		observer:  detailedUploadObserver{service: s},
+		resumable: true,
 	})
 }
 
@@ -58,9 +59,10 @@ func (s *Service) trackUploadCancel(ctx context.Context, uploadID int) (context.
 }
 
 type uploadOptions struct {
-	observer uploadObserver
-	peer     *tgclient.InputPeer
-	idOffset int
+	observer  uploadObserver
+	peer      *tgclient.InputPeer
+	idOffset  int
+	resumable bool
 }
 
 type uploadedResult struct {
@@ -148,7 +150,7 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 				}
 			}()
 
-			meta, op, header, err := s.uploadSingleWithObserver(uploadCtx, uploadID, path, pid, channelID, encrypt, *peer, observer)
+			meta, op, header, err := s.uploadSingleWithObserver(uploadCtx, uploadID, path, pid, channelID, encrypt, *peer, observer, options.resumable)
 			if err != nil {
 				if meta.MsgID != 0 {
 					mu.Lock()
@@ -267,10 +269,11 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 		wantEncrypted,
 		peer,
 		detailedUploadObserver{service: s},
+		false,
 	)
 }
 
-func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, filePath string, parentID string, channelID int64, wantEncrypted bool, peer tgclient.InputPeer, observer uploadObserver) (Metadata, projection.Op, string, error) {
+func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, filePath string, parentID string, channelID int64, wantEncrypted bool, peer tgclient.InputPeer, observer uploadObserver, resumable bool) (Metadata, projection.Op, string, error) {
 	if channelID == 0 {
 		return Metadata{}, projection.Op{}, "", fmt.Errorf("drive channel id not found")
 	}
@@ -312,7 +315,7 @@ func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, fi
 	// avoiding the duplicate start event that used to be emitted at two layers.
 	observer.Started(uploadID, filename, uploadByteSize(plaintextSize, wantEncrypted), parentID)
 	slog.Debug("file: uploading", "channel_id", channelID, "name", filename, "size", plaintextSize, "encrypt", wantEncrypted, "parent_id", parentID)
-	meta, op, header, err := s.uploadVisibleSource(ctx, uploadID, source, filePath, filename, plaintextSize, parentID, channelID, wantEncrypted, peer, observer)
+	meta, op, header, err := s.uploadVisibleSource(ctx, uploadID, source, filePath, filename, plaintextSize, parentID, channelID, wantEncrypted, peer, observer, resumable)
 	if err != nil {
 		slog.Error("file: upload failed", "channel_id", channelID, "name", filename, "size", plaintextSize, "error", err)
 	} else {
@@ -331,7 +334,7 @@ func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, fi
 // uploadVisibleSource is the compatibility path used by the existing GUI/CLI
 // uploader. Keeping the source boundary seekable lets staged-file callers use
 // the same single/multipart planning without coupling the core to local paths.
-func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source io.ReadSeeker, sourcePath, filename string, plaintextSize int64, parentID string, channelID int64, wantEncrypted bool, peer tgclient.InputPeer, observer uploadObserver) (Metadata, projection.Op, string, error) {
+func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source io.ReadSeeker, sourcePath, filename string, plaintextSize int64, parentID string, channelID int64, wantEncrypted bool, peer tgclient.InputPeer, observer uploadObserver, resumable bool) (Metadata, projection.Op, string, error) {
 	if err := validateSeekableSize(source, plaintextSize); err != nil {
 		return Metadata{}, projection.Op{}, "", err
 	}
@@ -355,6 +358,9 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 	}
 
 	if multipart {
+		if resumable && !wantEncrypted && sourcePath != "" && plaintextSize > s.minResumableUploadBytes() {
+			return s.startResumableUpload(ctx, uploadID, sourcePath, filename, plaintextSize, parent, channelID, peer, observer)
+		}
 		// uploadMultipart sends the parts, projects them, and emits the manifest
 		// (the commit point) itself. Success returns an empty op; if Telegram
 		// commits but the local manifest projection fails, it returns that exact

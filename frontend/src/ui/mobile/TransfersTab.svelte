@@ -3,6 +3,8 @@
     import { activeTransfers, type TransferEvent } from '../notifications/notif-store';
     import EventRow from '../notifications/EventRow.svelte';
     import MobileTransferRow from './MobileTransferRow.svelte';
+    import MobileResumableUploadRow from './MobileResumableUploadRow.svelte';
+    import { pauseUpload, resumableUploads } from '../../modules/resumable-uploads';
     import { cancelSingleUpload, cancelTransfersInDirection, cancelUploadFile, clearHistory, parseTransferKey } from '../../modules/notif-bell';
     import { isPhotoBackupActivity } from '../../modules/photo-backup/activity';
     import { humanizeBackendError } from '../../modules/errors';
@@ -12,7 +14,13 @@
     import { downloadSharePaths, forgetDownloadSharePath, recentTransferEvents } from './mobile-shell-store';
 
     /** How many transfers are in flight; more than one earns a way to stop the lot. */
-    const inFlight = $derived($activeTransfers.length);
+    const resumableIds = $derived(new Set($resumableUploads.map((job) => job.jobId)));
+    const visibleActive = $derived($activeTransfers.filter((transfer) => !transfer.resumableJobId || !resumableIds.has(transfer.resumableJobId)));
+    const visibleRecent = $derived($recentTransferEvents.filter((entry) =>
+        entry.kind !== 'transfer' || !entry.resumableJobId || !resumableIds.has(entry.resumableJobId)
+    ));
+    const hasActive = $derived($resumableUploads.length > 0 || visibleActive.length > 0);
+    const inFlight = $derived(visibleActive.length + $resumableUploads.filter((job) => job.status === 'uploading').length);
 
     /**
      * Stopping one row, where the backend can do that.
@@ -46,8 +54,11 @@
      * batch, and of a download queue whose waiting rows cannot be stopped alone.
      */
     function cancelEverything(): void {
-        cancelTransfersInDirection('up');
-        cancelTransfersInDirection('down');
+        if (visibleActive.some((transfer) => transfer.direction === 'up')) cancelTransfersInDirection('up');
+        if (visibleActive.some((transfer) => transfer.direction === 'down')) cancelTransfersInDirection('down');
+        for (const job of $resumableUploads) {
+            if (job.status === 'uploading') void pauseUpload(job.jobId);
+        }
     }
 
     /** Re-queues a failed download, forgetting the sandbox file the last try left. */
@@ -82,7 +93,7 @@
 </script>
 
 <div class="mobile-scroll transfers-tab">
-    {#if inFlight === 0 && $recentTransferEvents.length === 0}
+    {#if !hasActive && visibleRecent.length === 0}
         <div class="mobile-empty">
             <span class="mobile-empty-glyph">
                 <ArrowDownUpIcon size={40} strokeWidth={1.6} aria-hidden="true" />
@@ -91,26 +102,29 @@
             <p class="mobile-empty-body">Uploads and downloads show up here.</p>
         </div>
     {:else}
-        {#if inFlight > 0}
+        {#if hasActive}
             <div class="transfers-section-head">
                 <h2 class="mobile-section-label">Active</h2>
                 {#if inFlight > 1}
-                    <button type="button" class="transfers-clear" onclick={cancelEverything}>Cancel all</button>
+                    <button type="button" class="transfers-clear" onclick={cancelEverything}>Stop all</button>
                 {/if}
             </div>
             <div class="transfers-group" role="list">
-                {#each $activeTransfers as transfer (transfer.id)}
+                {#each $resumableUploads as job (job.jobId)}
+                    <MobileResumableUploadRow {job} />
+                {/each}
+                {#each visibleActive as transfer (transfer.id)}
                     <MobileTransferRow {transfer} onCancel={cancelFor(transfer)} onCancelFile={cancelUploadFile} />
                 {/each}
             </div>
         {/if}
-        {#if $recentTransferEvents.length > 0}
+        {#if visibleRecent.length > 0}
             <div class="transfers-section-head">
                 <h2 class="mobile-section-label">Recent</h2>
                 <button type="button" class="transfers-clear" onclick={clearHistory}>Clear</button>
             </div>
             <div class="transfers-group" role="list">
-                {#each $recentTransferEvents.slice(0, 50) as entry (entry.id)}
+                {#each visibleRecent.slice(0, 50) as entry (entry.id)}
                     {#if entry.kind === 'transfer'}
                         <MobileTransferRow
                             transfer={entry}

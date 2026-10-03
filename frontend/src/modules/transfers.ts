@@ -41,6 +41,7 @@ import {
     updateTransferProgress,
     updateTransferName,
     markTransferDone,
+    forgetResumableUpload,
     setTransferNote,
     transferKey,
     wasUploadCanceled,
@@ -489,18 +490,23 @@ let flowBusy = false;
  * reader does when the screen has not moved -- opened a second picker on top of
  * the first. Held from the trigger, that window is covered too.
  */
-async function withTransferFlow(run: () => Promise<void>): Promise<void> {
-    if (flowBusy) {
+export async function withTransferFlow(run: () => Promise<void>): Promise<void> {
+    if (!await tryWithTransferFlow(run)) {
         notify({
             level: 'info',
             title: 'A transfer is already in progress',
             body: 'Wait for it to finish, then start another.',
         });
-        return;
     }
+}
+
+/** Background recovery yields to a user-started transfer without a toast. */
+export async function tryWithTransferFlow(run: () => Promise<void>): Promise<boolean> {
+    if (flowBusy) return false;
     flowBusy = true;
     try {
         await run();
+        return true;
     } finally {
         flowBusy = false;
     }
@@ -697,6 +703,7 @@ function activateUploadProgressEvents(): void {
     subscribeTransferEvent("upload_complete", (id, name) => {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
+        forgetResumableUpload(uploadId);
         if (state.importBatch) {
             return;
         }
@@ -731,6 +738,7 @@ function activateUploadProgressEvents(): void {
     subscribeTransferEvent("upload_error", (id, name, message) => {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
+        forgetResumableUpload(uploadId);
         if (state.importBatch) {
             if (!state.cancelingUpload) recordFailureReason(importFailureReasons, name, message);
             return;

@@ -146,11 +146,18 @@ type Service struct {
 	// an upload slot are registered, so it stays bounded by MaxConcurrentUploads.
 	uploadCancelMu sync.Mutex
 	uploadCancels  map[int]context.CancelFunc
+	resumeOnce     sync.Once
+	resumeErr      error
+	resumeMu       sync.Mutex
+	resumeCancels  map[string]context.CancelFunc
 	previewMu      sync.Mutex
 	// afterHiddenPartSend is a nil-by-default crash-injection seam used only by
 	// package tests. It runs immediately after Telegram returns a positive
 	// message ID and before that receipt enters any local collection/projection.
 	afterHiddenPartSend func(partIndex int, msgID int64)
+	// afterVisiblePartSend injects a crash after Telegram accepts a resumable
+	// part but before its local receipt is saved. Used only by package tests.
+	afterVisiblePartSend func(partIndex int, msgID int64)
 
 	// Thumbs is the on-disk rendition cache. Nil disables caching; requests
 	// then fetch bounded remote derivatives without generating from originals.

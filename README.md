@@ -118,6 +118,7 @@ TDrive stores your API credentials locally; it does not ship a shared project-wi
 - Import `.zip`, `.tar`, and `.tar.gz` archives, with optional extraction.
 - Drop files and folders from the operating system directly into TDrive.
 - Concurrent uploads, cancellable transfers, progress, speed, and resilient retries.
+- Individual unencrypted file uploads larger than 2 GB can resume from confirmed Telegram parts on desktop, Android, and iOS. TDrive verifies the original file before continuing, retries after a connection interruption, and checks an uncertain final publish before retrying it. On phones, the source is kept in app storage until the upload finishes or is discarded; iOS continues when the app is active again. Smaller, encrypted, and folder-import uploads keep their existing behavior.
 
 ### Preview and stream
 

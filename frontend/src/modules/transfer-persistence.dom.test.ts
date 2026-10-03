@@ -140,6 +140,16 @@ describe('restoring the transfer log', () => {
         expect(upload.note).toBe('Interrupted when TDrive closed — choose the file again');
     });
 
+    it('lets the backend journal restore an interrupted multipart upload instead of a false failed row', () => {
+        const linked = transfer({
+            id: 'xfer:up:3', direction: 'up', resumableJobId: 'job-7',
+            status: 'active', progress: 60,
+        });
+        expect((saved([linked]) as { events: Record<string, unknown>[] }).events[0].resumableJobId).toBe('job-7');
+        expect(restore([linked])).toEqual([]);
+        expect(restore([{ ...linked, status: 'done' }])).toMatchObject([{ status: 'done' }]);
+    });
+
     it('reports a cancel that was still in flight as canceled rather than as a failure', () => {
         const [restored] = restore([transfer({ status: 'canceling' })]) as TransferEvent[];
         expect(restored.status).toBe('canceled');

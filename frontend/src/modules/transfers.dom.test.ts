@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TransferItem } from '../ui/notifications/notif-store';
 import { idleTransferActivity, state } from '../state';
+import { sidebarState } from '../ui/sidebar/sidebar-store';
 
 const mocks = vi.hoisted(() => ({
     dismissNotification: vi.fn(),
@@ -29,6 +30,10 @@ const app = vi.hoisted(() => ({
     SelectFiles: vi.fn(),
     SelectFolder: vi.fn(),
     UploadToDriveFS: vi.fn(),
+    ListResumableUploads: vi.fn(),
+    ResumeResumableUpload: vi.fn(),
+    PauseResumableUpload: vi.fn(),
+    CancelResumableUpload: vi.fn(),
 }));
 
 vi.mock('../../bindings/TDrive/app', () => app);
@@ -36,6 +41,7 @@ vi.mock('@wailsio/runtime', () => ({ Events: { On: eventsOn } }));
 vi.mock('./notifications', () => ({ notify: mocks.notify, dismissNotification: mocks.dismissNotification }));
 vi.mock('./app-actions', () => ({ appActions: () => ({ refreshFiles: mocks.refreshFiles }) }));
 vi.mock('./notif-bell', () => ({
+    forgetResumableUpload: vi.fn(),
     setTransferNote: vi.fn(),
     markTransferDone: mocks.markTransferDone,
     pushTransferStart: mocks.pushTransferStart,
@@ -54,6 +60,7 @@ vi.mock('../ui/chrome/UploadMenu.svelte', () => ({ default: {} }));
 vi.mock('../ui/mount', () => ({ mountSvelte: vi.fn() }));
 
 import { activateTransferSurfaces, importFolderWithParentID, uploadWithParentID } from './transfers';
+import { activateResumableUploads, resumeUpload } from './resumable-uploads';
 
 interface TestNotice {
     level?: string;
@@ -244,6 +251,27 @@ describe('the picker window', () => {
         expect(app.SelectFiles).toHaveBeenCalledTimes(2);
     });
 
+    it('does not start a resumed upload while another upload owns the transfer flow', async () => {
+        let releasePicker = (_paths: string[]) => {};
+        app.SelectFiles.mockReturnValue(new Promise<string[]>((resolve) => { releasePicker = resolve; }));
+        app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0, limitExceeded: false });
+        app.UploadToDriveFS.mockResolvedValue({ result: { ok: true }, files: [] });
+        app.ResumeResumableUpload.mockResolvedValue({ result: { ok: true }, files: [] });
+
+        const first = uploadWithParentID('');
+        await Promise.resolve();
+        resumeUpload('saved-job');
+        await vi.waitFor(() => expect(mocks.notify).toHaveBeenCalledWith(
+            expect.objectContaining({ title: 'A transfer is already in progress' }),
+        ));
+        expect(app.ResumeResumableUpload).not.toHaveBeenCalled();
+
+        releasePicker(['/tmp/report.pdf']);
+        await first;
+        resumeUpload('saved-job');
+        await vi.waitFor(() => expect(app.ResumeResumableUpload).toHaveBeenCalledWith('saved-job', ''));
+    });
+
     it('asks for the plan and the encryption snapshot together, not one after the other', async () => {
         // The snapshot does not depend on the selection, so it has no business
         // sitting between the picker closing and the modal opening.
@@ -269,6 +297,151 @@ describe('the picker window', () => {
         expect(planStarted).toBe(true);
         expect(encryptionSettled).toBe(true);
         state.activeChannel = { id: 1, title: 'Test drive', kind: 'shared' };
+    });
+});
+
+describe('automatic large upload recovery', () => {
+    const waitingJob = {
+        job_id: 'saved-large-upload', channel_id: 1, name: 'video.mkv',
+        size: 2_200_000_000, confirmed_bytes: 1_000_000_000,
+        status: 'waiting_network', error: 'connection reset',
+    };
+
+    beforeEach(() => {
+        vi.useFakeTimers();
+        app.ListResumableUploads.mockResolvedValue([waitingJob]);
+        app.ResumeResumableUpload.mockResolvedValue({
+            result: { ok: false, error: { code: 'io', message: 'connection reset' } }, files: [],
+        });
+    });
+
+    afterEach(() => {
+        sidebarState.update((current) => ({ ...current, activeChannelId: null }));
+        vi.useRealTimers();
+    });
+
+    function activate(): () => void {
+        sidebarState.update((current) => ({ ...current, activeChannelId: 1 }));
+        return activateResumableUploads();
+    }
+
+    it('retries only waiting network jobs with backoff and wakes on an online event', async () => {
+        const stop = activate();
+        try {
+            await vi.advanceTimersByTimeAsync(0);
+            expect(app.ResumeResumableUpload).toHaveBeenCalledExactlyOnceWith(waitingJob.job_id, '');
+            expect(mocks.notify).not.toHaveBeenCalledWith(expect.objectContaining({ level: 'error' }));
+
+            await vi.advanceTimersByTimeAsync(4_999);
+            expect(app.ResumeResumableUpload).toHaveBeenCalledTimes(1);
+            await vi.advanceTimersByTimeAsync(1);
+            expect(app.ResumeResumableUpload).toHaveBeenCalledTimes(2);
+
+            window.dispatchEvent(new Event('online'));
+            await vi.advanceTimersByTimeAsync(0);
+            expect(app.ResumeResumableUpload).toHaveBeenCalledTimes(3);
+        } finally {
+            stop();
+        }
+        await vi.advanceTimersByTimeAsync(120_000);
+        expect(app.ResumeResumableUpload).toHaveBeenCalledTimes(3);
+    });
+
+    it('never restarts a manual pause or a job needing user input', async () => {
+        app.ListResumableUploads.mockResolvedValue(['paused', 'needs_source', 'uncertain_manifest', 'restart_required']
+            .map((status) => ({ ...waitingJob, job_id: status, status })));
+        const stop = activate();
+        try {
+            await vi.advanceTimersByTimeAsync(120_000);
+            window.dispatchEvent(new Event('online'));
+            document.dispatchEvent(new Event('visibilitychange'));
+            await vi.advanceTimersByTimeAsync(120_000);
+            expect(app.ResumeResumableUpload).not.toHaveBeenCalled();
+        } finally {
+            stop();
+        }
+    });
+
+    it('takes turns when multiple uploads are waiting for the network', async () => {
+        app.ListResumableUploads.mockResolvedValue([
+            waitingJob,
+            { ...waitingJob, job_id: 'another-large-upload' },
+        ]);
+        const stop = activate();
+        try {
+            await vi.advanceTimersByTimeAsync(0);
+            await vi.advanceTimersByTimeAsync(5_000);
+            expect(app.ResumeResumableUpload.mock.calls.slice(0, 2)).toEqual([
+                [waitingJob.job_id, ''],
+                ['another-large-upload', ''],
+            ]);
+        } finally {
+            stop();
+        }
+    });
+
+    it('waits silently for a user transfer and restarts when the app becomes visible', async () => {
+        let releasePicker = (_paths: string[]) => {};
+        app.SelectFiles.mockReturnValue(new Promise<string[]>((resolve) => { releasePicker = resolve; }));
+        app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0, limitExceeded: false });
+        app.UploadToDriveFS.mockResolvedValue({ result: { ok: true }, files: [] });
+        const first = uploadWithParentID('');
+        await Promise.resolve();
+
+        const visibility = Object.getOwnPropertyDescriptor(document, 'visibilityState');
+        let visible = false;
+        Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visible ? 'visible' : 'hidden' });
+        const stop = activate();
+        try {
+            await vi.advanceTimersByTimeAsync(60_000);
+            expect(app.ResumeResumableUpload).not.toHaveBeenCalled();
+
+            visible = true;
+            document.dispatchEvent(new Event('visibilitychange'));
+            await vi.advanceTimersByTimeAsync(0);
+            expect(app.ResumeResumableUpload).not.toHaveBeenCalled();
+            expect(mocks.notify).not.toHaveBeenCalledWith(
+                expect.objectContaining({ title: 'A transfer is already in progress' }),
+            );
+
+            releasePicker(['/tmp/report.pdf']);
+            await first;
+            await vi.advanceTimersByTimeAsync(5_000);
+            expect(app.ResumeResumableUpload).toHaveBeenCalledExactlyOnceWith(waitingJob.job_id, '');
+        } finally {
+            stop();
+            if (visibility) Object.defineProperty(document, 'visibilityState', visibility);
+        }
+    });
+
+    it('cancels a scheduled retry when the active drive changes', async () => {
+        const stop = activate();
+        try {
+            sidebarState.update((current) => ({ ...current, activeChannelId: 2 }));
+            await vi.advanceTimersByTimeAsync(120_000);
+            expect(app.ResumeResumableUpload).not.toHaveBeenCalled();
+
+            sidebarState.update((current) => ({ ...current, activeChannelId: 1 }));
+            await vi.advanceTimersByTimeAsync(0);
+            expect(app.ResumeResumableUpload).toHaveBeenCalledExactlyOnceWith(waitingJob.job_id, '');
+        } finally {
+            stop();
+        }
+    });
+
+    it('uses native phone connectivity changes to wake a waiting job', async () => {
+        const stop = activate();
+        try {
+            handlers.get('android:NetworkChanged')?.(JSON.stringify({ connected: false }));
+            await vi.advanceTimersByTimeAsync(120_000);
+            expect(app.ResumeResumableUpload).not.toHaveBeenCalled();
+
+            handlers.get('android:NetworkChanged')?.(JSON.stringify({ connected: true }));
+            await vi.advanceTimersByTimeAsync(0);
+            expect(app.ResumeResumableUpload).toHaveBeenCalledExactlyOnceWith(waitingJob.job_id, '');
+        } finally {
+            stop();
+        }
     });
 });
 

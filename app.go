@@ -84,6 +84,9 @@ type App struct {
 	// keepAwake mirrors the phone's idle-timer override so it is only toggled
 	// when the transfer state actually flips. Guarded by transferMu.
 	keepAwake bool
+	// pickerSources contains disposable copies returned by the mobile file
+	// pickers. These can be moved into durable storage for large uploads.
+	pickerSources map[string]struct{} // guarded by transferMu
 
 	// The domains lifted out of App into their own bound services. They are
 	// built once in initServices; see app_services.go for the graph and for
@@ -214,6 +217,14 @@ func (a *App) SelectFiles() ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if application.System.IsMobile() {
+		a.transferMu.Lock()
+		a.pickerSources = make(map[string]struct{}, len(uploadfilepaths))
+		for _, path := range uploadfilepaths {
+			a.pickerSources[path] = struct{}{}
+		}
+		a.transferMu.Unlock()
+	}
 	return uploadfilepaths, nil
 }
 
@@ -244,6 +255,21 @@ func (a *App) beginUpload() context.Context {
 	a.syncTransferKeepAwakeLocked()
 	a.transferMu.Unlock()
 	return ctx
+}
+
+// beginResumeUpload refuses to replace another active upload. The normal
+// picker flow deliberately cancels its predecessor, but resuming a saved job
+// must not surprise the user by stopping an unrelated batch.
+func (a *App) beginResumeUpload() (context.Context, error) {
+	a.transferMu.Lock()
+	defer a.transferMu.Unlock()
+	if a.uploadCancel != nil {
+		return nil, fmt.Errorf("another upload is already running")
+	}
+	ctx, cancel := context.WithCancel(a.ctx)
+	a.uploadCancel = cancel
+	a.syncTransferKeepAwakeLocked()
+	return ctx, nil
 }
 
 func (a *App) endUpload() {
@@ -331,14 +357,20 @@ func (a *App) CancelDownload() {
 }
 
 func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool) UploadResult {
+	channelID := a.ActiveChannelID()
 	svc, err := a.requireFileService()
 	if err != nil {
 		return UploadResult{Result: operationFailure(err)}
 	}
 	ctx := a.beginUpload()
 	defer a.endUpload()
+	filePaths, staged, err := a.stageMobileUploadPaths(ctx, filePaths, encrypt)
+	if err != nil {
+		return UploadResult{Result: operationFailure(err)}
+	}
+	defer a.releaseUnreferencedUploadSources(svc, staged)
 	a.sweepOrphanParts(ctx)
-	files, err := svc.Upload(ctx, a.ActiveChannelID(), filePaths, parentIDs, encrypt)
+	files, err := svc.Upload(ctx, channelID, filePaths, parentIDs, encrypt)
 	out := make([]backend.FileMetaData, 0, len(files))
 	for _, f := range files {
 		out = append(out, uploadMetaToBackend(f))
@@ -347,6 +379,81 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bo
 		return UploadResult{Result: operationFailure(err), Files: out}
 	}
 	return UploadResult{Result: operationSuccess(), Files: out}
+}
+
+// ListResumableUploads returns backend-confirmed multipart upload checkpoints
+// for the selected drive. The frontend's transfer history is not a receipt.
+func (a *App) ListResumableUploads() ([]fileservice.ResumableUpload, error) {
+	svc, err := a.requireFileService()
+	if err != nil {
+		return nil, err
+	}
+	return svc.ListResumableUploads(a.ctx, a.ActiveChannelID())
+}
+
+// ResumeResumableUpload continues one paused multipart upload. An empty source
+// path reuses the original path; a selected replacement is verified by the
+// service before it can contribute bytes to an existing upload.
+func (a *App) ResumeResumableUpload(jobID, sourcePath string) UploadResult {
+	channelID := a.ActiveChannelID()
+	svc, err := a.requireFileService()
+	if err != nil {
+		return UploadResult{Result: operationFailure(err)}
+	}
+	ctx, err := a.beginResumeUpload()
+	if err != nil {
+		return UploadResult{Result: operationFailure(err)}
+	}
+	defer a.endUpload()
+	previousSource, err := svc.UploadJobSource(ctx, channelID, jobID)
+	if err != nil {
+		return UploadResult{Result: operationFailure(err)}
+	}
+	var staged []string
+	if sourcePath != "" {
+		paths, newStaged, stageErr := a.stageMobileUploadPaths(ctx, []string{sourcePath}, false)
+		if stageErr != nil {
+			return UploadResult{Result: operationFailure(stageErr)}
+		}
+		sourcePath, staged = paths[0], newStaged
+	}
+	defer a.releaseUnreferencedUploadSources(svc, append(staged, previousSource))
+	meta, err := svc.ResumeUpload(ctx, channelID, jobID, sourcePath)
+	if err != nil {
+		return UploadResult{Result: operationFailure(err)}
+	}
+	return UploadResult{Result: operationSuccess(), Files: []backend.FileMetaData{uploadMetaToBackend(meta)}}
+}
+
+// PauseResumableUpload stops the current attempt while retaining its durable
+// Telegram message checkpoints.
+func (a *App) PauseResumableUpload(jobID string) OperationResult {
+	svc, err := a.requireFileService()
+	if err != nil {
+		return operationFailure(err)
+	}
+	if !svc.PauseUpload(a.ActiveChannelID(), jobID) {
+		return operationFailure(fmt.Errorf("resumable upload is not running"))
+	}
+	return operationSuccess()
+}
+
+// CancelResumableUpload abandons a job and removes only the remote parts that
+// the backend has verified belong to that job.
+func (a *App) CancelResumableUpload(jobID string) OperationResult {
+	svc, err := a.requireFileService()
+	if err != nil {
+		return operationFailure(err)
+	}
+	source, err := svc.UploadJobSource(a.ctx, a.ActiveChannelID(), jobID)
+	if err != nil {
+		return operationFailure(err)
+	}
+	if err := svc.CancelResumableUpload(a.ctx, a.ActiveChannelID(), jobID); err != nil {
+		return operationFailure(err)
+	}
+	a.releaseUnreferencedUploadSources(svc, []string{source})
+	return operationSuccess()
 }
 
 // PlanImport scans the selected paths and returns the counts shown in the
@@ -736,6 +843,9 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 	}
 	a.engine = engine
 	a.Client = engine.RawClient()
+	if application.System.IsMobile() {
+		a.sweepUnreferencedUploadSources()
+	}
 	if err := a.initPhotoBackup(); err != nil {
 		fmt.Printf("Warning: Failed to initialize photo backup: %v\n", err)
 	}

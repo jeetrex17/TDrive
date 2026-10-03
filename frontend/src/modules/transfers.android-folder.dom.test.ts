@@ -31,6 +31,7 @@ vi.mock('@wailsio/runtime', () => ({ Events: { On: eventsOn } }));
 vi.mock('./notifications', () => ({ notify: mocks.notify }));
 vi.mock('./app-actions', () => ({ appActions: () => ({ refreshFiles: mocks.refreshFiles }) }));
 vi.mock('./notif-bell', () => ({
+    forgetResumableUpload: vi.fn(),
     markTransferDone: mocks.markTransferDone,
     pushTransferStart: mocks.pushTransferStart,
     updateTransferName: mocks.updateTransferName,

@@ -33,6 +33,17 @@ func TestDocumentOfClassifiesMessages(t *testing.T) {
 	}
 }
 
+func TestHistoryMessagePreservesOutgoingChannelPost(t *testing.T) {
+	t.Parallel()
+
+	message, ok := historyMessageFromTG(&tg.Message{
+		ID: 11, Out: true, FromID: &tg.PeerChannel{ChannelID: 42}, Message: "part",
+	})
+	if !ok || !message.Outgoing || message.FromID != 0 || message.Text != "part" {
+		t.Fatalf("history message = %+v, ok %t", message, ok)
+	}
+}
+
 // Telegram answers a batch in whatever order it likes; refs must follow the
 // requested ids, and the first bad message is named in the error.
 func TestDocumentRefsInOrderFollowsRequestedIDs(t *testing.T) {

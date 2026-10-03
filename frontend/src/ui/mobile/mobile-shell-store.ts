@@ -2,11 +2,12 @@
 // the drive switcher sheet is open, and the active drive's sync state for the
 // header ring. Desktop never imports this, so the stores stay inert there.
 
-import { derived, writable } from 'svelte/store';
+import { derived, get, writable } from 'svelte/store';
 import { sidebarState } from '../sidebar/sidebar-store';
 import { fileListView } from '../file-list/file-list-store';
 import { activeTransfers, historyEvents, recentEvents, type HistoryEvent } from '../notifications/notif-store';
 import type { DriveChannel } from '../../types';
+import { resumableUploads } from '../../modules/resumable-upload-store';
 
 export type MobileTab = 'files' | 'photos' | 'transfers' | 'account';
 
@@ -110,6 +111,11 @@ function readTransfersSeenAt(): number {
 /** When the Transfers tab was last on screen: a failure older than this has been seen. */
 export const transfersSeenAt = writable(readTransfersSeenAt());
 
+const ACTIONABLE_UPLOAD_STATES = new Set(['needs_source', 'uncertain', 'uncertain_manifest', 'restart_required']);
+const seenResumableAttention = writable<ReadonlySet<string>>(new Set());
+
+function attentionKey(jobId: string, status: string): string { return `${jobId}:${status}`; }
+
 /**
  * Looking at the tab is what answers the badge. Counting every failure in
  * history, which persists, meant a badge that outlived its reason and stayed
@@ -118,11 +124,20 @@ export const transfersSeenAt = writable(readTransfersSeenAt());
 export function markTransfersSeen(): void {
     const now = Date.now();
     transfersSeenAt.set(now);
+    seenResumableAttention.update((seen) => new Set([
+        ...seen,
+        ...get(resumableUploads)
+            .filter((job) => ACTIONABLE_UPLOAD_STATES.has(job.status))
+            .map((job) => attentionKey(job.jobId, job.status)),
+    ]));
     try { localStorage.setItem(TRANSFERS_SEEN_KEY, String(now)); } catch { /* a badge is a convenience */ }
 }
 
-export const transferAttentionCount = derived([historyEvents, transfersSeenAt], ([$events, $seenAt]) =>
-    $events.filter((event) => event.kind === 'transfer' && event.status === 'failed' && event.finishedAt >= $seenAt).length,
+export const transferAttentionCount = derived(
+    [historyEvents, transfersSeenAt, resumableUploads, seenResumableAttention],
+    ([$events, $seenAt, $jobs, $seenJobs]) =>
+        $events.filter((event) => event.kind === 'transfer' && event.status === 'failed' && event.finishedAt >= $seenAt).length
+        + $jobs.filter((job) => ACTIONABLE_UPLOAD_STATES.has(job.status) && !$seenJobs.has(attentionKey(job.jobId, job.status))).length,
 );
 
 /**

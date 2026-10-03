@@ -4,6 +4,7 @@
 import { get } from 'svelte/store';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { historyEvents, type TransferEvent } from '../notifications/notif-store';
+import { resumableUploads } from '../../modules/resumable-uploads';
 import { driveSyncStatus, markTransfersSeen, ringState, transferAttentionCount, transfersSeenAt } from './mobile-shell-store';
 
 function transfer(status: TransferEvent['status'], id = `xfer:up:${status}`): TransferEvent {
@@ -26,6 +27,7 @@ beforeEach(() => {
     historyEvents.set([]);
     driveSyncStatus.set('idle');
     transfersSeenAt.set(0);
+    resumableUploads.set([]);
 });
 
 describe('transferAttentionCount', () => {
@@ -58,6 +60,20 @@ describe('transferAttentionCount', () => {
             { ...transfer('failed', 'xfer:up:1'), finishedAt: 1_000 },
             { ...transfer('failed', 'xfer:up:2'), finishedAt: Date.now() + 1 },
         ]);
+        expect(get(transferAttentionCount)).toBe(1);
+    });
+
+    it('calls attention to durable uploads requiring a decision and clears on view', () => {
+        const job = { jobId: 'job-7', channelId: 1, name: 'archive.zip', size: 3000,
+            confirmedBytes: 1000, status: 'needs_source' as const, error: '' };
+        resumableUploads.set([job, { ...job, jobId: 'job-8', status: 'uploading' }]);
+        expect(get(transferAttentionCount)).toBe(1);
+        markTransfersSeen();
+        expect(get(transferAttentionCount)).toBe(0);
+
+        resumableUploads.set([{ ...job, status: 'uncertain_manifest' }]);
+        expect(get(transferAttentionCount)).toBe(1);
+        resumableUploads.set([{ ...job, status: 'restart_required' }]);
         expect(get(transferAttentionCount)).toBe(1);
     });
 });

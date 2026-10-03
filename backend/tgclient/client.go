@@ -70,6 +70,7 @@ type HistoryMessage struct {
 	MsgID              int64
 	Date               int64
 	FromID             int64
+	Outgoing           bool // Telegram marks messages sent by the current account.
 	Text               string // caption for media messages, body for text messages
 	HasMedia           bool
 	MediaSize          int64

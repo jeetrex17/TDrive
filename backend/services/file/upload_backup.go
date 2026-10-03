@@ -42,7 +42,7 @@ func (s *Service) UploadBackup(ctx context.Context, channelID int64, path, paren
 	if len(progress) > 0 {
 		observer.report = progress[0]
 	}
-	meta, op, header, uploadErr := s.uploadSingleWithObserver(ctx, 0, path, parentID, channelID, encrypt, peer, observer)
+	meta, op, header, uploadErr := s.uploadSingleWithObserver(ctx, 0, path, parentID, channelID, encrypt, peer, observer, false)
 	if meta.MsgID == 0 {
 		return meta, uploadErr
 	}

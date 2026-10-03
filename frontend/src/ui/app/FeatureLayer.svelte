@@ -21,6 +21,7 @@
     import { activateSelectionBar } from '../../modules/selection';
     import { activateSidebar } from '../../modules/sidebar';
     import { activateTransferSurfaces } from '../../modules/transfers';
+    import { activateResumableUploads } from '../../modules/resumable-uploads';
     import { activateUpdates } from '../../modules/updates';
     import { confirmDelete } from '../../modules/modals/delete';
     import { confirmTrashAction } from '../../modules/trash/controller';
@@ -98,6 +99,7 @@
             activateGallery(),
             activateDropOverlay(),
             activateTransferSurfaces(),
+            activateResumableUploads(),
             activateSearchBar(),
             activateRefreshShortcut(),
             activateConnectivityWatch(),
