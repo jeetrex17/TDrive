@@ -28,15 +28,15 @@ import {
     SetFileDropEnabled as rawSetFileDropEnabled,
     ShareFile as rawShareFile,
     UploadToDriveFS as rawUploadToDriveFs,
-} from "../../bindings/TDrive/app";
+} from "../../bindings/TDrive/internal/app/app";
 import {
     ChangeEncryptionPassword as rawChangeEncryptionPassword,
     CreateEncryptionPassword as rawCreateEncryptionPassword,
     EncryptionStatus as rawEncryptionStatus,
     UseEncryptionPassword as rawUseEncryptionPassword,
-} from "../../bindings/TDrive/encryptionservice";
+} from "../../bindings/TDrive/internal/app/encryptionservice";
 import type { FileMetaData, Folder, SearchResult } from "../../bindings/TDrive/backend/models";
-import type { TDriveFile } from "../../bindings/TDrive/models";
+import type { TDriveFile } from "../../bindings/TDrive/internal/app/models";
 import type {
     DownloadResult,
     EncryptionStatusView,

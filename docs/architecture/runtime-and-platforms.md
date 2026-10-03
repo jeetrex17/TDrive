@@ -39,8 +39,19 @@ alternate hosts must not assume they also started live synchronization.
 
 ## GUI startup and shutdown
 
-[`App.ServiceStartup`](../../app.go) owns the sequence below. Wails methods in
-[`app_services.go`](../../app_services.go) are grouped by domain and receive a
+The root [`main.go`](../../main.go) embeds the frontend, keeps the release-stamped
+`main.appVersion` and calls [`app.Run`](../../internal/app/run.go). The
+`internal/app` package owns Wails registration, windows, native callbacks and app
+lifecycle. Shared domain behavior stays in `backend/`, which the GUI and daemon
+can both use without importing the GUI package.
+
+Service package paths determine generated binding locations and method IDs.
+After changing a bound type's package, regenerate `frontend/bindings/`, update
+the typed frontend adapters and keep browser mocks pointed at the generated
+service directory. Do not hand-edit IDs or retain stale bindings as a shim.
+
+[`App.ServiceStartup`](../../internal/app/app.go) owns the sequence below. Wails methods in
+[`internal/app/services.go`](../../internal/app/services.go) are grouped by domain and receive a
 narrow `serviceHost`. They can be called before construction completes, so their
 existing unavailable-backend checks remain part of the bridge contract.
 
@@ -98,7 +109,7 @@ Svelte components render stores and invoke typed callbacks. The
 [`frontend/src/api.ts`](../../frontend/src/api.ts) is the public frontend API;
 its domain adapters wrap generated bindings. The
 [`gateway`](../../frontend/src/api/gateway.ts) preserves bridge rejection causes.
-[`app_operation.go`](../../app_operation.go) separates stable operation error
+[`internal/app/operation.go`](../../internal/app/operation.go) separates stable operation error
 codes from display messages. Branch on codes, never translated error text.
 Some APIs have different result shapes; inspect the adapter before assuming
 every call uses the operation envelope.
@@ -145,7 +156,7 @@ iOS, and an Android deadline measured from the first lease acquisition at 5 hour
 These are application cancellation bounds, not guaranteed OS execution time.
 
 The lease state and cancellation policy live in
-[`app_photo_backup_background.go`](../../app_photo_backup_background.go); the
+[`internal/app/photo_backup_background.go`](../../internal/app/photo_backup_background.go); the
 [frontend background coordinator](../../frontend/src/modules/photo-backup/background.ts)
 records the lease only after native acquisition. This is not a headless scheduled
 uploader and does not continue after process termination. See the
@@ -156,7 +167,7 @@ receipt recovery and source-specific restrictions.
 
 These are source references, not a claim that this documentation change ran them:
 
-- [App startup](../../app_auth_startup_test.go) and
+- [App startup](../../internal/app/auth_startup_test.go) and
   [core service wiring](../../backend/core/engine_file_service_test.go).
 - [Daemon protocol versions](../../backend/daemon/protocol_version_test.go),
   [agent contracts](../../backend/daemon/agent_contract_test.go) and

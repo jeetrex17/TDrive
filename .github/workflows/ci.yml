@@ -17,7 +17,7 @@ env:
   # build/linux/Taskfile.yml for why wails v3 is built against GTK3 +
   # WebKit2GTK-4.1 here instead of its new GTK4 default.
   GOFLAGS: "-tags=gtk3"
-  FIRST_PARTY_GO_PACKAGES: ". ./cmd/... ./backend/..."
+  FIRST_PARTY_GO_PACKAGES: ". ./internal/... ./cmd/... ./backend/..."
 
 jobs:
   test:

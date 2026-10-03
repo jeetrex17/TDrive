@@ -1,7 +1,7 @@
 import {
     GetMediaFolderTimeline, GetMediaTimeline, GetMediaTimelineAnchors, GetMediaTimelineSummary,
     ListMediaFolderPage, ListMediaFolders, ListMediaPage, LocateMedia,
-} from '../../bindings/TDrive/app';
+} from '../../bindings/TDrive/internal/app/app';
 import type { FileItem } from '../types';
 import { invokeBackend } from './gateway';
 import { asRecord, boundedText } from './shared';

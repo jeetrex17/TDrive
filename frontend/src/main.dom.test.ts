@@ -13,7 +13,7 @@ vi.mock('./ui/theme/native-theme', () => ({ initializeNativeTheme: vi.fn(async (
 vi.mock('./modules/app-shell', () => ({
     mountApplication: vi.fn(() => ({ destroy: vi.fn(async () => {}) })),
 }));
-vi.mock('../bindings/TDrive/app', () => ({ CheckSystemStatus: vi.fn(async () => 'NEEDS_SETUP') }));
+vi.mock('../bindings/TDrive/internal/app/app', () => ({ CheckSystemStatus: vi.fn(async () => 'NEEDS_SETUP') }));
 
 beforeEach(() => {
     vi.resetModules();

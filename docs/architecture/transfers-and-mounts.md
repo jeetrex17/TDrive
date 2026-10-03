@@ -217,7 +217,7 @@ uncertain publication and changed-source states require their recovery controls.
 Interrupted active jobs become paused when a new service instance opens the
 journal. Reopening the app does not imply unrestricted background execution.
 
-On Android and iOS, [app staging](../../app_upload_staging.go) retains eligible
+On Android and iOS, [app staging](../../internal/app/upload_staging.go) retains eligible
 picker sources in private app storage for unfinished jobs. Cleanup checks journal
 references before removing copies; startup can sweep unreferenced staging left
 before a job was saved. iOS excludes these source copies from device backup.
@@ -259,7 +259,7 @@ persisted restart continuation. Range reads for media are a separate read path.
 - Upload outcomes: [retry tests](../../backend/services/file/upload_retry_test.go)
   and [hidden receipt tests](../../backend/services/file/hidden_upload_recovery_test.go).
 - Upload continuation: [multipart tests](../../backend/services/file/multipart_test.go)
-  and [mobile source ownership tests](../../app_share_test.go).
+  and [mobile source ownership tests](../../internal/app/share_test.go).
 - Download publication: [file tests](../../backend/services/file/download_file_test.go),
   [publication tests](../../backend/services/file/download_publish_test.go) and
   [folder tests](../../backend/services/file/folder_download_test.go).

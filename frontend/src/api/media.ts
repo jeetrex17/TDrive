@@ -15,9 +15,9 @@ import {
     ShowNativeSeekThumbnail as rawShowNativeSeekThumbnail,
     Thumbnail as rawThumbnail,
     UpdateMediaPlayback as rawUpdateMediaPlayback,
-} from "../../bindings/TDrive/mediaservice";
+} from "../../bindings/TDrive/internal/app/mediaservice";
 import type { LogicalFile, OpenResult, ThroughputStats as MediaThroughputStats } from "../../bindings/TDrive/backend/media/models";
-import type { NativeMediaResult } from "../../bindings/TDrive/models";
+import type { NativeMediaResult } from "../../bindings/TDrive/internal/app/models";
 import type { FileItem } from "../types";
 import { toFileItem } from "./files";
 import { invokeBackend } from "./gateway";

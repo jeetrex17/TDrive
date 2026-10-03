@@ -5,7 +5,7 @@ import {
     SetImmersive as rawSetImmersive,
     SetKeyboardWatch as rawSetKeyboardWatch,
     SetScreenProtect as rawSetScreenProtect,
-} from "../../bindings/TDrive/deviceservice";
+} from "../../bindings/TDrive/internal/app/deviceservice";
 import {
     invokeBackend,
     invokeRuntimeAsync,

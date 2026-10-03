@@ -1,6 +1,6 @@
 // Drive (channel) management — Step 4 shared drives.
 //
-// Wraps the Wails methods exposed by app_channels.go and the existing
+// Wraps the Wails methods exposed by internal/app/channels.go and the existing
 // SetActiveChannel / SyncChannel methods. Keeps state.channels and
 // state.activeChannel in sync; tells the sidebar to re-render on every
 // change.

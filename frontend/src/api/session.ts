@@ -9,13 +9,13 @@ import {
     SaveSetup as rawSaveSetup,
     SubmitCode as rawSubmitCode,
     SubmitPassword as rawSubmitPassword,
-} from "../../bindings/TDrive/app";
+} from "../../bindings/TDrive/internal/app/app";
 import {
     CreatePersonalDrive as rawCreatePersonalDrive,
     DiscoverPersonalDrives as rawDiscoverPersonalDrives,
     PreparePersonalDrive as rawPreparePersonalDrive,
     SelectPersonalDrive as rawSelectPersonalDrive,
-} from "../../bindings/TDrive/driveservice";
+} from "../../bindings/TDrive/internal/app/driveservice";
 import type { PersonalDriveCandidate, PersonalDriveSetup, SelfUser } from "../types";
 import { asRecord, finiteNumber } from "./shared";
 import { invokeBackend } from "./gateway";

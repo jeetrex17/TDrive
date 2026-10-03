@@ -24,7 +24,7 @@ const eventsOn = vi.hoisted(() => vi.fn((eventName: string, callback: (event: { 
     return () => eventListeners.delete(eventName);
 }));
 
-vi.mock('../../bindings/TDrive/app', () => bindings);
+vi.mock('../../bindings/TDrive/internal/app/app', () => bindings);
 vi.mock('@wailsio/runtime', () => ({ Events: { On: eventsOn } }));
 vi.mock('./notif-bell', () => ({
     forgetResumableUpload: vi.fn(),

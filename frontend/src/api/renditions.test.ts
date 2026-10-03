@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 const bridge = vi.hoisted(() => ({ open: vi.fn(), close: vi.fn() }));
-vi.mock('../../bindings/TDrive/app', () => ({ OpenGalleryImages: bridge.open, CloseGalleryImages: bridge.close }));
+vi.mock('../../bindings/TDrive/internal/app/app', () => ({ OpenGalleryImages: bridge.open, CloseGalleryImages: bridge.close }));
 import { closeGalleryImages, fetchRendition, openGalleryImages, retryDeadline } from './renditions';
 const session = { channelId: 10, token: crypto.randomUUID(), baseUrl: 'http://127.0.0.1:4433/rendition/token' };
 const request = { scope: 'session', channelId: 10, fileId: 1, revision: 2, kind: 'thumbnail' as const };

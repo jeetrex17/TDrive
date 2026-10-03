@@ -31,7 +31,7 @@ const bindings = vi.hoisted(() => ({
 
 const eventsOn = vi.hoisted(() => vi.fn(() => () => {}));
 
-vi.mock('../../bindings/TDrive/app', () => bindings);
+vi.mock('../../bindings/TDrive/internal/app/app', () => bindings);
 vi.mock('@wailsio/runtime', () => ({ Events: { On: eventsOn } }));
 vi.mock('./notifications', () => ({ notify: mocks.notify }));
 vi.mock('./android-downloads', () => ({
