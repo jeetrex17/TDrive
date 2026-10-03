@@ -52,3 +52,23 @@ func TestPlanUpload(t *testing.T) {
 		t.Errorf("1 GiB default should be single, got multi=%v err=%v", multi, err)
 	}
 }
+
+func TestResumablePartPlan(t *testing.T) {
+	s := &Service{}
+	for _, size := range []int64{MaxPartBytes + 1, 10 << 30, LargeFileMaxBytes} {
+		plan, err := s.buildResumablePartPlan(size)
+		if err != nil {
+			t.Fatalf("size %d: %v", size, err)
+		}
+		if plan.partCount < 2 || plan.partCount > MaxParts || plan.partSize > MaxPartBytes {
+			t.Fatalf("size %d: invalid plan %+v", size, plan)
+		}
+		if size == MaxPartBytes+1 && plan.partSize != 512<<20 {
+			t.Fatalf("small large file: part size %d, want 512 MiB", plan.partSize)
+		}
+		last, length, err := plan.window(size, plan.partCount-1)
+		if err != nil || last+length != size || length <= 0 {
+			t.Fatalf("size %d: final window %d+%d, err %v", size, last, length, err)
+		}
+	}
+}

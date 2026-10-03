@@ -3,7 +3,9 @@ package file
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"TDrive/backend/projection"
+	"TDrive/backend/tgclient"
 )
 
 // bigBody returns deterministic, non-repeating-ish bytes of length n so a
@@ -70,6 +73,367 @@ func TestMultipartRoundTripPlain(t *testing.T) {
 	}
 	if !bytes.Equal(got, body) {
 		t.Fatalf("round-trip mismatch: got %d bytes, want %d", len(got), len(body))
+	}
+}
+
+func restartedUploadService(previous *Service) *Service {
+	return &Service{
+		DB: previous.DB, TG: previous.TG, Peers: previous.Peers,
+		ActorID: previous.ActorID, Now: previous.Now,
+		CacheNamespace: previous.CacheNamespace, MaxUploadBytes: previous.MaxUploadBytes,
+	}
+}
+
+func TestMultipartResumeReconcilesAcceptedPartAfterRestart(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "upload.db")
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	if err := projection.MigratePersonalChannel(db, personalChannelID); err != nil {
+		t.Fatal(err)
+	}
+	fakeTG := tgclient.NewFake(7)
+	peer := tgclient.InputPeer{ChannelID: personalChannelID, AccessHash: 99}
+	fakeTG.SeedChannel(peer, "Personal")
+	svc := &Service{DB: db, TG: fakeTG, Peers: testPeerResolver{peer: peer},
+		ActorID: func(context.Context) (int64, error) { return 7, nil }}
+	svc.MaxUploadBytes = 1000
+	path := writeTempNamedFile(t, "movie.bin", bigBody(2500))
+	svc.afterVisiblePartSend = func(index int, _ int64) {
+		if index == 1 {
+			panic("simulated crash before part projection")
+		}
+	}
+	if _, err := svc.Upload(t.Context(), personalChannelID, []string{path}, []string{""}, false); err == nil {
+		t.Fatal("upload unexpectedly survived injected crash")
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reopened, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reopened.SetMaxOpenConns(1)
+	t.Cleanup(func() { _ = reopened.Close() })
+	restarted := restartedUploadService(svc)
+	restarted.DB = reopened
+	jobs, err := restarted.ListResumableUploads(t.Context(), personalChannelID)
+	if err != nil || len(jobs) != 1 || jobs[0].Status != resumePaused || jobs[0].ConfirmedBytes != 1000 {
+		t.Fatalf("recovered jobs = %+v, err %v", jobs, err)
+	}
+	meta, err := restarted.ResumeUpload(t.Context(), personalChannelID, jobs[0].JobID, "")
+	if err != nil || meta.MsgID == 0 {
+		t.Fatalf("resume metadata = %+v, err %v", meta, err)
+	}
+	if got := len(fakeTG.SentFiles()); got != 3 {
+		t.Fatalf("Telegram part sends = %d, want exactly 3", got)
+	}
+	remaining, err := restarted.ListResumableUploads(t.Context(), personalChannelID)
+	if err != nil || len(remaining) != 0 {
+		t.Fatalf("unfinished jobs after resume = %+v, err %v", remaining, err)
+	}
+}
+
+func TestMultipartResumeRejectsChangedSource(t *testing.T) {
+	svc, db, fakeTG, _ := newTestService(t)
+	svc.MaxUploadBytes = 1000
+	path := writeTempNamedFile(t, "movie.bin", bigBody(2500))
+	svc.afterVisiblePartSend = func(index int, _ int64) {
+		if index == 0 {
+			panic("simulated crash")
+		}
+	}
+	_, _ = svc.Upload(t.Context(), personalChannelID, []string{path}, []string{""}, false)
+	restarted := restartedUploadService(svc)
+	jobs, err := restarted.ListResumableUploads(t.Context(), personalChannelID)
+	if err != nil || len(jobs) != 1 {
+		t.Fatalf("list jobs = %+v, err %v", jobs, err)
+	}
+	changed := bigBody(2500)
+	changed[1500] ^= 0xff
+	if err := os.WriteFile(path, changed, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.ResumeUpload(t.Context(), personalChannelID, jobs[0].JobID, ""); err == nil {
+		t.Fatal("changed source was accepted")
+	}
+	jobs, err = restarted.ListResumableUploads(t.Context(), personalChannelID)
+	if err != nil || len(jobs) != 1 || jobs[0].Status != resumeNeedsFile {
+		t.Fatalf("changed-source job = %+v, err %v", jobs, err)
+	}
+	if got := len(fakeTG.SentFiles()); got != 1 {
+		t.Fatalf("Telegram part sends after source mutation = %d, want 1", got)
+	}
+	// A deleted remote checkpoint must never lead to a manifest, and cleanup
+	// can finish even when the remote message is already gone.
+	partID := fakeTG.SentFiles()[0].MsgID
+	if err := fakeTG.DeleteMessages(t.Context(), tgclient.InputPeer{ChannelID: personalChannelID, AccessHash: 99}, []int64{partID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := restarted.ResumeUpload(t.Context(), personalChannelID, jobs[0].JobID, ""); err == nil {
+		t.Fatal("missing remote checkpoint was accepted")
+	}
+	if _, err := db.Exec(`UPDATE resumable_uploads SET status = ? WHERE job_id = ?`, resumeCanceling, jobs[0].JobID); err != nil {
+		t.Fatal(err)
+	}
+	otherID, err := fakeTG.SendControl(t.Context(), tgclient.InputPeer{ChannelID: personalChannelID, AccessHash: 99}, "unrelated", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`UPDATE file_parts SET msg_id = ? WHERE upload_uuid = ?`, otherID, jobs[0].JobID); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.CancelResumableUpload(t.Context(), personalChannelID, jobs[0].JobID); err == nil {
+		t.Fatal("tampered receipt could delete unrelated message")
+	}
+	if _, err := db.Exec(`UPDATE file_parts SET msg_id = ? WHERE upload_uuid = ?`, partID, jobs[0].JobID); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.CancelResumableUpload(t.Context(), personalChannelID, jobs[0].JobID); err != nil {
+		t.Fatalf("retry cleanup after partial deletion: %v", err)
+	}
+}
+
+type changingSourceClient struct {
+	*tgclient.Fake
+	path     string
+	original []byte
+	changed  bool
+}
+
+func (c *changingSourceClient) SendFileWithRandomID(ctx context.Context, peer tgclient.InputPeer, r io.Reader, name, caption string, size int64, progress func(int64, int64), randomID int64) (tgclient.SendFileResult, error) {
+	if !c.changed {
+		c.changed = true
+		mutated := append([]byte(nil), c.original...)
+		mutated[100] ^= 0xff
+		if err := os.WriteFile(c.path, mutated, 0o600); err != nil {
+			return tgclient.SendFileResult{}, err
+		}
+		defer func() { _ = os.WriteFile(c.path, c.original, 0o600) }()
+	}
+	return c.Fake.SendFileWithRandomID(ctx, peer, r, name, caption, size, progress, randomID)
+}
+
+func TestMultipartResumeInvalidatesBytesChangedDuringSend(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	svc.MaxUploadBytes = 1000
+	original := bigBody(2500)
+	path := writeTempNamedFile(t, "movie.bin", original)
+	svc.TG = &changingSourceClient{Fake: fakeTG, path: path, original: original}
+	if _, err := svc.Upload(t.Context(), personalChannelID, []string{path}, []string{""}, false); err == nil {
+		t.Fatal("upload with mutated sent bytes succeeded")
+	}
+	jobs, err := svc.ListResumableUploads(t.Context(), personalChannelID)
+	if err != nil || len(jobs) != 1 || jobs[0].Status != resumeRestartRequired {
+		t.Fatalf("invalidated upload = %+v, err %v", jobs, err)
+	}
+	if _, err := svc.ResumeUpload(t.Context(), personalChannelID, jobs[0].JobID, ""); err == nil {
+		t.Fatal("invalidated upload reused corrupted remote bytes")
+	}
+	if got := len(fakeTG.SentControls()); got != 0 {
+		t.Fatalf("manifest sends = %d, want 0", got)
+	}
+	if err := svc.CancelResumableUpload(t.Context(), personalChannelID, jobs[0].JobID); err != nil {
+		t.Fatalf("discard invalidated upload: %v", err)
+	}
+	if got := len(fakeTG.SentFiles()); got != 1 {
+		t.Fatalf("part sends = %d, want 1", got)
+	}
+}
+
+type acceptedBadThenRetriedClient struct {
+	*tgclient.Fake
+	path     string
+	original []byte
+	calls    int
+}
+
+func (c *acceptedBadThenRetriedClient) SendFileWithRandomID(ctx context.Context, peer tgclient.InputPeer, r io.Reader, name, caption string, size int64, progress func(int64, int64), randomID int64) (tgclient.SendFileResult, error) {
+	c.calls++
+	if c.calls == 1 {
+		bad := append([]byte(nil), c.original...)
+		bad[100] ^= 0xff
+		if err := os.WriteFile(c.path, bad, 0o600); err != nil {
+			return tgclient.SendFileResult{}, err
+		}
+		defer func() { _ = os.WriteFile(c.path, c.original, 0o600) }()
+		if _, err := c.Fake.SendFileWithRandomID(ctx, peer, r, name, caption, size, progress, randomID); err != nil {
+			return tgclient.SendFileResult{}, err
+		}
+		return tgclient.SendFileResult{}, errors.Join(tgclient.ErrSendOutcomeUnknown, tgclient.ErrInjectedTransport)
+	}
+	// The retry consumes the correct source but Telegram returns the message
+	// accepted on attempt one for this stable random ID.
+	if _, err := io.Copy(io.Discard, r); err != nil {
+		return tgclient.SendFileResult{}, err
+	}
+	return c.Fake.SendFileWithRandomID(ctx, peer, nil, name, caption, size, progress, randomID)
+}
+
+func TestMultipartRetryVerifiesAcceptedBytesNotLastAttempt(t *testing.T) {
+	svc, db, fakeTG, _ := newTestService(t)
+	svc.MaxUploadBytes = 1000
+	svc.FloodWaitRetry = instantRetryPolicy()
+	original := bigBody(2500)
+	path := writeTempNamedFile(t, "movie.bin", original)
+	client := &acceptedBadThenRetriedClient{Fake: fakeTG, path: path, original: original}
+	svc.TG = client
+	if _, err := svc.Upload(t.Context(), personalChannelID, []string{path}, []string{""}, false); err == nil {
+		t.Fatal("accepted wrong bytes were trusted after good retry")
+	}
+	if client.calls < 2 {
+		t.Fatalf("send calls = %d, want a retry", client.calls)
+	}
+	jobs, err := svc.ListResumableUploads(t.Context(), personalChannelID)
+	if err != nil || len(jobs) != 1 || jobs[0].Status != resumeRestartRequired {
+		t.Fatalf("job after bad accepted retry = %+v, err %v", jobs, err)
+	}
+	if got := len(fakeTG.SentControls()); got != 0 {
+		t.Fatalf("manifest sends = %d, want 0", got)
+	}
+	// A stray manifest must block deletion without making the invalidated
+	// multipart file visible as a side effect of cleanup reconciliation.
+	job, err := svc.loadUploadJob(t.Context(), jobs[0].JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := tgclient.InputPeer{ChannelID: personalChannelID, AccessHash: 99}
+	plan := uploadPartPlan{partSize: job.PartSize, partCount: job.PartCount}
+	for i := 1; i < job.PartCount; i++ {
+		offset, length, err := plan.window(job.Size, i)
+		if err != nil {
+			t.Fatal(err)
+		}
+		op := projection.Op{Type: projection.OpFilePart, UploadUUID: job.ID, PartIndex: i, FileSize: length}
+		randomID, err := tgclient.StableRandomID(job.ID, fmt.Sprintf("part:%d", i))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := fakeTG.SendFileWithRandomID(t.Context(), peer, bytes.NewReader(original[offset:offset+length]),
+			partAttachmentName(job.Name, i, job.PartCount), projection.Format(op), length, nil, randomID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	manifestID, err := fakeTG.SendControl(t.Context(), peer, projection.Format(uploadJobManifest(job)), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.CancelResumableUpload(t.Context(), personalChannelID, job.ID); err == nil {
+		t.Fatal("published manifest did not block cleanup")
+	}
+	if projection.FileExists(db, personalChannelID, manifestID) {
+		t.Fatal("invalidated manifest became visible during cleanup check")
+	}
+}
+
+type anonymousUploadHistoryClient struct {
+	*tgclient.Fake
+	outgoing bool
+}
+
+func (c *anonymousUploadHistoryClient) GetHistory(ctx context.Context, peer tgclient.InputPeer, minID, offsetID int64, limit int) ([]tgclient.HistoryMessage, error) {
+	page, err := c.Fake.GetHistory(ctx, peer, minID, offsetID, limit)
+	if err != nil {
+		return nil, err
+	}
+	for i := range page {
+		if page[i].HasMedia {
+			page[i].FromID = 0
+			page[i].Outgoing = c.outgoing
+		}
+	}
+	return page, nil
+}
+
+func TestMultipartCancelChecksAnonymousSenderOwnership(t *testing.T) {
+	for _, outgoing := range []bool{false, true} {
+		t.Run(fmt.Sprint("outgoing=", outgoing), func(t *testing.T) {
+			svc, _, fakeTG, _ := newTestService(t)
+			svc.MaxUploadBytes = 1000
+			path := writeTempNamedFile(t, "movie.bin", bigBody(2500))
+			svc.afterVisiblePartSend = func(index int, _ int64) {
+				if index == 0 {
+					panic("simulated crash")
+				}
+			}
+			_, _ = svc.Upload(t.Context(), personalChannelID, []string{path}, []string{""}, false)
+			restarted := restartedUploadService(svc)
+			restarted.TG = &anonymousUploadHistoryClient{Fake: fakeTG, outgoing: outgoing}
+			jobs, err := restarted.ListResumableUploads(t.Context(), personalChannelID)
+			if err != nil || len(jobs) != 1 {
+				t.Fatalf("jobs = %+v, err %v", jobs, err)
+			}
+			err = restarted.CancelResumableUpload(t.Context(), personalChannelID, jobs[0].JobID)
+			if outgoing && err != nil {
+				t.Fatalf("own anonymous part was not canceled: %v", err)
+			}
+			if !outgoing && err == nil {
+				t.Fatal("unowned anonymous part was deleted")
+			}
+		})
+	}
+}
+
+type uncertainManifestClient struct {
+	*tgclient.Fake
+	accepted bool
+	canceled bool
+}
+
+func (c *uncertainManifestClient) SendControlWithRandomID(ctx context.Context, peer tgclient.InputPeer, text string, silent bool, randomID int64) (int64, error) {
+	if c.accepted {
+		_, _ = c.Fake.SendControlWithRandomID(ctx, peer, text, silent, randomID)
+	}
+	if c.canceled {
+		return 0, context.Canceled
+	}
+	return 0, fmt.Errorf("%w: receipt lost", tgclient.ErrSendOutcomeUnknown)
+}
+
+func TestMultipartResumeReconcilesOrRetriesManifest(t *testing.T) {
+	for _, test := range []struct {
+		accepted bool
+		canceled bool
+	}{{false, false}, {true, false}, {true, true}} {
+		t.Run(fmt.Sprintf("accepted=%v/canceled=%v", test.accepted, test.canceled), func(t *testing.T) {
+			svc, _, fakeTG, _ := newTestService(t)
+			svc.MaxUploadBytes = 1000
+			svc.TG = &uncertainManifestClient{Fake: fakeTG, accepted: test.accepted, canceled: test.canceled}
+			path := writeTempNamedFile(t, "movie.bin", bigBody(2500))
+			if _, err := svc.Upload(t.Context(), personalChannelID, []string{path}, []string{""}, false); err == nil {
+				t.Fatal("unknown manifest result reported success")
+			}
+			restarted := restartedUploadService(svc)
+			restarted.TG = fakeTG
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			jobs, err := restarted.ListResumableUploads(t.Context(), personalChannelID)
+			if err != nil || len(jobs) != 1 || jobs[0].Status != resumeManifestUncertain {
+				t.Fatalf("uncertain job = %+v, err %v", jobs, err)
+			}
+			if !test.accepted {
+				fakeTG.InjectReadFloodWaits(1)
+				if _, err := restarted.ResumeUpload(t.Context(), personalChannelID, jobs[0].JobID, ""); err == nil {
+					t.Fatal("failed history check was accepted")
+				}
+				jobs, err = restarted.ListResumableUploads(t.Context(), personalChannelID)
+				if err != nil || len(jobs) != 1 || jobs[0].Status != resumeManifestUncertain {
+					t.Fatalf("manifest uncertainty downgraded after history error: %+v, %v", jobs, err)
+				}
+			}
+			_, err = restarted.ResumeUpload(t.Context(), personalChannelID, jobs[0].JobID, "")
+			if err != nil {
+				t.Fatalf("manifest not resolved without source: %v", err)
+			}
+			wantControls := 1
+			if got := len(fakeTG.SentControls()); got != wantControls {
+				t.Fatalf("manifest sends = %d, want %d", got, wantControls)
+			}
+		})
 	}
 }
 
