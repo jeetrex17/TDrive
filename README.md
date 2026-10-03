@@ -437,6 +437,16 @@ TDrive began as my first Go project and a way to learn Go, Wails, and Telegram A
 
 For bug reports, include the TDrive version, operating system, expected behavior, and steps to reproduce. Redact API hashes, passwords, session data, private filenames, and invite links from logs and screenshots.
 
+## Star history
+
+<a href="https://www.star-history.com/?repos=jeetrex17%2FTDrive&type=date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=jeetrex17/TDrive&type=date&theme=dark" />
+    <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=jeetrex17/TDrive&type=date" />
+    <img alt="TDrive GitHub star history" src="https://api.star-history.com/chart?repos=jeetrex17/TDrive&type=date" />
+  </picture>
+</a>
+
 ## License
 
 TDrive is licensed under the [MIT License](LICENSE).
