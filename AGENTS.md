@@ -28,8 +28,8 @@ The [architecture index](docs/architecture/README.md) links all technical guides
 
 - Inspect the current branch, working tree and relevant code before editing.
   Preserve existing user changes and work belonging to other agents.
-- Describe behavior implemented in this checkout. Planning documents such as
-  `making_mobile_app.md` and pending branches are not proof of shipped behavior.
+- Describe behavior implemented in this checkout. Planning documents and
+  pending branches are not proof of shipped behavior.
 - Follow the requested scope. A request to investigate, review or plan does not
   authorize implementation. A local draft request does not authorize publishing.
 - For changes spanning services, persistence or platforms, outline the affected
