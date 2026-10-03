@@ -5,7 +5,8 @@ GUI and CLI daemon share a Go backend; the frontend combines Svelte components
 with existing TypeScript controllers.
 
 Read [CONTRIBUTING.md](CONTRIBUTING.md) before preparing commits or creating or
-editing a PR. It defines the contribution workflow and required PR format.
+editing a PR. It defines concise commit messages, purpose-focused PR titles and
+the required PR body format.
 Use [build/README.md](build/README.md) for platform setup and packaging details.
 
 ## Read by task

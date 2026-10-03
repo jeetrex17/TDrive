@@ -21,22 +21,36 @@ the platforms affected by your work.
   Use [.github/workflows/ci.yml](.github/workflows/ci.yml) for the CI requirements.
 - Never commit credentials, Telegram sessions, encryption keys, local databases
   or private user files.
-- Use small, cohesive commits with short conventional messages, such as
-  `fix: preserve upload progress after reconnect` or `docs: clarify mobile setup`.
-  Do not add co-author trailers.
 
 For agents: commit, push or open a PR only when the user has authorized that
 action in the task. A request to open a PR includes the necessary commits and
 push. A local review request does not. Never merge or publish a release without
 explicit authorization.
 
+## Commit messages
+
+Keep each commit to one cohesive change. Use `<type>: <short imperative summary>`
+with a type such as `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf` or `ci`.
+
+- Aim for 72 characters or fewer, including the type. Use specific action words
+  and omit a trailing period.
+- Describe the change, for example `fix: preserve upload progress after reconnect`
+  or `docs: clarify mobile setup`. Avoid vague summaries such as `fix: updates`.
+- Add a body only when the reason or an important constraint needs explanation.
+- Do not add co-author trailers.
+
 ## Opening a pull request
 
 1. Target `master`, unless the work explicitly targets another branch.
 2. Review the full branch diff and commit history so the description covers the
    complete change.
-3. Use a short, clear title describing the change. Open agent-created PRs as
-   drafts unless the user asks otherwise.
+3. Use a short action title that states the PR's main user-facing purpose,
+   such as `Resume large uploads after interruption`. Aim for 72 characters or
+   fewer; omit a trailing period and implementation details that obscure the
+   purpose. For internal or documentation changes, state the maintainer benefit
+   honestly, such as `Clarify contribution and architecture guidance`; do not
+   invent a user-visible benefit. Open agent-created PRs as drafts unless the
+   user asks otherwise.
 4. Use exactly the three sections below, in this order. Keep the body concise
    and explain what changed, its meaningful scope and why it matters.
 
