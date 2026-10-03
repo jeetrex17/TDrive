@@ -15,12 +15,17 @@ shape using stored bytes, including encryption overhead.
 | --- | --- | --- |
 | Ordinary single document | Telegram accepts the document containing the file header | Local projection can fail after the remote file exists |
 | Ordinary multipart file | Telegram accepts a manifest referencing previously hidden parts | Once manifest send is attempted, preserve parts even if the outcome is unknown |
+| Resumable multipart file | The same manifest boundary, with a durable local job and verified part receipts | Keep checkpoints and reconcile uncertain sends before continuing or discarding |
 | Mounted content write | A separate writable commit references uploaded hidden bodies | Reconcile the journaled operation before deciding whether bodies are disposable |
 
 The current [limits](../../backend/services/file/limits.go) are 1900 MiB per
 stored part, 40 GiB per stored logical file and a defensive maximum of 32 parts.
 These are application limits, applied uniformly; an encrypted file can cross a
 part boundary because its stored size exceeds its plaintext size.
+
+The diagram below describes the ordinary upload path. Eligible unencrypted
+uploads use the durable recovery path described below instead of aborting their
+parts after an interrupted attempt.
 
 ```mermaid
 flowchart TD
@@ -174,7 +179,50 @@ local checkpoint is safe to repeat because Telegram body deletion is idempotent.
 See [storage and synchronization](storage-and-sync.md) for the ordering repair
 required when local commits are ahead of the contiguous history watermark.
 
-## What “resume” means in this checkout
+## Large upload recovery
+
+Individual, unencrypted file uploads larger than 2,000,000,000 bytes use the
+[upload journal](../../backend/services/file/resumable_upload.go) and
+[recovery runner](../../backend/services/file/resumable_run.go). This eligibility
+threshold is separate from the 1900 MiB multipart boundary. Encrypted uploads,
+folder imports, photo backup and downloads keep their existing paths.
+
+The journal scopes jobs to the account and channel and records source identity,
+whole-file and per-part hashes, the part plan and the history boundary before
+upload. Confirmed progress comes from durable part receipts. Bytes in a partially
+sent part do not count as a completed checkpoint.
+
+```mermaid
+flowchart TD
+    Source[Hash source and persist job] --> Send[Send missing parts with stable IDs]
+    Send --> Receipt[Project accepted part receipts]
+    Receipt --> Publish[Verify source and publish manifest]
+    Send -->|Interruption| Retain[Retain journal and source]
+    Retain --> Reconcile[Check Telegram history and verify accepted parts]
+    Reconcile -->|Parts verified| Send
+    Reconcile -->|Source missing or changed| User[Request original source or restart]
+    Publish -->|Accepted| Complete[Project file and complete job]
+    Publish -->|Unknown outcome| Check[Keep parts and reconcile publication]
+    Check -->|Manifest found| Complete
+    Check -->|Safe retry| Publish
+```
+
+Resume verifies the selected source and accepted remote parts before sending
+missing parts. It does not continue an unfinished Telegram document at a byte
+offset. An uncertain manifest must be reconciled before deciding whether its
+parts are disposable. Discard removes only parts verified to belong to the job.
+
+The frontend can retry `waiting_network` jobs while the app is active and visible;
+uncertain publication and changed-source states require their recovery controls.
+Interrupted active jobs become paused when a new service instance opens the
+journal. Reopening the app does not imply unrestricted background execution.
+
+On Android and iOS, [app staging](../../app_upload_staging.go) retains eligible
+picker sources in private app storage for unfinished jobs. Cleanup checks journal
+references before removing copies; startup can sweep unreferenced staging left
+before a job was saved. iOS excludes these source copies from device backup.
+
+## WebDAV range assembly
 
 The [WebDAV Content-Range handler](../../backend/mountdav/writes.go) implements a
 specific macOS client behavior: follow-up PUTs send
@@ -202,15 +250,16 @@ buffering happen **before** that staging step and write plaintext temporary file
 Private scratch permissions do not encrypt those bytes. See
 [encryption](encryption.md) for the key and staging boundary.
 
-Ordinary file-service uploads and downloads likewise have automatic transport
-retries but no persisted restart-resume workflow in this checkout. Multipart
-thresholds, range reads for media and mount recovery do not establish such a
-feature.
+This mechanism is independent of the large-upload journal above. Downloads and
+uploads outside that journal's eligibility retain transport retries without
+persisted restart continuation. Range reads for media are a separate read path.
 
 ## Source and regression map
 
 - Upload outcomes: [retry tests](../../backend/services/file/upload_retry_test.go)
   and [hidden receipt tests](../../backend/services/file/hidden_upload_recovery_test.go).
+- Upload continuation: [multipart tests](../../backend/services/file/multipart_test.go)
+  and [mobile source ownership tests](../../app_share_test.go).
 - Download publication: [file tests](../../backend/services/file/download_file_test.go),
   [publication tests](../../backend/services/file/download_publish_test.go) and
   [folder tests](../../backend/services/file/folder_download_test.go).
