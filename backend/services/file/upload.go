@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"runtime"
 	"slices"
 	"sync"
 	"time"
@@ -22,7 +21,7 @@ import (
 func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []string, parentIDs []string, encrypt bool) ([]Metadata, error) {
 	return s.upload(ctx, channelID, filePaths, parentIDs, encrypt, uploadOptions{
 		observer:  detailedUploadObserver{service: s},
-		resumable: runtime.GOOS != "android" && runtime.GOOS != "ios",
+		resumable: true,
 	})
 }
 
@@ -359,7 +358,7 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 	}
 
 	if multipart {
-		if resumable && !wantEncrypted && sourcePath != "" {
+		if resumable && !wantEncrypted && sourcePath != "" && plaintextSize > s.minResumableUploadBytes() {
 			return s.startResumableUpload(ctx, uploadID, sourcePath, filename, plaintextSize, parent, channelID, peer, observer)
 		}
 		// uploadMultipart sends the parts, projects them, and emits the manifest

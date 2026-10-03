@@ -137,6 +137,118 @@ func TestMultipartResumeReconcilesAcceptedPartAfterRestart(t *testing.T) {
 	}
 }
 
+func TestMultipartResumeWaitsForNetwork(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	svc.MaxUploadBytes = 1000
+	policy := instantRetryPolicy()
+	policy.MaxTransientRetries = 1
+	svc.FloodWaitRetry = policy
+	path := writeTempNamedFile(t, "movie.bin", bigBody(2500))
+	fakeTG.InjectTransientFailures(2)
+	if _, err := svc.Upload(t.Context(), personalChannelID, []string{path}, []string{""}, false); err == nil {
+		t.Fatal("upload succeeded after transport retry budget was exhausted")
+	}
+	restarted := restartedUploadService(svc)
+	jobs, err := restarted.ListResumableUploads(t.Context(), personalChannelID)
+	if err != nil || len(jobs) != 1 || jobs[0].Status != resumeWaitingNetwork {
+		t.Fatalf("network-waiting jobs = %+v, err %v", jobs, err)
+	}
+	if got := len(fakeTG.SentFiles()); got != 0 {
+		t.Fatalf("part sends before reconnect = %d, want 0", got)
+	}
+	restarted.afterVisiblePartSend = func(index int, _ int64) {
+		if index != 0 {
+			return
+		}
+		if _, err := restarted.ResumeUpload(t.Context(), personalChannelID, jobs[0].JobID, ""); err == nil {
+			t.Fatal("concurrent resume claimed the same upload")
+		}
+	}
+	if _, err := restarted.ResumeUpload(t.Context(), personalChannelID, jobs[0].JobID, ""); err != nil {
+		t.Fatalf("resume after reconnect: %v", err)
+	}
+	if got := len(fakeTG.SentFiles()); got != 3 {
+		t.Fatalf("part sends after reconnect = %d, want 3", got)
+	}
+}
+
+type interruptedPartVerificationClient struct {
+	*visibleAcceptThenLoseReceiptClient
+}
+
+func (c *interruptedPartVerificationClient) DownloadFile(context.Context, tgclient.InputPeer, int64, io.Writer, func(int64, int64)) error {
+	return tgclient.ErrInjectedTransport
+}
+
+func TestMultipartResumeReconcilesAcceptedPartAfterNetworkLoss(t *testing.T) {
+	for _, verifyInterrupted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("verification_interrupted=%v", verifyInterrupted), func(t *testing.T) {
+			svc, _, fakeTG, _ := newTestService(t)
+			svc.MaxUploadBytes = 1000
+			policy := instantRetryPolicy()
+			policy.MaxTransientRetries = 0
+			if verifyInterrupted {
+				policy.MaxTransientRetries = 1
+			}
+			svc.FloodWaitRetry = policy
+			client := &visibleAcceptThenLoseReceiptClient{Fake: fakeTG, fileFailAt: 1}
+			if verifyInterrupted {
+				svc.TG = &interruptedPartVerificationClient{client}
+			} else {
+				svc.TG = client
+			}
+			path := writeTempNamedFile(t, "movie.bin", bigBody(2500))
+			if _, err := svc.Upload(t.Context(), personalChannelID, []string{path}, []string{""}, false); err == nil {
+				t.Fatal("lost receipt was reported as a completed upload")
+			}
+			restarted := restartedUploadService(svc)
+			restarted.TG = fakeTG
+			jobs, err := restarted.ListResumableUploads(t.Context(), personalChannelID)
+			if err != nil || len(jobs) != 1 || jobs[0].Status != resumeWaitingNetwork {
+				t.Fatalf("network-waiting jobs = %+v, err %v", jobs, err)
+			}
+			if _, err := restarted.ResumeUpload(t.Context(), personalChannelID, jobs[0].JobID, ""); err != nil {
+				t.Fatalf("resume accepted part: %v", err)
+			}
+			if got := len(fakeTG.SentFiles()); got != 3 {
+				t.Fatalf("part sends after reconnect = %d, want exactly 3", got)
+			}
+		})
+	}
+}
+
+func TestMultipartManualPauseStaysPaused(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	svc.MaxUploadBytes = 1000
+	path := writeTempNamedFile(t, "movie.bin", bigBody(2500))
+	svc.afterVisiblePartSend = func(index int, _ int64) {
+		if index != 0 {
+			return
+		}
+		jobs, err := svc.ListResumableUploads(t.Context(), personalChannelID)
+		if err != nil || len(jobs) != 1 || !svc.PauseUpload(personalChannelID, jobs[0].JobID) {
+			t.Fatalf("pause active upload: jobs=%+v, err=%v", jobs, err)
+		}
+	}
+	if _, err := svc.Upload(t.Context(), personalChannelID, []string{path}, []string{""}, false); err == nil {
+		t.Fatal("paused upload reported success")
+	}
+	jobs, err := svc.ListResumableUploads(t.Context(), personalChannelID)
+	if err != nil || len(jobs) != 1 || jobs[0].Status != resumePaused {
+		t.Fatalf("paused jobs = %+v, err %v", jobs, err)
+	}
+	if got := len(fakeTG.SentFiles()); got != 1 {
+		t.Fatalf("part sends before explicit resume = %d, want 1", got)
+	}
+	restarted := restartedUploadService(svc)
+	if _, err := restarted.ResumeUpload(t.Context(), personalChannelID, jobs[0].JobID, ""); err != nil {
+		t.Fatalf("explicit resume after pause: %v", err)
+	}
+	if got := len(fakeTG.SentFiles()); got != 3 {
+		t.Fatalf("part sends after pause and resume = %d, want exactly 3", got)
+	}
+}
+
 func TestMultipartResumeRejectsChangedSource(t *testing.T) {
 	svc, db, fakeTG, _ := newTestService(t)
 	svc.MaxUploadBytes = 1000

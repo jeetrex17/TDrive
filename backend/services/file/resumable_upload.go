@@ -37,6 +37,7 @@ const (
 	resumeUncertain         = "uncertain"
 	resumeManifestUncertain = "uncertain_manifest"
 	resumeRestartRequired   = "restart_required"
+	resumeWaitingNetwork    = "waiting_network"
 	resumeComplete          = "completed"
 	resumeCanceling         = "canceling"
 )
@@ -311,6 +312,32 @@ func (s *Service) ListResumableUploads(ctx context.Context, channelID int64) ([]
 		jobs = append(jobs, view)
 	}
 	return jobs, nil
+}
+
+// UploadJobSource is for the native app's private source-file lifecycle. It is
+// deliberately separate from ResumableUpload, which is exposed to the UI and
+// must never contain a device path.
+func (s *Service) UploadJobSource(ctx context.Context, channelID int64, jobID string) (string, error) {
+	job, err := s.loadUploadJob(ctx, jobID)
+	if err != nil {
+		return "", err
+	}
+	if channelID == 0 || job.ChannelID != channelID {
+		return "", fmt.Errorf("upload job belongs to another channel")
+	}
+	return job.Path, nil
+}
+
+// StagedSourceReferenced includes every account and channel in this database:
+// a local source must not be removed while any unfinished job still needs it.
+func (s *Service) StagedSourceReferenced(ctx context.Context, path string) (bool, error) {
+	if err := s.ensureUploadJournal(); err != nil {
+		return false, err
+	}
+	var exists bool
+	err := s.DB.QueryRowContext(ctx, `SELECT EXISTS(SELECT 1 FROM resumable_uploads
+		WHERE source_path = ? AND status != ?)`, path, resumeComplete).Scan(&exists)
+	return exists, err
 }
 
 func (s *Service) trackResumeCancel(jobID string, cancel context.CancelFunc) func() {

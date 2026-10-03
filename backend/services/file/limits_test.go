@@ -51,6 +51,12 @@ func TestPlanUpload(t *testing.T) {
 	if _, multi, err := (&Service{}).planUpload("g.bin", 1<<30, false); err != nil || multi {
 		t.Errorf("1 GiB default should be single, got multi=%v err=%v", multi, err)
 	}
+	if got := (&Service{}).minResumableUploadBytes(); got != 2_000_000_000 || got <= MaxPartBytes {
+		t.Errorf("default recovery threshold = %d, want 2 GB above the multipart boundary", got)
+	}
+	if got := s.minResumableUploadBytes(); got != s.MaxUploadBytes {
+		t.Errorf("test recovery threshold = %d, want %d", got, s.MaxUploadBytes)
+	}
 }
 
 func TestResumablePartPlan(t *testing.T) {

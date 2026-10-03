@@ -150,8 +150,8 @@ func (s *Service) runResumableUpload(ctx context.Context, job uploadJob, sourceP
 	}
 	previousStatus := job.Status
 	claim, err := s.DB.ExecContext(ctx, `UPDATE resumable_uploads SET status = ?, error = ''
-		WHERE job_id = ? AND account_namespace = ? AND status IN (?, ?, ?, ?)`,
-		resumeUploading, job.ID, s.CacheNamespace, resumePaused, resumeNeedsFile, resumeUncertain, resumeManifestUncertain)
+		WHERE job_id = ? AND account_namespace = ? AND status IN (?, ?, ?, ?, ?)`,
+		resumeUploading, job.ID, s.CacheNamespace, resumePaused, resumeNeedsFile, resumeUncertain, resumeManifestUncertain, resumeWaitingNetwork)
 	if err != nil {
 		return Metadata{}, err
 	}
@@ -165,8 +165,10 @@ func (s *Service) runResumableUpload(ctx context.Context, job uploadJob, sourceP
 	untrack := s.trackResumeCancel(job.ID, cancel)
 	defer func() { untrack(); cancel() }()
 	fail := func(status string, cause error) (Metadata, error) {
-		if errors.Is(cause, context.Canceled) && status != resumeManifestUncertain {
+		if runCtx.Err() != nil && status != resumeManifestUncertain && status != resumeRestartRequired {
 			status = resumePaused
+		} else if status == resumeUncertain && tgclient.IsTransientTransport(cause) {
+			status = resumeWaitingNetwork
 		}
 		// The caller context can be canceled after Telegram accepts a message.
 		// Persist the recovery state with a bounded independent context.
@@ -285,7 +287,11 @@ func (s *Service) runResumableUpload(ctx context.Context, job uploadJob, sourceP
 		}
 		if sentBytes != length || attempts > 1 {
 			if err := s.verifyRemotePart(runCtx, peer, result.MsgID, length, job.PartHashes[i]); err != nil {
-				return fail(resumeRestartRequired, err)
+				status := resumeUncertain
+				if errors.Is(err, errResumablePartMismatch) {
+					status = resumeRestartRequired
+				}
+				return fail(status, err)
 			}
 		}
 		if s.afterVisiblePartSend != nil {
