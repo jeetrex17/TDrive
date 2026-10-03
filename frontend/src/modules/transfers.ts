@@ -41,6 +41,7 @@ import {
     updateTransferProgress,
     updateTransferName,
     markTransferDone,
+    forgetResumableUpload,
     setTransferNote,
     transferKey,
     wasUploadCanceled,
@@ -489,7 +490,7 @@ let flowBusy = false;
  * reader does when the screen has not moved -- opened a second picker on top of
  * the first. Held from the trigger, that window is covered too.
  */
-async function withTransferFlow(run: () => Promise<void>): Promise<void> {
+export async function withTransferFlow(run: () => Promise<void>): Promise<void> {
     if (flowBusy) {
         notify({
             level: 'info',
@@ -697,6 +698,7 @@ function activateUploadProgressEvents(): void {
     subscribeTransferEvent("upload_complete", (id, name) => {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
+        forgetResumableUpload(uploadId);
         if (state.importBatch) {
             return;
         }
@@ -731,6 +733,7 @@ function activateUploadProgressEvents(): void {
     subscribeTransferEvent("upload_error", (id, name, message) => {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
+        forgetResumableUpload(uploadId);
         if (state.importBatch) {
             if (!state.cancelingUpload) recordFailureReason(importFailureReasons, name, message);
             return;

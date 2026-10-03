@@ -222,6 +222,7 @@ function storedEvent(event: HistoryEvent): Record<string, unknown> {
             startedAt: event.startedAt,
             finishedAt: event.finishedAt,
             ...(event.note ? { note: event.note } : {}),
+            ...(event.resumableJobId ? { resumableJobId: event.resumableJobId } : {}),
         };
     }
     return {
@@ -246,6 +247,10 @@ function restoredTransfer(stored: Record<string, unknown>, savedAt: number): Tra
         ? stored.status as TransferStatus
         : 'failed';
     const interrupted = isUnfinishedTransfer(previous);
+    // Backend checkpoints, not this process's history, describe a resumable
+    // upload after restart. The dashboard loads those jobs independently.
+    const resumableJobId = text(stored.resumableJobId);
+    if (direction === 'up' && interrupted && resumableJobId) return null;
     const status = restingStatus(previous);
     const startedAt = count(stored.startedAt);
     const note = status === 'failed' && interrupted ? interruptedNote(direction) : text(stored.note);
@@ -265,6 +270,7 @@ function restoredTransfer(stored: Record<string, unknown>, savedAt: number): Tra
         // and it beats the alternative of a transfer that ended at the epoch.
         finishedAt: interrupted ? (savedAt || startedAt) : count(stored.finishedAt),
         ...(note ? { note } : {}),
+        ...(resumableJobId ? { resumableJobId } : {}),
     };
 }
 

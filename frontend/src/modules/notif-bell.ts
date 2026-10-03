@@ -48,6 +48,24 @@ const speedSamples = new Map<string, { at: number; bytes: number; speed: number 
 // would otherwise end as Failed and raise an error toast the user just asked
 // for. Cleared when the id is reused by the next batch (see pushTransferStart).
 const canceledUploads = new Set<number>();
+const resumableJobsByUploadId = new Map<number, string>();
+
+/** Links a legacy progress stream to the durable backend job that owns it. */
+export function linkResumableUpload(uploadId: number, jobId: string): void {
+    if (!Number.isSafeInteger(uploadId) || uploadId < 0 || !jobId) return;
+    resumableJobsByUploadId.set(uploadId, jobId);
+    const key = transferKey('up', uploadId);
+    historyEvents.update((events) => events.map((event) =>
+        event.kind === 'transfer' && event.id === key
+            ? { ...event, resumableJobId: jobId }
+            : event,
+    ));
+}
+
+/** Upload IDs are reused by the next batch; only the finished row keeps its link. */
+export function forgetResumableUpload(uploadId: number): void {
+    resumableJobsByUploadId.delete(uploadId);
+}
 
 
 // pushHistoryEvent enqueues a non-transfer event (folder created, drive
@@ -110,6 +128,9 @@ export function pushTransferStart({ id, direction, name, total = 0 }: { id: stri
         status: 'active',
         startedAt: Date.now(),
         finishedAt: 0,
+        ...(direction === 'up' && resumableJobsByUploadId.has(Number(id))
+            ? { resumableJobId: resumableJobsByUploadId.get(Number(id)) }
+            : {}),
     };
     // De-dup: an entry with this key is replaced, not duplicated.
     historyEvents.update((events) => [entry, ...events.filter((e) => e.id !== key)].slice(0, HISTORY_CAP));
@@ -309,6 +330,7 @@ export function markTransferDone({ id, direction, status = 'done' }: { id: strin
     const entry = findUnfinishedTransfer(key);
     if (!entry) return;
     speedSamples.delete(key);
+    if (direction === 'up' && Number.isSafeInteger(Number(id))) forgetResumableUpload(Number(id));
     historyEvents.update((events) =>
         events.map((e) =>
             e.id === key && e.kind === 'transfer'

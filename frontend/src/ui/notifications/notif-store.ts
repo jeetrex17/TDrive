@@ -74,6 +74,8 @@ export interface TransferEvent {
      * it went past once and could not be asked for again.
      */
     note?: string;
+    /** Backend journal identity, when this upload can resume across launches. */
+    resumableJobId?: string;
 }
 
 export interface NoticeEvent {
