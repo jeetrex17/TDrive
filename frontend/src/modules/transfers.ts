@@ -491,17 +491,22 @@ let flowBusy = false;
  * the first. Held from the trigger, that window is covered too.
  */
 export async function withTransferFlow(run: () => Promise<void>): Promise<void> {
-    if (flowBusy) {
+    if (!await tryWithTransferFlow(run)) {
         notify({
             level: 'info',
             title: 'A transfer is already in progress',
             body: 'Wait for it to finish, then start another.',
         });
-        return;
     }
+}
+
+/** Background recovery yields to a user-started transfer without a toast. */
+export async function tryWithTransferFlow(run: () => Promise<void>): Promise<boolean> {
+    if (flowBusy) return false;
     flowBusy = true;
     try {
         await run();
+        return true;
     } finally {
         flowBusy = false;
     }

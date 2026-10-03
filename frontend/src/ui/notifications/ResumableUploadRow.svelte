@@ -19,6 +19,7 @@
     const stateLabel = $derived(
         job.status === 'uploading' ? 'Uploading'
         : job.status === 'paused' ? 'Paused'
+        : job.status === 'waiting_network' ? 'Waiting for connection'
         : job.status === 'needs_source' ? 'Source file needed'
         : job.status === 'uncertain' ? 'Checking needed'
         : job.status === 'uncertain_manifest' ? 'Needs review'
@@ -30,6 +31,8 @@
     const guidance = $derived(
         job.status === 'needs_source'
             ? 'The source moved or changed. Choose the original file to verify it.'
+            : job.status === 'waiting_network'
+                ? 'TDrive will retry when your connection returns. You can also retry now.'
             : job.status === 'uncertain_manifest'
                 ? 'TDrive cannot yet confirm whether this file was published. Leave its parts in place.'
                 : job.status === 'uncertain'
@@ -68,8 +71,8 @@
     <div class="notif-row-meta"><div class="notif-row-state">{detail}</div></div>
     {#if job.status !== 'canceling'}
         <div class="actions">
-            {#if job.status === 'paused' || job.status === 'uncertain'}
-                <button class="notif-row-copy" type="button" disabled={busy} onclick={() => resumeUpload(job.jobId)}>Resume</button>
+            {#if job.status === 'paused' || job.status === 'uncertain' || job.status === 'waiting_network'}
+                <button class="notif-row-copy" type="button" disabled={busy} aria-label={`${job.status === 'waiting_network' ? 'Retry' : 'Resume'} ${job.name}`} onclick={() => resumeUpload(job.jobId)}>{job.status === 'waiting_network' ? 'Retry now' : 'Resume'}</button>
             {:else if job.status === 'needs_source'}
                 <button class="notif-row-copy" type="button" disabled={busy} onclick={() => chooseSourceAndResume(job.jobId)}>Choose file</button>
             {:else if job.status === 'uploading'}

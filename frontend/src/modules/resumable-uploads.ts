@@ -1,5 +1,5 @@
-import { writable } from 'svelte/store';
-import { isMobilePlatform, onRuntimeEvent, selectFiles, type RuntimeUnsubscribe } from '../api';
+import { get } from 'svelte/store';
+import { onRuntimeEvent, selectFiles, type RuntimeUnsubscribe } from '../api';
 import {
     cancelResumableUpload,
     listResumableUploads,
@@ -13,15 +13,104 @@ import { humanizeBackendError } from './errors';
 import { notify } from './notifications';
 import { linkResumableUpload } from './notif-bell';
 import { appActions } from './app-actions';
-import { withTransferFlow } from './transfers';
+import { tryWithTransferFlow, withTransferFlow } from './transfers';
+import { resumableUploads } from './resumable-upload-store';
 
-/** Active jobs are never reconstructed from localStorage. This is the backend's view. */
-export const resumableUploads = writable<ResumableUpload[]>([]);
+export { resumableUploads } from './resumable-upload-store';
 
 let activeChannelId: number | null = null;
 let generation = 0;
 const busy = new Set<string>();
 const starting = new Set<string>();
+let active = false;
+let retryTimer: ReturnType<typeof setTimeout> | null = null;
+let retryCount = 0;
+let retrying = false;
+let nativeConnected: boolean | null = null;
+let lastRetriedJobId: string | null = null;
+
+function stopRetryTimer(): void {
+    if (retryTimer !== null) clearTimeout(retryTimer);
+    retryTimer = null;
+}
+
+function canRetryInBackground(): boolean {
+    return active && activeChannelId !== null
+        && document.visibilityState !== 'hidden'
+        && (nativeConnected ?? navigator.onLine !== false);
+}
+
+function nativeNetworkChanged(payload: unknown): void {
+    let value = payload;
+    if (typeof value === 'string') {
+        try { value = JSON.parse(value); } catch { return; }
+    }
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return;
+    const connected = (value as Record<string, unknown>).connected;
+    if (typeof connected !== 'boolean') return;
+    nativeConnected = connected;
+    if (connected) scheduleNetworkRetry(true);
+    else stopRetryTimer();
+}
+
+/** Only a transport failure is safe to retry without the user's decision. */
+function scheduleNetworkRetry(wake = false): void {
+    if (wake) {
+        retryCount = 0;
+        stopRetryTimer();
+    }
+    if (!canRetryInBackground()) {
+        stopRetryTimer();
+        return;
+    }
+    const waiting = getWaitingUpload();
+    if (!waiting) {
+        stopRetryTimer();
+        retryCount = 0;
+        return;
+    }
+    if (retrying || retryTimer !== null) return;
+    const delay = retryCount === 0 ? 0 : Math.min(5_000 * 2 ** (retryCount - 1), 60_000);
+    retryTimer = setTimeout(() => {
+        retryTimer = null;
+        void retryWaitingUpload();
+    }, delay);
+}
+
+function getWaitingUpload(): ResumableUpload | undefined {
+    const waiting = get(resumableUploads).filter((job) => (
+        job.channelId === activeChannelId && job.status === 'waiting_network' && !starting.has(job.jobId)
+    ));
+    if (waiting.length === 0) return undefined;
+    const lastIndex = waiting.findIndex((job) => job.jobId === lastRetriedJobId);
+    return waiting[(lastIndex + 1) % waiting.length];
+}
+
+async function retryWaitingUpload(): Promise<void> {
+    const job = canRetryInBackground() ? getWaitingUpload() : undefined;
+    if (!job || retrying) return;
+    const channelId = activeChannelId;
+    retrying = true;
+    starting.add(job.jobId);
+    lastRetriedJobId = job.jobId;
+    try {
+        await tryWithTransferFlow(async () => {
+            if (!canRetryInBackground() || activeChannelId !== channelId) return;
+            const result = await resumeResumableUpload(job.jobId);
+            if (result.result.ok && activeChannelId === channelId) appActions().refreshFiles();
+        });
+    } catch (error) {
+        // The journal keeps the actionable state; a background retry should
+        // leave that state visible instead of producing repeated error toasts.
+        console.error('Could not retry resumable upload:', error);
+    } finally {
+        starting.delete(job.jobId);
+        retryCount += 1;
+        await refreshResumableUploads();
+        retrying = false;
+        scheduleNetworkRetry();
+    }
+}
 
 function forCurrentChannel(jobs: readonly ResumableUpload[]): ResumableUpload[] {
     return jobs.filter((job) => job.channelId === activeChannelId && job.status !== 'completed');
@@ -36,7 +125,10 @@ export async function refreshResumableUploads(): Promise<void> {
     }
     try {
         const jobs = await listResumableUploads();
-        if (request === generation) resumableUploads.set(forCurrentChannel(jobs));
+        if (request === generation) {
+            resumableUploads.set(forCurrentChannel(jobs));
+            scheduleNetworkRetry();
+        }
     } catch (error) {
         // Keep the last confirmed view. A transient list error must not turn
         // durable checkpoints into an empty transfer panel.
@@ -46,10 +138,13 @@ export async function refreshResumableUploads(): Promise<void> {
 
 /** Called once by the dashboard, not once per bell open. */
 export function activateResumableUploads(): () => void {
-    if (isMobilePlatform()) return () => {};
+    active = true;
     const unsubscribeDrive = sidebarState.subscribe(({ activeChannelId: nextId }) => {
         if (nextId === activeChannelId) return;
         activeChannelId = nextId;
+        retryCount = 0;
+        lastRetriedJobId = null;
+        stopRetryTimer();
         resumableUploads.set([]);
         void refreshResumableUploads();
     });
@@ -67,13 +162,42 @@ export function activateResumableUploads(): () => void {
             ...current.filter((entry) => entry.jobId !== job.jobId),
             job,
         ]));
+        scheduleNetworkRetry();
         if (job.status === 'completed') appActions().refreshFiles();
     });
+    const unsubscribeAndroidNetwork = onRuntimeEvent('android:NetworkChanged', nativeNetworkChanged);
+    const unsubscribeIOSNetwork = onRuntimeEvent('ios:NetworkChanged', nativeNetworkChanged);
+    const handleOnline = () => {
+        nativeConnected = null;
+        scheduleNetworkRetry(true);
+    };
+    const handleOffline = () => {
+        nativeConnected = null;
+        stopRetryTimer();
+    };
+    const handleVisibility = () => {
+        if (document.visibilityState === 'hidden') stopRetryTimer();
+        else scheduleNetworkRetry(true);
+    };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    document.addEventListener('visibilitychange', handleVisibility);
     return () => {
+        active = false;
+        stopRetryTimer();
+        retryCount = 0;
+        retrying = false;
+        lastRetriedJobId = null;
         generation += 1;
         activeChannelId = null;
         unsubscribeDrive();
         unsubscribeEvent();
+        unsubscribeAndroidNetwork();
+        unsubscribeIOSNetwork();
+        nativeConnected = null;
+        window.removeEventListener('online', handleOnline);
+        window.removeEventListener('offline', handleOffline);
+        document.removeEventListener('visibilitychange', handleVisibility);
         resumableUploads.set([]);
         busy.clear();
         starting.clear();

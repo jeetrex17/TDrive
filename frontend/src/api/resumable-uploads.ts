@@ -22,10 +22,10 @@ export interface ResumableUpload {
     error: string;
 }
 
-export type ResumableUploadStatus = 'paused' | 'uploading' | 'needs_source' | 'uncertain' | 'uncertain_manifest' | 'restart_required' | 'completed' | 'canceling';
+export type ResumableUploadStatus = 'paused' | 'uploading' | 'waiting_network' | 'needs_source' | 'uncertain' | 'uncertain_manifest' | 'restart_required' | 'completed' | 'canceling';
 
 const STATUSES: readonly string[] = [
-    'paused', 'uploading', 'needs_source', 'uncertain', 'uncertain_manifest', 'restart_required', 'completed', 'canceling',
+    'paused', 'uploading', 'waiting_network', 'needs_source', 'uncertain', 'uncertain_manifest', 'restart_required', 'completed', 'canceling',
 ];
 
 export function normalizeResumableUpload(value: unknown): ResumableUpload | null {

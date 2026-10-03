@@ -175,6 +175,16 @@ describe('notification panel keyboard reachability', () => {
 
         resumableUploads.set([{
             jobId: 'job-7', channelId: 1, name: 'archive.bin', size: 1_000,
+            confirmedBytes: 400, status: 'waiting_network', error: '',
+        }]);
+        await settle();
+        expect(open?.textContent).toContain('Waiting for connection');
+        expect(open?.textContent).toContain('retry when');
+        expect(open?.querySelector<HTMLButtonElement>('button[aria-label="Retry archive.bin"]')?.textContent).toBe('Retry now');
+        expect(open?.textContent).toContain('Discard');
+
+        resumableUploads.set([{
+            jobId: 'job-7', channelId: 1, name: 'archive.bin', size: 1_000,
             confirmedBytes: 400, status: 'uncertain_manifest', error: '',
         }]);
         await settle();
