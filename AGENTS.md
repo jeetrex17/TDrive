@@ -147,6 +147,9 @@ Run these commands from the repository root unless another directory is shown.
 
 ## Verification
 
+- Read [TESTING.md](TESTING.md) before adding or changing tests or choosing
+  verification. It defines Go testing conventions, reusable TDrive fixtures,
+  subsystem contracts and the limits of each kind of test evidence.
 - Start with checks that exercise the changed behavior. Extend existing focused
   tests or table cases where practical; add new files when they improve organization.
 - For bug fixes, reproduce the failure and add a regression case when feasible.
