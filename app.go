@@ -84,6 +84,9 @@ type App struct {
 	// keepAwake mirrors the phone's idle-timer override so it is only toggled
 	// when the transfer state actually flips. Guarded by transferMu.
 	keepAwake bool
+	// pickerSources contains disposable copies returned by the mobile file
+	// pickers. These can be moved into durable storage for large uploads.
+	pickerSources map[string]struct{} // guarded by transferMu
 
 	// The domains lifted out of App into their own bound services. They are
 	// built once in initServices; see app_services.go for the graph and for
@@ -213,6 +216,14 @@ func (a *App) SelectFiles() ([]string, error) {
 		PromptForMultipleSelection()
 	if err != nil {
 		return nil, err
+	}
+	if application.System.IsMobile() {
+		a.transferMu.Lock()
+		a.pickerSources = make(map[string]struct{}, len(uploadfilepaths))
+		for _, path := range uploadfilepaths {
+			a.pickerSources[path] = struct{}{}
+		}
+		a.transferMu.Unlock()
 	}
 	return uploadfilepaths, nil
 }
@@ -352,6 +363,11 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bo
 	}
 	ctx := a.beginUpload()
 	defer a.endUpload()
+	filePaths, staged, err := a.stageMobileUploadPaths(ctx, filePaths, encrypt)
+	if err != nil {
+		return UploadResult{Result: operationFailure(err)}
+	}
+	defer a.releaseUnreferencedUploadSources(svc, staged)
 	a.sweepOrphanParts(ctx)
 	files, err := svc.Upload(ctx, a.ActiveChannelID(), filePaths, parentIDs, encrypt)
 	out := make([]backend.FileMetaData, 0, len(files))
@@ -387,6 +403,19 @@ func (a *App) ResumeResumableUpload(jobID, sourcePath string) UploadResult {
 		return UploadResult{Result: operationFailure(err)}
 	}
 	defer a.endUpload()
+	previousSource, err := svc.UploadJobSource(ctx, a.ActiveChannelID(), jobID)
+	if err != nil {
+		return UploadResult{Result: operationFailure(err)}
+	}
+	var staged []string
+	if sourcePath != "" {
+		paths, newStaged, stageErr := a.stageMobileUploadPaths(ctx, []string{sourcePath}, false)
+		if stageErr != nil {
+			return UploadResult{Result: operationFailure(stageErr)}
+		}
+		sourcePath, staged = paths[0], newStaged
+	}
+	defer a.releaseUnreferencedUploadSources(svc, append(staged, previousSource))
 	meta, err := svc.ResumeUpload(ctx, a.ActiveChannelID(), jobID, sourcePath)
 	if err != nil {
 		return UploadResult{Result: operationFailure(err)}
@@ -414,9 +443,14 @@ func (a *App) CancelResumableUpload(jobID string) OperationResult {
 	if err != nil {
 		return operationFailure(err)
 	}
+	source, err := svc.UploadJobSource(a.ctx, a.ActiveChannelID(), jobID)
+	if err != nil {
+		return operationFailure(err)
+	}
 	if err := svc.CancelResumableUpload(a.ctx, a.ActiveChannelID(), jobID); err != nil {
 		return operationFailure(err)
 	}
+	a.releaseUnreferencedUploadSources(svc, []string{source})
 	return operationSuccess()
 }
 
@@ -807,6 +841,9 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 	}
 	a.engine = engine
 	a.Client = engine.RawClient()
+	if application.System.IsMobile() {
+		a.sweepUnreferencedUploadSources()
+	}
 	if err := a.initPhotoBackup(); err != nil {
 		fmt.Printf("Warning: Failed to initialize photo backup: %v\n", err)
 	}
