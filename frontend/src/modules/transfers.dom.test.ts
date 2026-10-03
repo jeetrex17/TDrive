@@ -29,6 +29,10 @@ const app = vi.hoisted(() => ({
     SelectFiles: vi.fn(),
     SelectFolder: vi.fn(),
     UploadToDriveFS: vi.fn(),
+    ListResumableUploads: vi.fn(),
+    ResumeResumableUpload: vi.fn(),
+    PauseResumableUpload: vi.fn(),
+    CancelResumableUpload: vi.fn(),
 }));
 
 vi.mock('../../bindings/TDrive/app', () => app);
@@ -36,6 +40,7 @@ vi.mock('@wailsio/runtime', () => ({ Events: { On: eventsOn } }));
 vi.mock('./notifications', () => ({ notify: mocks.notify, dismissNotification: mocks.dismissNotification }));
 vi.mock('./app-actions', () => ({ appActions: () => ({ refreshFiles: mocks.refreshFiles }) }));
 vi.mock('./notif-bell', () => ({
+    forgetResumableUpload: vi.fn(),
     setTransferNote: vi.fn(),
     markTransferDone: mocks.markTransferDone,
     pushTransferStart: mocks.pushTransferStart,
@@ -54,6 +59,7 @@ vi.mock('../ui/chrome/UploadMenu.svelte', () => ({ default: {} }));
 vi.mock('../ui/mount', () => ({ mountSvelte: vi.fn() }));
 
 import { activateTransferSurfaces, importFolderWithParentID, uploadWithParentID } from './transfers';
+import { resumeUpload } from './resumable-uploads';
 
 interface TestNotice {
     level?: string;
@@ -242,6 +248,27 @@ describe('the picker window', () => {
         app.SelectFiles.mockResolvedValue(['/tmp/second.pdf']);
         await uploadWithParentID('');
         expect(app.SelectFiles).toHaveBeenCalledTimes(2);
+    });
+
+    it('does not start a resumed upload while another upload owns the transfer flow', async () => {
+        let releasePicker = (_paths: string[]) => {};
+        app.SelectFiles.mockReturnValue(new Promise<string[]>((resolve) => { releasePicker = resolve; }));
+        app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0, limitExceeded: false });
+        app.UploadToDriveFS.mockResolvedValue({ result: { ok: true }, files: [] });
+        app.ResumeResumableUpload.mockResolvedValue({ result: { ok: true }, files: [] });
+
+        const first = uploadWithParentID('');
+        await Promise.resolve();
+        resumeUpload('saved-job');
+        await vi.waitFor(() => expect(mocks.notify).toHaveBeenCalledWith(
+            expect.objectContaining({ title: 'A transfer is already in progress' }),
+        ));
+        expect(app.ResumeResumableUpload).not.toHaveBeenCalled();
+
+        releasePicker(['/tmp/report.pdf']);
+        await first;
+        resumeUpload('saved-job');
+        await vi.waitFor(() => expect(app.ResumeResumableUpload).toHaveBeenCalledWith('saved-job', ''));
     });
 
     it('asks for the plan and the encryption snapshot together, not one after the other', async () => {

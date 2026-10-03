@@ -9,6 +9,7 @@ import { flushSync, mount, tick, unmount } from 'svelte';
 import { get } from 'svelte/store';
 import NotifBell from './NotifBell.svelte';
 import { historyEvents, notifPanelOpen, notifUnreadErrors } from './notif-store';
+import { resumableUploads } from '../../modules/resumable-uploads';
 
 const HOVER_INTENT_MS = 140;
 
@@ -41,6 +42,7 @@ beforeEach(() => {
         { kind: 'event', id: 'err-1', level: 'error', title: 'Could not join drive', body: 'INVITE_HASH_EXPIRED', ts: Date.now() },
     ]);
     notifUnreadErrors.set(1);
+    resumableUploads.set([]);
     host = document.createElement('div');
     document.body.appendChild(host);
     app = mount(NotifBell, {
@@ -54,6 +56,7 @@ afterEach(async () => {
     notifPanelOpen.set(false);
     notifUnreadErrors.set(0);
     historyEvents.set([]);
+    resumableUploads.set([]);
     flushSync();
     if (app) await unmount(app);
     app = null;
@@ -141,6 +144,52 @@ describe('notification panel keyboard reachability', () => {
         historyEvents.set([]);
         flushSync();
         expect(bell().getAttribute('aria-label')).toBe('Notifications');
+    });
+
+    it('shows backend-confirmed bytes and offers distinct resume and discard actions', async () => {
+        notifUnreadErrors.set(0);
+        historyEvents.set([{
+            kind: 'transfer', id: 'xfer:up:3', direction: 'up', name: 'archive.bin',
+            progress: 60, bytes: 600, total: 1_000, speed: 0,
+            status: 'failed', startedAt: 0, finishedAt: 1,
+            resumableJobId: 'job-7',
+        }]);
+        resumableUploads.set([{
+            jobId: 'job-7', channelId: 1, name: 'archive.bin', size: 1_000,
+            confirmedBytes: 400, status: 'paused', error: '',
+        }]);
+        bell().click();
+        await settle();
+
+        const open = panel();
+        expect(open?.querySelectorAll('.resumable-row')).toHaveLength(1);
+        expect(open?.textContent).toContain('confirmed');
+        expect(open?.querySelector('[aria-valuenow="40"]')).not.toBeNull();
+        expect(open?.textContent).not.toContain('Failed');
+        expect(Array.from(open?.querySelectorAll('button') ?? []).some((button) => button.textContent === 'Resume')).toBe(true);
+        const discard = Array.from(open?.querySelectorAll('button') ?? []).find((button) => button.textContent === 'Discard');
+        discard?.click();
+        await settle();
+        expect(open?.textContent).toContain('Discard parts');
+        expect(open?.textContent).toContain('Keep');
+
+        resumableUploads.set([{
+            jobId: 'job-7', channelId: 1, name: 'archive.bin', size: 1_000,
+            confirmedBytes: 400, status: 'uncertain_manifest', error: '',
+        }]);
+        await settle();
+        expect(open?.textContent).toContain('Check and retry');
+        expect(open?.textContent).not.toContain('Discard parts');
+        expect(open?.textContent).not.toContain('Resume');
+
+        resumableUploads.set([{
+            jobId: 'job-7', channelId: 1, name: 'archive.bin', size: 1_000,
+            confirmedBytes: 400, status: 'restart_required', error: '',
+        }]);
+        await settle();
+        expect(open?.textContent).toContain('start a new upload');
+        expect(open?.textContent).not.toContain('Resume');
+        expect(open?.textContent).not.toContain('Choose file');
     });
 });
 
