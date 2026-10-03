@@ -1,4 +1,4 @@
-import { GetGalleryStorage } from '../../bindings/TDrive/app';
+import { GetGalleryStorage } from '../../bindings/TDrive/internal/app/app';
 import { invokeBackend } from './gateway';
 import { asRecord } from './shared';
 

@@ -115,7 +115,7 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
 // app.ts is how OpenMedia and PreparePersonalDrive silently stopped being
 // mockable when the God object was split: an unrecovered id falls through to
 // the empty-success branch below, and the app sees an undefined result.
-const BINDINGS_DIR = join(__dirname, '../bindings/TDrive');
+const BINDINGS_DIR = join(__dirname, '../bindings/TDrive/internal/app');
 const GENERATED_MODEL_MODULES = new Set(['index.ts', 'models.ts']);
 
 function loadMethodIdsByName(): Record<string, number> {

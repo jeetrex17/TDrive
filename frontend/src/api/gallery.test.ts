@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-vi.mock('../../bindings/TDrive/app', () => ({ GetMediaTimeline: vi.fn(), GetMediaTimelineSummary: vi.fn(), GetMediaTimelineAnchors: vi.fn(), GetMediaFolderTimeline: vi.fn(), ListMediaPage: vi.fn(), ListMediaFolderPage: vi.fn(), ListMediaFolders: vi.fn(), LocateMedia: vi.fn() }));
+vi.mock('../../bindings/TDrive/internal/app/app', () => ({ GetMediaTimeline: vi.fn(), GetMediaTimelineSummary: vi.fn(), GetMediaTimelineAnchors: vi.fn(), GetMediaFolderTimeline: vi.fn(), ListMediaPage: vi.fn(), ListMediaFolderPage: vi.fn(), ListMediaFolders: vi.fn(), LocateMedia: vi.fn() }));
 import { normalizeMediaFolders, normalizeMediaPage, normalizeMediaTimeline } from './gallery';
 
 const timeline = { channel_id: 1, generation: 'g', total_count: 2, page_size: 128, buckets: [{ key: '2026-09', start_index: 0, count: 2, upload_time: 1 }], anchors: [{ start_index: 0, cursor: 'opaque' }] };

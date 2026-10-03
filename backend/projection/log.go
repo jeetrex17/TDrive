@@ -1,6 +1,6 @@
 // log.go is the single transactional writer for replay_log + projection state.
 //
-// Both the local-action path (app.go: emit Telegram op -> ProjectFromOp) and
+// Both the local-action path (internal/app: emit Telegram op -> ProjectFromOp) and
 // the sync engine (read history -> ProjectFromOp per parsed message) MUST go
 // through these functions. There is no other legal way to mutate the log or
 // the projection.
@@ -32,7 +32,7 @@ func HashHeader(rawHeader string) string {
 }
 
 // ProjectFromOp opens its own transaction and projects one op. Use this from
-// app.go local-action paths and from the sync engine's per-message loop.
+// internal/app local-action paths and from the sync engine's per-message loop.
 //
 // Returns alreadySeen=true when this (channel_id, msg_id) was already in the
 // replay_log. In that case the projection is unchanged. If the hash differs

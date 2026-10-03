@@ -6,7 +6,7 @@ import {
     GetUpdateState as rawGetUpdateState,
     InstallUpdateAndRestart as rawInstallUpdateAndRestart,
     OpenUpdatePage as rawOpenUpdatePage,
-} from "../../bindings/TDrive/updateservice";
+} from "../../bindings/TDrive/internal/app/updateservice";
 import type { AppVersion, UpdateSnapshot } from "../types";
 import { asRecord, nonNegativeNumber } from "./shared";
 import { onRuntimeEvent, type RuntimeUnsubscribe } from "./runtime";

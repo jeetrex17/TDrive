@@ -29,8 +29,8 @@ const bindings = vi.hoisted(() => ({
     UnmountDrive: vi.fn(),
     UpdateMediaPlayback: vi.fn(),
 }));
-vi.mock("../bindings/TDrive/app", () => bindings);
-vi.mock("../bindings/TDrive/mediaservice", () => bindings);
+vi.mock("../bindings/TDrive/internal/app/app", () => bindings);
+vi.mock("../bindings/TDrive/internal/app/mediaservice", () => bindings);
 
 import {
     attachNativeMedia,
@@ -67,7 +67,7 @@ import {
     ShowNativeSeekThumbnail,
     Thumbnail,
     UpdateMediaPlayback,
-} from "../bindings/TDrive/mediaservice";
+} from "../bindings/TDrive/internal/app/mediaservice";
 
 beforeEach(() => {
     vi.clearAllMocks();

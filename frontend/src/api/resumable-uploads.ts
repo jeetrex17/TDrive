@@ -3,7 +3,7 @@ import {
     ListResumableUploads as rawListResumableUploads,
     PauseResumableUpload as rawPauseResumableUpload,
     ResumeResumableUpload as rawResumeResumableUpload,
-} from "../../bindings/TDrive/app";
+} from "../../bindings/TDrive/internal/app/app";
 import type { OperationResult, UploadResult } from "../types";
 import type { FileMetaData } from "../../bindings/TDrive/backend/models";
 import { toFileItem } from "./files";

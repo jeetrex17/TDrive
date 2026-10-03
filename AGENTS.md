@@ -46,7 +46,7 @@ The [architecture index](docs/architecture/README.md) links all technical guides
 
 | Area | Location and responsibility |
 | --- | --- |
-| App integration | Root Go files; Wails services and application lifecycle |
+| App integration | `internal/app/`; Wails services and application lifecycle; root `main.go` embeds assets and starts the app |
 | Shared backend | `backend/`; core, domain services, Telegram transport and persistence |
 | CLI | `cmd/tdrive/` and `backend/daemon/`; commands and the local protocol |
 | Frontend | `frontend/src/`; UI, state and the API adapter in `api.ts` |
@@ -55,7 +55,7 @@ The [architecture index](docs/architecture/README.md) links all technical guides
 
 ## Architecture and data safety
 
-- Follow the domain service split in `app_services.go`. Keep process lifecycle
+- Follow the domain service split in `internal/app/services.go`. Keep process lifecycle
   ordering in its existing owner; domain services should receive narrow dependencies.
 - Reuse `backend/core.Engine` for backend assembly. The GUI and daemon are
   alternative owners guarded by `processlock`, not independent concurrent engines.
@@ -125,8 +125,8 @@ Run these commands from the repository root unless another directory is shown.
 | Build for the host desktop | `wails3 task build` |
 | Discover platform tasks | `wails3 task -l` |
 | Generate Wails bindings | `wails3 task common:generate:bindings` |
-| Go tests | `go test . ./cmd/... ./backend/...` |
-| Go analysis | `go vet . ./cmd/... ./backend/...` |
+| Go tests | `go test . ./internal/... ./cmd/... ./backend/...` |
+| Go analysis | `go vet . ./internal/... ./cmd/... ./backend/...` |
 | Frontend checks | In `frontend/`: `npm run typecheck`, `npm run lint`, `npm run test:coverage`, `npm run build` |
 | Browser contracts | In `frontend/`: `npm run test:e2e` |
 | Gallery WebKit contracts | In `frontend/`: `npx playwright test --config playwright.gallery-webkit.config.ts` |

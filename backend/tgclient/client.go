@@ -1,5 +1,5 @@
 // Package tgclient is a small adapter over Telegram. It exists so the rest
-// of the app — sync, backfill, app.go local actions — can be written and
+// of the app — sync, backfill, internal/app local actions — can be written and
 // tested without depending on the full gotd surface.
 //
 // The interface stays minimal on purpose. Add a method only when a real

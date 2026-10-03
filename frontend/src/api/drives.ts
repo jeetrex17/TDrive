@@ -1,7 +1,7 @@
 import {
     SetActiveChannel as rawSetActiveChannel,
     SyncChannel as rawSyncChannel,
-} from "../../bindings/TDrive/app";
+} from "../../bindings/TDrive/internal/app/app";
 import {
     ApproveJoinRequest as rawApproveJoinRequest,
     CheckPendingJoin as rawCheckPendingJoin,
@@ -15,7 +15,7 @@ import {
     ListPendingJoins as rawListPendingJoins,
     RejectJoinRequest as rawRejectJoinRequest,
     RemovePendingJoin as rawRemovePendingJoin,
-} from "../../bindings/TDrive/driveservice";
+} from "../../bindings/TDrive/internal/app/driveservice";
 import type { DriveChannel, JoinDriveResult, JoinRequest, PendingJoin } from "../types";
 import { asRecord, finiteNumber } from "./shared";
 import { invokeBackend } from "./gateway";

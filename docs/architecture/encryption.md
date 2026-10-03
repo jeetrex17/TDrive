@@ -143,7 +143,7 @@ closes encrypted media sessions, clears the service key, then increments back to
 even before releasing the gate. Both checks are necessary: key clearing alone
 cannot stop a request that already copied the old key from publishing afterward.
 
-The [GUI vault lifecycle](../../app_vault_session.go) and
+The [GUI vault lifecycle](../../internal/app/vault_session.go) and
 [daemon vault lifecycle](../../backend/daemon/server_session.go) hold the mount
 lifecycle gate through mount closure and key clearing. This prevents a concurrent
 mount start from acquiring a lease in between. GUI lock allows up to 55 seconds
@@ -182,4 +182,4 @@ identity checks. These separate protections do not add identity binding to TDE1.
 | Boundary reads, tampering, cancellation, clones and close | [random-access tests](../../backend/crypto/random_access_test.go) |
 | Key ownership and policy refresh | [lease tests](../../backend/services/encryption/key_lease_test.go), [policy tests](../../backend/services/encryption/policy_test.go) |
 | Publication after a generation change | [encrypted media tests](../../backend/media/service_encrypted_test.go) |
-| Mount/key ordering and failed eject | [GUI lifecycle tests](../../app_mount_lifecycle_test.go), [GUI mount tests](../../app_mount_test.go), [daemon lifecycle tests](../../backend/daemon/mount_lifecycle_test.go) |
+| Mount/key ordering and failed eject | [GUI lifecycle tests](../../internal/app/mount_lifecycle_test.go), [GUI mount tests](../../internal/app/mount_test.go), [daemon lifecycle tests](../../backend/daemon/mount_lifecycle_test.go) |

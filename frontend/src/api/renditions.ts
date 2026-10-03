@@ -1,4 +1,4 @@
-import { CloseGalleryImages, OpenGalleryImages } from '../../bindings/TDrive/app';
+import { CloseGalleryImages, OpenGalleryImages } from '../../bindings/TDrive/internal/app/app';
 import { invokeBackend } from './gateway';
 import { renditionMaxBytes, renditionMaxEdge, type RenditionBytes, type RenditionRequest } from '../modules/renditions/broker';
 

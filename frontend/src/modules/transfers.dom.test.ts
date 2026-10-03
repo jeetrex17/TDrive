@@ -36,7 +36,7 @@ const app = vi.hoisted(() => ({
     CancelResumableUpload: vi.fn(),
 }));
 
-vi.mock('../../bindings/TDrive/app', () => app);
+vi.mock('../../bindings/TDrive/internal/app/app', () => app);
 vi.mock('@wailsio/runtime', () => ({ Events: { On: eventsOn } }));
 vi.mock('./notifications', () => ({ notify: mocks.notify, dismissNotification: mocks.dismissNotification }));
 vi.mock('./app-actions', () => ({ appActions: () => ({ refreshFiles: mocks.refreshFiles }) }));

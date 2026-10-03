@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 const calls = vi.hoisted(() => ({ GetGalleryStorage: vi.fn() }));
-vi.mock('../../bindings/TDrive/app', () => calls);
+vi.mock('../../bindings/TDrive/internal/app/app', () => calls);
 import { getGalleryStorage } from './gallery-storage';
 
 describe('gallery storage API', () => {

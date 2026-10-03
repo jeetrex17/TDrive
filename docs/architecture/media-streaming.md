@@ -36,7 +36,7 @@ flowchart TD
 ```
 
 Primary entry points are [the video controller](../../frontend/src/modules/modals/video.ts),
-[frontend media API](../../frontend/src/api/media.ts), [Wails media service](../../app_media.go)
+[frontend media API](../../frontend/src/api/media.ts), [Wails media service](../../internal/app/media.go)
 and [`media.Service`](../../backend/media/service.go). The
 [resolver](../../backend/media/resolver.go) validates projected content and
 multipart completeness before constructing an ordered logical file.
@@ -339,5 +339,5 @@ Existing tests include [HLS routes](../../backend/media/hls_test.go),
 [range scheduling](../../backend/media/range_reader_window_test.go),
 [encrypted multipart reads](../../backend/media/service_encrypted_test.go),
 [player transitions](../../frontend/src/modules/video/playback-lifecycle.test.ts)
-and [native handoff](../../app_native_media_test.go). Fixtures establish specific
+and [native handoff](../../internal/app/native_media_test.go). Fixtures establish specific
 cases; real-device decoder support and playback memory still need measurement.

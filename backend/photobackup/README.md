@@ -6,8 +6,8 @@ upload receipts in `photo-backup.db`, scoped by authenticated account and drive.
 The app resolves that scope; native adapters cannot choose an account.
 
 Current app backup is restricted to **My Drive and encrypted uploads**. The
-[access gate](../../app_photo_backup_access.go) validates the personal drive;
-[uploadPhotoBackup](../../app_photo_backup.go) forces encryption even for work
+[access gate](../../internal/app/photo_backup_access.go) validates the personal drive;
+[uploadPhotoBackup](../../internal/app/photo_backup.go) forces encryption even for work
 queued by older builds. A legacy settings value cannot enable plaintext backup.
 
 ## Execution
@@ -111,7 +111,7 @@ the local file index and the backup receipt are separate persistence steps.
 A receipt also stops counting as complete once the drive no longer holds the
 file it points at. A sweep checks up to 2,048 receipts before each run in batches
 of 256, from a durable cursor that rewinds at the end of a cycle. The
-[app comparison](../../app_photo_backup_receipts.go) reads the local drive
+[app comparison](../../internal/app/photo_backup_receipts.go) reads the local drive
 projection and trash entries; it does not probe each message directly in Telegram.
 A receipt reported absent becomes `missing`: the ledger stops counting it as
 backed up and the panel reports it as waiting on the user. That state is never

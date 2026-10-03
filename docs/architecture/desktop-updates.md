@@ -3,7 +3,7 @@
 Desktop updates authenticate a checksum manifest, validate the selected payload,
 and replace the running installation while retaining a previous copy. The
 [updater service](../../backend/updater/service.go) owns release state;
-[UpdateService](../../app_updates.go) connects it to native players, restart and
+[UpdateService](../../internal/app/updates.go) connects it to native players, restart and
 startup cleanup. Mobile stores own the mobile update path.
 
 ## Release discovery and trust
@@ -184,5 +184,5 @@ health-based rollback here, and the gate does not test every application feature
   and restoration; [macOS](../../backend/updater/install_darwin_test.go),
   [Windows](../../backend/updater/install_windows_test.go) and
   [Linux](../../backend/updater/install_linux_test.go) have platform-specific tests.
-- [App update tests](../../app_updates_test.go) cover cleanup ordering, and
+- [App update tests](../../internal/app/updates_test.go) cover cleanup ordering, and
   [relaunch tests](../../backend/updater/relaunch_test.go) cover PID waiting.

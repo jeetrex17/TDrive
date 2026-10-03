@@ -1,7 +1,7 @@
 // Public boundary for the durable photo-backup queue. The namespace access is
 // intentional: generated Wails bindings arrive with the backend change, while
 // this module remains the single typed frontend boundary.
-import * as appBindings from '../../bindings/TDrive/app';
+import * as appBindings from '../../bindings/TDrive/internal/app/app';
 import type { OperationResult } from '../types';
 import { invokeBackend } from './gateway';
 import { normalizeOperationResult } from './operation';

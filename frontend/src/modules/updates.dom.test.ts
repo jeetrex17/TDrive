@@ -15,8 +15,8 @@ const bindings = vi.hoisted(() => ({
 }));
 const notifyMock = vi.hoisted(() => vi.fn());
 
-vi.mock('../../bindings/TDrive/app', () => bindings);
-vi.mock('../../bindings/TDrive/updateservice', () => bindings);
+vi.mock('../../bindings/TDrive/internal/app/app', () => bindings);
+vi.mock('../../bindings/TDrive/internal/app/updateservice', () => bindings);
 vi.mock('./notifications', () => ({ notify: notifyMock }));
 
 import { initialUpdateState } from '../ui/updates/update-model';
