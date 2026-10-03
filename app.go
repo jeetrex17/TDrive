@@ -357,6 +357,7 @@ func (a *App) CancelDownload() {
 }
 
 func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool) UploadResult {
+	channelID := a.ActiveChannelID()
 	svc, err := a.requireFileService()
 	if err != nil {
 		return UploadResult{Result: operationFailure(err)}
@@ -369,7 +370,7 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bo
 	}
 	defer a.releaseUnreferencedUploadSources(svc, staged)
 	a.sweepOrphanParts(ctx)
-	files, err := svc.Upload(ctx, a.ActiveChannelID(), filePaths, parentIDs, encrypt)
+	files, err := svc.Upload(ctx, channelID, filePaths, parentIDs, encrypt)
 	out := make([]backend.FileMetaData, 0, len(files))
 	for _, f := range files {
 		out = append(out, uploadMetaToBackend(f))
@@ -394,6 +395,7 @@ func (a *App) ListResumableUploads() ([]fileservice.ResumableUpload, error) {
 // path reuses the original path; a selected replacement is verified by the
 // service before it can contribute bytes to an existing upload.
 func (a *App) ResumeResumableUpload(jobID, sourcePath string) UploadResult {
+	channelID := a.ActiveChannelID()
 	svc, err := a.requireFileService()
 	if err != nil {
 		return UploadResult{Result: operationFailure(err)}
@@ -403,7 +405,7 @@ func (a *App) ResumeResumableUpload(jobID, sourcePath string) UploadResult {
 		return UploadResult{Result: operationFailure(err)}
 	}
 	defer a.endUpload()
-	previousSource, err := svc.UploadJobSource(ctx, a.ActiveChannelID(), jobID)
+	previousSource, err := svc.UploadJobSource(ctx, channelID, jobID)
 	if err != nil {
 		return UploadResult{Result: operationFailure(err)}
 	}
@@ -416,7 +418,7 @@ func (a *App) ResumeResumableUpload(jobID, sourcePath string) UploadResult {
 		sourcePath, staged = paths[0], newStaged
 	}
 	defer a.releaseUnreferencedUploadSources(svc, append(staged, previousSource))
-	meta, err := svc.ResumeUpload(ctx, a.ActiveChannelID(), jobID, sourcePath)
+	meta, err := svc.ResumeUpload(ctx, channelID, jobID, sourcePath)
 	if err != nil {
 		return UploadResult{Result: operationFailure(err)}
 	}

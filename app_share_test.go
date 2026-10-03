@@ -7,7 +7,59 @@ import (
 	"testing"
 
 	"TDrive/backend/datadir"
+	"TDrive/backend/projection"
+	"TDrive/backend/tgclient"
 )
+
+type uploadPreparationPeerResolver func(context.Context, int64) (tgclient.InputPeer, error)
+
+func (resolve uploadPreparationPeerResolver) ResolvePeer(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
+	return resolve(ctx, channelID)
+}
+
+func TestUploadKeepsDestinationWhenDriveChangesDuringPreparation(t *testing.T) {
+	app, db, fake := setupEncryptionAppWithPolicyRefresh(t, nil)
+	app.ctx = t.Context()
+	app.engine.SetActiveChannelID(testEncryptionChannelID)
+	const otherChannelID int64 = 525252
+	if err := projection.MigratePersonalChannel(db, otherChannelID); err != nil {
+		t.Fatal(err)
+	}
+	fake.SeedChannel(tgclient.InputPeer{ChannelID: otherChannelID, AccessHash: 8}, "Other drive")
+	if err := projection.QueuePartCleanup(db, testEncryptionChannelID, []int64{9000}); err != nil {
+		t.Fatal(err)
+	}
+	svc := app.fileService()
+	peers := svc.Peers
+	switched := false
+	svc.Peers = uploadPreparationPeerResolver(func(ctx context.Context, channelID int64) (tgclient.InputPeer, error) {
+		// The orphan sweep performs network preparation before the upload starts.
+		// Switching here exercises the same destination ownership as slow staging.
+		if !switched {
+			switched = true
+			app.engine.SetActiveChannelID(otherChannelID)
+		}
+		return peers.ResolvePeer(ctx, channelID)
+	})
+	source := filepath.Join(t.TempDir(), "destination.txt")
+	if err := os.WriteFile(source, []byte("keep the selected destination"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	result := app.UploadToDriveFS([]string{source}, []string{""}, false)
+	if !result.Result.OK {
+		t.Fatalf("upload failed: %+v", result.Result.Error)
+	}
+	if !switched || app.ActiveChannelID() != otherChannelID {
+		t.Fatal("preparation did not switch the selected drive")
+	}
+	var destination int64
+	if err := db.QueryRow(`SELECT channel_id FROM files WHERE name = ?`, "destination.txt").Scan(&destination); err != nil {
+		t.Fatal(err)
+	}
+	if destination != testEncryptionChannelID {
+		t.Fatalf("uploaded to channel %d, want original channel %d", destination, testEncryptionChannelID)
+	}
+}
 
 func TestMobileUploadSourceStagingKeepsOnlyOwnedCopies(t *testing.T) {
 	datadir.Set(t.TempDir())
