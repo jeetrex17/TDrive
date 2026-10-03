@@ -578,7 +578,7 @@
         width: 100%;
         max-height: none;
         padding: 0;
-        overflow: hidden;
+        overflow-y: auto;
     }
     :global(html.mobile) .auth-page-body > p {
         max-width: none;
