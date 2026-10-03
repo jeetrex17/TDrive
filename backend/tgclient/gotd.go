@@ -437,6 +437,7 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 		MsgID:              int64(fullMsg.ID),
 		Date:               int64(fullMsg.Date),
 		FromID:             fromID,
+		Outgoing:           fullMsg.Out,
 		Text:               text,
 		HasMedia:           hasMedia,
 		MediaSize:          mediaSize,
