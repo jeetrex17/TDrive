@@ -1,6 +1,6 @@
 import { readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, test as base, type Page } from '@playwright/test';
+import { expect, test as base, type Page, type ConsoleMessage } from '@playwright/test';
 
 type MockOutcome =
     | { kind: 'resolve'; value: unknown; delayMs: number }
@@ -20,6 +20,7 @@ export interface MockCall {
 
 interface BrowserMock {
     calls: MockCall[];
+    unexpectedCalls: string[];
     emit: (eventName: string, ...args: unknown[]) => void;
     setPlan: (method: string, plan: MockPlan) => void;
 }
@@ -67,7 +68,10 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
     }),
     GetAllFsMsgIDs: resolves([]),
     GetFileList: resolves([]),
+    GetPhotoBackupState: resolves({ settings: { enabled: false }, sources: [], status: { phase: 'idle' } }),
+    ListResumableUploads: resolves([]),
     GetFolderContents: resolves({ folders: [], files: [] }),
+    GetFolderStats: resolves([]),
     GetStorageUsed: resolves(0),
     GetGalleryStorage: resolves({ cache_bytes: 1024, cache_limit: 268435456, cache_entries: 1, catalog_bytes: 2048 }),
     ClearGalleryCache: resolves({ cache_bytes: 0, cache_limit: 268435456, cache_entries: 0, catalog_bytes: 2048 }),
@@ -82,6 +86,7 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
         },
     ]),
     ListMedia: resolves([]),
+    ListMediaFolders: resolves([]),
     GetMediaTimeline: resolves({ channel_id: 1, generation: 'test', total_count: 0, page_size: 128, buckets: [], anchors: [] }),
     OpenGalleryImages: resolves({ token: crypto.randomUUID(), base_url: '/mock-renditions', channel_id: 1 }),
     CloseGalleryImages: resolves(null),
@@ -101,6 +106,10 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
     MyUserID: resolves(7),
     PreparePersonalDrive: resolves({ status: 'ready', active_channel_id: '1' }),
     ResolveUsernames: resolves({}),
+    // Browser shells have no native insets, keyboard observer or immersive mode.
+    SafeAreaInsets: resolves({ top: 0, right: 0, bottom: 0, left: 0 }),
+    SetKeyboardWatch: resolves(null),
+    SetImmersive: resolves(null),
     SetFileDropEnabled: resolves(null),
     SyncChannel: resolves(null),
 };
@@ -113,8 +122,7 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
 // Every service gets its own module (app.ts, driveservice.ts, mediaservice.ts,
 // ...), so the whole directory is scanned rather than one file. Scanning only
 // app.ts is how OpenMedia and PreparePersonalDrive silently stopped being
-// mockable when the God object was split: an unrecovered id falls through to
-// the empty-success branch below, and the app sees an undefined result.
+// mockable when services were split. Unknown IDs now fail the journey.
 const BINDINGS_DIR = join(__dirname, '../bindings/TDrive/internal/app');
 const GENERATED_MODEL_MODULES = new Set(['index.ts', 'models.ts']);
 
@@ -190,9 +198,9 @@ export async function bootTDrive(
     }) => {
         let plans = configuredMethods;
         const calls: MockCall[] = [];
+        const unexpectedCalls: string[] = [];
 
-        const selectPlan = (candidate: MockPlan | undefined, args: unknown[]): MockOutcome => {
-            const plan = candidate ?? { kind: 'resolve', value: null, delayMs: 0 };
+        const selectPlan = (plan: MockPlan, args: unknown[]): MockOutcome => {
             if (plan.kind === 'byFirstArg') {
                 return selectPlan(plan.values[String(args[0])] ?? plan.fallback, args);
             }
@@ -220,6 +228,23 @@ export async function bootTDrive(
             headers: { 'Content-Type': 'application/json' },
         });
 
+        const unexpected = (message: string): Promise<Response> => {
+            const detail = `wails-mock: ${message}`;
+            unexpectedCalls.push(detail);
+            console.error(detail);
+            return Promise.resolve(jsonResponse(500, { message: detail, kind: 'RuntimeError' }));
+        };
+        // Explicit native housekeeping only. Dialogs and other platform actions
+        // need their own simulated outcomes before a browser test can assert them.
+        const ignoredRuntimeCalls = new Set([
+            '3:0', // Events.Emit
+            '6:7', '6:13', '6:41', // Window.Fullscreen, IsFullscreen, UnFullscreen
+            '6:26', // Window.SetBackgroundColour
+            '8:0', '8:1', '8:2', // System.IsDarkMode, Environment, Capabilities
+            '9:0', // Browser.OpenURL
+            '10:0', // CancelCall.CancelMethod
+        ]);
+
         window.fetch = ((input: RequestInfo | URL, init?: RequestInit) => {
             const url = typeof input === 'string' || input instanceof URL ? input : input.url;
             const method = init?.method ?? (input instanceof Request ? input.method : 'GET');
@@ -233,27 +258,29 @@ export async function bootTDrive(
                 return originalFetch(input, init);
             }
 
-            let body: { args?: Record<string, unknown> };
+            let body: { object?: number; method?: number; args?: Record<string, unknown> };
             try {
                 body = JSON.parse(init.body);
             } catch {
                 return originalFetch(input, init);
             }
 
+            if (body.object !== 0) {
+                return ignoredRuntimeCalls.has(`${body.object}:${body.method}`)
+                    ? Promise.resolve(jsonResponse(200, {}))
+                    : unexpected(`unconfigured runtime call ${body.object}:${body.method}`);
+            }
             const callArgs = body.args;
             if (callArgs == null || typeof callArgs !== 'object' || !('call-id' in callArgs)) {
-                // Window/System/Browser/Events/CancelCall calls the app makes
-                // in the background (native theme sync, etc). None of these
-                // e2e tests assert on them; a harmless empty success keeps
-                // every caller's best-effort error handling quiet.
-                return Promise.resolve(jsonResponse(200, {}));
+                return unexpected('malformed application call');
             }
 
             const methodID = typeof callArgs.methodID === 'number' ? callArgs.methodID : undefined;
             const methodName = methodID !== undefined
                 ? idToName[String(methodID)]
                 : (typeof callArgs.methodName === 'string' ? callArgs.methodName : undefined);
-            if (!methodName) return Promise.resolve(jsonResponse(200, {}));
+            if (!methodName) return unexpected(`unknown application method ID ${methodID}`);
+            if (!plans[methodName]) return unexpected(`no plan for ${methodName}`);
 
             const args = Array.isArray(callArgs.args) ? callArgs.args : [];
             const plan = selectPlan(plans[methodName], args);
@@ -294,7 +321,13 @@ export async function bootTDrive(
 
         window.__wailsMock = {
             calls,
-            setPlan(method, plan) { plans = { ...plans, [method]: plan }; },
+            unexpectedCalls,
+            setPlan(method, plan) {
+                if (!Object.values(idToName).includes(method)) {
+                    throw new Error(`wails-mock: no generated binding for ${method}`);
+                }
+                plans = { ...plans, [method]: plan };
+            },
             emit(eventName: string, ...args: unknown[]) {
                 // @wailsio/runtime's events module always wires up this hook
                 // (window._wails.dispatchWailsEvent) once it loads — the same
@@ -332,11 +365,21 @@ type HarnessFixtures = {
 export const test = base.extend<HarnessFixtures>({
     pageErrors: [async ({ page }, use) => {
         const errors: string[] = [];
+        // Capture outside the page so navigation or closing cannot erase failures.
+        const unexpected: string[] = [];
+        const recordMockError = (message: ConsoleMessage) => {
+            if (message.type() === 'error' && message.text().startsWith('wails-mock:')) {
+                unexpected.push(message.text());
+            }
+        };
+        page.on('console', recordMockError);
         const record = (error: Error) => errors.push(error.stack ?? error.message);
         page.on('pageerror', record);
         await use(errors);
         page.off('pageerror', record);
+        page.off('console', recordMockError);
         expect(errors, 'uncaught browser errors').toEqual([]);
+        expect(unexpected, 'unexpected Wails calls need explicit mock plans').toEqual([]);
     }, { auto: true }],
 });
 
