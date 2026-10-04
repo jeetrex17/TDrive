@@ -46,6 +46,14 @@ describe('describeBackup', () => {
         expect(describeBackup(state({}, { phase: 'failed', failed: 1, message: 'Telegram is unavailable.' }))).toMatchObject({ tone: 'danger', title: '1 item could not be backed up', detail: 'Telegram is unavailable.', primary: 'retry' });
     });
 
+    it('does not call a mobile backup complete while folder discovery has more pages', () => {
+        const mobile = state({
+            platform: 'android',
+            sources: [{ id: 'camera', kind: 'device-folder', root: 'external_primary:DCIM/', name: 'Camera', enabled: true, addedAt: 1, scanCursor: '{"id":128}', scanComplete: false }],
+        }, { phase: 'complete', complete: 128 });
+        expect(describeBackup(mobile)).toMatchObject({ tone: 'warning', title: 'Still checking this folder', primary: 'start' });
+    });
+
     it('names the file alone while uploading', () => {
         expect(describeBackup(state({}, { phase: 'uploading', currentFile: 'Trips/Summer/IMG_0042.HEIC' })).body).toBe('IMG_0042.HEIC');
         expect(currentFileName({ ...state().status, currentFile: 'C:\\Photos\\a.jpg' })).toBe('a.jpg');

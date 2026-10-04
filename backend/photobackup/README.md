@@ -35,9 +35,12 @@ queued by older builds. A legacy settings value cannot enable plaintext backup.
   sources are accepted; retired album and whole-library sources and their
   unfinished work are removed on startup. Completed receipts and uploaded files
   are kept.
-- The frontend enumerates mobile sources a page at a time. The Go worker
-  uploads one queued resource at a time using the shared file service. Opening
-  the gallery does not start an original-library download.
+- The frontend enumerates mobile sources a page at a time. Each page and its
+  continuation cursor are committed together to the Go ledger. A stopped scan
+  resumes from that checkpoint when the native cursor remains valid; an expired
+  native cursor restarts the source and the ledger deduplicates earlier pages.
+  The Go worker uploads one queued resource at a time using the shared file
+  service. Opening the gallery does not start an original-library download.
 - Mobile discovery runs while the app is active. With a native execution grant,
   an in-flight transfer can continue after backgrounding. Android uses a visible
   data-sync foreground service; iOS grants limited UIKit background time, with a
@@ -75,9 +78,11 @@ sequenceDiagram
 
 Settings and queue state survive restart. Desktop scan handles do not: an
 interrupted traversal performs a fresh linear scan, with the ledger suppressing
-already discovered versions. Mobile discovery may also reconcile accessible
-sources again after resume. Desktop and Android page their traversal/query work.
-iOS has the separate snapshot bound below; none promises constant-time discovery for a million items.
+already discovered versions. Mobile discovery checkpoints survive restart, but
+iOS directory iterator tokens are process-local and require a fresh traversal
+after expiry. Desktop and Android page their traversal/query work. Large scans
+take time proportional to the number of media files; none promises constant-time
+discovery for a million items.
 
 Pause cancels in-flight work and persists per account and drive. Only an explicit
 Resume clears that choice; settings changes, retries, and app restarts do not.
@@ -136,13 +141,13 @@ Each scan/staging access resolves the bookmark and opens a security scope;
 stale but resolvable bookmarks are refreshed. A missing bookmark, failed
 resolution or denied scope makes the source unavailable.
 
-The first iOS page walks the folder into an in-memory snapshot capped at **50,000
-matching media files per source**. Hidden files and package descendants are
-skipped. Subsequent pages use a snapshot token plus offset, with at most 128
-resources per response; the snapshot is released after its final page. A stale
-or lost token requires a new scan. This is response pagination over a retained
-listing, not a streaming directory traversal. Files beyond the cap are not
-covered by that scan, and there is no continuation beyond the capped snapshot.
+The iOS adapter streams a selected folder through a security-scoped directory
+iterator. It retains one lookahead resource and returns at most 128 resources
+per page, without a fixed file-count cap or an in-memory listing of the entire
+folder. Hidden files and package descendants are skipped. A live iterator token
+advances on each page and is released at completion or when the app backgrounds.
+After an expired token or process restart, discovery starts at the folder root;
+the ledger skips media versions it has already queued or uploaded.
 There is no compound-asset manifest or Live Photo reconstruction. Cross-device content deduplication and cloud album mirroring
 are not implemented.
 
@@ -173,10 +178,11 @@ starting. Explicit start, resume, or retry actions use the existing password
 dialog; automatic discovery never opens a password prompt. Canceling the dialog
 leaves the operation stopped. Passwords and keys remain session-only.
 
-The ledger is currently schema v6. Sequential migrations add manual pause,
-remove charging policy, and add capture time, receipt cursors and relative folder
-paths. Backup has no charging condition; migrations preserve supported sources
-and jobs, followed by cleanup of retired sources and orphaned unfinished work.
+The ledger is currently schema v7. Sequential migrations add manual pause,
+remove charging policy, and add capture time, receipt cursors, relative folder
+paths and scan checkpoints. Backup has no charging condition; migrations preserve
+supported sources and jobs, followed by cleanup of retired sources and orphaned
+unfinished work.
 
 ## User-visible limits
 

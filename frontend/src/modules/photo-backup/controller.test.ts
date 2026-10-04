@@ -8,7 +8,7 @@ const mocks = vi.hoisted(() => ({
     events: new Map<string, (payload: unknown) => void>(),
     state: null as PhotoBackupState | null,
     getState: vi.fn(), save: vi.fn(),
-    enqueue: vi.fn(), run: vi.fn(), pause: vi.fn(), resume: vi.fn(), retry: vi.fn(), policy: vi.fn(), unlock: vi.fn(),
+    commit: vi.fn(), resetScan: vi.fn(), run: vi.fn(), pause: vi.fn(), resume: vi.fn(), retry: vi.fn(), policy: vi.fn(), unlock: vi.fn(),
     list: vi.fn(), materialize: vi.fn(), release: vi.fn(),
     upsert: vi.fn(), pickFolder: vi.fn(), addFolder: vi.fn(), requestAccess: vi.fn(),
 }));
@@ -24,7 +24,7 @@ vi.mock('../../api/photo-backup', () => ({
         return raw?.id ? { id: String(raw.id), version: String(raw.version), name: String(raw.name ?? ''), mediaType: raw.media_type === 'video' ? 'video' : 'photo', modifiedAt: 0, createdAt: Number(raw.created_at) || 0, size: 0 } : null;
     },
     getPhotoBackupState: mocks.getState,
-    enqueuePhotoBackupAssets: mocks.enqueue,
+    commitPhotoBackupScanPage: mocks.commit, resetPhotoBackupScan: mocks.resetScan,
     runPhotoBackup: mocks.run,
     pausePhotoBackup: mocks.pause,
     resumePhotoBackup: mocks.resume,
@@ -53,7 +53,7 @@ describe('photo backup controller scheduler', () => {
     let stop = () => {};
     beforeEach(() => {
         stop(); mocks.events.clear();
-        for (const mock of [mocks.enqueue, mocks.run, mocks.pause, mocks.resume, mocks.retry, mocks.policy, mocks.unlock, mocks.list, mocks.materialize, mocks.release, mocks.getState, mocks.save]) mock.mockReset();
+        for (const mock of [mocks.commit, mocks.resetScan, mocks.run, mocks.pause, mocks.resume, mocks.retry, mocks.policy, mocks.unlock, mocks.list, mocks.materialize, mocks.release, mocks.getState, mocks.save]) mock.mockReset();
         for (const control of [mocks.run, mocks.pause, mocks.resume, mocks.retry]) control.mockResolvedValue(ok);
         // The host answers every access request with the grant it gave.
         mocks.requestAccess.mockReset().mockResolvedValue({ status: 'granted', detail: '' });
@@ -69,9 +69,120 @@ describe('photo backup controller scheduler', () => {
     it('automatically drains multiple bounded pages once', async () => {
         mocks.list.mockResolvedValueOnce({ assets: [{ id: '1', version: '1', name: 'a', mediaType: 'photo', modifiedAt: 1, createdAt: 0, size: 1 }], nextCursor: 'next' }).mockResolvedValueOnce({ assets: [{ id: '2', version: '1', name: 'b', mediaType: 'photo', modifiedAt: 2, createdAt: 0, size: 1 }], nextCursor: '' });
         await startPhotoBackup(); await flush();
-        expect(mocks.enqueue).toHaveBeenCalledTimes(2);
+        expect(mocks.commit).toHaveBeenCalledTimes(2);
         mocks.events.get('photo-backup:state')?.({}); await flush();
-        expect(mocks.enqueue).toHaveBeenCalledTimes(2);
+        expect(mocks.commit).toHaveBeenCalledTimes(2);
+    });
+
+    it('discovers every asset across the 128-item page boundary', async () => {
+        stop(); await flush(); mocks.list.mockClear();
+        const assets = Array.from({ length: 1000 }, (_, index) => ({ id: String(index), version: '1', name: `${index}.jpg`, mediaType: 'photo' as const, modifiedAt: index, createdAt: 0, size: 1 }));
+        mocks.list.mockImplementation(async (_source: string, cursor: string) => {
+            const start = cursor ? Number(cursor) : 0;
+            const end = Math.min(start + 128, assets.length);
+            return { assets: assets.slice(start, end), nextCursor: end < assets.length ? String(end) : '' };
+        });
+
+        stop = activatePhotoBackup(); await flush();
+
+        expect(mocks.list).toHaveBeenCalledTimes(8);
+        expect(mocks.commit).toHaveBeenCalledTimes(8);
+        expect(mocks.commit.mock.calls.flatMap((call) => call[3])).toHaveLength(1000);
+        expect(mocks.commit.mock.calls.map((call) => [call[1], call[2]])).toEqual([
+            ['', '128'], ['128', '256'], ['256', '384'], ['384', '512'],
+            ['512', '640'], ['640', '768'], ['768', '896'], ['896', ''],
+        ]);
+        expect(mocks.list.mock.calls.map((call) => call[1])).toEqual(['', '128', '256', '384', '512', '640', '768', '896']);
+    });
+
+    it('resumes from a durable cursor after controller activation', async () => {
+        stop(); await flush(); mocks.list.mockClear();
+        mocks.state = { ...state(), sources: [{ ...state().sources[0], scanCursor: '128', scanComplete: false }] };
+        mocks.list.mockResolvedValue({ assets: [{ id: '129', version: '1', name: '129.jpg', mediaType: 'photo' }], nextCursor: '' });
+
+        stop = activatePhotoBackup(); await flush();
+
+        expect(mocks.list).toHaveBeenCalledWith(mocks.state.sources[0].id, '128');
+        expect(mocks.commit).toHaveBeenCalledWith(mocks.state.sources[0].id, '128', '', expect.arrayContaining([expect.objectContaining({ id: '129' })]));
+        expect(mocks.resetScan).not.toHaveBeenCalled();
+    });
+
+    it('resets a completed scan before checking for newly added media', async () => {
+        stop(); await flush(); mocks.list.mockClear();
+        mocks.state = { ...state(), sources: [{ ...state().sources[0], scanCursor: '', scanComplete: true }] };
+        mocks.list.mockResolvedValue({ assets: [{ id: 'new', version: '1', name: 'new.jpg', mediaType: 'photo' }], nextCursor: '' });
+
+        stop = activatePhotoBackup(); await flush();
+
+        expect(mocks.resetScan).toHaveBeenCalledWith(mocks.state.sources[0].id);
+        expect(mocks.commit).toHaveBeenCalledWith(mocks.state.sources[0].id, '', '', expect.arrayContaining([expect.objectContaining({ id: 'new' })]));
+    });
+
+    it('restarts discovery after visibility returns while an old page is pending', async () => {
+        stop(); await flush(); mocks.list.mockClear();
+        let finishOldPage!: (value: unknown) => void;
+        const assets = Array.from({ length: 1000 }, (_, index) => ({ id: String(index), version: '1', name: `${index}.jpg`, mediaType: 'photo' as const, modifiedAt: index, createdAt: 0, size: 1 }));
+        mocks.list.mockImplementationOnce(() => new Promise((resolve) => { finishOldPage = resolve; }));
+        mocks.list.mockImplementation(async (_source: string, cursor: string) => {
+            const start = cursor ? Number(cursor) : 0;
+            const end = Math.min(start + 128, assets.length);
+            return { assets: assets.slice(start, end), nextCursor: end < assets.length ? String(end) : '' };
+        });
+
+        stop = activatePhotoBackup(); await flush();
+        expect(mocks.list).toHaveBeenCalledTimes(1);
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+        document.dispatchEvent(new Event('visibilitychange'));
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
+        document.dispatchEvent(new Event('visibilitychange'));
+
+        finishOldPage({ assets: [{ id: 'stale', version: '1', name: 'stale.jpg', mediaType: 'photo' }], nextCursor: '' });
+        await flush();
+
+        expect(mocks.list).toHaveBeenCalledTimes(9);
+        expect(mocks.commit.mock.calls.flatMap((call) => call[3])).toHaveLength(1000);
+        expect(mocks.commit.mock.calls.flatMap((call) => call[3]).some((asset) => asset.id === 'stale')).toBe(false);
+    });
+
+    it('restarts discovery after a media change while an old page is pending', async () => {
+        stop(); await flush(); mocks.list.mockClear();
+        let finishOldPage!: (value: unknown) => void;
+        mocks.list.mockImplementationOnce(() => new Promise((resolve) => { finishOldPage = resolve; }));
+        mocks.list.mockResolvedValue({ assets: [{ id: 'new', version: '1', name: 'new.jpg', mediaType: 'photo' }], nextCursor: '' });
+
+        stop = activatePhotoBackup(); await flush();
+        mocks.events.get('android:PhotoBackupMediaChanged')?.({});
+        finishOldPage({ assets: [{ id: 'stale', version: '1', name: 'stale.jpg', mediaType: 'photo' }], nextCursor: '' });
+        await flush();
+
+        expect(mocks.list).toHaveBeenCalledTimes(2);
+        expect(mocks.commit).toHaveBeenCalledOnce();
+        expect(mocks.commit.mock.calls[0][3]).toMatchObject([{ id: 'new' }]);
+    });
+
+    it('rechecks the start after media changes during an incomplete Android scan', async () => {
+        stop(); await flush(); mocks.list.mockClear();
+        mocks.state = { ...state(), sources: [{ ...state().sources[0], scanCursor: '128', scanComplete: false }] };
+        let finishOldPage!: (value: unknown) => void;
+        mocks.list.mockImplementationOnce(() => new Promise((resolve) => { finishOldPage = resolve; }));
+        mocks.list.mockImplementation(async (_source: string, cursor: string) => ({
+            assets: [{ id: cursor ? 'older' : 'newer', version: '1', name: 'photo.jpg', mediaType: 'photo' }], nextCursor: '',
+        }));
+        mocks.commit.mockImplementation(async (_source: string, _previous: string, next: string) => {
+            mocks.state = { ...mocks.state!, sources: [{ ...mocks.state!.sources[0], scanCursor: next, scanComplete: next === '' }] };
+        });
+        mocks.resetScan.mockImplementation(async () => {
+            mocks.state = { ...mocks.state!, sources: [{ ...mocks.state!.sources[0], scanCursor: '', scanComplete: false }] };
+        });
+
+        stop = activatePhotoBackup(); await flush();
+        mocks.events.get('android:PhotoBackupMediaChanged')?.({});
+        finishOldPage({ assets: [], nextCursor: '' });
+        await flush();
+
+        expect(mocks.list.mock.calls.map((call) => call[1])).toEqual(['128', '128', '']);
+        expect(mocks.resetScan).toHaveBeenCalledOnce();
+        expect(mocks.commit.mock.calls.flatMap((call) => call[3]).map((asset) => asset.id)).toEqual(['older', 'newer']);
     });
 
     it('reports scanning while the library is being walked, and only then', async () => {
@@ -294,7 +405,21 @@ describe('photo backup controller scheduler', () => {
         await pausePhotoBackupNow();
         finish({ assets: [{ id: 'late', version: '1', name: 'late.jpg', mediaType: 'photo' }], nextCursor: '' });
         await flush();
-        expect(mocks.enqueue).not.toHaveBeenCalled();
+        expect(mocks.commit).not.toHaveBeenCalled();
+    });
+
+    it('does not reset a completed checkpoint after discovery is canceled during queue drain', async () => {
+        stop(); await flush(); mocks.list.mockClear();
+        mocks.state = { ...state(), sources: [{ ...state().sources[0], scanCursor: '', scanComplete: true }] };
+        let finishDrain!: (result: OperationResult) => void;
+        mocks.run.mockImplementationOnce(() => new Promise<OperationResult>((resolve) => { finishDrain = resolve; }));
+        stop = activatePhotoBackup(); await flush();
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+        document.dispatchEvent(new Event('visibilitychange'));
+        finishDrain(ok); await flush();
+
+        expect(mocks.resetScan).not.toHaveBeenCalled();
+        expect(mocks.list).not.toHaveBeenCalled();
     });
 
     it('refetches backup activity for the initial drive scope and ignores the earlier stale reply', async () => {

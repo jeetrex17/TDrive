@@ -39,9 +39,9 @@ export async function listNativePhotoBackupAssets(sourceID: string, cursor = '')
         try {
             return toAssetPage(await nativeCall(ios.listPhotoBackupAssets(sourceID, cursor, PAGE_LIMIT)));
         } catch (cause) {
-            // The bridge pages over a library snapshot it keeps per cursor and
-            // lets go of when the app is suspended or memory runs short. Starting
-            // over is cheap: the ledger ignores everything it already holds.
+            // iOS keeps a live folder iterator for each cursor and releases it
+            // when backgrounded or restarted. Rescan from the root after expiry;
+            // the ledger ignores media versions already discovered.
             if (!cursor || nativeErrorCode(cause) !== 'cursorExpired') throw cause;
             return toAssetPage(await nativeCall(ios.listPhotoBackupAssets(sourceID, '', PAGE_LIMIT)));
         }

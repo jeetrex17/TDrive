@@ -740,9 +740,21 @@ public class MainActivity extends AppCompatActivity {
                 TreeSource tree = TreeSource.parse(sourceId);
                 if (tree == null) throw new IOException("unknown media source");
                 int limit = Math.max(1, Math.min(PHOTO_BACKUP_PAGE_LIMIT, request.optInt("limit", PHOTO_BACKUP_PAGE_LIMIT)));
-                JSONObject cursor = request.optJSONObject("cursor");
-                long modified = cursor == null ? Long.MAX_VALUE : cursor.optLong("modified", Long.MAX_VALUE);
-                long id = cursor == null ? Long.MAX_VALUE : cursor.optLong("id", Long.MAX_VALUE);
+                Object cursorValue = request.opt("cursor");
+                // The JS adapter sends "" for the first page. A nonempty or
+                // malformed cursor must fail rather than restart at page one.
+                boolean firstPage = cursorValue == null || cursorValue == JSONObject.NULL || "".equals(cursorValue);
+                JSONObject cursor = firstPage ? null : request.optJSONObject("cursor");
+                long id = Long.MAX_VALUE;
+                if (!firstPage) {
+                    if (cursor == null || !(cursor.opt("id") instanceof Number)) throw new IOException("invalid media cursor");
+                    try {
+                        id = Long.parseLong(cursor.get("id").toString());
+                    } catch (NumberFormatException e) {
+                        throw new IOException("invalid media cursor", e);
+                    }
+                    if (id <= 0) throw new IOException("invalid media cursor");
+                }
                 String selection = MediaStore.Files.FileColumns.MEDIA_TYPE + " IN (?,?)";
                 List<String> args = new ArrayList<>();
                 args.add(String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_IMAGE)); args.add(String.valueOf(MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO));
@@ -757,7 +769,13 @@ public class MainActivity extends AppCompatActivity {
                 if (prefix == null) throw new IOException("that folder is not available on this device");
                 selection += " AND (" + column + "=? OR " + column + " LIKE ? ESCAPE '\\')";
                 args.add(prefix); args.add(escapeLike(prefix) + "%");
-                if (cursor != null) { selection += " AND (" + MediaStore.MediaColumns.DATE_MODIFIED + "<? OR (" + MediaStore.MediaColumns.DATE_MODIFIED + "=? AND " + MediaStore.MediaColumns._ID + "<?))"; args.add(String.valueOf(modified)); args.add(String.valueOf(modified)); args.add(String.valueOf(id)); }
+                // _ID is stable for a MediaStore row. DATE_MODIFIED can change
+                // during a multi-page scan and move an unseen row behind the
+                // cursor. New rows above this ID wait for the next scan.
+                if (cursor != null) {
+                    selection += " AND " + MediaStore.MediaColumns._ID + "<?";
+                    args.add(String.valueOf(id));
+                }
                 // DATE_TAKEN is the camera's clock and the only column that survives
                 // an edit; DATE_ADDED is when MediaStore first saw the row, which is
                 // the closest thing to it for media without EXIF.
@@ -769,12 +787,14 @@ public class MainActivity extends AppCompatActivity {
                 String[] projection = new String[base.length + 1];
                 System.arraycopy(base, 0, projection, 0, base.length);
                 projection[base.length] = treePathColumn();
-                JSONArray assets = new JSONArray(); JSONObject next = null; long lastModified = 0; long lastId = 0;
+                JSONArray assets = new JSONArray(); long lastId = 0; long previousId = id;
                 Uri collection = tree.collection();
-                try (Cursor c = queryMedia(collection, projection, selection, args.toArray(new String[0]), limit + 1)) {
-                    while (c != null && c.moveToNext()) {
-                        if (assets.length() >= limit) { next = new JSONObject().put("modified", lastModified).put("id", lastId); break; }
+                try (Cursor c = queryMedia(collection, projection, selection, args.toArray(new String[0]), limit)) {
+                    if (c == null) throw new IOException("media query returned no cursor");
+                    while (assets.length() < limit && c.moveToNext()) {
                         long mediaId = c.getLong(0); boolean video = c.getInt(1) == MediaStore.Files.FileColumns.MEDIA_TYPE_VIDEO; long size = c.getLong(4); long changed = c.getLong(5);
+                        if (mediaId <= 0 || mediaId >= previousId) throw new IOException("media query order changed");
+                        previousId = mediaId;
                         long taken = c.isNull(7) ? 0L : c.getLong(7);
                         long createdAt = taken > 0 ? taken : c.getLong(6) * 1000L;
                         // The id is MediaStore's, the same one an album source
@@ -788,9 +808,12 @@ public class MainActivity extends AppCompatActivity {
                                 .put("resourceID", "media:" + (video ? "video:" : "image:") + mediaId)
                                 .put("relDir", tree.relativeDir(c.isNull(base.length) ? "" : c.getString(base.length)))
                                 .put("size", size).put("modifiedAt", changed * 1000L).put("createdAt", createdAt).put("sourceId", sourceId));
-                        lastModified = changed; lastId = mediaId;
+                        lastId = mediaId;
                     }
                 }
+                // A provider may cap a query below our requested limit (or
+                // ignore that limit). Only an empty query proves exhaustion.
+                JSONObject next = lastId == 0 ? null : new JSONObject().put("id", lastId);
                 JSONObject answer = new JSONObject().put("assets", assets).put("nextCursor", next == null ? JSONObject.NULL : next);
                 jsBridge.sendCallback(callbackId, answer.toString(), null);
             } catch (Exception e) { Log.e(TAG, "Media asset listing failed", e); jsBridge.sendCallback(callbackId, null, "could not list media assets"); }
@@ -806,13 +829,13 @@ public class MainActivity extends AppCompatActivity {
             args.putString(ContentResolver.QUERY_ARG_SQL_SELECTION, selection);
             args.putStringArray(ContentResolver.QUERY_ARG_SQL_SELECTION_ARGS, selectionArgs);
             args.putStringArray(ContentResolver.QUERY_ARG_SORT_COLUMNS,
-                    new String[]{MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns._ID});
+                    new String[]{MediaStore.MediaColumns._ID});
             args.putInt(ContentResolver.QUERY_ARG_SORT_DIRECTION, ContentResolver.QUERY_SORT_DIRECTION_DESCENDING);
             if (limit > 0) args.putInt(ContentResolver.QUERY_ARG_LIMIT, limit);
             return getContentResolver().query(uri, projection, args, null);
         }
         return getContentResolver().query(uri, projection, selection, selectionArgs,
-                MediaStore.MediaColumns.DATE_MODIFIED + " DESC, " + MediaStore.MediaColumns._ID + " DESC");
+                MediaStore.MediaColumns._ID + " DESC");
     }
 
     public void materializePhotoBackupAsset(String callbackId, String requestJson) {

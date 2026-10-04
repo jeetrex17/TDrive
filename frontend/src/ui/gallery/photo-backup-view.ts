@@ -120,6 +120,9 @@ export function describeBackup(state: PhotoBackupState): BackupSituation {
         case 'queued':
             return { tone: 'idle', title: 'Ready to back up', body: '', detail: '', primary: 'start', secondary: null, progress: false };
         case 'complete':
+            if (state.sources.some((source) => source.enabled && source.kind === 'device-folder' && source.scanComplete === false)) {
+                return { tone: 'warning', title: 'Still checking this folder', body: 'Keep TDrive open to find the remaining photos and videos.', detail: '', primary: 'start', secondary: null, progress: false };
+            }
             return { tone: 'success', title: 'Up to date', body: '', detail: '', primary: 'start', secondary: null, progress: false };
         default:
             if (!hasSources) {

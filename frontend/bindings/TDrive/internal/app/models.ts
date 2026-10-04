@@ -314,6 +314,8 @@ export interface PhotoBackupSource {
     "root": string;
     "enabled": boolean;
     "added_at": number;
+    "scan_cursor": string;
+    "scan_complete": boolean;
 }
 
 export interface PhotoBackupState {

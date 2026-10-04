@@ -35,10 +35,9 @@ func Open(db *sql.DB, options Options) (*Engine, error) {
 	return &Engine{db: db, options: options}, nil
 }
 
-// schemaVersion is what PRAGMA user_version reads on a current ledger. Bump it
-// with a new entry in migrationSteps; never edit an existing step, because a
-// database in the wild may be sitting on any of the earlier versions.
-const schemaVersion = 6
+// schemaVersion is what PRAGMA user_version reads on a current ledger. Never
+// edit an existing migration: a database may be on any earlier version.
+const schemaVersion = 7
 
 // migrationSteps upgrades one version at a time. from is the version a step
 // starts at, so a ledger at any earlier release replays every later step in
@@ -138,10 +137,37 @@ func (e *Engine) migrateSchema(ctx context.Context) error {
 			return fmt.Errorf("photobackup migrate %s: %w", step.what, err)
 		}
 	}
+	if version < 7 {
+		if err := ensureScanCheckpointColumns(ctx, tx); err != nil {
+			return err
+		}
+	}
 	if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version=%d", schemaVersion)); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+func ensureScanCheckpointColumns(ctx context.Context, tx *sql.Tx) error {
+	for _, column := range []struct {
+		name string
+		ddl  string
+	}{
+		{"scan_cursor", `ALTER TABLE photo_backup_sources ADD COLUMN scan_cursor TEXT NOT NULL DEFAULT ''`},
+		{"scan_complete", `ALTER TABLE photo_backup_sources ADD COLUMN scan_complete INTEGER NOT NULL DEFAULT 0`},
+	} {
+		var count int
+		if err := tx.QueryRowContext(ctx, `SELECT COUNT(*) FROM pragma_table_info('photo_backup_sources') WHERE name=?`, column.name).Scan(&count); err != nil {
+			return fmt.Errorf("photobackup migrate %s: %w", column.name, err)
+		}
+		if count != 0 {
+			continue
+		}
+		if _, err := tx.ExecContext(ctx, column.ddl); err != nil {
+			return fmt.Errorf("photobackup migrate %s: %w", column.name, err)
+		}
+	}
+	return nil
 }
 
 // createSchema lays down a current ledger in one go. The counter backfill in
@@ -220,7 +246,7 @@ func (e *Engine) UpsertSource(ctx context.Context, s Source) error {
 	if count >= 256 {
 		return fmt.Errorf("photobackup: source limit reached")
 	}
-	_, err := e.db.ExecContext(ctx, `INSERT INTO photo_backup_sources(account_id,drive_id,source_id,kind,root,name,enabled,added_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(account_id,drive_id,source_id) DO UPDATE SET kind=excluded.kind,root=excluded.root,name=excluded.name,enabled=excluded.enabled`, s.Scope.AccountID, s.Scope.DriveID, s.ID, s.Kind, s.Root, s.Name, s.Enabled, s.AddedAt.UnixNano())
+	_, err := e.db.ExecContext(ctx, `INSERT INTO photo_backup_sources(account_id,drive_id,source_id,kind,root,name,enabled,added_at) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(account_id,drive_id,source_id) DO UPDATE SET scan_cursor=CASE WHEN root<>excluded.root OR kind<>excluded.kind THEN '' ELSE scan_cursor END,scan_complete=CASE WHEN root<>excluded.root OR kind<>excluded.kind THEN 0 ELSE scan_complete END,kind=excluded.kind,root=excluded.root,name=excluded.name,enabled=excluded.enabled`, s.Scope.AccountID, s.Scope.DriveID, s.ID, s.Kind, s.Root, s.Name, s.Enabled, s.AddedAt.UnixNano())
 	return err
 }
 func (e *Engine) RemoveSource(ctx context.Context, scope Scope, id string) error {
@@ -251,7 +277,7 @@ func (e *Engine) ListSources(ctx context.Context, scope Scope) ([]Source, error)
 	if !scope.valid() {
 		return nil, ErrInvalid
 	}
-	rows, err := e.db.QueryContext(ctx, `SELECT source_id,kind,root,name,enabled,added_at FROM photo_backup_sources WHERE account_id=? AND drive_id=? ORDER BY source_id`, scope.AccountID, scope.DriveID)
+	rows, err := e.db.QueryContext(ctx, `SELECT source_id,kind,root,name,enabled,added_at,scan_cursor,scan_complete FROM photo_backup_sources WHERE account_id=? AND drive_id=? ORDER BY source_id`, scope.AccountID, scope.DriveID)
 	if err != nil {
 		return nil, err
 	}
@@ -260,7 +286,7 @@ func (e *Engine) ListSources(ctx context.Context, scope Scope) ([]Source, error)
 	for rows.Next() {
 		s := Source{Scope: scope}
 		var n int64
-		if err := rows.Scan(&s.ID, &s.Kind, &s.Root, &s.Name, &s.Enabled, &n); err != nil {
+		if err := rows.Scan(&s.ID, &s.Kind, &s.Root, &s.Name, &s.Enabled, &n, &s.ScanCursor, &s.ScanComplete); err != nil {
 			return nil, err
 		}
 		s.AddedAt = time.Unix(0, n)
@@ -335,6 +361,63 @@ func (e *Engine) EnqueuePage(ctx context.Context, scope Scope, sourceID string, 
 		return 0, err
 	}
 	defer tx.Rollback()
+	added, err := e.enqueuePageTx(ctx, tx, scope, sourceID, settings, assets)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return added, nil
+}
+
+// CommitScanPage stores discovered jobs and the next cursor together. The
+// expected cursor rejects pages overtaken by another committed page.
+func (e *Engine) CommitScanPage(ctx context.Context, scope Scope, sourceID, expectedCursor, nextCursor string, assets []Asset) (int, error) {
+	if !scope.valid() || sourceID == "" || len(expectedCursor) > 1024 || len(nextCursor) > 1024 || len(assets) > 128 || (nextCursor != "" && nextCursor == expectedCursor) {
+		return 0, ErrInvalid
+	}
+	for _, asset := range assets {
+		if asset.ID == "" || asset.Version == "" || (asset.Path == "" && asset.ResourceID == "") {
+			return 0, ErrInvalid
+		}
+	}
+	tx, err := e.db.BeginTx(ctx, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer tx.Rollback()
+	var settings Settings
+	settings.Scope = scope
+	if err := tx.QueryRowContext(ctx, `SELECT enabled,photos,videos FROM photo_backup_settings WHERE account_id=? AND drive_id=?`, scope.AccountID, scope.DriveID).Scan(&settings.Enabled, &settings.Photos, &settings.Videos); err != nil {
+		return 0, err
+	}
+	if !settings.Enabled {
+		return 0, ErrScanStale
+	}
+	complete := nextCursor == ""
+	result, err := tx.ExecContext(ctx, `UPDATE photo_backup_sources SET scan_cursor=?,scan_complete=? WHERE account_id=? AND drive_id=? AND source_id=? AND scan_cursor=? AND scan_complete=0 AND enabled=1 AND kind='device-folder'`, nextCursor, complete, scope.AccountID, scope.DriveID, sourceID, expectedCursor)
+	if err != nil {
+		return 0, err
+	}
+	changed, err := result.RowsAffected()
+	if err != nil {
+		return 0, err
+	}
+	if changed == 0 {
+		return 0, ErrScanStale
+	}
+	added, err := e.enqueuePageTx(ctx, tx, scope, sourceID, settings, assets)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(); err != nil {
+		return 0, err
+	}
+	return added, nil
+}
+
+func (e *Engine) enqueuePageTx(ctx context.Context, tx *sql.Tx, scope Scope, sourceID string, settings Settings, assets []Asset) (int, error) {
 	now := e.options.Now().UnixNano()
 	added := 0
 	for _, a := range assets {
@@ -370,9 +453,6 @@ func (e *Engine) EnqueuePage(ctx context.Context, scope Scope, sourceID string, 
 		}
 		n, _ := res.RowsAffected()
 		added += int(n)
-	}
-	if err := tx.Commit(); err != nil {
-		return 0, err
 	}
 	return added, nil
 }

@@ -8,6 +8,7 @@ import (
 
 var ErrInvalid = errors.New("photobackup: invalid argument")
 var ErrCursorExpired = errors.New("photobackup: cursor expired")
+var ErrScanStale = errors.New("photobackup: scan cursor changed")
 
 type Scope struct {
 	AccountID string
@@ -30,6 +31,8 @@ type Source struct {
 	ID, Kind, Root, Name string
 	Enabled              bool
 	AddedAt              time.Time
+	ScanCursor           string
+	ScanComplete         bool
 }
 
 type Asset struct {

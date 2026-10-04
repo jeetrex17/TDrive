@@ -46,12 +46,14 @@ type PhotoBackupSettings struct {
 }
 
 type PhotoBackupSource struct {
-	ID      string `json:"id"`
-	Kind    string `json:"kind"`
-	Name    string `json:"name"`
-	Root    string `json:"root"`
-	Enabled bool   `json:"enabled"`
-	AddedAt int64  `json:"added_at"`
+	ID           string `json:"id"`
+	Kind         string `json:"kind"`
+	Name         string `json:"name"`
+	Root         string `json:"root"`
+	Enabled      bool   `json:"enabled"`
+	AddedAt      int64  `json:"added_at"`
+	ScanCursor   string `json:"scan_cursor"`
+	ScanComplete bool   `json:"scan_complete"`
 }
 
 type PhotoBackupCapability struct {
@@ -351,6 +353,10 @@ func (a *App) EnqueuePhotoBackupAssets(sourceID string, values []PhotoBackupAsse
 	if err != nil {
 		return 0, err
 	}
+	return engine.EnqueuePage(a.appContext(), scope, sourceID, photoBackupAssets(values))
+}
+
+func photoBackupAssets(values []PhotoBackupAsset) []photobackup.Asset {
 	assets := make([]photobackup.Asset, 0, len(values))
 	for _, value := range values {
 		resourceID := value.ResourceID
@@ -359,7 +365,39 @@ func (a *App) EnqueuePhotoBackupAssets(sourceID string, values []PhotoBackupAsse
 		}
 		assets = append(assets, photobackup.Asset{ID: value.ID, Version: value.Version, Name: value.Name, MediaType: value.MediaType, ResourceID: resourceID, ModifiedAt: time.UnixMilli(value.ModifiedAt), CapturedAt: timeFromMillis(value.CreatedAt), RelDir: value.RelDir, Size: value.Size})
 	}
-	return engine.EnqueuePage(a.appContext(), scope, sourceID, assets)
+	return assets
+}
+
+// CommitPhotoBackupScanPage atomically queues one mobile discovery page and
+// saves its continuation token. An outdated continuation is rejected.
+func (a *App) CommitPhotoBackupScanPage(sourceID, previousCursor, nextCursor string, values []PhotoBackupAsset) (int, error) {
+	if len(values) > 128 {
+		return 0, photobackup.ErrInvalid
+	}
+	engine, err := a.photoBackupEngine()
+	if err != nil {
+		return 0, err
+	}
+	ctx := a.appContext()
+	scope, err := a.photoBackupScope(ctx)
+	if err != nil {
+		return 0, err
+	}
+	assets := photoBackupAssets(values)
+	return engine.CommitScanPage(ctx, scope, sourceID, previousCursor, nextCursor, assets)
+}
+
+func (a *App) ResetPhotoBackupScan(sourceID string) error {
+	engine, err := a.photoBackupEngine()
+	if err != nil {
+		return err
+	}
+	ctx := a.appContext()
+	scope, err := a.photoBackupScope(ctx)
+	if err != nil {
+		return err
+	}
+	return engine.ResetDiscovery(ctx, scope, sourceID)
 }
 
 // The backup controls answer with the common operation envelope so the
@@ -845,7 +883,7 @@ func photoBackupSourceDTO(source photobackup.Source) PhotoBackupSource {
 	if name == "" {
 		name = filepath.Base(source.Root)
 	}
-	return PhotoBackupSource{ID: source.ID, Kind: source.Kind, Name: name, Root: source.Root, Enabled: source.Enabled, AddedAt: source.AddedAt.UnixMilli()}
+	return PhotoBackupSource{ID: source.ID, Kind: source.Kind, Name: name, Root: source.Root, Enabled: source.Enabled, AddedAt: source.AddedAt.UnixMilli(), ScanCursor: source.ScanCursor, ScanComplete: source.ScanComplete}
 }
 
 func photoBackupAssetDTO(asset photobackup.Asset) PhotoBackupAsset {

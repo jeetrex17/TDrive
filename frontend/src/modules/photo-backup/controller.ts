@@ -1,8 +1,8 @@
 import { get, writable } from 'svelte/store';
 import {
-    addPhotoBackupFolder, defaultSettings, enqueuePhotoBackupAssets, getPhotoBackupState, normalizeAsset,
+    addPhotoBackupFolder, commitPhotoBackupScanPage, defaultSettings, getPhotoBackupState, normalizeAsset,
     pausePhotoBackup, removePhotoBackupSource, resolvePhotoBackupResource, resumePhotoBackup, retryPhotoBackup, setPhotoBackupPolicy,
-    runPhotoBackup, savePhotoBackupSettings, type PhotoBackupAsset, type PhotoBackupSettings,
+    resetPhotoBackupScan, runPhotoBackup, savePhotoBackupSettings, type PhotoBackupAsset, type PhotoBackupSettings,
     type PhotoBackupState, upsertPhotoBackupSource,
 } from '../../api/photo-backup';
 import { OperationFailure, requireOperationSuccess } from '../../api/operation';
@@ -34,7 +34,12 @@ const ACCESS_RETRY_MS = 5_000;
 let active = false;
 let refreshTimer: ReturnType<typeof setTimeout> | null = null;
 let schedulerRunning = false;
+// A resume, source change or media event can arrive while a canceled native
+// page is still settling. Keep that request until the serial worker exits.
+let schedulerRestartRequested = false;
 let schedulerEpoch = 0;
+let scanPassedStart = false;
+let scanNeedsReconcile = false;
 // A backend reply belongs to the account and drive that requested it. Changing
 // either scope invalidates replies already in flight so an old filename cannot
 // reappear in the bell after a switch.
@@ -45,7 +50,6 @@ let documentVisible = typeof document === 'undefined' || document.visibilityStat
 let observedDriveID: number | null = null;
 let policySampling = false;
 const completedScans = new Set<string>();
-const discoveryCursors = new Map<string, string>();
 interface NativeStage {
     controller: AbortController;
     released: Promise<void>;
@@ -96,7 +100,6 @@ function scheduleRefresh(): void {
 
 function cancelDiscovery(): void {
     schedulerEpoch += 1;
-    discoveryCursors.clear();
     completedScans.clear();
     if (retryTimer) { clearTimeout(retryTimer); retryTimer = null; }
 }
@@ -126,10 +129,13 @@ function refusalMessage(error: OperationError): string {
 // concurrency of one. It yields after every <=128 asset page so a huge library
 // does not monopolize the WebView, but continues automatically while active.
 async function runDiscoveryScheduler(): Promise<void> {
-    if (schedulerRunning || !active || !documentVisible || manuallyPaused || !nativePhotoBackupAvailable()) return;
+    if (!active || !documentVisible || manuallyPaused || !nativePhotoBackupAvailable()) return;
+    if (schedulerRunning) { schedulerRestartRequested = true; return; }
     schedulerRunning = true;
+    scanPassedStart = false;
     const epoch = schedulerEpoch;
     const currentScope = scopeEpoch;
+    let discoveryCompleted = false;
     try {
         const current = await getPhotoBackupState();
         if (currentScope !== scopeEpoch) return;
@@ -146,8 +152,8 @@ async function runDiscoveryScheduler(): Promise<void> {
         // locked vault waits for the user, a Wi-Fi wait for the device, and
         // the device is asked again after a while.
         const drained = await runPhotoBackup();
+        if (epoch !== schedulerEpoch || currentScope !== scopeEpoch || !active || !documentVisible) return;
         if (!drained.ok) {
-            if (epoch !== schedulerEpoch) return;
             photoBackupError.set(refusalMessage(drained.error));
             if (drained.error.code === 'operation_failed') retryDiscoveryAfter(POLICY_RECHECK_MS, epoch);
             return;
@@ -155,20 +161,29 @@ async function runDiscoveryScheduler(): Promise<void> {
         setDiscovering(true);
         for (const source of current.sources.filter((item) => item.enabled)) {
             if (completedScans.has(source.id)) continue;
-            while (active && epoch === schedulerEpoch) {
-                const before = discoveryCursors.get(source.id) ?? '';
-                const page = await listNativePhotoBackupAssets(source.id, before);
+            let cursor = source.scanCursor ?? '';
+            if (source.scanComplete) {
+                if (epoch !== schedulerEpoch || currentScope !== scopeEpoch || !active || !documentVisible) return;
+                await resetPhotoBackupScan(source.id);
                 if (epoch !== schedulerEpoch) return;
-                if (page.assets.length) await enqueuePhotoBackupAssets(source.id, page.assets);
+                cursor = '';
+            }
+            if (cursor) scanPassedStart = true;
+            while (active && epoch === schedulerEpoch) {
+                const page = await listNativePhotoBackupAssets(source.id, cursor);
                 if (epoch !== schedulerEpoch) return;
                 const next = page.nextCursor;
-                if (next && next === before) throw new Error('Photo library cursor did not advance.');
-                if (next) discoveryCursors.set(source.id, next); else discoveryCursors.delete(source.id);
+                if (next && next === cursor) throw new Error('Photo library cursor did not advance.');
+                await commitPhotoBackupScanPage(source.id, cursor, next, page.assets);
+                if (epoch !== schedulerEpoch) return;
+                cursor = next;
+                scanPassedStart = true;
                 await runPhotoBackup();
                 if (!next) { completedScans.add(source.id); break; }
                 await yieldToForeground();
             }
         }
+        discoveryCompleted = true;
         await refreshPhotoBackup();
     } catch {
         if (active && epoch === schedulerEpoch) photoBackupError.set('Backup is waiting for media access or a connection.');
@@ -178,6 +193,15 @@ async function runDiscoveryScheduler(): Promise<void> {
     } finally {
         setDiscovering(false);
         schedulerRunning = false;
+        scanPassedStart = false;
+        if (discoveryCompleted && scanNeedsReconcile) {
+            scanNeedsReconcile = false;
+            completedScans.clear();
+            schedulerRestartRequested = true;
+        }
+        const restart = schedulerRestartRequested;
+        schedulerRestartRequested = false;
+        if (restart) void runDiscoveryScheduler();
     }
 }
 
@@ -356,7 +380,7 @@ export function activatePhotoBackup(): () => void {
         stops.push(onRuntimeEvent('photo-backup:materialize', materialize));
         stops.push(onRuntimeEvent('photo-backup:release', release));
         stops.push(onRuntimeEvent('photo-backup:state', scheduleRefresh));
-        stops.push(onRuntimeEvent('android:PhotoBackupMediaChanged', () => { cancelDiscovery(); void continueForegroundDiscovery(); }));
+        stops.push(onRuntimeEvent('android:PhotoBackupMediaChanged', () => { if (schedulerRunning && scanPassedStart) scanNeedsReconcile = true; cancelDiscovery(); void continueForegroundDiscovery(); }));
         stops.push(onRuntimeEvent('ios:PhotoBackupMediaChanged', () => { cancelDiscovery(); void continueForegroundDiscovery(); }));
     }
     const iosResume = () => { cancelDiscovery(); void continueForegroundDiscovery(); };
@@ -371,10 +395,11 @@ export function activatePhotoBackup(): () => void {
         publish(null);
         photoBackupError.set('');
         cancelDiscovery();
+        scanNeedsReconcile = false;
         observedDriveID = id;
         if (id === null) return;
         const epoch = scopeEpoch;
         void refreshPhotoBackup().then(() => { if (epoch === scopeEpoch) void runDiscoveryScheduler(); });
     });
-    return () => { scopeEpoch += 1; stopBackground(); active = false; observedDriveID = null; stopDriveWatch(); clearPhotoBackupActivity(); cancelDiscovery(); for (const token of materializations.keys()) release({ token }); document.removeEventListener('visibilitychange', visibility); window.removeEventListener('ios:PhotoBackupMediaChanged', iosResume); if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; } for (const stop of stops) stop(); };
+    return () => { scopeEpoch += 1; stopBackground(); active = false; observedDriveID = null; stopDriveWatch(); clearPhotoBackupActivity(); cancelDiscovery(); scanNeedsReconcile = false; for (const token of materializations.keys()) release({ token }); document.removeEventListener('visibilitychange', visibility); window.removeEventListener('ios:PhotoBackupMediaChanged', iosResume); if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; } for (const stop of stops) stop(); };
 }
