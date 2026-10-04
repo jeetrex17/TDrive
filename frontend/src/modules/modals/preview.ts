@@ -764,7 +764,10 @@ function hideLockedState() {
 // drop them back where they were.
 function submitInlineUnlock(): Promise<void> {
     const target = activePreviewItem;
+    const token = previewRequestToken;
     return unlockCard?.submit(() => {
+        // Closing, navigation, and drive resets invalidate this viewer action.
+        if (token !== previewRequestToken || !isPreviewOpen()) return;
         hideLockedState();
         if (target) void loadPreview(target);
     }) ?? Promise.resolve();

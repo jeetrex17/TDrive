@@ -10,10 +10,10 @@
 // The supported platforms are not ports of one design. macOS links libmpv
 // in-process, renders into an NSOpenGLView and polls for state; Windows and
 // Linux spawn mpv as a child process embedded through --wid and receive pushed
-// state over JSON IPC. Because there is no shared Player type, everything that
-// must not drift between them lives in this file, which carries no build tag:
-// the State model, the property mapping, and the IPC scanner and encoders. That
-// also keeps them testable on any host OS.
+// state over JSON IPC. The State model, property mapping, IPC scanner and
+// encoders live in this file without build tags, keeping them testable on any
+// host OS. State publication is shared by desktop players in state_supported.go;
+// each platform retains ownership of its native resources and lifecycle.
 //
 // Two invariants callers depend on. State.Status is decided by normalization,
 // never by the caller, with the precedence closed, failed, ended, opening,

@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { FileCommandItem } from '../../ui/file-list/types';
 
 const actions = vi.hoisted(() => ({
@@ -22,8 +22,17 @@ vi.mock('../../api', () => ({
     openExternalUrl: vi.fn(),
     useEncryptionPassword: vi.fn(),
     closeMedia: vi.fn(),
-    openOriginalImage: vi.fn(),
+    openOriginalImage: vi.fn(async (id: number) => ({ token: `image-${id}`, url: `http://127.0.0.1/image-${id}` })),
 }));
+vi.mock('../renditions/runtime', () => ({
+    acquireRendition: () => ({ promise: new Promise(() => {}), release: vi.fn() }),
+    subscribeRenditionReset: () => vi.fn(),
+}));
+vi.mock('../gallery-policy', () => ({
+    acquireOriginalViewerBudget: () => vi.fn(),
+    subscribeGalleryPolicy: () => vi.fn(),
+}));
+vi.mock('../../ui/gallery/gallery-controller', () => ({ setActive: vi.fn() }));
 vi.mock('../encryption', () => ({ loadEncryptionStatus: vi.fn() }));
 vi.mock('../transfers', () => ({ enqueueDownload: vi.fn() }));
 vi.mock('./preview-info', () => ({ renderImageInfoHTML: vi.fn(() => '') }));
@@ -93,6 +102,10 @@ beforeEach(() => {
     document.body.innerHTML = `<div id="preview-modal" class="modal-overlay" style="display:none" aria-hidden="true">${PREVIEW_MARKUP}</div>`;
 });
 
+afterEach(async () => {
+    (await import('./preview')).teardownPreviewModal();
+});
+
 describe('space on a file with no preview', () => {
     it('plays a video instead of complaining that it is not an image', async () => {
         await bootPreview();
@@ -129,5 +142,128 @@ describe('space on a file with no preview', () => {
         pressSpace();
 
         expect(actions.playVideo).not.toHaveBeenCalled();
+    });
+});
+
+// Keyboard actions must respect controls and other modal owners while keeping
+// desktop browsing available immediately after focus moves to the close button.
+describe('preview keyboard ownership', () => {
+    it('opens the selected photo, switches selections and toggles the same photo closed', async () => {
+        await bootPreview();
+        select('First.jpg');
+        pressSpace();
+        await vi.waitFor(() => expect(document.getElementById('preview-image')!.getAttribute('src')).toContain('image-42'));
+        expect(document.getElementById('preview-filename')!.textContent).toBe('First.jpg');
+        state.selectedItems = new Map([['file:43', { type: 'file', id: 43, name: 'Second.jpg', size: 512, parentId: '', source: 'fs' }]]);
+        pressSpace();
+        await vi.waitFor(() => expect(document.getElementById('preview-image')!.getAttribute('src')).toContain('image-43'));
+        pressSpace();
+        expect(document.getElementById('preview-modal')!.style.display).toBe('none');
+    });
+
+    it('hands a newly selected video off and closes the photo', async () => {
+        const preview = await bootPreview();
+        select('Photo.jpg');
+        await preview.openPreviewForSelection();
+        select('Movie.mp4');
+        pressSpace();
+        expect(actions.playVideo).toHaveBeenCalledWith(expect.objectContaining({ name: 'Movie.mp4' }));
+        expect(document.getElementById('preview-modal')!.style.display).toBe('none');
+    });
+
+    it('keeps the photo when a new selection cannot be previewed', async () => {
+        const preview = await bootPreview();
+        select('Photo.jpg');
+        await preview.openPreviewForSelection();
+        select('archive.zip');
+        pressSpace();
+        expect(document.getElementById('preview-modal')!.style.display).toBe('flex');
+        expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({ title: 'TDrive cannot open this kind of file' }));
+    });
+
+    it('reports multiple selection and does nothing for an empty selection', async () => {
+        const preview = await bootPreview();
+        expect(await preview.openPreviewForSelection()).toBe(false);
+        pressSpace();
+        expect(notifications.notify).not.toHaveBeenCalled();
+        select('Photo.jpg');
+        state.selectedItems.set('file:43', { type: 'file', id: 43, name: 'Second.jpg', size: 512, parentId: '', source: 'fs' });
+        expect(await preview.openPreviewForSelection()).toBe(false);
+        expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({ title: 'Preview works with one image at a time' }));
+        expect(document.getElementById('preview-modal')!.style.display).toBe('none');
+    });
+
+    it.each(['INPUT', 'TEXTAREA', 'SELECT'])('leaves Space with a focused %s', async tag => {
+        await bootPreview();
+        select('Photo.jpg');
+        const control = document.createElement(tag);
+        document.body.append(control);
+        control.focus();
+        pressSpace();
+        expect(document.getElementById('preview-modal')!.style.display).toBe('none');
+        expect(notifications.notify).not.toHaveBeenCalled();
+    });
+
+    it.each(['metaKey', 'ctrlKey', 'altKey'])('leaves modified Space shortcuts alone (%s)', async modifier => {
+        await bootPreview();
+        select('Photo.jpg');
+        const key = new KeyboardEvent('keydown', { key: ' ', code: 'Space', [modifier]: true, cancelable: true });
+        window.dispatchEvent(key);
+        expect(key.defaultPrevented).toBe(false);
+        expect(document.getElementById('preview-modal')!.style.display).toBe('none');
+    });
+
+    it('leaves claimed Space and Space under another overlay or context menu alone', async () => {
+        await bootPreview();
+        select('Photo.jpg');
+        const claimed = new KeyboardEvent('keydown', { key: ' ', cancelable: true });
+        claimed.preventDefault();
+        window.dispatchEvent(claimed);
+        expect(document.getElementById('preview-modal')!.style.display).toBe('none');
+        const overlay = document.createElement('div');
+        overlay.className = 'modal-overlay';
+        overlay.style.display = 'flex';
+        document.body.append(overlay);
+        pressSpace();
+        expect(document.getElementById('preview-modal')!.style.display).toBe('none');
+        overlay.remove();
+        document.body.insertAdjacentHTML('beforeend', '<div id="context-menu"><div class="context-menu-panel"></div></div>');
+        pressSpace();
+        expect(document.getElementById('preview-modal')!.style.display).toBe('none');
+    });
+
+    it('navigates from buttons but yields arrows and info shortcuts to text controls and modifiers', async () => {
+        const preview = await bootPreview();
+        const first = { type: 'file' as const, id: 1, name: 'First.jpg' };
+        await preview.openPreviewList([first, { ...first, id: 2, name: 'Second.jpg' }], 0);
+        const input = document.getElementById('preview-locked-input')!;
+        input.focus();
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'i' }));
+        expect(document.getElementById('preview-counter')!.textContent).toBe('1 / 2');
+        expect(document.getElementById('preview-modal')!.classList.contains('is-info-open')).toBe(false);
+        document.getElementById('preview-close')!.focus();
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight', altKey: true }));
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'i', ctrlKey: true }));
+        expect(document.getElementById('preview-counter')!.textContent).toBe('1 / 2');
+        expect(document.getElementById('preview-modal')!.classList.contains('is-info-open')).toBe(false);
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowRight' }));
+        await vi.waitFor(() => expect(document.getElementById('preview-counter')!.textContent).toBe('2 / 2'));
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowLeft' }));
+        await vi.waitFor(() => expect(document.getElementById('preview-counter')!.textContent).toBe('1 / 2'));
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'I' }));
+        expect(document.getElementById('preview-modal')!.classList.contains('is-info-open')).toBe(true);
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+        expect(document.getElementById('preview-modal')!.style.display).toBe('none');
+    });
+
+    it('does not reinterpret arrows for a standalone photo', async () => {
+        const preview = await bootPreview();
+        select('Photo.jpg');
+        await preview.openPreviewForSelection();
+        const event = new KeyboardEvent('keydown', { key: 'ArrowRight', cancelable: true });
+        window.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(false);
+        expect(document.getElementById('preview-filename')!.textContent).toBe('Photo.jpg');
     });
 });

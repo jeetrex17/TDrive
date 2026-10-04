@@ -12,7 +12,6 @@
  */
 
 import { MAX_PLAYBACK_RATE, MIN_PLAYBACK_RATE, clampPlaybackRate } from "./player-adapters";
-import { byID } from "./video-dom";
 
 /** The presets on the pill and in the menu, in the order the pill cycles them. */
 export const RATE_OPTIONS = [0.5, 0.75, 1, 1.25, 1.5, 2];
@@ -72,8 +71,7 @@ export function speedMenuMarkup(): string {
  * This runs on every player state event, so it takes the two elements it needs
  * as plain arguments rather than a context object: a per-event object literal
  * would be an allocation on a path that fires several times a second during
- * playback. The remaining lookups are by id, exactly as before, and nothing
- * here allocates beyond the strings the DOM is about to be given anyway.
+ * playback. Descendant lookups stay inside the owning speed menu.
  *
  * The custom field is skipped while it has focus, because overwriting a field
  * mid-keystroke is how "1.3" becomes "1" under the reader's hands.
@@ -83,6 +81,7 @@ export function syncSpeedControls(
     speedMenu: HTMLElement | null,
     rate: number,
 ): void {
+    const byID = <T extends HTMLElement>(id: string): T | null => speedMenu?.querySelector<T>(`#${id}`) ?? null;
     const customInput = byID<HTMLInputElement>("video-speed-custom-input");
     if (speedButton) {
         speedButton.textContent = `${formatRate(rate)}x`;

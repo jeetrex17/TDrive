@@ -86,6 +86,15 @@ describe('the speed menu markup', () => {
 });
 
 describe('showing the current rate on the controls', () => {
+    it('does not update a slider that has left its menu', () => {
+        const { button, menu } = mountMenu();
+        const slider = menu.querySelector<HTMLInputElement>('#video-speed-slider')!;
+        document.body.append(slider);
+        syncSpeedControls(button, menu, 2);
+        expect(slider.value).toBe('1');
+        expect(button.textContent).toBe('2x');
+    });
+
     it('puts the rate on the pill, the slider, the readout and the selected preset at once', () => {
         const { button, menu } = mountMenu();
         syncSpeedControls(button, menu, 1.5);

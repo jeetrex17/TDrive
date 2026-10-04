@@ -65,16 +65,14 @@ export interface VideoDOMHandlers {
     resize(): void;
 }
 
-export function byID<T extends HTMLElement>(id: string): T | null {
-    return document.getElementById(id) as T | null;
-}
-
-export function collectVideoDOM(): VideoDOM {
+export function collectVideoDOM(host: HTMLElement | null = document.getElementById("video-modal")): VideoDOM {
+    // Resolve only inside the owning shell, including during overlapping mounts.
+    const byID = <T extends HTMLElement>(id: string): T | null => host?.querySelector<T>(`#${id}`) ?? null;
     return {
-        modal: byID('video-modal'),
+        modal: host,
         stage: byID('video-stage'),
-        topbar: document.querySelector<HTMLElement>('#video-modal .video-topbar'),
-        controls: document.querySelector<HTMLElement>('#video-modal .video-controls'),
+        topbar: host?.querySelector<HTMLElement>('.video-topbar') ?? null,
+        controls: host?.querySelector<HTMLElement>('.video-controls') ?? null,
         filename: byID('video-filename'),
         meta: byID('video-meta'),
         closeButton: byID('video-close'),
@@ -128,6 +126,12 @@ export function collectVideoDOM(): VideoDOM {
             menu: byID('video-subtitle-menu'),
         },
     };
+}
+
+/** Required playback nodes must still belong to this activation's host. */
+export function videoDOMLive(dom: VideoDOM): boolean {
+    return Boolean(dom.modal?.isConnected && dom.stage && dom.video
+        && dom.modal.contains(dom.stage) && dom.stage.contains(dom.video));
 }
 
 export function bindVideoDOM(dom: VideoDOM, handlers: VideoDOMHandlers): () => void {

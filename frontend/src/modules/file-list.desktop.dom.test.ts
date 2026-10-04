@@ -25,18 +25,23 @@ const modals = vi.hoisted(() => ({
     openNewFolderModal: vi.fn(),
 }));
 
+const actions = vi.hoisted(() => ({
+    playVideo: vi.fn(), openFile: vi.fn(), triggerRefresh: vi.fn(), refreshFiles: vi.fn(),
+    navigateToFolder: vi.fn(), enqueueDownload: vi.fn(), enqueueFolderDownload: vi.fn(),
+}));
+
 vi.mock('../api', () => api);
 vi.mock('./drag-drop', () => dragDrop);
 vi.mock('./modals/delete', () => ({ openDeleteModal: modals.openDeleteModal }));
 vi.mock('./modals/rename', () => ({ openRenameModal: modals.openRenameModal }));
 vi.mock('./modals/move', () => ({ openMoveModal: modals.openMoveModal }));
 vi.mock('./modals/folder', () => ({ openNewFolderModal: modals.openNewFolderModal }));
-vi.mock('./app-actions', () => ({ appActions: () => ({ playVideo: vi.fn(), openFile: vi.fn(), triggerRefresh: vi.fn(), refreshFiles: vi.fn() }) }));
-vi.mock('./navigation', () => ({ navigateToFolder: vi.fn() }));
+vi.mock('./app-actions', () => ({ appActions: () => actions }));
+vi.mock('./navigation', () => ({ navigateToFolder: actions.navigateToFolder }));
 vi.mock('./transfers', () => ({
     chooseFilesForCurrentFolder: vi.fn(),
-    enqueueDownload: vi.fn(),
-    enqueueFolderDownload: vi.fn(),
+    enqueueDownload: actions.enqueueDownload,
+    enqueueFolderDownload: actions.enqueueFolderDownload,
 }));
 vi.mock('./connectivity', () => ({ isOffline: () => false }));
 vi.mock('./context-menu', () => ({ showRowContextMenu: vi.fn() }));
@@ -48,6 +53,7 @@ vi.mock('./folder-index', () => ({ refreshFolderIndex: vi.fn(() => Promise.resol
 import FileList from '../ui/file-list/FileList.svelte';
 import { activateFileList, buildFileRow, buildFolderRow, renderFileListRows } from './file-list';
 import { state } from '../state';
+import { refreshFolderIndex, collectDescendants } from './folder-index';
 import type { FileListFileRow } from '../ui/file-list/types';
 
 let list: HTMLElement;
@@ -81,6 +87,9 @@ beforeEach(() => {
     dragDrop.canDropOnFolder.mockReturnValue(true);
     state.activeChannel = { id: 1, title: 'Drive', kind: 'personal' };
     state.currentFolderId = '';
+    state.virtualView = null;
+    state.searchQuery = '';
+    state.dragOverEl = null;
     state.selectedItems.clear();
     state.dragState = null;
     list = document.createElement('div');
@@ -196,4 +205,260 @@ describe('dragging a row', () => {
 
         expect(dragDrop.performDropMove).toHaveBeenCalledWith('design');
     });
+});
+
+
+describe('desktop activation and lifecycle', () => {
+    it.each([
+        ['movie.mp4', 'playVideo'],
+        ['notes.txt', 'openFile'],
+        ['bundle.zip', 'enqueueDownload'],
+    ] as const)('opens %s from Enter with the captured drive identity', (name, action) => {
+        renderFileListRows(list, [buildFileRow({ id: 41, name, size: 25 }, '')]);
+        flushSync();
+        state.activeChannel = { id: 2, title: 'Other', kind: 'personal' };
+        press(row('file:41'), 'Enter');
+        if (action === 'enqueueDownload') {
+            expect(actions.enqueueDownload).toHaveBeenCalledWith(41, name, 25, 1);
+        } else {
+            expect(actions[action]).toHaveBeenCalledWith(expect.objectContaining({ id: 41, name, channelId: 1 }));
+        }
+    });
+
+    it('opens folders and downloads them through distinct affordances', () => {
+        press(row('folder:design'), 'Enter');
+        row('folder:design').querySelector<HTMLButtonElement>('button.download-folder')?.click();
+        expect(actions.navigateToFolder).toHaveBeenCalledWith('design', 'Design');
+        expect(actions.enqueueFolderDownload).toHaveBeenCalledWith('design', 'Design', 0, 1);
+        expect(state.selectedItems.size).toBe(0);
+    });
+
+    it.each([
+        ['movie.mp4', 'play-video', 'playVideo'],
+        ['notes.txt', 'open-file', 'openFile'],
+        ['bundle.zip', 'download', 'enqueueDownload'],
+    ] as const)('runs the %s button without selecting its row', (name, className, action) => {
+        renderFileListRows(list, [buildFileRow({ id: 41, name, size: 25 }, '')]);
+        flushSync();
+        row('file:41').querySelector<HTMLButtonElement>(`button.${className}`)?.click();
+        expect(actions[action]).toHaveBeenCalledTimes(1);
+        expect(state.selectedItems.size).toBe(0);
+    });
+
+    it.each([
+        ['movie.mp4', 'playVideo'], ['notes.txt', 'openFile'],
+    ] as const)('opens %s by double-clicking its name', (name, action) => {
+        renderFileListRows(list, [buildFileRow({ id: 41, name }, '')]);
+        flushSync();
+        row('file:41').querySelector('.row-name')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        expect(actions[action]).toHaveBeenCalledTimes(1);
+        expect(modals.openRenameModal).not.toHaveBeenCalled();
+    });
+
+    it('renames a non-previewable file only from its name area', () => {
+        renderFileListRows(list, [buildFileRow({ id: 41, name: 'bundle.zip', size: 25 }, '')]);
+        flushSync();
+        row('file:41').querySelector('.row-meta')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        expect(modals.openRenameModal).not.toHaveBeenCalled();
+        row('file:41').querySelector('.row-name')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        expect(modals.openRenameModal).toHaveBeenCalledWith(expect.objectContaining({ id: 41, name: 'bundle.zip' }));
+    });
+
+    it('leaves removed listeners inactive and reactivation invokes each action once', () => {
+        deactivate();
+        press(row('folder:design'), 'Enter');
+        drag(row('folder:design'), 'dragend');
+        expect(actions.navigateToFolder).not.toHaveBeenCalled();
+        expect(dragDrop.endRowDrag).not.toHaveBeenCalled();
+        deactivate = activateFileList();
+        press(row('folder:design'), 'Enter');
+        expect(actions.navigateToFolder).toHaveBeenCalledTimes(1);
+    });
+
+    it('ignores live-item keyboard and click actions in the trash', () => {
+        state.virtualView = 'trash';
+        press(row('folder:design'), 'Enter');
+        press(row('folder:design'), 'F2');
+        press(row('folder:design'), 'Delete');
+        row('file:41').click();
+        drag(row('folder:design').querySelector('.row-name')!, 'dragstart');
+        expect(actions.navigateToFolder).not.toHaveBeenCalled();
+        expect(modals.openRenameModal).not.toHaveBeenCalled();
+        expect(modals.openDeleteModal).not.toHaveBeenCalled();
+        expect(dragDrop.beginRowDrag).not.toHaveBeenCalled();
+        expect(state.selectedItems.size).toBe(0);
+    });
+
+    it('delegates search activation to the result callback', () => {
+        state.searchQuery = 'plan';
+        const activate = vi.fn();
+        publish({ onDoubleClick: activate });
+        press(row('file:41'), 'Enter');
+        expect(activate).toHaveBeenCalledTimes(1);
+        expect(actions.openFile).not.toHaveBeenCalled();
+    });
+});
+
+describe('desktop keyboard focus', () => {
+    it('moves between logical rows and returns from row actions', async () => {
+        const folder = row('folder:design');
+        const file = row('file:41');
+        press(folder, 'ArrowDown');
+        await vi.waitFor(() => expect(document.activeElement).toBe(file));
+        press(file, 'Home');
+        await vi.waitFor(() => expect(document.activeElement).toBe(folder));
+        press(folder, 'End');
+        await vi.waitFor(() => expect(document.activeElement).toBe(file));
+        press(file, 'ArrowUp');
+        await vi.waitFor(() => expect(document.activeElement).toBe(folder));
+        press(folder, 'ArrowRight');
+        const button = folder.querySelector('button')!;
+        expect(document.activeElement).toBe(button);
+        press(button, 'Escape');
+        await vi.waitFor(() => expect(document.activeElement).toBe(folder));
+    });
+
+    it('selects with Space while leaving text editors and action buttons alone', () => {
+        press(row('file:41'), ' ');
+        expect(state.selectedItems.has('file:41')).toBe(true);
+        const input = document.createElement('input');
+        row('file:41').append(input);
+        press(input, 'Delete');
+        press(row('file:41').querySelector('button')!, 'Delete');
+        expect(modals.openDeleteModal).not.toHaveBeenCalled();
+    });
+
+    it('opens the context menu at the row for keyboard users', () => {
+        const listener = vi.fn();
+        row('file:41').addEventListener('contextmenu', listener);
+        press(row('file:41'), 'ContextMenu');
+        row('file:41').dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }));
+        expect(listener).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe('desktop drag target safety', () => {
+    it('does not commit a drop rejected by the folder permission check', () => {
+        state.dragState = { items: [], parentId: '', blocked: new Set(), row: row('file:41') };
+        dragDrop.canDropOnFolder.mockReturnValue(false);
+        drag(row('folder:design'), 'dragover');
+        drag(row('folder:design'), 'drop');
+        expect(dragDrop.setDropHighlight).toHaveBeenCalledWith(row('folder:design'), false);
+        expect(dragDrop.performDropMove).not.toHaveBeenCalled();
+    });
+
+    it('clears drop highlighting only when leaving the folder itself', () => {
+        const folder = row('folder:design');
+        state.dragOverEl = folder;
+        folder.classList.add('drop-target');
+        folder.dispatchEvent(new MouseEvent('dragleave', { bubbles: true, relatedTarget: folder.querySelector('.row-name') }));
+        expect(folder.classList.contains('drop-target')).toBe(true);
+        folder.dispatchEvent(new MouseEvent('dragleave', { bubbles: true, relatedTarget: list }));
+        expect(folder.classList.contains('drop-target')).toBe(false);
+        expect(state.dragOverEl).toBeNull();
+    });
+});
+
+
+it('drags a multi-selection and blocks selected folders and descendants', async () => {
+    row('folder:design').click();
+    row('file:41').dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+    expect(state.selectedItems.size).toBe(2);
+    dragDrop.beginRowDrag.mockImplementationOnce((element, items, parentId, blocked) => {
+        state.dragState = { row: element, items, parentId, blocked };
+    });
+    vi.mocked(collectDescendants).mockReturnValueOnce(new Set(['child']));
+    drag(row('folder:design').querySelector('.row-name')!, 'dragstart');
+    await vi.waitFor(() => expect(state.dragState?.blocked.has('child')).toBe(true));
+    expect(state.dragState?.blocked.has('design')).toBe(true);
+    expect(state.dragState?.items.map((item) => item.id)).toEqual(['design', 41]);
+});
+
+it('does not apply late folder descendants after a drag has ended', async () => {
+    let resolve!: (index: Awaited<ReturnType<typeof refreshFolderIndex>>) => void;
+    vi.mocked(refreshFolderIndex).mockReturnValueOnce(new Promise((done) => { resolve = done; }));
+    dragDrop.beginRowDrag.mockImplementationOnce((element, items, parentId, blocked) => {
+        state.dragState = { row: element, items, parentId, blocked };
+    });
+    drag(row('folder:design').querySelector('.row-name')!, 'dragstart');
+    state.dragState = null;
+    resolve({ folders: [], byId: new Map(), children: new Map() });
+    await Promise.resolve();
+    expect(state.dragState).toBeNull();
+    expect(collectDescendants).not.toHaveBeenCalled();
+});
+
+it('deletes a folder and renames a Telegram file with their original identifiers', () => {
+    press(row('folder:design'), 'Backspace');
+    expect(modals.openDeleteModal).toHaveBeenCalledWith({ type: 'folder', id: 'design', name: 'Design', parentId: '' });
+    renderFileListRows(list, [buildFileRow({ id: 99, name: 'raw.zip', source: 'tg', size: 300 }, 'origin')]);
+    flushSync();
+    press(row('file:99'), 'F2');
+    expect(modals.openRenameModal).toHaveBeenCalledWith({ type: 'file', id: 99, name: 'raw.zip', size: 300, source: 'tg', parentId: 'origin' });
+});
+
+it('does not rename a read-only archive on double click', () => {
+    renderFileListRows(list, [buildFileRow({ id: 41, name: 'archive.zip', canRename: false }, '')]);
+    flushSync();
+    row('file:41').querySelector('.row-name')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+    expect(modals.openRenameModal).not.toHaveBeenCalled();
+});
+
+it('supports keyboard navigation from the list container without a focused row', async () => {
+    press(list, 'End');
+    await vi.waitFor(() => expect(document.activeElement).toBe(row('file:41')));
+    press(list, 'Home');
+    await vi.waitFor(() => expect(document.activeElement).toBe(row('folder:design')));
+});
+
+it('does not consume unrelated keys or move focus into absent actions', () => {
+    publish({ actions: [] });
+    for (const key of ['ArrowRight', 'F10', 'a']) {
+        const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
+        row('file:41').dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(false);
+    }
+});
+
+it('uses native drag feedback and clears highlight when a drop is committed', () => {
+    const source = row('file:41');
+    const folder = row('folder:design');
+    const dataTransfer = { effectAllowed: '', dropEffect: '', types: ['text/plain'], setData: vi.fn() };
+    const start = new Event('dragstart', { bubbles: true, cancelable: true });
+    Object.defineProperty(start, 'dataTransfer', { value: dataTransfer });
+    source.querySelector('.row-name')!.dispatchEvent(start);
+    expect(dataTransfer.effectAllowed).toBe('move');
+    expect(dataTransfer.setData).toHaveBeenCalledWith('text/plain', 'tdrive-move');
+    state.dragState = { items: [], parentId: '', blocked: new Set(), row: source };
+    for (const allowed of [false, true]) {
+        dragDrop.canDropOnFolder.mockReturnValue(allowed);
+        const over = new Event('dragover', { bubbles: true, cancelable: true });
+        Object.defineProperty(over, 'dataTransfer', { value: dataTransfer });
+        folder.dispatchEvent(over);
+        expect(dataTransfer.dropEffect).toBe(allowed ? 'move' : 'none');
+        expect(over.defaultPrevented).toBe(allowed);
+    }
+    folder.classList.add('drop-target');
+    state.dragOverEl = folder;
+    drag(folder, 'drop');
+    expect(state.dragOverEl).toBeNull();
+    expect(folder.classList.contains('drop-target')).toBe(false);
+    expect(dragDrop.performDropMove).toHaveBeenCalledWith('design');
+});
+
+it('does not handle external drag events as internal moves', () => {
+    drag(row('folder:design'), 'dragover');
+    drag(row('folder:design'), 'drop');
+    expect(dragDrop.canDropOnFolder).not.toHaveBeenCalled();
+    expect(dragDrop.performDropMove).not.toHaveBeenCalled();
+});
+
+it('does not treat a file or the list background as a folder drop target', () => {
+    state.dragState = { items: [], parentId: '', blocked: new Set(), row: row('file:41') };
+    drag(row('file:41'), 'drop');
+    drag(list, 'drop');
+    drag(list, 'dragleave');
+    drag(list, 'dragstart');
+    expect(dragDrop.performDropMove).not.toHaveBeenCalled();
+    expect(dragDrop.beginRowDrag).not.toHaveBeenCalled();
 });

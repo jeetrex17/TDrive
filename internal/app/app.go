@@ -76,17 +76,7 @@ type App struct {
 	fileDropMu      sync.Mutex
 	fileDropEnabled bool
 
-	// transferMu guards the cancel handles for the active upload/import and the
-	// active download (both serialized by the frontend).
-	transferMu     sync.Mutex
-	uploadCancel   context.CancelFunc
-	downloadCancel context.CancelFunc
-	// keepAwake mirrors the phone's idle-timer override so it is only toggled
-	// when the transfer state actually flips. Guarded by transferMu.
-	keepAwake bool
-	// pickerSources contains disposable copies returned by the mobile file
-	// pickers. These can be moved into durable storage for large uploads.
-	pickerSources map[string]struct{} // guarded by transferMu
+	transfers transferState
 
 	// The domains lifted out of App into their own bound services. They are
 	// built once in initServices; see services.go for the graph and for
@@ -218,12 +208,7 @@ func (a *App) SelectFiles() ([]string, error) {
 		return nil, err
 	}
 	if application.System.IsMobile() {
-		a.transferMu.Lock()
-		a.pickerSources = make(map[string]struct{}, len(uploadfilepaths))
-		for _, path := range uploadfilepaths {
-			a.pickerSources[path] = struct{}{}
-		}
-		a.transferMu.Unlock()
+		a.transfers.rememberPickerSources(uploadfilepaths)
 	}
 	return uploadfilepaths, nil
 }
@@ -236,59 +221,6 @@ func (a *App) SelectFolder() (string, error) {
 		CanChooseDirectories(true).
 		SetTitle("Select a folder to upload").
 		PromptForSingleSelection()
-}
-
-// UploadToDriveFS uploads each chosen file to the active drive. The
-// `encrypt` flag is a per-batch choice made in the upload-options modal:
-// true means encrypt-and-upload (the encryption password must already
-// be remembered for this app session before this call), false means plain
-// upload regardless of encryption password state.
-// beginUpload starts a cancellable context for an upload/import and stores its
-// cancel handle so CancelUpload can stop it. endUpload clears it.
-func (a *App) beginUpload() context.Context {
-	ctx, cancel := context.WithCancel(a.ctx)
-	a.transferMu.Lock()
-	if a.uploadCancel != nil {
-		a.uploadCancel()
-	}
-	a.uploadCancel = cancel
-	a.syncTransferKeepAwakeLocked()
-	a.transferMu.Unlock()
-	return ctx
-}
-
-// beginResumeUpload refuses to replace another active upload. The normal
-// picker flow deliberately cancels its predecessor, but resuming a saved job
-// must not surprise the user by stopping an unrelated batch.
-func (a *App) beginResumeUpload() (context.Context, error) {
-	a.transferMu.Lock()
-	defer a.transferMu.Unlock()
-	if a.uploadCancel != nil {
-		return nil, fmt.Errorf("another upload is already running")
-	}
-	ctx, cancel := context.WithCancel(a.ctx)
-	a.uploadCancel = cancel
-	a.syncTransferKeepAwakeLocked()
-	return ctx, nil
-}
-
-func (a *App) endUpload() {
-	a.transferMu.Lock()
-	a.uploadCancel = nil
-	a.syncTransferKeepAwakeLocked()
-	a.transferMu.Unlock()
-}
-
-// syncTransferKeepAwakeLocked keeps a phone's screen on while an upload or a
-// download is running: the OS would otherwise suspend the app and drop the
-// transfer mid-way. Desktop is a no-op. Caller holds transferMu.
-func (a *App) syncTransferKeepAwakeLocked() {
-	active := a.uploadCancel != nil || a.downloadCancel != nil
-	if active == a.keepAwake {
-		return
-	}
-	a.keepAwake = active
-	mobileKeepAwake(active)
 }
 
 // sweepOrphanParts retries deleting the part bodies of already-deleted multipart
@@ -308,12 +240,7 @@ func (a *App) sweepOrphanParts(ctx context.Context) {
 // CancelUpload cancels the in-flight upload or import: in-flight sends abort and
 // the rest are skipped. The frontend marks the affected transfers canceled.
 func (a *App) CancelUpload() {
-	a.transferMu.Lock()
-	cancel := a.uploadCancel
-	a.transferMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
+	a.transfers.cancel(uploadTransfer)
 }
 
 // CancelUploadByID cancels one file of the running batch. Both cancels exist
@@ -325,45 +252,21 @@ func (a *App) CancelUploadByID(uploadID int) {
 	}
 }
 
-// beginDownload / endDownload / CancelDownload do the same for the active
-// download.
-func (a *App) beginDownload() context.Context {
-	ctx, cancel := context.WithCancel(a.ctx)
-	a.transferMu.Lock()
-	if a.downloadCancel != nil {
-		a.downloadCancel()
-	}
-	a.downloadCancel = cancel
-	a.syncTransferKeepAwakeLocked()
-	a.transferMu.Unlock()
-	return ctx
-}
-
-func (a *App) endDownload() {
-	a.transferMu.Lock()
-	a.downloadCancel = nil
-	a.syncTransferKeepAwakeLocked()
-	a.transferMu.Unlock()
-}
-
 // CancelDownload cancels the active download.
 func (a *App) CancelDownload() {
-	a.transferMu.Lock()
-	cancel := a.downloadCancel
-	a.transferMu.Unlock()
-	if cancel != nil {
-		cancel()
-	}
+	a.transfers.cancel(downloadTransfer)
 }
 
+// UploadToDriveFS uploads the selected batch. Encryption is chosen per batch;
+// encrypted uploads require an already unlocked vault.
 func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool) UploadResult {
 	channelID := a.ActiveChannelID()
 	svc, err := a.requireFileService()
 	if err != nil {
 		return UploadResult{Result: operationFailure(err)}
 	}
-	ctx := a.beginUpload()
-	defer a.endUpload()
+	ctx, finish := a.transfers.begin(a.ctx, uploadTransfer)
+	defer finish()
 	filePaths, staged, err := a.stageMobileUploadPaths(ctx, filePaths, encrypt)
 	if err != nil {
 		return UploadResult{Result: operationFailure(err)}
@@ -400,11 +303,11 @@ func (a *App) ResumeResumableUpload(jobID, sourcePath string) UploadResult {
 	if err != nil {
 		return UploadResult{Result: operationFailure(err)}
 	}
-	ctx, err := a.beginResumeUpload()
+	ctx, finish, err := a.transfers.resumeUpload(a.ctx)
 	if err != nil {
 		return UploadResult{Result: operationFailure(err)}
 	}
-	defer a.endUpload()
+	defer finish()
 	previousSource, err := svc.UploadJobSource(ctx, channelID, jobID)
 	if err != nil {
 		return UploadResult{Result: operationFailure(err)}
@@ -476,8 +379,8 @@ func (a *App) ImportPaths(paths []string, parentID string, encrypt bool, extract
 	if err != nil {
 		return operationFailure(err)
 	}
-	ctx := a.beginUpload()
-	defer a.endUpload()
+	ctx, finish := a.transfers.begin(a.ctx, uploadTransfer)
+	defer finish()
 	a.sweepOrphanParts(ctx)
 	return operationFailure(svc.RunImport(ctx, a.ActiveChannelID(), paths, parentID, encrypt, extractArchives))
 }
@@ -617,8 +520,9 @@ func (a *App) DownloadFile(channelID int64, msgID int, TgMsgID int, requestID st
 	if err != nil {
 		return DownloadResult{Result: operationFailure(err)}
 	}
-	ctx := fileservice.WithDownloadProgressID(a.beginDownload(), requestID)
-	defer a.endDownload()
+	ctx, finish := a.transfers.begin(a.ctx, downloadTransfer)
+	defer finish()
+	ctx = fileservice.WithDownloadProgressID(ctx, requestID)
 	result := svc.Download(ctx, channelID, msgID, TgMsgID, a.chooseDownloadPath)
 	// An iPhone download stays in the app container, so offer the share sheet
 	// as soon as the bytes are on disk: Files can list the container, but
@@ -647,8 +551,9 @@ func (a *App) DownloadFolder(channelID int64, folderID string, requestID string)
 	if err != nil {
 		return DownloadResult{Result: operationFailure(err)}
 	}
-	ctx := fileservice.WithDownloadProgressID(a.beginDownload(), requestID)
-	defer a.endDownload()
+	ctx, finish := a.transfers.begin(a.ctx, downloadTransfer)
+	defer finish()
+	ctx = fileservice.WithDownloadProgressID(ctx, requestID)
 	result := svc.DownloadFolder(ctx, channelID, folderID, a.chooseDownloadDir)
 	return downloadOperationResult(result)
 }

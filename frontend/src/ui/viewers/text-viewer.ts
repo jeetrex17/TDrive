@@ -5,7 +5,7 @@ import json from 'highlight.js/lib/languages/json';
 import plaintext from 'highlight.js/lib/languages/plaintext';
 import xml from 'highlight.js/lib/languages/xml';
 import yaml from 'highlight.js/lib/languages/yaml';
-import MarkdownIt from 'markdown-it';
+import MarkdownIt, { type RenderRule } from 'markdown-it';
 import type { StructuredTextLanguage, TextViewerMode } from './text-viewer-types';
 
 export type { StructuredTextLanguage, TextViewerMode } from './text-viewer-types';
@@ -59,19 +59,11 @@ const markdown = new MarkdownIt({
     typographer: false,
 });
 
-type MarkdownRenderRule = (
-    tokens: Array<{ attrIndex(name: string): number; attrs?: Array<[string, string]>; attrSet(name: string, value: string): void }>,
-    idx: number,
-    options: unknown,
-    env: unknown,
-    self: { renderToken(tokens: unknown, idx: number, options: unknown): string },
-) => string;
-
-const defaultLinkOpen: MarkdownRenderRule =
+const defaultLinkOpen: RenderRule =
     markdown.renderer.rules.link_open ??
     ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
 
-const secureLinkOpen: MarkdownRenderRule = (tokens, idx, options, env, self) => {
+const secureLinkOpen: RenderRule = (tokens, idx, options, env, self) => {
     const hrefIndex = tokens[idx].attrIndex('href');
     const href = hrefIndex >= 0 ? tokens[idx].attrs?.[hrefIndex]?.[1] ?? '' : '';
     if (/^(https?:)?\/\//i.test(href)) {

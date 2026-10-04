@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"log/slog"
 	"reflect"
-	"strings"
 	"time"
+
+	"modernc.org/sqlite"
+	sqlite3 "modernc.org/sqlite/lib"
 )
 
 type JournalRecord struct {
@@ -469,7 +471,12 @@ func unmarshalOptional[T any](data []byte, destination **T) error {
 }
 
 func isUniqueConstraint(err error) bool {
-	return strings.Contains(strings.ToLower(err.Error()), "unique constraint")
+	var sqliteErr *sqlite.Error
+	if !errors.As(err, &sqliteErr) {
+		return false
+	}
+	return sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_PRIMARYKEY ||
+		sqliteErr.Code() == sqlite3.SQLITE_CONSTRAINT_UNIQUE
 }
 
 var _ Journal = (*SQLiteJournal)(nil)

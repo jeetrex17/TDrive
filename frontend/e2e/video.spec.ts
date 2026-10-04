@@ -119,6 +119,8 @@ async function openTheVideo(page: Page): Promise<void> {
 test('plays a real file, and closing it releases the backend session', async ({ page }) => {
     await serveFixture(page);
     const mock = await bootTDrive(page, {
+        GetMediaStats: resolves({ playback: {}, thumbnails: {} }),
+        UpdateMediaPlayback: resolves(null),
         GetFolderContents: resolves({ folders: [], files: [VIDEO_FILE] }),
         OpenMedia: resolves(opened()),
     });
@@ -152,6 +154,8 @@ for (const platform of ['android', 'ios'] as const) {
         await page.setViewportSize({ width: 390, height: 844 });
         await serveFixture(page);
         await bootTDrive(page, {
+        GetMediaStats: resolves({ playback: {}, thumbnails: {} }),
+        UpdateMediaPlayback: resolves(null),
             GetFolderContents: resolves({ folders: [], files: [VIDEO_FILE] }),
             OpenMedia: resolves(opened()),
         }, { url: `/?mobile=${platform}` });
@@ -203,6 +207,8 @@ for (const platform of ['android', 'ios'] as const) {
 test('surfaces a failed open instead of leaving a dead player on screen', async ({ page }) => {
     await serveFixture(page);
     await bootTDrive(page, {
+        GetMediaStats: resolves({ playback: {}, thumbnails: {} }),
+        UpdateMediaPlayback: resolves(null),
         GetFolderContents: resolves({ folders: [], files: [VIDEO_FILE] }),
         OpenMedia: rejects('Telegram is unavailable', 60),
     });
@@ -225,6 +231,8 @@ test('surfaces a failed open instead of leaving a dead player on screen', async 
 test('keeps playing in the webview when the native player refuses to start', async ({ page }) => {
     await serveFixture(page);
     await bootTDrive(page, {
+        GetMediaStats: resolves({ playback: {}, thumbnails: {} }),
+        UpdateMediaPlayback: resolves(null),
         GetFolderContents: resolves({ folders: [], files: [VIDEO_FILE] }),
         OpenMedia: resolves(opened()),
         // The promotion path: the backend opened the stream, then the
@@ -245,6 +253,8 @@ test('keeps playing in the webview when the native player refuses to start', asy
 test('the speed control changes the element, not just the label', async ({ page }) => {
     await serveFixture(page);
     await bootTDrive(page, {
+        GetMediaStats: resolves({ playback: {}, thumbnails: {} }),
+        UpdateMediaPlayback: resolves(null),
         GetFolderContents: resolves({ folders: [], files: [VIDEO_FILE] }),
         OpenMedia: resolves(opened()),
     });
@@ -300,6 +310,8 @@ test('on iOS the element is handed the HLS source, not the progressive one', asy
     // player that loads its bytes and then stalls -- iOS Safari will not seek
     // a progressive stream the way the desktop webviews do.
     await bootTDrive(page, {
+        GetMediaStats: resolves({ playback: {}, thumbnails: {} }),
+        UpdateMediaPlayback: resolves(null),
         GetFolderContents: resolves({ folders: [], files: [VIDEO_FILE] }),
         OpenMedia: resolves(opened({ hls_url: HLS_URL })),
     }, { url: '/?mobile=ios' });
@@ -324,6 +336,8 @@ test('on iOS the element is handed the HLS source, not the progressive one', asy
 test('an encrypted video with the vault locked asks for the password', async ({ page }) => {
     const encrypted = { ...VIDEO_FILE, name: 'holiday.mkv', msg_id: 611, encrypted: true, plaintext_size: VIDEO_FILE.size };
     const mock = await bootTDrive(page, {
+        GetMediaStats: resolves({ playback: {}, thumbnails: {} }),
+        UpdateMediaPlayback: resolves(null),
         GetFolderContents: resolves({ folders: [], files: [encrypted] }),
         EncryptionStatus: resolves({ available: true, password_set: true, password_remembered: false, hint: '' }),
         // What the drive answers with while the key is not in memory.

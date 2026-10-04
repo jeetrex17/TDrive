@@ -1,25 +1,25 @@
 // Package sync owns the channel <-> projection sync engine.
 //
-// The Engine is shared across all channels (personal + shared, when Step 4
-// lands). Per-channel mutexes serialize Initial vs Incremental and prevent
-// two concurrent syncs of the same channel.
+// The Engine is shared across personal and shared channels. Per-channel gates
+// serialize scans while allowing queued callers to cancel independently.
 //
 // All projection writes go through projection.ProjectFromOp — the single
 // apply path — so tamper detection and idempotency are inherited.
 package sync
 
 import (
-	stdsync "sync"
-
 	"context"
 	"database/sql"
 	"errors"
 	"fmt"
 	"log/slog"
+	stdsync "sync"
 	"time"
 
 	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
+
+	"golang.org/x/sync/semaphore"
 )
 
 const (
@@ -82,7 +82,7 @@ type Engine struct {
 	EmitTomb func(channelID int64, fileMsgID int64) error
 
 	mu    stdsync.Mutex
-	locks map[int64]*stdsync.Mutex
+	locks map[int64]*semaphore.Weighted
 	// deletionsCurrent marks channels whose last incremental pass applied
 	// deletions from a Telegram difference, so ReconcileDeletions can skip
 	// its per-message existence check. Guarded by mu.
@@ -138,7 +138,7 @@ func NewEngine(db *sql.DB, tg tgclient.Client, peers PeerResolver) *Engine {
 		db:    db,
 		tg:    tg,
 		peers: peers,
-		locks: make(map[int64]*stdsync.Mutex),
+		locks: make(map[int64]*semaphore.Weighted),
 	}
 }
 
@@ -148,13 +148,15 @@ func (e *Engine) report(p Progress) {
 	}
 }
 
-func (e *Engine) lockFor(channelID int64) *stdsync.Mutex {
+// Keep one gate per channel for the engine lifetime. Removing a gate while
+// callers still hold its pointer would let two scans enter the same channel.
+func (e *Engine) lockFor(channelID int64) *semaphore.Weighted {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if m, ok := e.locks[channelID]; ok {
 		return m
 	}
-	m := &stdsync.Mutex{}
+	m := semaphore.NewWeighted(1)
 	e.locks[channelID] = m
 	return m
 }
@@ -164,8 +166,10 @@ func (e *Engine) lockFor(channelID int64) *stdsync.Mutex {
 // new messages is a no-op.
 func (e *Engine) Incremental(ctx context.Context, channelID int64) error {
 	lk := e.lockFor(channelID)
-	lk.Lock()
-	defer lk.Unlock()
+	if err := lk.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	defer lk.Release(1)
 	start := time.Now()
 	slog.Debug("sync: incremental sync starting", "channel_id", channelID)
 	err := e.incrementalLocked(ctx, channelID)
@@ -185,8 +189,10 @@ func (e *Engine) Incremental(ctx context.Context, channelID int64) error {
 // unnecessary full Telegram history scan for ordinary local writes.
 func (e *Engine) PrepareHardDeleteProjection(ctx context.Context, channelID int64) error {
 	lk := e.lockFor(channelID)
-	lk.Lock()
-	defer lk.Unlock()
+	if err := lk.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	defer lk.Release(1)
 	return e.incrementalLocked(ctx, channelID)
 }
 
@@ -294,8 +300,10 @@ func (e *Engine) ReconcileDeletions(ctx context.Context, channelID int64) (int, 
 		return 0, nil
 	}
 	lk := e.lockFor(channelID)
-	lk.Lock()
-	defer lk.Unlock()
+	if err := lk.Acquire(ctx, 1); err != nil {
+		return 0, err
+	}
+	defer lk.Release(1)
 
 	if e.deletionsCurrentFor(channelID) {
 		slog.Debug("sync: deletions already applied from channel difference, skipping existence check", "channel_id", channelID)
@@ -373,8 +381,10 @@ func (e *Engine) tombstoneMissing(channelID int64, refs []projection.FileMessage
 // an unknown policy into an authoritative plaintext policy.
 func (e *Engine) EnsureAuthoritative(ctx context.Context, channelID int64) error {
 	lk := e.lockFor(channelID)
-	lk.Lock()
-	defer lk.Unlock()
+	if err := lk.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	defer lk.Release(1)
 
 	channel, err := projection.GetChannel(e.db, channelID)
 	if err != nil {
@@ -445,8 +455,10 @@ func (e *Engine) authoritativeLocked(ctx context.Context, channelID int64) error
 // preserve tamper-detection hashes).
 func (e *Engine) InitialSyncEmptyChannel(ctx context.Context, channelID int64) error {
 	lk := e.lockFor(channelID)
-	lk.Lock()
-	defer lk.Unlock()
+	if err := lk.Acquire(ctx, 1); err != nil {
+		return err
+	}
+	defer lk.Release(1)
 	start := time.Now()
 	slog.Info("sync: initial sync of empty channel starting", "channel_id", channelID)
 

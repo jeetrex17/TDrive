@@ -49,21 +49,22 @@ export class TrackPicker {
         private readonly apply: (player: TrackSwitching, id: number | null) => void,
         private readonly els: TrackPickerDOM,
         private readonly host: TrackPickerHost,
+        signal?: AbortSignal,
     ) {
         els.button?.addEventListener("click", (event) => {
             event.stopPropagation();
             this.cycle();
             this.host.revealChrome();
-        });
+        }, { signal });
         els.menu?.addEventListener("click", (event) => {
             const item = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-track]");
             if (!item) return;
             this.select(item.dataset.track === "no" ? null : Number(item.dataset.track));
             this.close(true);
-        });
+        }, { signal });
         els.menu?.addEventListener("keydown", (event) => {
             if (this.isOpen()) handleMenuKeydown(event, this.items().filter((item) => !item.hidden), () => this.close(true));
-        });
+        }, { signal });
     }
 
     get visible() {

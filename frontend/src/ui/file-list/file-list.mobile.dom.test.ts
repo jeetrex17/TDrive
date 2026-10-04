@@ -133,6 +133,30 @@ describe('phone row transfer badge', () => {
         expect(item.querySelector('[role="gridcell"]')).toBeNull();
     });
 
+    it('runs inline actions without opening the row or adding overflow and swipe actions', () => {
+        const onClick = vi.fn();
+        const onRestore = vi.fn();
+        setup();
+        showFileListRows([makeFileRow({
+            actionsInline: true,
+            onClick,
+            actions: [{ kind: 'restore', className: 'restore', title: 'Restore', label: 'Restore file', onClick: onRestore }],
+        })]);
+        flushSync();
+
+        const item = rows()[0];
+        const button = item.querySelector<HTMLButtonElement>('button[aria-label="Restore file"]');
+        expect(button).not.toBeNull();
+        button?.click();
+
+        expect(onRestore).toHaveBeenCalledTimes(1);
+        expect(onRestore.mock.calls[0][1].id).toBe('42');
+        expect(onClick).not.toHaveBeenCalled();
+        expect(item.querySelector('.row-more')).toBeNull();
+        expect(item.querySelector('.row-swipe-actions')).toBeNull();
+        expect(item.querySelector('[role="gridcell"]')).toBeNull();
+    });
+
     it('badges the row a download is actually for', () => {
         // The download queue keys its jobs "file:<id>"; a row that only matched
         // a bare id meant no download ever badged anything.
