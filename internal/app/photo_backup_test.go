@@ -1,10 +1,13 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -260,5 +263,47 @@ func TestDesktopDiscoveryRetainsCursorReconcilesAndRestarts(t *testing.T) {
 	status, err = engine.Status(ctx, scope)
 	if err != nil || status.Pending != 301 {
 		t.Fatalf("restart status=%+v err=%v", status, err)
+	}
+}
+
+func TestPhotoBackupRunLogsUnavailableStatusWithoutZeroCounts(t *testing.T) {
+	for _, canceled := range []bool{false, true} {
+		t.Run(fmt.Sprintf("canceled=%t", canceled), func(t *testing.T) {
+			db, err := sql.Open("sqlite", ":memory:")
+			if err != nil {
+				t.Fatal(err)
+			}
+			engine, err := photobackup.Open(db, photobackup.Options{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := db.Close(); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if canceled {
+				cancel()
+			}
+			var output bytes.Buffer
+			previous := slog.Default()
+			slog.SetDefault(slog.New(slog.NewJSONHandler(&output, nil)))
+			t.Cleanup(func() { slog.SetDefault(previous) })
+			logPhotoBackupRunStatus(ctx, engine, photobackup.Scope{AccountID: "test", DriveID: 1}, "finished", 3)
+			var record map[string]any
+			if err := json.Unmarshal(output.Bytes(), &record); err != nil {
+				t.Fatal(err)
+			}
+			if _, present := record["pending"]; present || record["status_error"] == nil {
+				t.Fatalf("unavailable status logged as counts: %s", output.Bytes())
+			}
+			wantLevel := "WARN"
+			if canceled {
+				wantLevel = "INFO"
+			}
+			if record["level"] != wantLevel || record["uploaded"] != float64(3) {
+				t.Fatalf("run outcome missing or unexpected severity: %s", output.Bytes())
+			}
+		})
 	}
 }

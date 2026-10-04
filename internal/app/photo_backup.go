@@ -530,8 +530,7 @@ func (a *App) startPhotoBackup() error {
 			slog.Warn("photo backup: recover interrupted uploads failed", "drive_id", scope.DriveID, "error", err)
 		}
 		a.reconcilePhotoBackupReceipts(ctx, engine, scope)
-		before, _ := engine.Status(ctx, scope)
-		slog.Info("photo backup: run starting", "drive_id", scope.DriveID, "pending", before.Pending, "failed", before.Error, "held", before.Paused+before.Missing, "complete", before.Complete)
+		logPhotoBackupRunStatus(ctx, engine, scope, "starting", 0)
 		uploaded := 0
 		for ctx.Err() == nil {
 			// A native background lease may finish the item that was already in
@@ -550,11 +549,27 @@ func (a *App) startPhotoBackup() error {
 				break
 			}
 		}
-		after, _ := engine.Status(ctx, scope)
-		slog.Info("photo backup: run finished", "drive_id", scope.DriveID, "uploaded", uploaded, "pending", after.Pending, "failed", after.Error, "held", after.Paused+after.Missing, "canceled", ctx.Err() != nil)
+		logPhotoBackupRunStatus(ctx, engine, scope, "finished", uploaded)
 		a.emit("photo-backup:state")
 	}()
 	return nil
+}
+
+// Status is diagnostic only: a failed read must not invent an empty queue or
+// change execution. Cancellation normally prevents the final status read.
+func logPhotoBackupRunStatus(ctx context.Context, engine *photobackup.Engine, scope photobackup.Scope, phase string, uploaded int) {
+	attrs := []any{"drive_id", scope.DriveID, "uploaded", uploaded, "canceled", ctx.Err() != nil}
+	status, err := engine.Status(ctx, scope)
+	if err != nil {
+		attrs = append(attrs, "status_error", err)
+		if ctx.Err() == nil {
+			slog.Warn("photo backup: run "+phase, attrs...)
+			return
+		}
+	} else {
+		attrs = append(attrs, "pending", status.Pending, "failed", status.Error, "held", status.Paused+status.Missing, "complete", status.Complete)
+	}
+	slog.Info("photo backup: run "+phase, attrs...)
 }
 
 func (a *App) uploadPhotoBackup(ctx context.Context, request photobackup.UploadRequest) (photobackup.UploadResult, error) {
