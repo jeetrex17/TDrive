@@ -74,6 +74,17 @@ func TestMultipartRoundTripPlain(t *testing.T) {
 	if !bytes.Equal(got, body) {
 		t.Fatalf("round-trip mismatch: got %d bytes, want %d", len(got), len(body))
 	}
+	svc.CacheNamespace = "multipart-plain-download"
+	svc.DownloadStagingDir = t.TempDir()
+	resumedPath := filepath.Join(t.TempDir(), "resumed-out.bin")
+	resumed := svc.StartResumableDownload(t.Context(), personalChannelID, files[0].MsgID, files[0].MsgID,
+		func(string) (string, error) { return resumedPath, nil })
+	if resumed.Status != "success" {
+		t.Fatalf("resumable multipart download = %+v", resumed)
+	}
+	if got, err := os.ReadFile(resumedPath); err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("resumable multipart output = %d bytes, err %v", len(got), err)
+	}
 }
 
 func restartedUploadService(previous *Service) *Service {
@@ -591,6 +602,18 @@ func TestMultipartRoundTripEncrypted(t *testing.T) {
 	}
 	if !bytes.Equal(got, body) {
 		t.Fatalf("encrypted round-trip mismatch: got %d bytes, want %d", len(got), len(body))
+	}
+	assertKeyZeroed(t, downloadKey)
+	svc.CacheNamespace = "multipart-encrypted-download"
+	svc.DownloadStagingDir = t.TempDir()
+	resumedPath := filepath.Join(t.TempDir(), "resumed-secret.out")
+	resumed := svc.StartResumableDownload(t.Context(), personalChannelID, files[0].MsgID, files[0].MsgID,
+		func(string) (string, error) { return resumedPath, nil })
+	if resumed.Status != "success" {
+		t.Fatalf("resumable encrypted multipart download = %+v", resumed)
+	}
+	if got, err := os.ReadFile(resumedPath); err != nil || !bytes.Equal(got, body) {
+		t.Fatalf("resumable encrypted multipart output = %d bytes, err %v", len(got), err)
 	}
 	assertKeyZeroed(t, downloadKey)
 }
