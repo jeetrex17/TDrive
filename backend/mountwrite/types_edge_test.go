@@ -3,6 +3,7 @@ package mountwrite
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -28,10 +29,10 @@ func TestSafeOperationErrorsPreserveOnlyPublicClassification(t *testing.T) {
 		{ErrBusy, "busy"},
 		{ErrOperationExists, "already active"},
 		{ErrOperationInProgress, "already active"},
+		{fmt.Errorf("wrapped: %w", ErrLocked), "locked"},
 		{errors.New("secret internal detail"), "unavailable"},
 	}
 	for _, test := range tests {
-		test := test
 		t.Run(test.label, func(t *testing.T) {
 			err := newOperationError("safe-id", MutationPut, test.cause)
 			if got := safeErrorLabel(err); got != test.label {
@@ -45,6 +46,54 @@ func TestSafeOperationErrorsPreserveOnlyPublicClassification(t *testing.T) {
 	unsafe := newOperationError("bad\noperation", MutationPut, ErrInvalidRequest)
 	if got := unsafe.Error(); got != "mount write put invalid" {
 		t.Fatalf("unsafe operation ID leaked in %q", got)
+	}
+}
+
+func TestSafeErrorLabelsRecoverPublicErrorClasses(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		label string
+		want  error
+	}{
+		{"invalid", ErrInvalidRequest},
+		{"forbidden", ErrForbidden},
+		{"not found", ErrNotFound},
+		{"conflicted", ErrConflict},
+		{"precondition failed", ErrPreconditionFailed},
+		{"too large", ErrTooLarge},
+		{"locked", ErrLocked},
+		{"out of space", ErrQuotaExceeded},
+		{"canceled", ErrCanceled},
+		{"length mismatch", ErrLengthMismatch},
+		{"draining", ErrDraining},
+		{"busy", ErrBusy},
+		{"already active", ErrOperationInProgress},
+		{"unknown future label", ErrUnavailable},
+	}
+	for _, test := range tests {
+		t.Run(test.label, func(t *testing.T) {
+			if got := errorFromSafeLabel(test.label); !errors.Is(got, test.want) {
+				t.Fatalf("errorFromSafeLabel(%q) = %v, want %v", test.label, got, test.want)
+			}
+		})
+	}
+}
+
+func TestSafeErrorLabelsPreserveManyToOneActiveState(t *testing.T) {
+	t.Parallel()
+
+	for _, err := range []error{ErrOperationExists, ErrOperationInProgress} {
+		if got := safeErrorLabel(err); got != "already active" {
+			t.Fatalf("safeErrorLabel(%v) = %q, want already active", err, got)
+		}
+	}
+	restored := errorFromSafeLabel("already active")
+	if !errors.Is(restored, ErrOperationInProgress) {
+		t.Fatalf("already active restored as %v, want ErrOperationInProgress", restored)
+	}
+	if errors.Is(restored, ErrOperationExists) {
+		t.Fatalf("already active restored as %v, want no ErrOperationExists match", restored)
 	}
 }
 
