@@ -15,12 +15,13 @@ describe('native photo backup adapter', () => {
     it('preserves Android MediaStore assets, their capture time and the object cursor', async () => {
         bridge.callBridge.mockResolvedValue(JSON.stringify({
             assets: [{ id: 'media:image:9', version: '100:32', name: 'IMG_9.jpg', mediaType: 'image', modifiedAt: 100, createdAt: 40, size: 32, resourceID: 'media:image:9' }],
-            nextCursor: { modified: 100, id: 9 },
+            nextCursor: { id: 9 },
         }));
         const first = await listNativePhotoBackupAssets('library:all');
         expect(first.assets[0]).toMatchObject({ id: 'media:image:9', mediaType: 'photo', modifiedAt: 100, createdAt: 40, resourceId: 'media:image:9' });
+        expect(JSON.parse(bridge.callBridge.mock.calls[0][1][0]).cursor).toBe('');
         await listNativePhotoBackupAssets('library:all', first.nextCursor);
-        expect(JSON.parse(bridge.callBridge.mock.calls[1][1][0]).cursor).toEqual({ modified: 100, id: 9 });
+        expect(JSON.parse(bridge.callBridge.mock.calls[1][1][0]).cursor).toEqual({ id: 9 });
     });
 
     it('carries the subfolder a watched-folder asset came out of', async () => {
@@ -80,7 +81,7 @@ describe('native photo backup adapter', () => {
         expect(page.assets.map((asset) => asset.createdAt)).toEqual([7, 0]);
     });
 
-    it('starts an iOS scan over when the bridge has dropped its snapshot', async () => {
+    it('starts an iOS scan over when the bridge has dropped its iterator', async () => {
         const listPhotoBackupAssets = vi.fn()
             .mockRejectedValueOnce(Object.assign(new Error('snapshot gone'), { code: 'cursorExpired' }))
             .mockResolvedValueOnce({ assets: [{ id: 'PH-2', version: 'v1', name: 'a.jpg', media_type: 'photo' }], next_cursor: 'tok:1:0' });

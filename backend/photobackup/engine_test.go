@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -350,6 +351,49 @@ PRAGMA user_version=5`); err != nil {
 	}
 	if err := engine.Migrate(context.Background()); err != nil {
 		t.Fatalf("repeat migration: %v", err)
+	}
+}
+
+func TestMigrateVersionSixAddsScanCheckpointWithoutLosingQueue(t *testing.T) {
+	now := time.Unix(45, 0)
+	engine, scope := testEngine(t, &now)
+	configure(t, engine, scope)
+	if _, err := engine.EnqueuePage(context.Background(), scope, "camera", []Asset{{ID: "queued", Version: "v1", Path: "/queued.jpg", Name: "queued.jpg", MediaType: "photo", ModifiedAt: now}}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.db.Exec(`ALTER TABLE photo_backup_sources DROP COLUMN scan_cursor;
+ALTER TABLE photo_backup_sources DROP COLUMN scan_complete;
+PRAGMA user_version=6`); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	sources, err := engine.ListSources(context.Background(), scope)
+	if err != nil || len(sources) != 1 || sources[0].ID != "camera" || sources[0].ScanCursor != "" || sources[0].ScanComplete {
+		t.Fatalf("sources=%+v err=%v", sources, err)
+	}
+	status, err := engine.Status(context.Background(), scope)
+	if err != nil || status.Pending != 1 {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+	var version int
+	if err := engine.db.QueryRow(`PRAGMA user_version`).Scan(&version); err != nil || version != schemaVersion {
+		t.Fatalf("version=%d err=%v", version, err)
+	}
+	if err := engine.Migrate(context.Background()); err != nil {
+		t.Fatalf("repeat migration: %v", err)
+	}
+}
+
+func TestMigrateVersionSixWithCheckpointColumnsAlreadyPresent(t *testing.T) {
+	now := time.Unix(46, 0)
+	engine, _ := testEngine(t, &now)
+	if _, err := engine.db.Exec(`PRAGMA user_version=6`); err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Migrate(context.Background()); err != nil {
+		t.Fatal(err)
 	}
 }
 
@@ -739,6 +783,145 @@ func TestDiscoverPageCheckpointAndReset(t *testing.T) {
 	_, done, err = e.DiscoverPage(context.Background(), scope, "camera", a)
 	if err != nil || done {
 		t.Fatalf("reset done=%v err=%v", done, err)
+	}
+}
+
+func TestCommitScanPagePersistsAcrossEngineRestart(t *testing.T) {
+	now := time.Unix(701, 0)
+	e, scope := testEngine(t, &now)
+	configure(t, e, scope)
+	if err := e.UpsertSource(t.Context(), Source{Scope: scope, ID: "camera", Kind: "device-folder", Root: "native:camera", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	assets := make([]Asset, 128)
+	for i := range assets {
+		assets[i] = Asset{ID: fmt.Sprintf("asset-%d", i), Version: "1", ResourceID: fmt.Sprintf("resource-%d", i), Name: fmt.Sprintf("%d.jpg", i), MediaType: "photo", ModifiedAt: now}
+	}
+	added, err := e.CommitScanPage(t.Context(), scope, "camera", "", "next", assets)
+	if err != nil || added != 128 {
+		t.Fatalf("first page: added=%d err=%v", added, err)
+	}
+	var sequence int
+	var name, path string
+	if err := e.db.QueryRowContext(t.Context(), `PRAGMA database_list`).Scan(&sequence, &name, &path); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	reopened, err := Open(db, Options{Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sources, err := reopened.ListSources(t.Context(), scope)
+	if err != nil || len(sources) != 1 || sources[0].ScanCursor != "next" || sources[0].ScanComplete {
+		t.Fatalf("source after restart: %+v err=%v", sources, err)
+	}
+	added, err = reopened.CommitScanPage(t.Context(), scope, "camera", "next", "", []Asset{{ID: "last", Version: "1", ResourceID: "last", Name: "last.mov", MediaType: "video", ModifiedAt: now}})
+	if err != nil || added != 1 {
+		t.Fatalf("final page: added=%d err=%v", added, err)
+	}
+	sources, err = reopened.ListSources(t.Context(), scope)
+	if err != nil || !sources[0].ScanComplete {
+		t.Fatalf("completed source: %+v err=%v", sources, err)
+	}
+}
+
+func TestCommitScanPageRejectsStaleAndRollsBack(t *testing.T) {
+	now := time.Unix(702, 0)
+	e, scope := testEngine(t, &now)
+	configure(t, e, scope)
+	if err := e.UpsertSource(t.Context(), Source{Scope: scope, ID: "camera", Kind: "device-folder", Root: "native:camera", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	asset := Asset{ID: "one", Version: "1", ResourceID: "one", Name: "one.jpg", MediaType: "photo", ModifiedAt: now}
+	if _, err := e.CommitScanPage(t.Context(), scope, "camera", "", "next", []Asset{asset}); err != nil {
+		t.Fatal(err)
+	}
+	_, err := e.CommitScanPage(t.Context(), scope, "camera", "", "stale", []Asset{{ID: "stale", Version: "1", ResourceID: "stale", Name: "stale.jpg", MediaType: "photo", ModifiedAt: now}})
+	if !errors.Is(err, ErrScanStale) {
+		t.Fatalf("stale page error=%v", err)
+	}
+	_, err = e.CommitScanPage(t.Context(), scope, "camera", "next", "invalid", []Asset{{ID: "invalid", Name: "invalid.jpg", MediaType: "photo"}})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("invalid page error=%v", err)
+	}
+	_, err = e.CommitScanPage(t.Context(), scope, "camera", "next", strings.Repeat("x", 1025), []Asset{asset})
+	if !errors.Is(err, ErrInvalid) {
+		t.Fatalf("oversized cursor error=%v", err)
+	}
+	if _, err := e.db.ExecContext(t.Context(), `CREATE TRIGGER reject_scan_asset BEFORE INSERT ON photo_backup_jobs WHEN NEW.asset_id='bad' BEGIN SELECT RAISE(ABORT,'test insert failure'); END`); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.CommitScanPage(t.Context(), scope, "camera", "next", "final", []Asset{{ID: "bad", Version: "1", ResourceID: "bad", Name: "bad.jpg", MediaType: "photo", ModifiedAt: now}})
+	if err == nil {
+		t.Fatal("expected insert failure")
+	}
+	sources, err := e.ListSources(t.Context(), scope)
+	if err != nil || sources[0].ScanCursor != "next" || sources[0].ScanComplete {
+		t.Fatalf("checkpoint changed after rollback: %+v err=%v", sources, err)
+	}
+	var count int
+	if err := e.db.QueryRowContext(t.Context(), `SELECT COUNT(*) FROM photo_backup_jobs`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("jobs after stale/failed page=%d err=%v", count, err)
+	}
+	if err := e.PutSettings(t.Context(), Settings{Scope: scope, Photos: true, Videos: true}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = e.CommitScanPage(t.Context(), scope, "camera", "next", "", []Asset{asset})
+	if !errors.Is(err, ErrScanStale) {
+		t.Fatalf("disabled backup accepted a scan page: %v", err)
+	}
+}
+
+func TestCommitScanPageAcrossEightPagesAndScopeIsolation(t *testing.T) {
+	now := time.Unix(703, 0)
+	e, scope := testEngine(t, &now)
+	configure(t, e, scope)
+	if err := e.UpsertSource(t.Context(), Source{Scope: scope, ID: "camera", Kind: "device-folder", Root: "native:camera", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	other := Scope{AccountID: "other", DriveID: scope.DriveID}
+	configure(t, e, other)
+	if err := e.UpsertSource(t.Context(), Source{Scope: other, ID: "camera", Kind: "device-folder", Root: "native:camera", Enabled: true}); err != nil {
+		t.Fatal(err)
+	}
+	cursor := ""
+	for start := 0; start < 1000; start += 128 {
+		end := min(start+128, 1000)
+		assets := make([]Asset, end-start)
+		for i := start; i < end; i++ {
+			assets[i-start] = Asset{ID: fmt.Sprintf("asset-%d", i), Version: "1", ResourceID: fmt.Sprintf("resource-%d", i), Name: fmt.Sprintf("%d.jpg", i), MediaType: "photo", ModifiedAt: now}
+		}
+		next := ""
+		if end < 1000 {
+			next = fmt.Sprintf("page-%d", end)
+		}
+		added, err := e.CommitScanPage(t.Context(), scope, "camera", cursor, next, assets)
+		if err != nil || added != len(assets) {
+			t.Fatalf("page %d: added=%d want=%d err=%v", start/128+1, added, len(assets), err)
+		}
+		cursor = next
+	}
+	status, err := e.Status(t.Context(), scope)
+	if err != nil || status.Pending != 1000 {
+		t.Fatalf("status=%+v err=%v", status, err)
+	}
+	sources, err := e.ListSources(t.Context(), other)
+	if err != nil || len(sources) != 1 || sources[0].ScanComplete || sources[0].ScanCursor != "" {
+		t.Fatalf("other account source=%+v err=%v", sources, err)
+	}
+	if err := e.ResetDiscovery(t.Context(), scope, "camera"); err != nil {
+		t.Fatal(err)
+	}
+	added, err := e.CommitScanPage(t.Context(), scope, "camera", "", "", []Asset{{ID: "asset-0", Version: "1", ResourceID: "resource-0", Name: "0.jpg", MediaType: "photo", ModifiedAt: now}})
+	if err != nil || added != 0 {
+		t.Fatalf("rescan duplicate: added=%d err=%v", added, err)
 	}
 }
 

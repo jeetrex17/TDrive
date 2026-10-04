@@ -85,6 +85,14 @@ export function CloseGalleryImages(token: string): $CancellablePromise<void> {
     return $Call.ByID(1230796400, token);
 }
 
+/**
+ * CommitPhotoBackupScanPage atomically queues one mobile discovery page and
+ * saves its continuation token. An outdated continuation is rejected.
+ */
+export function CommitPhotoBackupScanPage(sourceID: string, previousCursor: string, nextCursor: string, values: $models.PhotoBackupAsset[] | null): $CancellablePromise<number> {
+    return $Call.ByID(2766461163, sourceID, previousCursor, nextCursor, values);
+}
+
 export function CreateFolder(foldername: string, parentID: string): $CancellablePromise<backend$0.Folder> {
     return $Call.ByID(4072853788, foldername, parentID);
 }
@@ -413,6 +421,10 @@ export function RenameFile(msgID: number, newName: string): $CancellablePromise<
 
 export function RenameFolder(folderID: string, newName: string): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(751076414, folderID, newName);
+}
+
+export function ResetPhotoBackupScan(sourceID: string): $CancellablePromise<void> {
+    return $Call.ByID(2079426614, sourceID);
 }
 
 export function ResolvePhotoBackupResource(token: string, path: string, errorMessage: string): $CancellablePromise<void> {

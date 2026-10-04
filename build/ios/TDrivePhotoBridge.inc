@@ -24,14 +24,6 @@ static NSUInteger TDriveBoundedPageSize(id value) {
     return (NSUInteger)MAX(1, MIN((NSInteger)TDrivePhotoMaximumPageSize, requested));
 }
 
-static NSUInteger TDriveCursorOffset(id value) {
-    if (![value isKindOfClass:[NSString class]] || [value length] == 0) return 0;
-    NSScanner *scanner = [NSScanner scannerWithString:value];
-    unsigned long long offset = 0;
-    if (![scanner scanUnsignedLongLong:&offset] || !scanner.isAtEnd || offset > NSUIntegerMax) return 0;
-    return (NSUInteger)offset;
-}
-
 static NSNumber *TDriveMillis(NSDate *date) {
     return date ? @((long long)(date.timeIntervalSince1970 * 1000.0)) : @0;
 }
@@ -47,7 +39,6 @@ static NSNumber *TDriveMillis(NSDate *date) {
 static NSString *const TDriveFolderRootPrefix = @"files:";
 static NSString *const TDriveFolderSourcePrefix = @"tree:files:";
 static NSString *const TDriveFolderBookmarksKey = @"TDriveBackupFolderBookmarks";
-static NSUInteger const TDriveFolderMaxEntries = 50000;
 
 static NSString *TDriveNormalizedFolderRoot(NSString *path) {
     NSMutableArray<NSString *> *components = [NSMutableArray array];
@@ -81,6 +72,86 @@ static NSString *TDriveFolderMediaKind(NSString *name) {
     return nil;
 }
 
+// A cursor names a live directory walk. Keep the security scope open for its
+// lifetime, but retain only one item beyond the page being returned. A lost
+// cursor starts a fresh walk; the ledger deduplicates previously seen files.
+@interface TDriveFolderScan : NSObject
+@property (nonatomic, strong) NSURL *folder;
+@property (nonatomic, strong) NSDirectoryEnumerator<NSURL *> *enumerator;
+@property (nonatomic, copy) NSString *token;
+@property (nonatomic, assign) NSUInteger pageNumber;
+@property (nonatomic, copy) NSString *expectedCursor;
+@property (nonatomic, strong) NSDictionary *pendingAsset;
+@property (nonatomic, strong) NSError *walkError;
+- (instancetype)initWithFolder:(NSURL *)folder;
+- (NSDictionary *)nextAsset;
+- (void)close;
+@end
+
+@implementation TDriveFolderScan
+
+- (instancetype)initWithFolder:(NSURL *)folder {
+    self = [super init];
+    if (self) {
+        _folder = folder;
+        _token = NSUUID.UUID.UUIDString;
+        NSArray<NSURLResourceKey> *keys = @[NSURLIsDirectoryKey, NSURLFileSizeKey, NSURLContentModificationDateKey, NSURLCreationDateKey];
+        __weak TDriveFolderScan *weakSelf = self;
+        _enumerator = [[NSFileManager defaultManager] enumeratorAtURL:folder includingPropertiesForKeys:keys options:NSDirectoryEnumerationSkipsHiddenFiles | NSDirectoryEnumerationSkipsPackageDescendants errorHandler:^BOOL(NSURL *url, NSError *error) {
+            (void)url;
+            weakSelf.walkError = error;
+            return NO;
+        }];
+        if (_enumerator == nil) {
+            _walkError = [NSError errorWithDomain:NSCocoaErrorDomain code:NSFileReadUnknownError userInfo:@{
+                NSLocalizedDescriptionKey: @"The folder could not be opened for scanning"
+            }];
+        }
+    }
+    return self;
+}
+
+- (NSDictionary *)nextAsset {
+    NSString *base = self.folder.path;
+    NSURL *url = nil;
+    while ((url = [self.enumerator nextObject]) != nil) {
+        @autoreleasepool {
+            NSNumber *isDirectory = nil;
+            [url getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:nil];
+            if (isDirectory.boolValue) continue;
+            NSString *name = url.lastPathComponent ?: @"";
+            NSString *kind = TDriveFolderMediaKind(name);
+            if (kind == nil) continue;
+            NSNumber *size = nil;
+            NSDate *modified = nil, *created = nil;
+            [url getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
+            [url getResourceValue:&modified forKey:NSURLContentModificationDateKey error:nil];
+            [url getResourceValue:&created forKey:NSURLCreationDateKey error:nil];
+            NSString *path = url.path;
+            NSString *relative = [path hasPrefix:base] ? [path substringFromIndex:base.length] : name;
+            while ([relative hasPrefix:@"/"]) relative = [relative substringFromIndex:1];
+            NSString *version = [NSString stringWithFormat:@"%.0f:%llu", modified.timeIntervalSince1970, size.unsignedLongLongValue];
+            return @{
+                @"relative": relative, @"name": name, @"kind": kind,
+                @"relDir": relative.stringByDeletingLastPathComponent ?: @"",
+                @"version": version, @"size": size ?: @0,
+                @"modified": TDriveMillis(modified),
+                @"created": TDriveMillis(created ?: modified),
+            };
+        }
+    }
+    return nil;
+}
+
+- (void)close {
+    self.enumerator = nil;
+    self.pendingAsset = nil;
+    if (self.folder != nil) [self.folder stopAccessingSecurityScopedResource];
+    self.folder = nil;
+}
+
+@end
+
 @interface TDrivePhotoBridge : NSObject <WKScriptMessageHandler, UIDocumentPickerDelegate>
 @property (nonatomic, weak) WKWebView *webView;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *materializations;
@@ -91,11 +162,7 @@ static NSString *TDriveFolderMediaKind(NSString *name) {
 // backup drains or the app returns.
 @property (nonatomic, assign) BOOL backgroundBackupWanted;
 @property (nonatomic, assign) UIBackgroundTaskIdentifier backgroundBackupTask;
-// A picked folder is walked once per scan and the listing held here, for the
-// same reason a library scan holds its fetch result: page N+1 has to see what
-// page N did, or a file written mid-scan shifts every index after it.
-@property (nonatomic, strong) NSMutableDictionary<NSString *, NSArray<NSDictionary *> *> *folderSnapshots;
-@property (nonatomic, strong) NSMutableDictionary<NSString *, NSString *> *folderTokens;
+@property (nonatomic, strong) NSMutableDictionary<NSString *, TDriveFolderScan *> *folderScans;
 // The view controller the document picker is presented from, and the one
 // request waiting on it. Only one picker can be open at a time.
 @property (nonatomic, weak) UIViewController *presenter;
@@ -110,8 +177,7 @@ static NSString *TDriveFolderMediaKind(NSString *name) {
     if (self) {
         _materializations = [NSMutableDictionary dictionary];
         _stagedTokens = [NSMutableSet set];
-        _folderSnapshots = [NSMutableDictionary dictionary];
-        _folderTokens = [NSMutableDictionary dictionary];
+        _folderScans = [NSMutableDictionary dictionary];
         _backgroundBackupTask = UIBackgroundTaskInvalid;
     }
     return self;
@@ -127,6 +193,7 @@ static NSString *TDriveFolderMediaKind(NSString *name) {
 }
 
 - (void)dealloc {
+    for (TDriveFolderScan *scan in self.folderScans.allValues) [scan close];
     [self endBackgroundBackupTask];
     [[NSNotificationCenter defaultCenter] removeObserver:self];
 }
@@ -148,6 +215,8 @@ static NSString *TDriveFolderMediaKind(NSString *name) {
 
 - (void)applicationDidEnterBackground:(NSNotification *)notification {
     (void)notification;
+    for (TDriveFolderScan *scan in self.folderScans.allValues) [scan close];
+    [self.folderScans removeAllObjects];
     [self beginBackgroundBackupTaskIfNeeded];
 }
 
@@ -318,85 +387,29 @@ static NSString *TDriveFolderMediaKind(NSString *name) {
     if (requestID.length > 0) [self reply:requestID result:@{} error:nil];
 }
 
-/** Every photo and video under a picked folder, deepest paths included. */
-- (NSArray<NSDictionary *> *)walkFolder:(NSURL *)folder root:(NSURL *)root {
-    NSMutableArray<NSDictionary *> *items = [NSMutableArray array];
-    NSArray<NSURLResourceKey> *keys = @[NSURLIsDirectoryKey, NSURLNameKey, NSURLFileSizeKey, NSURLContentModificationDateKey, NSURLCreationDateKey];
-    NSDirectoryEnumerator<NSURL *> *walk = [[NSFileManager defaultManager] enumeratorAtURL:folder includingPropertiesForKeys:keys options:NSDirectoryEnumerationSkipsHiddenFiles | NSDirectoryEnumerationSkipsPackageDescendants errorHandler:nil];
-    NSString *base = root.path;
-    for (NSURL *url in walk) {
-        if (items.count >= TDriveFolderMaxEntries) break;
-        NSNumber *isDirectory = nil;
-        [url getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:nil];
-        if (isDirectory.boolValue) continue;
-        NSString *name = url.lastPathComponent ?: @"";
-        NSString *kind = TDriveFolderMediaKind(name);
-        if (kind == nil) continue;
-        NSNumber *size = nil, *ignored = nil;
-        NSDate *modified = nil, *created = nil;
-        [url getResourceValue:&size forKey:NSURLFileSizeKey error:nil];
-        [url getResourceValue:&ignored forKey:NSURLIsDirectoryKey error:nil];
-        [url getResourceValue:&modified forKey:NSURLContentModificationDateKey error:nil];
-        [url getResourceValue:&created forKey:NSURLCreationDateKey error:nil];
-        NSString *path = url.path;
-        NSString *relative = [path hasPrefix:base] ? [path substringFromIndex:base.length] : name;
-        while ([relative hasPrefix:@"/"]) relative = [relative substringFromIndex:1];
-        NSString *relativeDirectory = relative.stringByDeletingLastPathComponent ?: @"";
-        // The version moves when the file does: an edit changes one of these
-        // two, and the ledger sends it again rather than believing the copy it
-        // already has.
-        NSString *version = [NSString stringWithFormat:@"%.0f:%llu", modified.timeIntervalSince1970, size.unsignedLongLongValue];
-        [items addObject:@{
-            @"relative": relative,
-            @"path": path,
-            @"name": name,
-            @"kind": kind,
-            @"relDir": relativeDirectory,
-            @"version": version,
-            @"size": size ?: @0,
-            @"modified": TDriveMillis(modified),
-            @"created": TDriveMillis(created ?: modified),
-        }];
-    }
-    return items;
-}
-
-// One page of a folder scan, against the listing the token names. A folder
-// needs no photo permission: the user handed this one over themselves.
+// One page of a folder scan. The cursor is valid only while its iterator is
+// live; completion and backgrounding release the security scope.
 - (void)listFolderAssets:(NSString *)requestID root:(NSString *)root arguments:(NSDictionary *)arguments {
     NSUInteger pageSize = TDriveBoundedPageSize(arguments[@"pageSize"]);
     NSString *cursor = [arguments[@"cursor"] isKindOfClass:[NSString class]] ? arguments[@"cursor"] : @"";
-    NSArray<NSDictionary *> *listing = nil;
-    NSUInteger offset = 0;
-    NSString *token = nil;
-    @synchronized (self.folderSnapshots) {
-        if (cursor.length > 0) {
-            NSString *live = self.folderTokens[root];
-            NSArray<NSString *> *parts = [cursor componentsSeparatedByString:@":"];
-            listing = live.length > 0 ? self.folderSnapshots[root] : nil;
-            if (parts.count != 2 || live.length == 0 || ![parts[0] isEqualToString:live] || listing == nil) {
-                [self reply:requestID result:nil error:TDrivePhotoError(@"cursorExpired", @"The folder changed; scan again from the start")];
-                return;
-            }
-            token = live;
-            offset = TDriveCursorOffset(parts[1]);
-        }
-    }
-    if (listing == nil) {
+    TDriveFolderScan *scan = self.folderScans[root];
+    if (cursor.length == 0) {
+        [scan close];
+        [self.folderScans removeObjectForKey:root];
         NSURL *folder = [self openFolderForRoot:root];
         if (folder == nil) { [self reply:requestID result:nil error:TDrivePhotoError(@"folderUnavailable", @"That folder is no longer available. Add it again to keep backing it up.")]; return; }
-        listing = [self walkFolder:folder root:folder];
-        [folder stopAccessingSecurityScopedResource];
-        token = [NSUUID.UUID.UUIDString substringToIndex:8];
-        @synchronized (self.folderSnapshots) {
-            self.folderSnapshots[root] = listing;
-            self.folderTokens[root] = token;
-        }
+        scan = [[TDriveFolderScan alloc] initWithFolder:folder];
+        self.folderScans[root] = scan;
+    } else if (scan == nil || ![cursor isEqualToString:scan.expectedCursor]) {
+        [self reply:requestID result:nil error:TDrivePhotoError(@"cursorExpired", @"The folder scan ended; scan again from the start")];
+        return;
     }
-    NSUInteger end = MIN(listing.count, offset + pageSize);
-    NSMutableArray *assets = [NSMutableArray arrayWithCapacity:end - MIN(offset, listing.count)];
-    for (NSUInteger i = MIN(offset, listing.count); i < end; i++) {
-        NSDictionary *item = listing[i];
+    scan.expectedCursor = nil;
+    NSMutableArray *assets = [NSMutableArray arrayWithCapacity:pageSize];
+    while (assets.count < pageSize) {
+        NSDictionary *item = scan.pendingAsset ?: [scan nextAsset];
+        scan.pendingAsset = nil;
+        if (item == nil) break;
         // The id carries the root, because a staged file is asked for by id
         // alone and the folder it came from is the only way to open it.
         NSString *assetID = [root stringByAppendingString:item[@"relative"]];
@@ -409,9 +422,26 @@ static NSString *TDriveFolderMediaKind(NSString *name) {
             @"size": item[@"size"],
         }];
     }
-    BOOL hasMore = end < listing.count;
-    if (!hasMore) @synchronized (self.folderSnapshots) { [self.folderTokens removeObjectForKey:root]; [self.folderSnapshots removeObjectForKey:root]; }
-    [self reply:requestID result:@{ @"assets": assets, @"nextCursor": hasMore ? [NSString stringWithFormat:@"%@:%lu", token, (unsigned long)end] : (id)[NSNull null] } error:nil];
+    if (assets.count == pageSize) scan.pendingAsset = [scan nextAsset];
+    if (scan.walkError != nil) {
+        NSString *message = scan.walkError.localizedDescription ?: @"The folder could not be read";
+        [scan close];
+        [self.folderScans removeObjectForKey:root];
+        [self reply:requestID result:nil error:TDrivePhotoError(@"folderReadFailed", message)];
+        return;
+    }
+    BOOL hasMore = scan.pendingAsset != nil;
+    NSString *nextCursor = nil;
+    if (hasMore) {
+        scan.pageNumber++;
+        nextCursor = [NSString stringWithFormat:@"%@:%lu", scan.token, (unsigned long)scan.pageNumber];
+        scan.expectedCursor = nextCursor;
+    }
+    if (!hasMore) {
+        [scan close];
+        [self.folderScans removeObjectForKey:root];
+    }
+    [self reply:requestID result:@{ @"assets": assets, @"nextCursor": nextCursor ?: (id)[NSNull null] } error:nil];
 }
 
 /** The picked folder an asset id belongs to, and its path inside it. */
