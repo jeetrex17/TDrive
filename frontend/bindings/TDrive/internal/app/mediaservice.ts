@@ -90,6 +90,14 @@ export function NativeMediaCommand(token: string, command: string[] | null): $Ca
 }
 
 /**
+ * OpenChannelMedia publishes an account- and source-scoped capability. The
+ * lifecycle gate serializes its final publication with terminal logout.
+ */
+export function OpenChannelMedia(channelID: number, msgID: number, expectedAccountID: number, expectedGeneration: string): $CancellablePromise<media$0.OpenResult> {
+    return $Call.ByID(1588526659, channelID, msgID, expectedAccountID, expectedGeneration);
+}
+
+/**
  * OpenMedia creates a short-lived, tokenized loopback URL for a plain media
  * file in the active drive. The frontend player must call CloseMedia when the
  * preview closes so the underlying range reader and cache are released.
