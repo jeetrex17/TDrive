@@ -135,9 +135,32 @@ describe('folder download queue', () => {
         mod.enqueueDownload(Number.MAX_SAFE_INTEGER + 1, 'unsafe.txt', 1);
         state.activeChannel = { id: 0, title: 'Invalid', kind: 'personal' };
         mod.enqueueDownload(3, 'no-drive.txt', 1);
+        mod.enqueueFolderDownload('d:folder', 'No source folder', 1);
+        mod.enqueueFolderDownload('d:folder', 'Invalid source folder', 1, Number.MAX_SAFE_INTEGER + 1);
 
         expect(bindings.DownloadFile).not.toHaveBeenCalled();
+        expect(bindings.DownloadFolder).not.toHaveBeenCalled();
         expect(state.downloadQueue).toEqual([]);
+    });
+
+    it('updates a duplicate queued download in place without publishing another queued row', async () => {
+        const active = deferred<DownloadBindingResult>();
+        bindings.DownloadFile.mockReturnValueOnce(active.promise);
+        const { mod, state } = await loadModule();
+
+        mod.enqueueDownload(1, 'active.txt', 1);
+        await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledWith(101, 1, 1, expect.stringMatching(/^file:101:1@/)));
+        mod.enqueueDownload(2, 'original.txt', 10);
+        mod.enqueueDownload(2, 'renamed.txt', 20);
+
+        expect(transferEvents.queued).toHaveBeenCalledTimes(2);
+        expect(state.downloadQueue).toEqual([
+            expect.objectContaining({ key: 'file:101:1', name: 'active.txt' }),
+            expect.objectContaining({ key: 'file:101:2', name: 'original.txt', size: 20 }),
+        ]);
+
+        active.resolve(downloadSuccess('/tmp/active.txt'));
+        await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledWith(101, 2, 2, expect.stringMatching(/^file:101:2@/)));
     });
 
     it('ignores late progress from a completed request after starting the next file', async () => {
@@ -346,6 +369,28 @@ describe('folder download queue', () => {
             title: "Couldn't download Project",
             body: 'There is not enough free disk space to finish this action.',
         }));
+    });
+
+    it('marks a thrown file download as failed and keeps the queue moving', async () => {
+        bindings.DownloadFile
+            .mockRejectedValueOnce(new Error('network went away'))
+            .mockResolvedValueOnce(downloadSuccess('/tmp/next.txt'));
+        const { mod, state } = await loadModule();
+
+        mod.enqueueDownload(42, 'broken.txt', 10);
+        mod.enqueueDownload(43, 'next.txt', 11);
+
+        await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledTimes(2));
+        expect(transferEvents.done).toHaveBeenCalledWith({
+            id: 'file:101:42',
+            direction: 'down',
+            status: 'failed',
+        });
+        expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({
+            level: 'error',
+            title: "Couldn't download broken.txt",
+        }));
+        await vi.waitFor(() => expect(state.downloadQueue).toEqual([]));
     });
 
     it('shows an already-exists folder as a warning, not an error', async () => {

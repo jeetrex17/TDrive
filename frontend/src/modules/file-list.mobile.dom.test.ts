@@ -24,6 +24,8 @@ const actions = vi.hoisted(() => ({
     enqueueDownload: vi.fn(),
     chooseFiles: vi.fn(),
     chooseFolder: vi.fn(),
+    move: vi.fn(),
+    preview: vi.fn(),
 }));
 
 vi.mock('../api', () => api);
@@ -42,6 +44,8 @@ vi.mock('./drag-drop', () => ({
 vi.mock('./context-menu', () => ({ showRowContextMenu: vi.fn() }));
 vi.mock('./modals/rename', () => ({ openRenameModal: vi.fn() }));
 vi.mock('./modals/delete', () => ({ openDeleteModal: vi.fn() }));
+vi.mock('./modals/move', () => ({ openMoveModal: actions.move }));
+vi.mock('./modals/preview', () => ({ activatePreviewModal: vi.fn(), openPreviewList: actions.preview }));
 vi.mock('./modals/folder', () => ({ openNewFolderModal: vi.fn() }));
 vi.mock('./gallery', () => ({ renderGallery: vi.fn(), setPhotosMode: vi.fn() }));
 vi.mock('./uploaders', () => ({ ensureUserNames: vi.fn(), uploaderChipLabel: () => null }));
@@ -53,6 +57,7 @@ import { contextMenuState } from '../ui/menus/context-menu-store';
 import { showRowContextMenu } from './context-menu';
 import { activateFileList, buildFileRow, buildFolderRow, fileThumbnailIdentity, refreshFiles, renderFileListRows } from './file-list';
 import { state } from '../state';
+import { breadcrumbPath } from '../ui/chrome/breadcrumb-store';
 
 let list: HTMLElement;
 let app: Record<string, unknown> | null = null;
@@ -82,6 +87,10 @@ beforeEach(() => {
     vi.clearAllMocks();
     state.activeChannel = { id: 1, title: 'Drive', kind: 'personal' };
     state.selectedItems.clear();
+    state.searchQuery = '';
+    state.virtualView = null;
+    state.currentFolderId = '';
+    breadcrumbPath.set([]);
     list = document.createElement('div');
     list.id = 'file-list';
     document.body.append(list);
@@ -255,4 +264,75 @@ describe('phone file list', () => {
 
         expect(actions.openFile).toHaveBeenCalledWith({ id: 99, name: 'result.pdf', size: 10, encrypted: false });
     });
+});
+
+
+it('shows folder details and its breadcrumb location without inventing an empty size', () => {
+    breadcrumbPath.set([{ id: 'work', name: 'Work' }]);
+    renderFileListRows(list, [buildFolderRow({ id: 'design', name: 'Design' }, 'work', { modifiedTime: 100 })]);
+    flushSync();
+    click(row('Design').querySelector('button.row-more')!);
+    const options = vi.mocked(showRowContextMenu).mock.calls[0][3];
+    expect(options?.header?.details).toEqual([
+        { label: 'Type', value: 'Folder', icon: 'type' },
+        { label: 'Updated', value: expect.any(String), icon: 'added' },
+        { label: 'Location', value: '/Work', icon: 'location' },
+    ]);
+    expect(state.selectedItems.size).toBe(0);
+});
+
+it('describes an undated extensionless file without made-up size or dates', () => {
+    renderFileListRows(list, [buildFileRow({ id: 5, name: 'LICENSE', size: 0 }, '')]);
+    flushSync();
+    click(row('LICENSE').querySelector('button.row-more')!);
+    expect(vi.mocked(showRowContextMenu).mock.calls[0][3]?.header?.details).toEqual([
+        { label: 'Type', value: 'FILE file', icon: 'type' },
+        { label: 'Location', value: 'Drive', icon: 'location' },
+    ]);
+});
+
+it('opens a search result overflow without activating the result', () => {
+    state.searchQuery = 'plan';
+    click(row('plan.pdf').querySelector('button.row-more')!);
+    expect(showRowContextMenu).toHaveBeenCalledTimes(1);
+    expect(actions.openFile).not.toHaveBeenCalled();
+});
+
+it('moves a folder from its swipe affordance without opening it', () => {
+    state.currentFolderId = 'work';
+    click(row('Design').querySelector('button[data-swipe-action]')!);
+    expect(actions.move).toHaveBeenCalledWith({ type: 'folder', id: 'design', name: 'Design', parentId: 'work' });
+    expect(actions.navigateToFolder).not.toHaveBeenCalled();
+});
+
+it.each(['fs', 'tg'] as const)('keeps a %s root search result rooted when moved from another folder', (source) => {
+    state.currentFolderId = 'work';
+    state.searchQuery = 'root';
+    renderFileListRows(list, [buildFileRow({ id: 5, name: 'root.bin', source, size: 50 }, '')]);
+    flushSync();
+    click(row('root.bin').querySelector('button[data-swipe-action]')!);
+    expect(actions.move).toHaveBeenCalledWith({ type: 'file', id: 5, name: 'root.bin', size: 50, parentId: '', source });
+    expect(actions.enqueueDownload).not.toHaveBeenCalled();
+});
+
+it('previews an image alongside only the other images in its folder', async () => {
+    renderFileListRows(list, [
+        buildFileRow({ id: 1, name: 'first.jpg', date: 200 }, ''),
+        buildFileRow({ id: 2, name: 'clip.mp4', date: 150 }, ''),
+        buildFileRow({ id: 3, name: 'second.png', date: 100 }, ''),
+    ]);
+    flushSync();
+    click(row('second.png'));
+    await vi.waitFor(() => expect(actions.preview).toHaveBeenCalledTimes(1));
+    const [images, index] = actions.preview.mock.calls[0];
+    expect(images.map((image: { id: number }) => image.id)).toEqual([1, 3]);
+    expect(index).toBe(1);
+    expect(actions.openFile).not.toHaveBeenCalled();
+});
+
+it('does not start selection from a long press in the trash', () => {
+    state.virtualView = 'trash';
+    press(row('plan.pdf').querySelector('.row-text')!);
+    expect(state.selectedItems.size).toBe(0);
+    expect(showRowContextMenu).not.toHaveBeenCalled();
 });

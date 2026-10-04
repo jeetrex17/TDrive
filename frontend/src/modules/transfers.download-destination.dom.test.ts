@@ -104,6 +104,15 @@ describe('android', () => {
         await vi.waitFor(() => expect(lastNote()).toBe('Saved to Download/plan.pdf'));
     });
 
+    it('names the public Downloads folder when Android returns no display path', async () => {
+        mocks.saveToDownloads.mockResolvedValue('');
+        const mod = await loadModule();
+        mod.enqueueDownload(42, 'plan.pdf', 10);
+
+        await vi.waitFor(() => expect(mocks.saveToDownloads).toHaveBeenCalledWith('/sandbox/Downloads/plan.pdf'));
+        expect(lastNote()).toBe('Saved to your Downloads folder');
+    });
+
     it('moves a folder too, which is the case that had no way out at all', async () => {
         mocks.saveToDownloads.mockResolvedValue('Download/Holiday');
         const mod = await loadModule();

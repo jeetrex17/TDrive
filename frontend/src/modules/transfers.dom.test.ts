@@ -189,6 +189,123 @@ describe('aggregate import completion', () => {
             body: expect.stringContaining('1 failed'),
         }));
     });
+
+    it('updates the aggregate row from import progress phases and payload counts', () => {
+        handlers.get('import_progress')?.({ label: 'ignored before start' });
+        expect(mocks.updateTransferName).not.toHaveBeenCalledWith(expect.objectContaining({ name: 'ignored before start' }));
+
+        handlers.get('import_start')?.();
+        handlers.get('import_progress')?.({ label: 'Extracting backup.zip' });
+        handlers.get('import_uploading')?.({ files: 1 });
+        handlers.get('import_upload_progress')?.({
+            done: 1,
+            failed: 0,
+            bytes: 400,
+            totalBytes: 400,
+            progress: 100,
+            active: ['backup.zip'],
+            activeCount: 1,
+        });
+
+        expect(mocks.updateTransferName).toHaveBeenCalledWith({
+            id: 'import',
+            direction: 'up',
+            name: 'Extracting backup.zip',
+        });
+        expect(mocks.updateTransferName).toHaveBeenCalledWith({
+            id: 'import',
+            direction: 'up',
+            name: 'Importing 1 file',
+        });
+        expect(mocks.updateTransferProgress).toHaveBeenLastCalledWith(expect.objectContaining({
+            id: 'import',
+            direction: 'up',
+            progress: 100,
+            itemsDone: 1,
+            itemsTotal: 1,
+        }));
+    });
+
+    it('summarizes skipped and reported import errors when no live row exists', () => {
+        handlers.get('import_complete')?.({
+            status: 'done',
+            uploaded: 2,
+            failed: 0,
+            oversize: 1,
+            errors: ['Photos/cache.tmp was ignored'],
+        });
+
+        expect(mocks.pushTransferStart).toHaveBeenCalledWith({
+            id: 'import',
+            direction: 'up',
+            name: 'Import completed',
+            total: 2,
+        });
+        expect(mocks.markTransferDone).toHaveBeenCalledWith({
+            id: 'import',
+            direction: 'up',
+            status: 'done',
+        });
+        expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({
+            level: 'info',
+            title: 'Imported 2 files',
+            body: expect.stringContaining('1 skipped (too large)'),
+        }));
+        expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({
+            body: expect.stringContaining('Photos/cache.tmp was ignored'),
+        }));
+    });
+});
+
+describe('upload runtime events', () => {
+    it('keeps stray per-file upload events out of the aggregate import row', () => {
+        handlers.get('import_start')?.();
+
+        handlers.get('upload_start')?.(9, 'stray.mov', 500, 'root');
+        handlers.get('upload_progress')?.(9, 60);
+        handlers.get('upload_complete')?.(9, 'stray.mov');
+
+        expect(mocks.pushTransferStart).toHaveBeenCalledWith({
+            id: 'import',
+            direction: 'up',
+            name: 'Preparing import…',
+            total: 0,
+        });
+        expect(mocks.pushTransferStart).not.toHaveBeenCalledWith(expect.objectContaining({ id: 9 }));
+        expect(mocks.markTransferDone).not.toHaveBeenCalledWith(expect.objectContaining({ id: 9 }));
+        expect(state.uploadTransfers.size).toBe(0);
+    });
+
+    it('creates a terminal row for an upload completion whose start event was missed', () => {
+        handlers.get('upload_complete')?.(7, 'receipt-only.txt');
+
+        expect(state.uploadTransfers.get(7)).toMatchObject({
+            id: 7,
+            name: 'receipt-only.txt',
+            progress: 100,
+            state: 'done',
+        });
+        expect(mocks.markTransferDone).toHaveBeenCalledWith({
+            id: 7,
+            direction: 'up',
+            status: 'done',
+        });
+    });
+
+    it('treats an individually canceled upload error as canceled and not noisy', () => {
+        mocks.wasUploadCanceled.mockReturnValueOnce(true);
+
+        handlers.get('upload_error')?.(8, 'stopped.txt', 'context canceled');
+
+        expect(mocks.markTransferDone).toHaveBeenCalledWith({
+            id: 8,
+            direction: 'up',
+            status: 'canceled',
+        });
+        expect(mocks.notify).not.toHaveBeenCalledWith(expect.objectContaining({
+            title: expect.stringContaining('Upload failed'),
+        }));
+    });
 });
 
 describe('native file drop', () => {
@@ -209,6 +326,32 @@ describe('native file drop', () => {
         handlers.get('files_dropped')?.({ x: 5, y: 5, paths: ['/tmp/ignored.txt'] });
         await new Promise((resolve) => setTimeout(resolve, 0));
         expect(app.PlanImport).toHaveBeenCalledTimes(1);
+
+        Reflect.deleteProperty(document, 'elementFromPoint');
+        state.currentFolderId = '';
+    });
+
+    it('ignores native drops while internal drag, virtual views or malformed payloads are active', async () => {
+        document.body.innerHTML = '<div id="file-list"></div>';
+        Object.defineProperty(document, 'elementFromPoint', {
+            configurable: true,
+            value: () => document.getElementById('file-list'),
+        });
+        state.currentFolderId = 'folder-7';
+
+        state.dragState = { type: 'file', id: 'f:1' } as never;
+        handlers.get('files_dropped')?.({ x: 40, y: 80, paths: ['/tmp/internal.txt'] });
+        state.dragState = null;
+
+        state.virtualView = 'photos';
+        handlers.get('files_dropped')?.({ x: 40, y: 80, paths: ['/tmp/photo.jpg'] });
+        state.virtualView = null;
+
+        handlers.get('files_dropped')?.({ x: Number.NaN, y: 80, paths: ['/tmp/bad.txt'] });
+        handlers.get('files_dropped')?.({ x: 40, y: 80, paths: [42] });
+        await new Promise((resolve) => setTimeout(resolve, 0));
+
+        expect(app.PlanImport).not.toHaveBeenCalled();
 
         Reflect.deleteProperty(document, 'elementFromPoint');
         state.currentFolderId = '';
@@ -297,6 +440,82 @@ describe('the picker window', () => {
         expect(planStarted).toBe(true);
         expect(encryptionSettled).toBe(true);
         state.activeChannel = { id: 1, title: 'Test drive', kind: 'shared' };
+    });
+
+    it('stops when the backend cannot plan the selected paths', async () => {
+        app.SelectFiles.mockResolvedValue(['/tmp/report.pdf']);
+        app.PlanImport.mockRejectedValue(new Error('permission denied'));
+
+        await uploadWithParentID('folder-1');
+
+        expect(app.UploadToDriveFS).not.toHaveBeenCalled();
+        expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({
+            level: 'error',
+            title: 'Could not read the selection',
+        }));
+    });
+
+    it('rejects an oversized selection before starting upload work', async () => {
+        app.SelectFiles.mockResolvedValue(['/tmp/huge']);
+        app.PlanImport.mockResolvedValue({
+            files: 12_000,
+            folders: 1,
+            archives: 0,
+            limitExceeded: true,
+            maxItems: 5000,
+        });
+
+        await uploadWithParentID('folder-1');
+
+        expect(app.ImportPaths).not.toHaveBeenCalled();
+        expect(app.UploadToDriveFS).not.toHaveBeenCalled();
+        expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({
+            level: 'info',
+            title: 'Selection is too large',
+            body: expect.stringContaining('5,000'),
+        }));
+    });
+
+    it('marks a canceled flat upload without raising a failure toast', async () => {
+        app.SelectFiles.mockResolvedValue(['/tmp/cancel-me.pdf']);
+        app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0, limitExceeded: false });
+        app.UploadToDriveFS.mockResolvedValue({
+            result: { ok: false, error: { code: 'canceled', message: 'user canceled' } },
+            files: [],
+        });
+
+        await uploadWithParentID('folder-1');
+
+        expect(mocks.markTransferDone).toHaveBeenCalledWith({
+            id: 0,
+            direction: 'up',
+            status: 'canceled',
+        });
+        expect(mocks.notify).not.toHaveBeenCalledWith(expect.objectContaining({
+            level: 'error',
+            title: 'Upload failed',
+        }));
+    });
+
+    it('offers a failed flat upload retry once for the same destination', async () => {
+        app.SelectFiles.mockResolvedValue(['/tmp/retry.pdf']);
+        app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0, limitExceeded: false });
+        app.UploadToDriveFS
+            .mockRejectedValueOnce(new Error('network down'))
+            .mockResolvedValue({ result: { ok: true }, files: [{ name: 'retry.pdf' }] });
+
+        await uploadWithParentID('folder-1');
+
+        const failure = mocks.notify.mock.calls
+            .map(([notice]) => notice as { level?: string; action?: { run: () => void } })
+            .find((notice) => notice.level === 'error' && notice.action);
+        expect(failure?.action).toBeDefined();
+        failure?.action?.run();
+        failure?.action?.run();
+
+        await vi.waitFor(() => expect(app.UploadToDriveFS).toHaveBeenCalledTimes(2));
+        expect(app.UploadToDriveFS).toHaveBeenLastCalledWith(['/tmp/retry.pdf'], ['folder-1'], false);
+        expect(mocks.dismissNotification).toHaveBeenCalledTimes(1);
     });
 });
 
