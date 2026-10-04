@@ -26,7 +26,7 @@ export function confirmUploadOptions(choice: { encrypt: boolean }): void {
 
 
 
-export function openUploadOptionsModal({ count }: { count: any }): Promise<UploadChoice> {
+export function openUploadOptionsModal({ count }: { count: number }): Promise<UploadChoice> {
     return new Promise<UploadChoice>((resolve) => {
         // A second open while one is pending keeps the visible modal and lets
         // both callers observe the same eventual choice.

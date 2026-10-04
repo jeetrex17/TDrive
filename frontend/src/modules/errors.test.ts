@@ -74,7 +74,8 @@ describe("AppError", () => {
             code: "deadline_exceeded",
             message: "backend wording callers must not parse",
         };
-        const gatewayError = new Error("Backend invocation failed", { cause: operationError });
+        const gatewayError = new Error("Backend invocation failed");
+        Object.assign(gatewayError, { cause: operationError });
 
         const error = toAppError(gatewayError, { source: "backend" });
 

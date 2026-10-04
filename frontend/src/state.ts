@@ -5,13 +5,16 @@ import type { ImportProgress } from './modules/import-progress';
 import type { DriveChannel, DriveKind, PendingJoin, RootFile } from './types';
 import type { FileCommandItem, FileDragState } from './ui/file-list/types';
 
-// Centralized state for the TDrive frontend.
-//
-// Loosely-shaped, frequently-reshaped fields (drag payloads, modal targets,
-// transient caches) are typed `any` on purpose — they are read/written from
-// many still-untyped modules, and over-specifying them here would just produce
-// churn. The value of this type is catching field-name typos and locking the
-// primitive/collection shapes.
+// Centralized state shared by the typed controllers and rendered surfaces.
+
+export interface UploadTransfer {
+    id: number;
+    name: string;
+    size: number;
+    parentId: string;
+    progress: number;
+    state: 'queued' | 'uploading' | 'done' | 'failed';
+}
 
 export interface DrivePathEntry {
     id: string;
@@ -82,7 +85,7 @@ export interface State {
     transferSheetEl: HTMLElement | null;
     transferUploadListEl: HTMLElement | null;
     transferClearEl: HTMLElement | null;
-    uploadTransfers: Map<string | number, any>;
+    uploadTransfers: Map<string | number, UploadTransfer>;
     uploadBatch: { total: number; done: number; failed: number } | null;
     // Constant-size aggregate progress for a folder/archive import. The backend
     // coalesces per-file activity before it crosses the Wails bridge.

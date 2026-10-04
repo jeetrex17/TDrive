@@ -17,12 +17,12 @@ describe("formatRelative", () => {
 
 describe("uploaderChipLabel", () => {
     beforeEach(() => {
-        state.activeChannel = { kind: "shared" };
+        state.activeChannel = { id: 1, title: "Shared", kind: "shared" };
         state.userNames = new Map();
     });
 
     it("returns null outside shared drives", () => {
-        state.activeChannel = { kind: "personal" };
+        state.activeChannel = { id: 1, title: "Personal", kind: "personal" };
         expect(uploaderChipLabel({ uploaderID: 5, uploadTime: 0 })).toBeNull();
     });
     it("returns null when uploader id is missing", () => {
