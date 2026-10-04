@@ -78,8 +78,11 @@ callers must retain the distinction between send failure and projection failure.
 ## Coverage, ordering and authority
 
 [`sync.Engine`](../../backend/sync/sync.go) serializes initial, incremental and
-authoritative work with a per-channel lock. These channel fields have distinct
-meanings:
+authoritative work with a per-channel gate. Queued callers can cancel without
+waiting for another scan's network calls or FLOOD_WAIT. Cancellation affects
+only the caller's admission; the active scan retains its own context and gate
+until it finishes. Deletion reconciliation and hard-delete preparation use the
+same gate. These channel fields have distinct meanings:
 
 | Field | Meaning |
 | --- | --- |
