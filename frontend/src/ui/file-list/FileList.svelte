@@ -260,6 +260,33 @@
     {/if}
 {/snippet}
 
+<!-- Keep shared content inside each platform's existing semantic wrapper. -->
+{#snippet fileIcon(row: FileListFileRow, strokeWidth: number)}
+    {#if row.thumbnail}
+        <FileThumbnail ext={row.ext} identity={row.thumbnail} />
+    {:else}
+        {@const family = fileTypeFamily(row.ext)}
+        {@const TypeIcon = fileTypeIcon(family)}
+        <span class="file-type-icon" data-family={family} aria-hidden="true">
+            <TypeIcon size={20} {strokeWidth} aria-hidden="true" />
+        </span>
+    {/if}
+{/snippet}
+
+{#snippet inlineActions(row: InteractiveRow, size: number)}
+    {#each row.actions as action (action.kind)}
+        <button
+            class={`action-icon ${action.className}`}
+            type="button"
+            title={action.title}
+            aria-label={action.label}
+            onclick={(event) => onActionClick(event, row, action)}
+        >
+            {@render actionGlyph(action, size)}
+        </button>
+    {/each}
+{/snippet}
+
 {#if $fileListView.kind === 'state'}
     <FileState
         kind={$fileListView.stateKind}
@@ -329,15 +356,7 @@
                             <FolderIcon size={20} strokeWidth={1.75} aria-hidden="true" />
                         </span>
                     {:else}
-                        {#if row.thumbnail}
-                            <FileThumbnail ext={row.ext} identity={row.thumbnail} />
-                        {:else}
-                            {@const family = fileTypeFamily(row.ext)}
-                            {@const TypeIcon = fileTypeIcon(family)}
-                            <span class="file-type-icon" data-family={family} aria-hidden="true">
-                                <TypeIcon size={20} strokeWidth={1.75} aria-hidden="true" />
-                            </span>
-                        {/if}
+                        {@render fileIcon(row, 1.75)}
                     {/if}
                     <span class="row-text">
                         {@render phoneLabel(row.name, row.kind === 'file')}
@@ -374,17 +393,7 @@
                         <!-- Few, important, and with no menu behind them, so the
                              phone shows them the way the desktop does rather
                              than hiding them in a sheet built for a live item. -->
-                        {#each row.actions as action (action.kind)}
-                            <button
-                                class={`action-icon ${action.className}`}
-                                type="button"
-                                title={action.title}
-                                aria-label={action.label}
-                                onclick={(event) => onActionClick(event, row, action)}
-                            >
-                                {@render actionGlyph(action, 20)}
-                            </button>
-                        {/each}
+                        {@render inlineActions(row, 20)}
                     {:else}
                         <button
                             class="action-icon row-more"
@@ -466,18 +475,7 @@
                         </span>
                         <span class="row-label">{row.name}</span>
                     {:else}
-                        {#if row.thumbnail}
-                            <FileThumbnail ext={row.ext} identity={row.thumbnail} />
-                        {:else}
-                            {@const family = fileTypeFamily(row.ext)}
-                            {@const TypeIcon = fileTypeIcon(family)}
-                            <span class="file-type-icon" data-family={family} aria-hidden="true">
-                                <!-- Lighter than the app default: Lucide's stroke is fixed
-                                     against a 24px grid, so it reads heavier the smaller
-                                     the glyph is drawn. The folder chip matches. -->
-                                <TypeIcon size={20} strokeWidth={1.5} aria-hidden="true" />
-                            </span>
-                        {/if}
+                        {@render fileIcon(row, 1.5)}
                         {#if row.encrypted}
                             <span class="file-lock-badge" title="Encrypted" aria-label="Encrypted">
                                 <LockKeyholeIcon size={12} strokeWidth={2} aria-hidden="true" />
@@ -493,17 +491,7 @@
                 <div class="row-meta" role="gridcell" aria-colindex="2">{row.metaLabel}</div>
                 <div class={`row-meta ${row.kind === 'folder' ? 'folder-size' : ''}`} role="gridcell" aria-colindex="3">{row.sizeLabel}</div>
                 <div class="row-actions" role="gridcell" aria-colindex="4">
-                    {#each row.actions as action (action.kind)}
-                        <button
-                            class={`action-icon ${action.className}`}
-                            type="button"
-                            title={action.title}
-                            aria-label={action.label}
-                            onclick={(event) => onActionClick(event, row, action)}
-                        >
-                            {@render actionGlyph(action, 16)}
-                        </button>
-                    {/each}
+                    {@render inlineActions(row, 16)}
                 </div>
             </div>
         {/if}
