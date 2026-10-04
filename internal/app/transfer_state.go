@@ -2,8 +2,13 @@ package app
 
 import (
 	"context"
-	"fmt"
+	"errors"
 	"sync"
+)
+
+var (
+	errUploadBusy   = errors.New("another upload is already running")
+	errDownloadBusy = errors.New("another download is running; pause it before starting a new one")
 )
 
 type transferKind uint8
@@ -37,12 +42,21 @@ func (s *transferState) begin(ctx context.Context, kind transferKind) (context.C
 
 // Resume must not stop an unrelated batch selected by the user.
 func (s *transferState) resumeUpload(ctx context.Context) (context.Context, func(), error) {
+	return s.beginExclusive(ctx, uploadTransfer, errUploadBusy)
+}
+
+// A new or resumed download must not cancel another file or folder transfer.
+func (s *transferState) beginDownload(ctx context.Context) (context.Context, func(), error) {
+	return s.beginExclusive(ctx, downloadTransfer, errDownloadBusy)
+}
+
+func (s *transferState) beginExclusive(ctx context.Context, kind transferKind, busyErr error) (context.Context, func(), error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if s.active[uploadTransfer] != nil {
-		return nil, nil, fmt.Errorf("another upload is already running")
+	if s.active[kind] != nil {
+		return nil, nil, busyErr
 	}
-	ctx, finish := s.startLocked(ctx, uploadTransfer)
+	ctx, finish := s.startLocked(ctx, kind)
 	return ctx, finish, nil
 }
 

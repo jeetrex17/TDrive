@@ -10,6 +10,9 @@ import * as media$0 from "../../backend/media/models.js";
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
 import * as nativeplayer$0 from "../../backend/nativeplayer/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as file$0 from "../../backend/services/file/models.js";
 
 /**
  * AppVersionInfo describes the running build for the About/Updates panel.
@@ -42,6 +45,7 @@ export interface ChannelInfo {
 export interface DownloadResult {
     "result": OperationResult;
     "saved_path": string;
+    "job_id": string;
 }
 
 /**
@@ -350,6 +354,14 @@ export interface PreviewPayload {
 export interface PreviewResult {
     "result": OperationResult;
     "payload": PreviewPayload;
+}
+
+/**
+ * ResumableDownloadsResult lists jobs scoped to the requested drive.
+ */
+export interface ResumableDownloadsResult {
+    "result": OperationResult;
+    "jobs": file$0.ResumableDownload[] | null;
 }
 
 /**

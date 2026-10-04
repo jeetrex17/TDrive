@@ -1,6 +1,10 @@
 package app
 
-import "testing"
+import (
+	"context"
+	"errors"
+	"testing"
+)
 
 func TestDownloadRejectsInvalidBoundIDsBeforeServiceLookup(t *testing.T) {
 	app := &App{}
@@ -55,5 +59,52 @@ func TestDownloadRejectsInvalidRequestIdentityBeforeServiceLookup(t *testing.T) 
 	result := app.DownloadFolder(1, "   ", "folder:1:space")
 	if result.Result.OK {
 		t.Fatal("blank folder id unexpectedly succeeded")
+	}
+}
+
+func TestResumableDownloadRejectsInvalidJobIDsBeforeServiceLookup(t *testing.T) {
+	app := &App{}
+	if got := app.ListResumableDownloads(0); got.Result.OK {
+		t.Fatal("accepted invalid drive for job listing")
+	}
+	if got := app.ResumeDownload(1, "", "file:1:1"); got.Result.OK {
+		t.Fatal("accepted empty resume job ID")
+	}
+	if got := app.PauseResumableDownload(1, "job\nother"); got.OK {
+		t.Fatal("accepted invalid pause job ID")
+	}
+	if got := app.DiscardResumableDownload(0, "job"); got.OK {
+		t.Fatal("accepted invalid discard drive")
+	}
+}
+
+func TestDownloadSlotRejectsConcurrentStartUntilPreviousRunEnds(t *testing.T) {
+	app := &App{ctx: t.Context()}
+	activeCtx, finishActive, err := app.transfers.beginDownload(app.ctx)
+	if err != nil {
+		t.Fatalf("start first download: %v", err)
+	}
+	t.Cleanup(finishActive)
+	if _, _, err := app.transfers.beginDownload(app.ctx); !errors.Is(err, errDownloadBusy) {
+		t.Fatalf("concurrent start error = %v, want download busy", err)
+	}
+	if activeCtx.Err() != nil {
+		t.Fatalf("busy rejection canceled active download: %v", activeCtx.Err())
+	}
+	app.CancelDownload()
+	if activeCtx.Err() != context.Canceled {
+		t.Fatalf("active download context = %v, want canceled", activeCtx.Err())
+	}
+	if _, _, err := app.transfers.beginDownload(app.ctx); !errors.Is(err, errDownloadBusy) {
+		t.Fatalf("start before canceled run exits = %v, want download busy", err)
+	}
+	finishActive()
+	newCtx, finishNew, err := app.transfers.beginDownload(app.ctx)
+	if err != nil || newCtx.Err() != nil {
+		t.Fatalf("start after previous run ended: context=%v, error=%v", newCtx, err)
+	}
+	finishNew()
+	if app.transfers.active[downloadTransfer] != nil {
+		t.Fatal("finished download left an active cancel handle")
 	}
 }

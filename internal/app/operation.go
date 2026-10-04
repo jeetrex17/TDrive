@@ -84,6 +84,13 @@ type UploadResult struct {
 type DownloadResult struct {
 	Result    OperationResult `json:"result"`
 	SavedPath string          `json:"saved_path"`
+	JobID     string          `json:"job_id"`
+}
+
+// ResumableDownloadsResult lists jobs scoped to the requested drive.
+type ResumableDownloadsResult struct {
+	Result OperationResult                 `json:"result"`
+	Jobs   []fileservice.ResumableDownload `json:"jobs"`
 }
 
 // MountResult adds capability-free mount state to the common operation envelope.
@@ -181,7 +188,7 @@ func operationErrorCode(err error) OperationErrorCode {
 
 func downloadOperationResult(result fileservice.DownloadResult) DownloadResult {
 	if result.Status == "success" {
-		return DownloadResult{Result: operationSuccess(), SavedPath: result.SavedPath}
+		return DownloadResult{Result: operationSuccess(), SavedPath: result.SavedPath, JobID: result.JobID}
 	}
 	err := result.Err
 	if err == nil {
@@ -190,5 +197,6 @@ func downloadOperationResult(result fileservice.DownloadResult) DownloadResult {
 	return DownloadResult{
 		Result:    operationFailureMessage(err, result.Message),
 		SavedPath: result.SavedPath,
+		JobID:     result.JobID,
 	}
 }

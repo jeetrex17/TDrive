@@ -10,10 +10,10 @@
  *
  * Two rules shape everything below.
  *
- * Nothing measured per tick is written down. Progress, bytes and speed move
- * many times a second and none of them survive their own process: whatever the
- * bar said, a restored transfer has moved zero bytes, because the thing that
- * was moving them is gone. Leaving them out is also what keeps the record
+ * Nothing measured per tick is written down here. Progress, bytes and speed
+ * move many times a second, and this UI log is not a byte checkpoint. The
+ * backend journal restores verified bytes for resumable downloads and uploads;
+ * its rows supersede this log after startup. Leaving ticks out also keeps the record
  * byte-identical from one tick to the next, so a ten-minute download compares
  * equal every time and is written once rather than six hundred times.
  *
@@ -292,14 +292,10 @@ function restoredNotice(stored: Record<string, unknown>): NoticeEvent | null {
 /**
  * What an unfinished transfer becomes once the process running it is gone.
  *
- * A transfer the user had already asked to stop is stopped now, and calling
- * that a failure would report an error for exactly the thing they wanted.
- * Everything else -- waiting, running, paused behind a backgrounded app --
- * ends the same way, because the file is not there. Failed is the honest word
- * for that, and it is also the one status the rows offer a way out of: it is
- * what puts Retry on a download row, and a download is re-offerable because
- * its message id is right there in the row's own key. An upload's source path
- * went with the process, so its row offers nothing and its note says why.
+ * A transfer the user had asked to stop is stopped now. The rest of this
+ * volatile log becomes failed until a backend checkpoint replaces its row
+ * with authoritative progress. Folder downloads still restart through Retry;
+ * an upload without a durable source cannot be retried from this log.
  */
 function restingStatus(previous: TransferStatus): TransferStatus {
     if (previous === 'canceling') return 'canceled';

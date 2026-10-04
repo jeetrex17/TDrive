@@ -27,11 +27,11 @@ export function canSaveToDownloads(): boolean {
  * around a name already taken, and it deletes the sandbox copy only once every
  * byte is safely across, so a failure here never costs the download.
  */
-export async function saveToDownloads(path: string): Promise<string> {
+export async function saveToDownloads(path: string, jobId?: string): Promise<string> {
     if (!path) return '';
     const raw = await callBridge(
         'saveToDownloads',
-        [JSON.stringify({ path })],
+        [JSON.stringify(jobId ? { path, jobID: jobId } : { path })],
         'This build cannot save to Downloads.',
     );
     if (!raw) return '';

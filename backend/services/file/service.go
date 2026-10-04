@@ -144,13 +144,27 @@ type Service struct {
 	// upload ID its progress events carry, so one transfer row can be stopped
 	// without taking the rest of the batch with it. Only goroutines that hold
 	// an upload slot are registered, so it stays bounded by MaxConcurrentUploads.
-	uploadCancelMu sync.Mutex
-	uploadCancels  map[int]context.CancelFunc
-	resumeOnce     sync.Once
-	resumeErr      error
-	resumeMu       sync.Mutex
-	resumeCancels  map[string]context.CancelFunc
-	previewMu      sync.Mutex
+	uploadCancelMu     sync.Mutex
+	uploadCancels      map[int]context.CancelFunc
+	resumeOnce         sync.Once
+	resumeErr          error
+	resumeMu           sync.Mutex
+	resumeCancels      map[string]context.CancelFunc
+	downloadResumeOnce sync.Once
+	downloadResumeErr  error
+	downloadResumeMu   sync.Mutex
+	downloadRuns       map[string]*downloadRun
+	downloadDiscards   map[string]bool
+	// DownloadStagingDir overrides the private download staging root in tests.
+	// Production leaves it empty and uses the app data directory.
+	DownloadStagingDir string
+	// downloadBlockBytes is a test seam; production uses Telegram's 1 MiB limit.
+	downloadBlockBytes  int64
+	downloadConcurrency int
+	// afterDownloadSaving injects a failure after the publish intent is durable
+	// and before the destination rename. It is nil outside package tests.
+	afterDownloadSaving func() error
+	previewMu           sync.Mutex
 	// afterHiddenPartSend is a nil-by-default crash-injection seam used only by
 	// package tests. It runs immediately after Telegram returns a positive
 	// message ID and before that receipt enters any local collection/projection.
@@ -186,6 +200,7 @@ type DownloadResult struct {
 	Status    string
 	Message   string
 	SavedPath string
+	JobID     string `json:"job_id,omitempty"`
 	Err       error
 }
 

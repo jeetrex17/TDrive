@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const bindings = vi.hoisted(() => ({
     DownloadFile: vi.fn(),
     DownloadFolder: vi.fn(),
+    ListResumableDownloads: vi.fn(async () => ({ result: { ok: true }, jobs: [] as unknown[] })),
+    ResumeDownload: vi.fn(),
     SelectFiles: vi.fn(async () => []),
 }));
 const passwordModal = vi.hoisted(() => vi.fn(async () => false));
@@ -98,7 +100,109 @@ beforeEach(() => {
     vi.clearAllMocks();
     bindings.DownloadFile.mockResolvedValue(downloadSuccess('/tmp/file'));
     bindings.DownloadFolder.mockResolvedValue(downloadSuccess('/tmp/folder'));
+    bindings.ListResumableDownloads.mockResolvedValue({ result: { ok: true }, jobs: [] });
     passwordModal.mockResolvedValue(false);
+});
+
+describe('download checkpoint recovery', () => {
+    it('loads backend verified bytes for the selected drive after restart', async () => {
+        bindings.ListResumableDownloads.mockResolvedValue({
+            result: { ok: true },
+            jobs: [{
+                job_id: 'resume-42', channel_id: 101, logical_msg_id: 42,
+                name: 'plan.pdf', status: 'paused', verified_bytes: 300,
+                total_bytes: 1000, error: '', saved_path: '',
+            }],
+        });
+        await loadModule();
+        const { activateResumableDownloads, resumableDownloads } = await import('./resumable-downloads');
+        const { sidebarState } = await import('../ui/sidebar/sidebar-store');
+        const { get } = await import('svelte/store');
+        const stop = activateResumableDownloads();
+        try {
+            sidebarState.update((current) => ({ ...current, activeChannelId: 101 }));
+            await vi.waitFor(() => expect(get(resumableDownloads)).toMatchObject([{
+                jobId: 'resume-42', channelId: 101, verifiedBytes: 300, totalBytes: 1000,
+            }]));
+            expect(bindings.ListResumableDownloads).toHaveBeenCalledWith(101);
+        } finally {
+            stop();
+            sidebarState.update((current) => ({ ...current, activeChannelId: null }));
+        }
+    });
+
+    it('tries every waiting job once when the connection returns', async () => {
+        bindings.ListResumableDownloads.mockResolvedValue({
+            result: { ok: true },
+            jobs: [42, 43].map((id) => ({
+                job_id: `resume-${id}`, channel_id: 101, logical_msg_id: id,
+                name: `${id}.txt`, status: 'waiting_network', verified_bytes: 300,
+                total_bytes: 1000, error: '', saved_path: '',
+            })),
+        });
+        bindings.ResumeDownload.mockResolvedValue({
+            result: { ok: false, error: { code: 'network_unavailable', message: 'offline' } },
+            saved_path: '', job_id: '',
+        });
+        const activeDownload = deferred<DownloadBindingResult>();
+        bindings.DownloadFile.mockReturnValueOnce(activeDownload.promise);
+        const { mod } = await loadModule();
+        const { activateResumableDownloads, resumableDownloads } = await import('./resumable-downloads');
+        const { sidebarState } = await import('../ui/sidebar/sidebar-store');
+        const { get } = await import('svelte/store');
+        const stop = activateResumableDownloads();
+        try {
+            sidebarState.update((current) => ({ ...current, activeChannelId: 101 }));
+            await vi.waitFor(() => expect(get(resumableDownloads)).toHaveLength(2));
+            mod.enqueueDownload(99, 'in-flight.txt', 100);
+            await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledTimes(1));
+            window.dispatchEvent(new Event('online'));
+            expect(bindings.ResumeDownload).not.toHaveBeenCalled();
+            activeDownload.resolve(downloadSuccess('/tmp/in-flight.txt'));
+            await vi.waitFor(() => expect(bindings.ResumeDownload).toHaveBeenCalledTimes(2));
+            expect(bindings.ResumeDownload.mock.calls.map((call) => call[1])).toEqual(['resume-42', 'resume-43']);
+        } finally {
+            stop();
+            sidebarState.update((current) => ({ ...current, activeChannelId: null }));
+        }
+    });
+
+    it('does not start a manual resume while another queued download owns the slot', async () => {
+        const activeDownload = deferred<DownloadBindingResult>();
+        bindings.DownloadFile.mockReturnValueOnce(activeDownload.promise);
+        const { mod } = await loadModule();
+        const { resumePausedDownload, resumableDownloads } = await import('./resumable-downloads');
+        resumableDownloads.set([{
+            jobId: 'resume-42', channelId: 101, logicalMsgId: 42, name: 'plan.pdf',
+            status: 'paused', verifiedBytes: 300, totalBytes: 1000,
+            error: '', savedPath: '', speed: 0,
+        }]);
+        mod.enqueueDownload(99, 'in-flight.txt', 100);
+        await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledTimes(1));
+        await resumePausedDownload('resume-42');
+        expect(bindings.ResumeDownload).not.toHaveBeenCalled();
+        expect(notifications.notify).toHaveBeenCalledWith(expect.objectContaining({ title: 'Another download is running' }));
+        activeDownload.resolve(downloadSuccess('/tmp/in-flight.txt'));
+    });
+
+    it('starts a queued download after an active resume releases the slot', async () => {
+        const activeResume = deferred<DownloadBindingResult>();
+        bindings.ResumeDownload.mockReturnValueOnce(activeResume.promise);
+        const { mod } = await loadModule();
+        const { resumePausedDownload, resumableDownloads } = await import('./resumable-downloads');
+        resumableDownloads.set([{
+            jobId: 'resume-42', channelId: 101, logicalMsgId: 42, name: 'plan.pdf',
+            status: 'paused', verifiedBytes: 300, totalBytes: 1000,
+            error: '', savedPath: '', speed: 0,
+        }]);
+        const resume = resumePausedDownload('resume-42');
+        await vi.waitFor(() => expect(bindings.ResumeDownload).toHaveBeenCalledTimes(1));
+        mod.enqueueDownload(99, 'next.txt', 100);
+        expect(bindings.DownloadFile).not.toHaveBeenCalled();
+        activeResume.resolve(downloadSuccess('/tmp/plan.pdf'));
+        await resume;
+        await vi.waitFor(() => expect(bindings.DownloadFile).toHaveBeenCalledWith(101, 99, 99, expect.any(String)));
+    });
 });
 
 describe('folder download queue', () => {

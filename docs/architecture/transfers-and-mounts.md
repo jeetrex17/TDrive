@@ -56,13 +56,52 @@ semaphore across GUI, import, backup and mount callers.
 
 ## Downloads publish completed output
 
-[`downloadProjectedFileToPath`](../../backend/services/file/download_file.go)
-reads an immutable projected revision into a sibling temporary file. It verifies
-output length, closes the file and only then replaces the destination. Transfer
-failure or cancellation removes temporary output before publication. The
+Interactive single-file downloads keep a private checkpoint in the
+[download journal](../../backend/services/file/resumable_download.go). The job
+pins its account, channel, projected file revision, body message IDs, sizes and
+destination. This path applies at every file size and to both single-document
+and multipart files. Its block records describe stored bytes: ciphertext for
+encrypted files, plaintext for other files. A block becomes confirmed only after
+its bytes are synced to the staging file. Recovery validates those bytes before
+skipping a block; missing or damaged blocks are fetched again. Telegram range
+reads stay bounded to 1 MiB requests, so an interrupted document does not have
+to restart from its first byte.
+
+The [download runner](../../backend/services/file/resumable_download_run.go)
+checks the pinned source again before using a checkpoint. It assembles output
+in a sibling temporary file and publishes only after complete verification.
+Encrypted files retain ciphertext until the entire stream can pass authenticated
+decryption. A recognized trusted hash is checked for plaintext files; legacy
+plaintext records with no trusted digest have size and local checkpoint checks,
+which do not establish cryptographic authenticity of the remote content.
+
+```mermaid
+flowchart LR
+    Source[Pin file revision] --> Journal[Create private job and staging]
+    Journal --> Fetch[Fetch missing 1 MiB blocks]
+    Fetch --> Checkpoint[Sync bytes, then record block hash]
+    Checkpoint -->|Pause or restart| Recover[Validate saved blocks]
+    Recover --> Fetch
+    Checkpoint -->|All blocks present| Verify[Verify and assemble final output]
+    Verify --> Publish[Save completed file]
+```
+
+The backend journal owns recovery state; the frontend's transfer history is only
+a display record. Pause retains the private stage, while discard removes it.
+After a destination conflict, the user can choose another location without
+fetching confirmed blocks again. On Android, the native exporter uses the job
+ID to recover a pending public Downloads copy after an interrupted bridge call;
+the completed private file remains available until export succeeds. iOS offers
+its share sheet only after an explicit download completes. Phone suspension
+stops active work, so resume occurs when the app is running again.
+
+The previous [`downloadProjectedFileToPath`](../../backend/services/file/download_file.go)
+path remains for folder assembly. It reads an immutable projected revision into
+a sibling temporary file, verifies length and replaces the destination only
+after completion. Failure or cancellation removes temporary output. The
 [replacement helper](../../backend/services/file/download.go) first tries rename,
 then a backup-and-rename fallback with best-effort rollback; the fallback is not
-a crash-atomic transaction. This is not a persistent resume queue.
+a crash-atomic transaction.
 
 | Download shape | Transfer and verification |
 | --- | --- |
@@ -76,8 +115,10 @@ to a partial byte stream. Aggregate progress avoids counting retransmitted bytes
 twice. Encrypted output also passes authenticated decryption; plaintext size
 checks alone are not a cryptographic content-integrity guarantee.
 
-[Folder downloads](../../backend/services/file/folder_download.go) assemble a
-private sibling directory and publish it with a rename after success.
+[Folder downloads](../../backend/services/file/folder_download.go) still assemble
+a private sibling directory and publish it with a rename after success. They do
+not yet retain a folder manifest or partial tree across interruptions; folder
+resume needs a parent job and separate publication recovery.
 [Publication](../../backend/services/file/download_staging.go) checks for a
 conflicting destination again before rename. This narrows a race; the code does
 not implement an atomic filesystem "rename only if absent" primitive.

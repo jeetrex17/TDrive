@@ -144,6 +144,7 @@ public class MainActivity extends AppCompatActivity {
     private static final long PHOTO_BACKUP_STAGE_FREE_HEADROOM_BYTES = 512L * 1024L * 1024L;
     private String pendingSaveCallbackId;
     private String pendingSavePath;
+    private String pendingSaveJobId;
     private File pendingCaptureFile;
     private boolean pendingCaptureIsVideo;
     private String pendingPhotoBackupPermissionCallbackId;
@@ -416,13 +417,15 @@ public class MainActivity extends AppCompatActivity {
         if (requestCode == SAVE_PERMISSION_REQUEST) {
             String callbackId = pendingSaveCallbackId;
             String path = pendingSavePath;
+            String jobId = pendingSaveJobId;
             pendingSaveCallbackId = null;
             pendingSavePath = null;
+            pendingSaveJobId = null;
             if (callbackId == null) {
                 return;
             }
             if (grantResults.length > 0 && grantResults[0] == PackageManager.PERMISSION_GRANTED) {
-                runSaveToDownloads(callbackId, path);
+                runSaveToDownloads(callbackId, path, jobId);
             } else {
                 jsBridge.sendCallback(callbackId, null, "TDrive needs permission to write to Downloads");
             }
@@ -1527,8 +1530,11 @@ public class MainActivity extends AppCompatActivity {
      */
     public void saveToDownloads(String callbackId, String json) {
         String path;
+        String jobId;
         try {
-            path = new JSONObject(json).optString("path", "");
+            JSONObject request = new JSONObject(json);
+            path = request.optString("path", "");
+            jobId = request.optString("jobID", "");
         } catch (JSONException e) {
             jsBridge.sendCallback(callbackId, null, "malformed save request");
             return;
@@ -1548,19 +1554,20 @@ public class MainActivity extends AppCompatActivity {
             runOnUiThread(() -> {
                 pendingSaveCallbackId = callbackId;
                 pendingSavePath = asked;
+                pendingSaveJobId = jobId;
                 requestPermissions(
                         new String[]{"android.permission.WRITE_EXTERNAL_STORAGE"}, SAVE_PERMISSION_REQUEST);
             });
             return;
         }
-        runSaveToDownloads(callbackId, path);
+        runSaveToDownloads(callbackId, path, jobId);
     }
 
     /** A folder download can be gigabytes, so none of this happens on the main thread. */
-    private void runSaveToDownloads(String callbackId, String path) {
+    private void runSaveToDownloads(String callbackId, String path, String jobId) {
         new Thread(() -> {
             try {
-                String location = DownloadExport.save(this, new File(path));
+                String location = DownloadExport.save(this, new File(path), jobId);
                 jsBridge.sendCallback(
                         callbackId, new JSONObject().put("location", location).toString(), null);
             } catch (Exception e) {

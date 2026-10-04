@@ -48,6 +48,7 @@ export type {
     PhotoBackupStatus,
     PreviewPayload,
     PreviewResult,
+    ResumableDownloadsResult,
     SafeAreaInsets,
     SelfUser,
     TDriveFile,

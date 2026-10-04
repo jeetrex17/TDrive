@@ -520,10 +520,13 @@ func (a *App) DownloadFile(channelID int64, msgID int, TgMsgID int, requestID st
 	if err != nil {
 		return DownloadResult{Result: operationFailure(err)}
 	}
-	ctx, finish := a.transfers.begin(a.ctx, downloadTransfer)
+	downloadCtx, finish, err := a.transfers.beginDownload(a.appContext())
+	if err != nil {
+		return DownloadResult{Result: operationFailure(err)}
+	}
+	ctx := fileservice.WithDownloadProgressID(downloadCtx, requestID)
 	defer finish()
-	ctx = fileservice.WithDownloadProgressID(ctx, requestID)
-	result := svc.Download(ctx, channelID, msgID, TgMsgID, a.chooseDownloadPath)
+	result := svc.StartResumableDownload(ctx, channelID, msgID, TgMsgID, a.chooseDownloadPath)
 	// An iPhone download stays in the app container, so offer the share sheet
 	// as soon as the bytes are on disk: Files can list the container, but
 	// sending the file straight on is the thing worth saving a trip for.
@@ -531,11 +534,7 @@ func (a *App) DownloadFile(channelID int64, msgID int, TgMsgID int, requestID st
 	// Android must not do this. There the host moves the download into public
 	// Downloads once this call returns and deletes the sandbox copy, so a
 	// chooser opened here would be holding a file that is about to vanish.
-	if application.System.IsPlatform(application.PlatformIOS) && result.Status == "success" && result.SavedPath != "" {
-		if err := shareFileNative(result.SavedPath); err != nil {
-			fmt.Printf("Warning: share sheet failed: %v\n", err)
-		}
-	}
+	shareCompletedIOSDownload(result)
 	return downloadOperationResult(result)
 }
 
@@ -551,9 +550,12 @@ func (a *App) DownloadFolder(channelID int64, folderID string, requestID string)
 	if err != nil {
 		return DownloadResult{Result: operationFailure(err)}
 	}
-	ctx, finish := a.transfers.begin(a.ctx, downloadTransfer)
+	downloadCtx, finish, err := a.transfers.beginDownload(a.appContext())
+	if err != nil {
+		return DownloadResult{Result: operationFailure(err)}
+	}
+	ctx := fileservice.WithDownloadProgressID(downloadCtx, requestID)
 	defer finish()
-	ctx = fileservice.WithDownloadProgressID(ctx, requestID)
 	result := svc.DownloadFolder(ctx, channelID, folderID, a.chooseDownloadDir)
 	return downloadOperationResult(result)
 }

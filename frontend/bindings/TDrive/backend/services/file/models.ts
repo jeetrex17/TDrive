@@ -59,6 +59,23 @@ export interface ImportPlan {
 }
 
 /**
+ * ResumableDownload is the account-scoped view of a download job.
+ * VerifiedBytes counts blocks committed to the journal, not in-flight reads.
+ */
+export interface ResumableDownload {
+    "job_id": string;
+    "channel_id": number;
+    "logical_msg_id": number;
+    "name": string;
+    "status": string;
+    "verified_bytes": number;
+    "total_bytes": number;
+    "encrypted": boolean;
+    "error": string;
+    "saved_path"?: string;
+}
+
+/**
  * ResumableUpload is the public, path-free view of a local multipart job.
  * ConfirmedBytes counts durable part receipts, not bytes in the current send.
  */

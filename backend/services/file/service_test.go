@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -515,7 +516,7 @@ func TestUploadEncryptedRequiresPasswordBeforeSend(t *testing.T) {
 }
 
 func TestDownloadPlainFileWritesBytes(t *testing.T) {
-	svc, _, _, _ := newTestService(t)
+	svc, db, fakeTG, _ := newTestService(t)
 	path := writeTempFile(t, "hello")
 	files, err := svc.Upload(context.Background(), personalChannelID, []string{path}, []string{""}, false)
 	if err != nil {
@@ -538,6 +539,33 @@ func TestDownloadPlainFileWritesBytes(t *testing.T) {
 	}
 	if string(got) != "hello" {
 		t.Fatalf("downloaded bytes = %q, want hello", string(got))
+	}
+
+	// Writable mounts record a raw 64-character SHA-256, while older files
+	// may have no digest. A trusted mismatch must stop publication.
+	replacement, err := fakeTG.SendFile(t.Context(), tgclient.InputPeer{ChannelID: personalChannelID, AccessHash: 99},
+		bytes.NewReader([]byte("hello")), "upload.txt", "", 5, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	project(t, db, personalChannelID, 2000, 7, projection.Op{
+		Type: projection.OpFileReplace, ProtocolVersion: 1, OpID: "hash-mismatch",
+		Obj: fmt.Sprintf("f:%d", files[0].MsgID), ExpectedRevision: 1,
+		ContentMsgID: replacement.MsgID, ContentHash: strings.Repeat("0", 64),
+		FileSize: 5, FileUploadTime: 1234, RetainedUntil: 10000,
+	})
+	svc.CacheNamespace = "hash-download-test"
+	svc.DownloadStagingDir = t.TempDir()
+	if err := os.WriteFile(savePath, []byte("keep me"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	resumed := svc.StartResumableDownload(t.Context(), personalChannelID, files[0].MsgID, files[0].MsgID,
+		func(string) (string, error) { return savePath, nil })
+	if resumed.Status != "error" || !strings.Contains(resumed.Message, "checksum mismatch") {
+		t.Fatalf("download with wrong trusted digest = %+v", resumed)
+	}
+	if got, err := os.ReadFile(savePath); err != nil || string(got) != "keep me" {
+		t.Fatalf("destination after digest mismatch = %q, err %v", got, err)
 	}
 }
 
@@ -623,6 +651,18 @@ func TestDownloadEncryptedFileDecrypts(t *testing.T) {
 		t.Fatalf("downloaded bytes = %q, want secret", string(got))
 	}
 	assertKeyZeroed(t, downloadKey)
+	svc.CacheNamespace = "encrypted-single-download"
+	svc.DownloadStagingDir = t.TempDir()
+	resumedPath := filepath.Join(t.TempDir(), "resumed-secret.out")
+	resumed := svc.StartResumableDownload(t.Context(), personalChannelID, files[0].MsgID, files[0].MsgID,
+		func(string) (string, error) { return resumedPath, nil })
+	if resumed.Status != "success" {
+		t.Fatalf("resumable encrypted download = %+v", resumed)
+	}
+	if got, err := os.ReadFile(resumedPath); err != nil || string(got) != "secret" {
+		t.Fatalf("resumable encrypted output = %q, err %v", got, err)
+	}
+	assertKeyZeroed(t, downloadKey)
 }
 
 func TestDownloadEncryptedDecryptFailurePreservesExistingFile(t *testing.T) {
@@ -685,6 +725,47 @@ func TestDownloadEncryptedDecryptFailurePreservesExistingFile(t *testing.T) {
 		t.Fatalf("existing file = %q, want preserved contents", string(got))
 	}
 	assertKeyZeroed(t, downloadKey)
+
+	// The resumable path retains ciphertext, but authentication must still
+	// finish before an existing destination can be replaced.
+	svc.CacheNamespace = "encrypted-download-test"
+	svc.DownloadStagingDir = t.TempDir()
+	resumed := svc.StartResumableDownload(t.Context(), personalChannelID, files[0].MsgID, files[0].MsgID,
+		func(string) (string, error) { return savePath, nil })
+	if resumed.Status != "error" || resumed.JobID == "" {
+		t.Fatalf("resumable encrypted download = %+v, want authentication error with saved job", resumed)
+	}
+	got, err = os.ReadFile(savePath)
+	if err != nil || string(got) != "keep me" {
+		t.Fatalf("destination after authentication failure = %q, err %v", got, err)
+	}
+	keyRequests := 0
+	svc.RequireEncryptionKey = func(encrypted bool) ([]byte, error) {
+		if !encrypted {
+			return nil, nil
+		}
+		keyRequests++
+		if keyRequests == 1 {
+			return append([]byte(nil), masterKey...), nil
+		}
+		return nil, errNeedPassword
+	}
+	locked := svc.StartResumableDownload(t.Context(), personalChannelID, files[0].MsgID, files[0].MsgID,
+		func(string) (string, error) { return savePath, nil })
+	if !errors.Is(locked.Err, errNeedPassword) || locked.JobID == "" {
+		t.Fatalf("locked finalization lost password error: %+v", locked)
+	}
+	job, err := svc.loadDownloadJob(t.Context(), locked.JobID)
+	if err != nil || job.Status != downloadWaitingUnlock {
+		t.Fatalf("locked download job = %+v, err %v", job, err)
+	}
+	svc.RequireEncryptionKey = func(bool) ([]byte, error) { return append([]byte(nil), masterKey...), nil }
+	if result := svc.ResumeDownload(t.Context(), locked.JobID); result.Status != "success" {
+		t.Fatalf("unlocked download = %+v", result)
+	}
+	if got, err := os.ReadFile(savePath); err != nil || string(got) != "secret" {
+		t.Fatalf("unlocked output = %q, err %v", got, err)
+	}
 }
 
 func TestDownloadEncryptedRequiresPassword(t *testing.T) {

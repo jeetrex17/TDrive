@@ -26,6 +26,8 @@ const mocks = vi.hoisted(() => ({
 const bindings = vi.hoisted(() => ({
     DownloadFile: vi.fn(),
     DownloadFolder: vi.fn(),
+    DiscardResumableDownload: vi.fn(async () => ({ ok: true })),
+    ListResumableDownloads: vi.fn(async () => ({ result: { ok: true }, jobs: [] })),
     SelectFiles: vi.fn(async () => []),
 }));
 
@@ -63,8 +65,8 @@ vi.mock('../api', async (original) => ({
     isAndroidPlatform: () => mocks.android,
 }));
 
-function success(savedPath: string) {
-    return { result: { ok: true }, saved_path: savedPath };
+function success(savedPath: string, jobId = '') {
+    return { result: { ok: true }, saved_path: savedPath, job_id: jobId };
 }
 
 async function loadModule() {
@@ -104,13 +106,24 @@ describe('android', () => {
         await vi.waitFor(() => expect(lastNote()).toBe('Saved to Download/plan.pdf'));
     });
 
-    it('names the public Downloads folder when Android returns no display path', async () => {
-        mocks.saveToDownloads.mockResolvedValue('');
+    it('uses the durable job receipt and clears it only after Android accepts the file', async () => {
+        bindings.DownloadFile.mockResolvedValue(success('/sandbox/Downloads/plan.pdf', 'job-42'));
         const mod = await loadModule();
         mod.enqueueDownload(42, 'plan.pdf', 10);
 
-        await vi.waitFor(() => expect(mocks.saveToDownloads).toHaveBeenCalledWith('/sandbox/Downloads/plan.pdf'));
-        expect(lastNote()).toBe('Saved to your Downloads folder');
+        await vi.waitFor(() => expect(mocks.saveToDownloads).toHaveBeenCalledWith('/sandbox/Downloads/plan.pdf', 'job-42'));
+        await vi.waitFor(() => expect(bindings.DiscardResumableDownload).toHaveBeenCalledWith(101, 'job-42'));
+    });
+
+    it('keeps the receipt when Android does not confirm a public destination', async () => {
+        mocks.saveToDownloads.mockResolvedValue('');
+        bindings.DownloadFile.mockResolvedValue(success('/sandbox/Downloads/plan.pdf', 'job-42'));
+        const mod = await loadModule();
+        mod.enqueueDownload(42, 'plan.pdf', 10);
+
+        await vi.waitFor(() => expect(mocks.saveToDownloads).toHaveBeenCalledWith('/sandbox/Downloads/plan.pdf', 'job-42'));
+        await vi.waitFor(() => expect(lastNote()).toBe('Saved inside TDrive, not in your Downloads folder'));
+        expect(bindings.DiscardResumableDownload).not.toHaveBeenCalled();
     });
 
     it('moves a folder too, which is the case that had no way out at all', async () => {
@@ -136,12 +149,12 @@ describe('android', () => {
         expect(lastNote()).toBe('Saved inside TDrive, not in your Downloads folder');
     });
 
-    it('falls back to a plain confirmation when the host cannot move it', async () => {
+    it('keeps the verified copy for export when the Android bridge is unavailable', async () => {
         mocks.canSaveToDownloads.mockReturnValue(false);
         const mod = await loadModule();
         mod.enqueueDownload(42, 'plan.pdf', 10);
 
-        await vi.waitFor(() => expect(lastNote()).toContain('Files'));
+        await vi.waitFor(() => expect(lastNote()).toContain('Ready to save'));
         expect(mocks.saveToDownloads).not.toHaveBeenCalled();
     });
 });
