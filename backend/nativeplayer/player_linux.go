@@ -432,7 +432,7 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 	}
 	p.onState = opts.OnState
 	if opts.OnState != nil {
-		p.emitState(normalizeState(State{Status: StatusOpening, Paused: true, Loading: true, Volume: 1, Rate: 1}))
+		p.publishState(normalizeState(State{Status: StatusOpening, Paused: true, Loading: true, Volume: 1, Rate: 1}))
 	}
 	eventConn, err := dialLinuxMPVIPCWithAttempts(p.ipcPath, 80, exited)
 	if err != nil {
@@ -619,37 +619,6 @@ func writeMPVIPCWithAttempts(path string, payload []byte, attempts int) error {
 	return fmt.Errorf("native player: mpv IPC unavailable: %w", lastErr)
 }
 
-func (p *Player) emitState(state State) {
-	state = normalizeState(state)
-	p.mu.Lock()
-	if p.closed || p.terminal {
-		p.mu.Unlock()
-		return
-	}
-	p.lastState = state
-	onState := p.onState
-	p.mu.Unlock()
-	if onState != nil {
-		onState(state)
-	}
-}
-
-func (p *Player) emitTerminal(status PlaybackStatus) {
-	state := terminalState(status)
-	p.mu.Lock()
-	if p.terminal {
-		p.mu.Unlock()
-		return
-	}
-	p.terminal = true
-	p.lastState = state
-	onState := p.onState
-	p.mu.Unlock()
-	if onState != nil {
-		onState(state)
-	}
-}
-
 func (p *Player) handleProcessExit(err error) {
 	p.mu.Lock()
 	closed := p.closed
@@ -703,7 +672,7 @@ func (p *Player) handleMPVEvent(event mpvIPCEvent) {
 		p.mu.Lock()
 		lastState := p.lastState
 		p.mu.Unlock()
-		p.emitState(endedState(lastState))
+		p.publishState(endedState(lastState))
 		return
 	}
 	p.emitTerminal(status)
@@ -726,7 +695,7 @@ func (p *Player) updateObservedState(event mpvIPCEvent) {
 	if !ready {
 		return
 	}
-	p.emitState(stateFromMPVProperties(values))
+	p.publishState(stateFromMPVProperties(values))
 }
 
 func dialLinuxMPVIPCWithAttempts(path string, attempts int, exited <-chan struct{}) (net.Conn, error) {
