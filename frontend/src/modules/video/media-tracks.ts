@@ -66,7 +66,7 @@ export function nativeTrackLabel(track: NativeMediaTrack, index: number): string
 // and place did not already say, while being long enough to push the row onto a
 // second line on a phone. The full description is one tap away in the settings
 // sheet, which is where a name belongs.
-export function shortNativeTrackLabel(track: NativeMediaTrack, index: number): string {
+export function shortNativeTrackLabel(track: NativeMediaTrack, _index: number): string {
     const language = formatLanguage(track.language);
     if (language && language.length <= 5) return language;
     if (!track.title || GENERIC_TITLE.test(track.title)) return "";
