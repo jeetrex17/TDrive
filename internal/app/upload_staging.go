@@ -59,10 +59,7 @@ func (a *App) stageMobileUploadPaths(ctx context.Context, paths []string, encryp
 		if info.Size() <= fileservice.MinResumableUploadBytes {
 			continue
 		}
-		a.transferMu.Lock()
-		_, pickerCopy := a.pickerSources[path]
-		delete(a.pickerSources, path)
-		a.transferMu.Unlock()
+		pickerCopy := a.transfers.takePickerSource(path)
 		stage, err := stageMobileUploadSource(ctx, path, info, pickerCopy)
 		if err != nil {
 			a.removeUploadSourceCopies(staged)
