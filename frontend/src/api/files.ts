@@ -97,6 +97,7 @@ export function normalizeDownloadResult(value: unknown): DownloadResult {
     return {
         result: normalizeOperationResult(raw.result, "Download failed"),
         savedPath: String(raw.saved_path ?? ""),
+        jobId: String(raw.job_id ?? ""),
     };
 }
 

@@ -35,6 +35,8 @@ import { retryTransferAction } from './notification-actions';
 import { createImportProgress, reduceImportProgress } from './import-progress';
 import { TransferBatch, type UploadOutcome } from './transfer-batch';
 import { activateTransferPersistence } from './transfer-persistence';
+import { acknowledgeCompletedDownload, refreshResumableDownloads } from './resumable-downloads';
+import { onDownloadRunIdle, tryBeginDownloadRun } from './download-run';
 import {
     pushQueuedTransfer,
     pushTransferStart,
@@ -167,15 +169,19 @@ function activateDownloadProgressEvents(): void {
  * folder but hides the sandbox completely, so the file has to be moved out
  * before it exists as far as the user is concerned.
  */
-async function announceMobileDownload(item: DownloadQueueItem, savedPath: string): Promise<void> {
+async function announceMobileDownload(item: DownloadQueueItem, savedPath: string, jobId = ''): Promise<boolean> {
     const folder = item.kind === 'folder';
     const note = (text: string) => setTransferNote({ id: item.key, direction: 'down', note: text });
 
     if (isAndroidPlatform() && canSaveToDownloads()) {
         try {
-            const location = await saveToDownloads(savedPath);
+            if (!savedPath) throw new Error('Completed download has no saved file');
+            const location = jobId && !folder
+                ? await saveToDownloads(savedPath, jobId)
+                : await saveToDownloads(savedPath);
+            if (!location) throw new Error('Downloads did not confirm a save location');
             note(location ? `Saved to ${location}` : 'Saved to your Downloads folder');
-            return;
+            return true;
         } catch (err) {
             // The bytes arrived either way, so this is a question of where they
             // are rather than a failed transfer -- but it is the one outcome
@@ -185,10 +191,15 @@ async function announceMobileDownload(item: DownloadQueueItem, savedPath: string
             notify({
                 level: 'warning',
                 title: 'Could not reach your Downloads folder',
-                body: `${item.name} is saved inside TDrive instead. Open Transfers to share it out.`,
+                body: `${item.name} is saved inside TDrive. Try saving it again from Transfers.`,
             });
-            return;
+            return false;
         }
+    }
+
+    if (isAndroidPlatform()) {
+        note('Ready to save from TDrive to Downloads');
+        return false;
     }
 
     // Go opens the share sheet after a single file; keep the path so the
@@ -198,6 +209,7 @@ async function announceMobileDownload(item: DownloadQueueItem, savedPath: string
     note(folder
         ? 'Saved to Files › On My iPhone › TDrive › Downloads'
         : 'Saved to Files › TDrive › Downloads');
+    return true;
 }
 
 async function startNextDownload() {
@@ -207,6 +219,8 @@ async function startNextDownload() {
         setTransferDirectionActive('download', false);
         return;
     }
+    const releaseRun = tryBeginDownloadRun();
+    if (!releaseRun) return;
 
     setTransferDirectionActive('download', true);
     state.activeDownloadId = next.key;
@@ -232,7 +246,8 @@ async function startNextDownload() {
 
         if (result.result.ok) {
             finalizeDownload(next.key, 'done');
-            if (isMobilePlatform()) await announceMobileDownload(next, result.savedPath);
+            let saved = true;
+            if (isMobilePlatform()) saved = await announceMobileDownload(next, result.savedPath, result.jobId);
             else if (next.kind === 'folder') {
                 notify({
                     level: 'success',
@@ -240,12 +255,15 @@ async function startNextDownload() {
                     body: result.savedPath ? 'Saved to ' + result.savedPath : next.name + ' saved',
                 });
             }
+            if (saved && result.jobId) await acknowledgeCompletedDownload(next.channelId, result.jobId);
         } else if (result.result.error.code === 'canceled') {
             finalizeDownload(next.key, 'canceled');
         } else {
             const canceled = state.cancelingDownload;
             finalizeDownload(next.key, canceled ? 'canceled' : 'failed');
-            if (!canceled) notifyDownloadFailure(next, result.result.error);
+            // A durable job has its own actionable row; a fresh Retry here
+            // would start a second download instead of using saved bytes.
+            if (!canceled && !result.jobId) notifyDownloadFailure(next, result.result.error);
         }
     } catch (err) {
         console.error("Download failed:", err);
@@ -256,7 +274,8 @@ async function startNextDownload() {
         state.cancelingDownload = false;
         state.activeDownloadId = null;
         state.activeDownloadRequestId = null;
-        void startNextDownload();
+        void refreshResumableDownloads();
+        releaseRun();
     }
 }
 
@@ -1471,12 +1490,14 @@ export function activateTransferSurfaces(): () => void {
     // Makes the phone's copy-out-of-the-picker wait visible; silent everywhere
     // the host hands back paths directly. Torn down with the rest.
     transferUnsubscribers.push(activateFileSelectionProgress());
+    transferUnsubscribers.push(onDownloadRunIdle(() => { void startNextDownload(); }));
     // The log outlives the app. The queue above it is deliberately not stored
     // alongside: every job in it already has a bell row whose key carries the
     // drive, the kind and the message id, which is everything enqueueDownload
     // needs, and a second copy of that would only be a second thing to
-    // disagree. A job interrupted by a kill comes back as a failed row, and the
-    // Retry that key already powers is what puts it back in this queue.
+    // disagree. The backend journal supersedes individual file rows after
+    // restart, showing verified bytes and the recovery action. Volatile folder
+    // rows still use Retry to re-enter this queue.
     stopTransferPersistence = activateTransferPersistence();
     return teardownTransferSurfaces;
 }

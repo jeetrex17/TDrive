@@ -13,6 +13,12 @@ const resumeActions = vi.hoisted(() => ({
     checkUploadStatus: vi.fn(async () => {}),
     discardUpload: vi.fn(async () => {}),
 }));
+const downloadActions = vi.hoisted(() => ({
+    resumePausedDownload: vi.fn(async () => {}),
+    pauseDownload: vi.fn(async () => {}),
+    discardDownload: vi.fn(async () => {}),
+    saveRecoveredDownload: vi.fn(async () => {}),
+}));
 vi.mock('../../modules/notif-bell', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../../modules/notif-bell')>();
     return { ...actual, cancelSingleUpload, cancelTransfersInDirection };
@@ -21,10 +27,15 @@ vi.mock('../../modules/resumable-uploads', async (importOriginal) => {
     const actual = await importOriginal<typeof import('../../modules/resumable-uploads')>();
     return { ...actual, ...resumeActions };
 });
+vi.mock('../../modules/resumable-downloads', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../../modules/resumable-downloads')>();
+    return { ...actual, ...downloadActions };
+});
 
 import TransfersTab from './TransfersTab.svelte';
 import { historyEvents, type TransferEvent } from '../notifications/notif-store';
 import { resumableUploads } from '../../modules/resumable-uploads';
+import { resumableDownloads } from '../../modules/resumable-downloads';
 
 let host: HTMLElement;
 let app: Record<string, unknown> | null = null;
@@ -62,7 +73,9 @@ beforeEach(() => {
     cancelSingleUpload.mockClear();
     cancelTransfersInDirection.mockClear();
     Object.values(resumeActions).forEach((action) => action.mockClear());
+    Object.values(downloadActions).forEach((action) => action.mockClear());
     resumableUploads.set([]);
+    resumableDownloads.set([]);
     host = document.createElement('div');
     document.body.append(host);
 });
@@ -72,7 +85,59 @@ afterEach(async () => {
     app = null;
     historyEvents.set([]);
     resumableUploads.set([]);
+    resumableDownloads.set([]);
     host.remove();
+});
+
+describe('durable downloads', () => {
+    const job = {
+        jobId: 'download-7', channelId: 101, logicalMsgId: 42, name: 'plan.pdf',
+        status: 'paused' as const, verifiedBytes: 300, totalBytes: 1000,
+        error: '', savedPath: '', speed: 0,
+    };
+
+    it('shows saved bytes after relaunch and hides the volatile transfer row', () => {
+        resumableDownloads.set([job]);
+        render([transfer({ id: 'xfer:down:file:101:42', direction: 'down', name: job.name, status: 'failed' })]);
+
+        expect(host.querySelectorAll('.download-row')).toHaveLength(1);
+        expect(host.querySelectorAll('.row:not(.download-row)')).toHaveLength(0);
+        expect(host.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('30');
+        expect(host.textContent).toContain('downloaded');
+    });
+
+    it('resumes and pauses one job without discarding its bytes', async () => {
+        resumableDownloads.set([job]);
+        render([]);
+        host.querySelector<HTMLButtonElement>('button[aria-label="Resume plan.pdf"]')?.click();
+        expect(downloadActions.resumePausedDownload).toHaveBeenCalledExactlyOnceWith(job.jobId);
+
+        resumableDownloads.set([{ ...job, status: 'downloading' }]);
+        flushSync();
+        await vi.waitFor(() => expect(host.querySelector<HTMLButtonElement>('button[aria-label="Pause plan.pdf"]')?.disabled).toBe(false));
+        host.querySelector<HTMLButtonElement>('button[aria-label="Pause plan.pdf"]')?.click();
+        expect(downloadActions.pauseDownload).toHaveBeenCalledExactlyOnceWith(job.jobId);
+    });
+
+    it('keeps network waits separate from speed and requires confirmation to discard bytes', () => {
+        resumableDownloads.set([{ ...job, status: 'waiting_network', speed: 120 }]);
+        render([]);
+        expect(host.textContent).toContain('Waiting for connection');
+        expect(host.textContent).not.toContain('/s');
+        host.querySelector<HTMLButtonElement>('button[aria-label="Discard plan.pdf"]')?.click();
+        flushSync();
+        expect(downloadActions.discardDownload).not.toHaveBeenCalled();
+        host.querySelector<HTMLButtonElement>('button[aria-label="Discard downloaded bytes for plan.pdf"]')?.click();
+        expect(downloadActions.discardDownload).toHaveBeenCalledExactlyOnceWith(job.jobId);
+    });
+
+    it('offers a new save location without clearing downloaded bytes', () => {
+        resumableDownloads.set([{ ...job, status: 'needs_destination' }]);
+        render([]);
+        host.querySelector<HTMLButtonElement>('button[aria-label="Choose location for plan.pdf"]')?.click();
+        expect(downloadActions.resumePausedDownload).toHaveBeenCalledExactlyOnceWith(job.jobId);
+        expect(downloadActions.discardDownload).not.toHaveBeenCalled();
+    });
 });
 
 describe('durable large uploads', () => {

@@ -4,7 +4,9 @@
     import EventRow from './EventRow.svelte';
     import TransferRow from './TransferRow.svelte';
     import ResumableUploadRow from './ResumableUploadRow.svelte';
+    import ResumableDownloadRow from './ResumableDownloadRow.svelte';
     import { resumableUploads } from '../../modules/resumable-uploads';
+    import { resumableDownloads } from '../../modules/resumable-downloads';
     import { hasActiveModal } from '../modals/modal-a11y';
     import { portal } from './portal';
     import {
@@ -56,16 +58,19 @@
      * who cannot separate the accent from the danger hue.
      */
     const resumableIds = $derived(new Set($resumableUploads.map((job) => job.jobId)));
-    const visibleActive = $derived($activeTransfers.filter((transfer) => !transfer.resumableJobId || !resumableIds.has(transfer.resumableJobId)));
-    const visibleRecent = $derived($recentEvents.filter((entry) =>
-        entry.kind !== 'transfer' || !entry.resumableJobId || !resumableIds.has(entry.resumableJobId)
+    const downloadKeys = $derived(new Set($resumableDownloads.map((job) => `xfer:down:file:${job.channelId}:${job.logicalMsgId}`)));
+    const visibleActive = $derived($activeTransfers.filter((transfer) =>
+        (!transfer.resumableJobId || !resumableIds.has(transfer.resumableJobId)) && !downloadKeys.has(transfer.id)
     ));
-    const activeCount = $derived(visibleActive.length + $resumableUploads.length);
+    const visibleRecent = $derived($recentEvents.filter((entry) =>
+        entry.kind !== 'transfer' || ((!entry.resumableJobId || !resumableIds.has(entry.resumableJobId)) && !downloadKeys.has(entry.id))
+    ));
+    const activeCount = $derived(visibleActive.length + $resumableUploads.length + $resumableDownloads.length);
     const bellLabel = $derived(
         $bellMode === 'error'
             ? `Notifications, ${$notifUnreadErrors} ${$notifUnreadErrors === 1 ? 'error' : 'errors'}`
             : activeCount > 0
-              ? $resumableUploads.length > 0
+              ? $resumableUploads.length + $resumableDownloads.length > 0
                   ? `Notifications, ${activeCount} transfer${activeCount === 1 ? '' : 's'} in progress or waiting`
                   : `Notifications, ${activeCount} transfer${activeCount === 1 ? '' : 's'} in progress`
               : 'Notifications',
@@ -257,10 +262,13 @@
         </div>
         <div class="notif-panel-body">
             {#if activeCount > 0}
-                <h3 id="notif-section-active" class="notif-section-label">{$resumableUploads.length > 0 ? 'Transfers' : 'Active'}</h3>
+                <h3 id="notif-section-active" class="notif-section-label">{$resumableUploads.length + $resumableDownloads.length > 0 ? 'Transfers' : 'Active'}</h3>
                 <div class="notif-section" role="list" aria-labelledby="notif-section-active">
                     {#each $resumableUploads as job (job.jobId)}
                         <div role="listitem"><ResumableUploadRow {job} /></div>
+                    {/each}
+                    {#each $resumableDownloads as job (job.jobId)}
+                        <div role="listitem"><ResumableDownloadRow {job} /></div>
                     {/each}
                     {#each visibleActive as transfer (transfer.id)}
                         <!-- TransferRow carries no role of its own, unlike its

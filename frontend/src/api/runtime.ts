@@ -41,6 +41,8 @@ export interface RuntimeEventMap {
     "live_sync_completed": [payload: unknown];
     "live_sync_failed": [payload: unknown];
     download_progress: [percent: unknown, requestId: unknown];
+    download_resume_progress: [jobId: unknown, verifiedBytes: unknown, totalBytes: unknown];
+    resumable_download_changed: [payload: unknown];
     folder_download_progress: [payload: unknown];
     upload_start: [id: unknown, name: unknown, size: unknown, parentId: unknown];
     upload_progress: [id: unknown, percent: unknown];

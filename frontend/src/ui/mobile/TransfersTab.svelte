@@ -4,7 +4,9 @@
     import EventRow from '../notifications/EventRow.svelte';
     import MobileTransferRow from './MobileTransferRow.svelte';
     import MobileResumableUploadRow from './MobileResumableUploadRow.svelte';
+    import ResumableDownloadRow from '../notifications/ResumableDownloadRow.svelte';
     import { pauseUpload, resumableUploads } from '../../modules/resumable-uploads';
+    import { pauseDownload, resumableDownloads } from '../../modules/resumable-downloads';
     import { cancelSingleUpload, cancelTransfersInDirection, cancelUploadFile, clearHistory, parseTransferKey } from '../../modules/notif-bell';
     import { isPhotoBackupActivity } from '../../modules/photo-backup/activity';
     import { humanizeBackendError } from '../../modules/errors';
@@ -15,12 +17,15 @@
 
     /** How many transfers are in flight; more than one earns a way to stop the lot. */
     const resumableIds = $derived(new Set($resumableUploads.map((job) => job.jobId)));
-    const visibleActive = $derived($activeTransfers.filter((transfer) => !transfer.resumableJobId || !resumableIds.has(transfer.resumableJobId)));
-    const visibleRecent = $derived($recentTransferEvents.filter((entry) =>
-        entry.kind !== 'transfer' || !entry.resumableJobId || !resumableIds.has(entry.resumableJobId)
+    const downloadKeys = $derived(new Set($resumableDownloads.map((job) => `xfer:down:file:${job.channelId}:${job.logicalMsgId}`)));
+    const visibleActive = $derived($activeTransfers.filter((transfer) =>
+        (!transfer.resumableJobId || !resumableIds.has(transfer.resumableJobId)) && !downloadKeys.has(transfer.id)
     ));
-    const hasActive = $derived($resumableUploads.length > 0 || visibleActive.length > 0);
-    const inFlight = $derived(visibleActive.length + $resumableUploads.filter((job) => job.status === 'uploading').length);
+    const visibleRecent = $derived($recentTransferEvents.filter((entry) =>
+        entry.kind !== 'transfer' || ((!entry.resumableJobId || !resumableIds.has(entry.resumableJobId)) && !downloadKeys.has(entry.id))
+    ));
+    const hasActive = $derived($resumableUploads.length + $resumableDownloads.length > 0 || visibleActive.length > 0);
+    const inFlight = $derived(visibleActive.length + $resumableUploads.filter((job) => job.status === 'uploading').length + $resumableDownloads.filter((job) => job.status === 'downloading').length);
 
     /**
      * Stopping one row, where the backend can do that.
@@ -58,6 +63,9 @@
         if (visibleActive.some((transfer) => transfer.direction === 'down')) cancelTransfersInDirection('down');
         for (const job of $resumableUploads) {
             if (job.status === 'uploading') void pauseUpload(job.jobId);
+        }
+        for (const job of $resumableDownloads) {
+            if (job.status === 'downloading') void pauseDownload(job.jobId);
         }
     }
 
@@ -112,6 +120,9 @@
             <div class="transfers-group" role="list">
                 {#each $resumableUploads as job (job.jobId)}
                     <MobileResumableUploadRow {job} />
+                {/each}
+                {#each $resumableDownloads as job (job.jobId)}
+                    <ResumableDownloadRow {job} mobile />
                 {/each}
                 {#each visibleActive as transfer (transfer.id)}
                     <MobileTransferRow {transfer} onCancel={cancelFor(transfer)} onCancelFile={cancelUploadFile} />

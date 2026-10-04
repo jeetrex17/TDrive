@@ -3,6 +3,7 @@
 export * from "./api/drives";
 export * from "./api/files";
 export * from "./api/resumable-uploads";
+export * from "./api/resumable-downloads";
 export * from "./api/gallery";
 export * from "./api/media";
 export * from "./api/renditions";

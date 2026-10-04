@@ -166,6 +166,7 @@ export interface UploadResult {
 export interface DownloadResult {
     result: OperationResult;
     savedPath: string;
+    jobId: string;
 }
 
 export interface ImportPlan {
