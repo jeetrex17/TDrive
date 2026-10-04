@@ -1,4 +1,4 @@
-import { closeMedia, onRuntimeEvent, openStream } from '../../api';
+import { closeMedia, onRuntimeEvent, openStream, type MediaOpenResult } from '../../api';
 import { formatBytes } from '../../utils';
 import { enqueueDownload } from '../transfers';
 import { notify } from '../notifications';
@@ -25,6 +25,7 @@ let viewerHost: HTMLElement | null = null;
 let lifecycleObserver: MutationObserver | null = null;
 let activeToken = '';
 let activeTarget: FileViewerTarget | null = null;
+let activeReadOnly = false;
 let openSeq = 0;
 let encryptedSessionsEpoch = 0;
 let unsubscribeEncryptedSessionsClosed: (() => void) | null = null;
@@ -63,7 +64,7 @@ export function teardownFileViewerModal(): void {
 
 
 
-export async function openFileViewer(target: FileViewerTarget): Promise<void> {
+export async function openFileViewer(target: FileViewerTarget, sourceOpener?: () => Promise<MediaOpenResult>): Promise<void> {
     const kind = fileOpenKind(target.name);
     if (!canOpenFileViewer(target.name)) {
         notify({ level: 'warning', title: `${fileKindLabel(target.name)} files cannot be opened yet` });
@@ -79,6 +80,7 @@ export async function openFileViewer(target: FileViewerTarget): Promise<void> {
         encrypted: Boolean(target.encrypted),
     };
     activeTarget = nextTarget;
+    activeReadOnly = Boolean(sourceOpener);
     closeFileViewerView();
     await releaseActiveSession();
     if (seq !== openSeq) return;
@@ -92,12 +94,13 @@ export async function openFileViewer(target: FileViewerTarget): Promise<void> {
         mimeType: '',
         loading: true,
         error: '',
+        readOnly: Boolean(sourceOpener),
     });
 
     try {
         const opened = await accessEncryptedResource(
             nextTarget.encrypted,
-            () => openStream(nextTarget.id),
+            () => sourceOpener ? sourceOpener() : openStream(nextTarget.id),
         );
         if (!opened) {
             if (seq === openSeq) closeFileViewer();
@@ -124,6 +127,7 @@ export async function openFileViewer(target: FileViewerTarget): Promise<void> {
             mimeType: opened.mimeType,
             loading: false,
             error: '',
+            readOnly: Boolean(sourceOpener),
         });
     } catch (error) {
         if (seq !== openSeq) return;
@@ -149,10 +153,11 @@ export function closeFileViewer(): void {
     openSeq += 1;
     void releaseActiveSession();
     activeTarget = null;
+    activeReadOnly = false;
     closeFileViewerView();
 }
 
 export function downloadActiveFile(): void {
-    if (!activeTarget) return;
+    if (!activeTarget || activeReadOnly) return;
     enqueueDownload(activeTarget.id, activeTarget.name, activeTarget.size);
 }

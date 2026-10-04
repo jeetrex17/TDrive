@@ -1,5 +1,8 @@
 /* === DASHBOARD LAYOUT === */
 .dashboard-container { display: flex; height: 100vh; }
+.main-content { position: relative; }
+.channel-surface-host { position: absolute; inset: 0; z-index: 2; min-width: 0; min-height: 0; }
+.channel-surface-host[hidden] { display: none; }
 
 .sidebar {
     width: 240px; flex-shrink: 0; background: var(--bg-sidebar); border-right: 1px solid var(--color-surface-1);
@@ -121,4 +124,3 @@
     white-space: nowrap;
 }
 .uploader-chip:empty { display: none; }
-

@@ -7,6 +7,7 @@ import { sidebarState } from '../sidebar/sidebar-store';
 import { activeTab } from './mobile-shell-store';
 import { selectionBarState } from '../selection/selection-bar-store';
 import { fileListView } from '../file-list/file-list-store';
+import { closeChannelSurface, openChannelSurface } from '../channels/channel-surface-store';
 
 let target: HTMLElement;
 let component: Record<string, unknown> | null = null;
@@ -23,6 +24,7 @@ function scrollTo(selector: string, top: number): void {
 }
 
 beforeEach(() => {
+    closeChannelSurface();
     activeTab.set('files');
     selectionBarState.set({ count: 0 });
     fileListView.set({ kind: 'state', stateKind: 'loading', title: 'Loading files' });
@@ -34,6 +36,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+    closeChannelSurface();
     if (component) unmount(component);
     component = null;
     target.remove();
@@ -86,6 +89,17 @@ describe('scroll divider', () => {
 });
 
 describe('mobile hierarchy', () => {
+    it('leaves Channels when a platform action selects another tab', () => {
+        openChannelSurface();
+        flushSync();
+        expect(target.querySelector('.mobile-channel-surface')).not.toBeNull();
+
+        activeTab.set('transfers');
+        flushSync();
+
+        expect(target.querySelector('.mobile-channel-surface')).toBeNull();
+    });
+
     it('keeps Upload/Create contextual to drive content instead of a fifth destination', () => {
         const action = target.querySelector('.mobile-context-action') as HTMLElement;
         expect(action.hidden).toBe(false);

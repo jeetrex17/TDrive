@@ -29,6 +29,10 @@
     import { sidebarState } from '../sidebar/sidebar-store';
     import { breadcrumbPath } from '../chrome/breadcrumb-store';
     import { fileListView } from '../file-list/file-list-store';
+    import ChannelSurface from '../channels/ChannelSurface.svelte';
+    import { playChannelMedia, openChannelTelegram } from '../channels/channel-actions';
+    import { channelSurfaceOpen, closeChannelSurface } from '../channels/channel-surface-store';
+    import { connectChannelSource, disconnectChannelSource, listChannelMedia, listChannelSourceCandidates, listConnectedChannelSources } from '../../api';
 
     interface Props {
         dashboardVisible: boolean;
@@ -56,6 +60,22 @@
         || ($activeTab === 'files' && !emptyFilesOwnsCreation && $sidebarState.virtualView !== 'trash'),
     );
     const contextualActionVisible = $derived(showContextAction && !selecting && !$keyboardOpen);
+    let channelEntryTab = $state<MobileTab | null>(null);
+
+    // Some platform actions select a tab without going through the tab bar
+    // (notification routing and the sync ring, for example). Keep Channels as
+    // a proper destination by dismissing its overlay for any of those changes.
+    $effect(() => {
+        if (!$channelSurfaceOpen) {
+            channelEntryTab = null;
+            return;
+        }
+        if (channelEntryTab === null) {
+            channelEntryTab = $activeTab;
+            return;
+        }
+        if (channelEntryTab !== $activeTab) closeChannelSurface();
+    });
 
     // Publish the upload button's footprint so anything else that floats over
     // the content can stand off it. The toast stack is the one that matters:
@@ -224,6 +244,11 @@
             <AccountTab />
         </div>
     </div>
+    {#if dashboardVisible && $channelSurfaceOpen}
+        <div class="mobile-channel-surface">
+            <ChannelSurface loadConnected={listConnectedChannelSources} loadCandidates={listChannelSourceCandidates} connect={(source) => connectChannelSource(source.channelId, source.accountId)} disconnect={(source) => disconnectChannelSource(source.channelId, source.accountId, source.generation)} fetchMedia={listChannelMedia} play={playChannelMedia} openTelegram={openChannelTelegram} onClose={closeChannelSurface} />
+        </div>
+    {/if}
 
     <!-- The selection bar sits above the tab bar and replaces it while
          selecting. It keeps its id and its inline display: none because the

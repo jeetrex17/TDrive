@@ -88,6 +88,8 @@ interface VideoOpenAttempt {
     nativeFallbackRequested: boolean;
     pausedByUser: boolean;
     playbackIntent: PlaybackIntent | null;
+    /** Opens a source-scoped capability instead of resolving through active drive. */
+    openSource?: () => Promise<MediaOpenResult>;
 }
 
 let playbackPreferences = loadPlaybackPreferences();
@@ -288,9 +290,11 @@ function retryVideoOpen() {
         run();
         return;
     }
-    const target = activeOpenAttempt?.target;
-    if (!target) return;
-    void openVideoTarget(target, null);
+    const attempt = activeOpenAttempt;
+    if (!attempt) return;
+    // Retrying a channel capability must keep its explicit source; numeric
+    // message ids are not globally unique across Telegram channels/drives.
+    void openVideoTarget(attempt.target, null, attempt.openSource);
 }
 
 function handleHtmlPlaybackError(detail: string) {
@@ -857,9 +861,10 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
         // A prefetched session was opened while the file was already unlocked,
         // so only a cold open can reach the vault prompt. A null here is the
         // user dismissing that prompt, which is not an error to surface.
-        opened = mediaPrefetcher.take(attempt.target.id) ?? await accessEncryptedResource(
+        const prefetched = attempt.openSource ? null : mediaPrefetcher.take(attempt.target.id);
+        opened = prefetched ?? await accessEncryptedResource(
             Boolean(attempt.target.encrypted),
-            () => openMedia(attempt.target.id),
+            () => attempt.openSource ? attempt.openSource() : openMedia(attempt.target.id),
         );
         if (!opened) {
             // Closing queues teardown after this ownership transition finishes.
@@ -971,7 +976,7 @@ function handleHtmlMediaError(
     // A repackaged container that still will not decode has nothing left to
     // retry: the streams inside are ones this device has no decoder for. Point
     // at the one thing that can still work rather than at a button that cannot.
-    const action = undecodable && isRemuxableVideo(attempt.target.name)
+    const action = !attempt.openSource && undecodable && isRemuxableVideo(attempt.target.name)
         ? downloadInstead(attempt.target)
         : null;
     void playbackTransitions.run(attempt.generation, async (isCurrent) => {
@@ -1158,7 +1163,11 @@ function activateNativePlayback(
     if (!standalone) geometry?.scheduleNativeResize();
 }
 
-async function openVideoTarget(target: VideoOpenTarget, playbackIntent: PlaybackIntent | null): Promise<void> {
+async function openVideoTarget(
+    target: VideoOpenTarget,
+    playbackIntent: PlaybackIntent | null,
+    sourceOpener?: () => Promise<MediaOpenResult>,
+): Promise<void> {
     const host = document.getElementById("video-modal");
     if (videoHostEl !== host || !videoSetupComplete) activateVideoModal();
     if (!videoDOM.modal || !videoDOM.video || !videoDOM.filename || !videoDOM.meta) return;
@@ -1170,6 +1179,7 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
         nativeFallbackRequested: false,
         pausedByUser: false,
         playbackIntent,
+        openSource: sourceOpener,
     };
     activeOpenAttempt = attempt;
 
@@ -1200,7 +1210,7 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
         const format = videoFormatLabel(target.name);
         setError(
             `iOS cannot open ${format} files. Download it to play in another app.`,
-            downloadInstead(target),
+            attempt.openSource ? null : downloadInstead(target),
         );
         return;
     }
@@ -1222,19 +1232,28 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
         if (!rect || !isCurrent()) return;
         // A warmed session is attached to rather than opened again, which skips
         // the Telegram round-trip a fresh native open would repeat.
-        const warmed = mediaPrefetcher.take(attempt.target.id);
+        // An external channel source has no active-drive identity. Open its
+        // explicit capability once, then attach the native player to that
+        // token, which keeps the shared player lifecycle and cleanup intact.
+        const warmed = attempt.openSource
+            ? await attempt.openSource()
+            : mediaPrefetcher.take(attempt.target.id);
         await openNativePlayback(attempt, rect, isCurrent, warmed, attempt.playbackIntent);
     });
 }
 
-export async function openVideoModal(target: VideoOpenTarget, playlist?: VideoPlaylistLaunch): Promise<void> {
+export async function openVideoModal(
+    target: VideoOpenTarget,
+    playlist?: VideoPlaylistLaunch,
+    sourceOpener?: () => Promise<MediaOpenResult>,
+): Promise<void> {
     const normalized = normalizeVideoTarget(target);
     if (!normalized) return;
     const host = document.getElementById("video-modal");
     if (videoHostEl !== host || !videoSetupComplete) activateVideoModal();
     if (!videoDOM.modal || !videoDOM.video || !videoDOM.filename || !videoDOM.meta) return;
     installVideoPlaylist(normalized, playlist);
-    await openVideoTarget(normalized, null);
+    await openVideoTarget(normalized, null, sourceOpener);
 }
 
 export async function closeVideoModal() {

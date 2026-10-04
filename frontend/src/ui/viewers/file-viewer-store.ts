@@ -12,6 +12,7 @@ export interface FileViewerView {
     mimeType: string;
     loading: boolean;
     error: string;
+    readOnly: boolean;
 }
 
 const initialState: FileViewerView = {
@@ -24,12 +25,13 @@ const initialState: FileViewerView = {
     mimeType: '',
     loading: false,
     error: '',
+    readOnly: false,
 };
 
 export const fileViewerState = writable<FileViewerView>(initialState);
 
-export function openFileViewerView(view: Omit<FileViewerView, 'open'>): void {
-    fileViewerState.set({ open: true, ...view });
+export function openFileViewerView(view: Omit<FileViewerView, 'open' | 'readOnly'> & { readOnly?: boolean }): void {
+    fileViewerState.set({ open: true, readOnly: false, ...view });
 }
 
 export function setFileViewerLoading(loading: boolean): void {

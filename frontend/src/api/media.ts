@@ -143,7 +143,7 @@ export async function openOriginalImage(msgId: number, revision: number): Promis
     return opened;
 }
 
-function normalizeMediaOpenResult(opened?: OpenResult): MediaOpenResult {
+export function normalizeMediaOpenResult(opened?: OpenResult): MediaOpenResult {
     return {
         token: String(opened?.token ?? ""),
         url: String(opened?.url ?? ""),

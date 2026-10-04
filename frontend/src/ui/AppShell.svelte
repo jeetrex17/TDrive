@@ -5,8 +5,9 @@
     import ImagesIcon from '@lucide/svelte/icons/images';
     import Link2Icon from '@lucide/svelte/icons/link-2';
     import SearchIcon from '@lucide/svelte/icons/search';
+    import RadioIcon from '@lucide/svelte/icons/radio';
     import Trash2Icon from '@lucide/svelte/icons/trash-2';
-    import { isMobilePlatform, listMountableDrives } from '../api';
+    import { connectChannelSource, disconnectChannelSource, isMobilePlatform, listChannelMedia, listChannelSourceCandidates, listConnectedChannelSources, listMountableDrives } from '../api';
     import tdriveLogo from '../assets/images/tdrive-logo.png';
     import { openEncryptionSettingsModal } from '../modules/modals/encryption-settings';
     import { openLogoutModal } from '../modules/modals/logout';
@@ -35,6 +36,9 @@
     import DriveList from './sidebar/DriveList.svelte';
     import MountControl from './mount/MountControl.svelte';
     import FeatureLayer from './app/FeatureLayer.svelte';
+    import ChannelSurface from './channels/ChannelSurface.svelte';
+    import { playChannelMedia, openChannelTelegram } from './channels/channel-actions';
+    import { channelSurfaceOpen, closeChannelSurface, openChannelSurface } from './channels/channel-surface-store';
 
     interface Props {
         dashboardVisible: boolean;
@@ -140,6 +144,15 @@
                                 onPendingActions={showPendingActionsMenu}
                             />
                         {/if}
+                    </div>
+                </div>
+                <div class="drives-section">
+                    <div class="drives-section-title">External</div>
+                    <div class="drives-list">
+                        <button id="nav-channels" class="drive-item" class:active={$channelSurfaceOpen} type="button" aria-current={$channelSurfaceOpen ? 'page' : undefined} onclick={openChannelSurface}>
+                            <RadioIcon class="icon" size={18} strokeWidth={2} aria-hidden="true" />
+                            <span class="drive-item-title">Channels</span>
+                        </button>
                     </div>
                 </div>
             </div>
@@ -310,6 +323,11 @@
                 <PhotosSurface />
             {/if}
         </div>
+        {#if dashboardVisible && $channelSurfaceOpen}
+            <div class="channel-surface-host">
+                <ChannelSurface loadConnected={listConnectedChannelSources} loadCandidates={listChannelSourceCandidates} connect={(source) => connectChannelSource(source.channelId, source.accountId)} disconnect={(source) => disconnectChannelSource(source.channelId, source.accountId, source.generation)} fetchMedia={listChannelMedia} play={playChannelMedia} openTelegram={openChannelTelegram} onClose={closeChannelSurface} />
+            </div>
+        {/if}
     </main>
 </div>
 

@@ -1760,6 +1760,27 @@ describe("video chrome interactions", () => {
 });
 
 describe("fatal video error card", () => {
+    it("retries an explicit channel source without opening the matching drive file", async () => {
+        const channelOpen = vi
+            .fn()
+            .mockRejectedValueOnce(new Error("channel session expired"))
+            .mockResolvedValueOnce(mediaOpenResult(44, "channel-retry-token"));
+        const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+
+        await videoModule.openVideoModal({ id: 44, name: "same-id.mp4", size: 1024 }, undefined, channelOpen);
+
+        const retry = document.querySelector<HTMLButtonElement>("#video-error-retry");
+        await vi.waitFor(() => expect(retry?.closest<HTMLElement>("#video-error")?.style.display).toBe("block"));
+        retry?.click();
+
+        await vi.waitFor(() => expect(channelOpen).toHaveBeenCalledTimes(2));
+        expect(apiMocks.openMedia).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(document.querySelector<HTMLVideoElement>("#video-player")?.getAttribute("src")).toContain("channel-retry-token"));
+        errorLog.mockRestore();
+    });
+
     it("retries the failed HTML target without exposing backend detail", async () => {
         const retried = mediaOpenResult(44, "retry-html-token");
         let resolveRetry: (() => void) | undefined;

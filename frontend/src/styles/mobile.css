@@ -117,6 +117,8 @@ html.mobile .main-content {
     min-height: 0;
     padding: 0 var(--inset-right) 0 var(--inset-left);
 }
+html.mobile .mobile-channel-surface { position: absolute; inset: 0; z-index: 3; min-width: 0; min-height: 0; background: var(--color-canvas); }
+html.mobile .mobile-channel-surface[hidden] { display: none; }
 
 html.mobile .mobile-scroll {
     flex: 1 1 auto;
@@ -922,7 +924,10 @@ html.mobile .mobile-sheet {
     background: var(--color-surface-1);
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     box-shadow: var(--shadow-lg);
-    transform: translateY(100%);
+    /* A percentage of a capped sheet can still leave an edge in view on some
+       WebViews. Move a closed sheet by the viewport height so it is wholly
+       below the glass before another full-screen destination appears. */
+    transform: translateY(100dvh);
     transition: transform var(--motion-slow) var(--ease-enter);
 }
 html.mobile .mobile-sheet.open { transform: translateY(0); }
