@@ -134,10 +134,10 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 	s.warmContainerIndex()
 	if opts.EnableVideoThumbnails {
 		thumbnailCache := cache
-		if file.Encrypted {
-			// Generated frames are plaintext. Keep encrypted-video thumbnails in
-			// the session temp directory only; Close removes that directory and
-			// the startup sweep removes leftovers after an unclean exit.
+		if file.Encrypted || file.SourceKind == "channel" {
+			// Generated frames are plaintext. Keep encrypted and external
+			// channel thumbnails in the session temp directory only; their
+			// cached identities must not survive key loss or source revocation.
 			thumbnailCache = nil
 		}
 		s.thumbReader = NewRangeReader(RangeReaderConfig{
@@ -198,6 +198,10 @@ func (s *Session) Token() string {
 		return ""
 	}
 	return s.token
+}
+
+func (s *Session) External() bool {
+	return s != nil && s.file.SourceKind == "channel"
 }
 
 func (s *Session) URL() string {

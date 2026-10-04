@@ -84,6 +84,9 @@ type LogicalFile struct {
 	EncryptionVersion int       `json:"encryption_version"`
 	Multipart         bool      `json:"multipart"`
 	Segments          []Segment `json:"segments"`
+	SourceKind        string    `json:"source_kind,omitempty"`
+	SourceAccountID   int64     `json:"source_account_id,omitempty"`
+	SourceGeneration  string    `json:"source_generation,omitempty"`
 }
 
 func (f LogicalFile) SegmentCount() int {

@@ -83,6 +83,66 @@ func (g *Gotd) ListOwnedBroadcastChannels(ctx context.Context) ([]OwnedBroadcast
 	return channels, nil
 }
 
+// collectJoinedBroadcastChannels includes both primary and archived dialogs.
+// It does not require creator or admin rights.
+func collectJoinedBroadcastChannels(ctx context.Context, queries ...dialogs.Query) ([]JoinedBroadcastChannel, error) {
+	seen := make(map[int64]struct{})
+	out := make([]JoinedBroadcastChannel, 0)
+	for _, query := range queries {
+		iterator := dialogs.NewIterator(query, ownedDialogsBatchSize)
+		for iterator.Next(ctx) {
+			elem := iterator.Value()
+			peer, ok := elem.Peer.(*tg.InputPeerChannel)
+			if !ok {
+				continue
+			}
+			channel, ok := elem.Entities.Channel(peer.ChannelID)
+			if !ok || !channel.Broadcast || channel.Megagroup || channel.Left {
+				continue
+			}
+			if _, exists := seen[channel.ID]; exists {
+				continue
+			}
+			seen[channel.ID] = struct{}{}
+			out = append(out, JoinedBroadcastChannel{
+				ID: channel.ID, AccessHash: channel.AccessHash,
+				Title: strings.TrimSpace(channel.Title), Username: channel.Username,
+				Protected: channel.Noforwards,
+			})
+		}
+		if err := iterator.Err(); err != nil {
+			return nil, fmt.Errorf("tgclient: list joined broadcast channels: %w", err)
+		}
+	}
+	return out, nil
+}
+
+func (g *Gotd) ListJoinedBroadcastChannels(ctx context.Context) ([]JoinedBroadcastChannel, error) {
+	var channels []JoinedBroadcastChannel
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		var err error
+		channels, err = collectJoinedBroadcastChannels(ctx,
+			folderDialogsQuery{api: api, folderID: 0},
+			folderDialogsQuery{api: api, folderID: 1},
+		)
+		return err
+	})
+	return channels, err
+}
+
+func (g *Gotd) GetJoinedBroadcastChannel(ctx context.Context, channelID int64) (JoinedBroadcastChannel, error) {
+	channels, err := g.ListJoinedBroadcastChannels(ctx)
+	if err != nil {
+		return JoinedBroadcastChannel{}, err
+	}
+	for _, channel := range channels {
+		if channel.ID == channelID {
+			return channel, nil
+		}
+	}
+	return JoinedBroadcastChannel{}, fmt.Errorf("tgclient: joined broadcast channel %d unavailable", channelID)
+}
+
 func (g *Gotd) CreateBroadcastChannel(ctx context.Context, title, about string) (OwnedBroadcastChannel, error) {
 	var created OwnedBroadcastChannel
 	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {

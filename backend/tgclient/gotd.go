@@ -418,19 +418,34 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 		mediaSize          int64
 		documentName       string
 		documentAccessHash int64
+		documentID         int64
+		mimeType           string
+		video              bool
+		audio              bool
+		ttlSeconds         int
+		paid               bool
 	)
 	if media, ok := fullMsg.Media.(*tg.MessageMediaDocument); ok {
 		hasMedia = true
+		ttlSeconds, _ = media.GetTTLSeconds()
 		if doc, ok := media.Document.(*tg.Document); ok {
 			mediaSize = doc.Size
+			documentID = doc.ID
+			mimeType = doc.MimeType
 			documentAccessHash = doc.AccessHash
 			for _, attr := range doc.Attributes {
-				if fname, ok := attr.(*tg.DocumentAttributeFilename); ok {
-					documentName = fname.FileName
-					break
+				switch value := attr.(type) {
+				case *tg.DocumentAttributeFilename:
+					documentName = value.FileName
+				case *tg.DocumentAttributeVideo:
+					video = true
+				case *tg.DocumentAttributeAudio:
+					audio = true
 				}
 			}
 		}
+	} else if _, ok := fullMsg.Media.(*tg.MessageMediaPaidMedia); ok {
+		hasMedia, paid = true, true
 	}
 
 	return HistoryMessage{
@@ -443,6 +458,13 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 		MediaSize:          mediaSize,
 		DocumentName:       documentName,
 		DocumentAccessHash: documentAccessHash,
+		DocumentID:         documentID,
+		MimeType:           mimeType,
+		Video:              video,
+		Audio:              audio,
+		NoForwards:         fullMsg.Noforwards,
+		TTLSeconds:         ttlSeconds,
+		Paid:               paid,
 	}, true
 }
 
@@ -485,6 +507,52 @@ func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID i
 	} else {
 		slog.Debug("tgclient: MessagesGetHistory returned", "channel_id", peer.ChannelID, "messages", len(out))
 	}
+	return out, err
+}
+
+func (g *Gotd) SearchChannelMessages(ctx context.Context, peer InputPeer, query string, offsetID int64, limit int) ([]HistoryMessage, error) {
+	var out []HistoryMessage
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		result, err := api.MessagesSearch(ctx, &tg.MessagesSearchRequest{
+			Peer: toPeer(peer), Q: query, Filter: &tg.InputMessagesFilterEmpty{},
+			OffsetID: int(offsetID), Limit: limit,
+		})
+		if err != nil {
+			return err
+		}
+		var messages []tg.MessageClass
+		switch value := result.(type) {
+		case *tg.MessagesMessages:
+			messages = value.Messages
+		case *tg.MessagesMessagesSlice:
+			messages = value.Messages
+		case *tg.MessagesChannelMessages:
+			messages = value.Messages
+		}
+		for _, message := range messages {
+			if converted, ok := historyMessageFromTG(message); ok {
+				out = append(out, converted)
+			}
+		}
+		return nil
+	})
+	return out, err
+}
+
+func (g *Gotd) GetChannelMessage(ctx context.Context, peer InputPeer, msgID int64) (HistoryMessage, error) {
+	var out HistoryMessage
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		messages, err := channelMessages(ctx, api, peer, []int64{msgID})
+		if err != nil {
+			return err
+		}
+		converted, ok := historyMessageFromTG(messages[msgID])
+		if !ok || converted.Placeholder || converted.MsgID != msgID {
+			return ErrMessageNotFound
+		}
+		out = converted
+		return nil
+	})
 	return out, err
 }
 

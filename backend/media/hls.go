@@ -169,7 +169,7 @@ func (s *Server) handleHLS(w http.ResponseWriter, r *http.Request) {
 func writeHLS(w http.ResponseWriter, r *http.Request, session *Session, contentType string, body []byte) {
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-	if session.Encrypted() {
+	if session.Encrypted() || session.External() {
 		setMediaNoStore(w.Header())
 	}
 	w.WriteHeader(http.StatusOK)

@@ -67,15 +67,23 @@ type InputPeer struct {
 // HistoryMessage is the subset of a tg.Message that sync/backfill/read paths care about.
 // We deliberately avoid leaking the gotd types so the fake stays cheap.
 type HistoryMessage struct {
+	ChannelID          int64 // optional in fakes; production history is scoped by the request peer
 	MsgID              int64
 	Date               int64
 	FromID             int64
-	Outgoing           bool // Telegram marks messages sent by the current account.
+	Outgoing           bool   // Telegram marks messages sent by the current account.
 	Text               string // caption for media messages, body for text messages
 	HasMedia           bool
 	MediaSize          int64
 	DocumentName       string
 	DocumentAccessHash int64
+	DocumentID         int64
+	MimeType           string
+	Video              bool
+	Audio              bool
+	NoForwards         bool
+	TTLSeconds         int
+	Paid               bool
 	Thumbs             []FileThumb
 	// Placeholder marks an entry that occupies a message id but carries no
 	// content: a service event, or the stub left where a message was deleted.
@@ -157,6 +165,16 @@ type OwnedBroadcastChannel struct {
 	HasActivity bool
 }
 
+// JoinedBroadcastChannel is a channel visible to this account, including
+// archived dialogs. AccessHash stays entirely behind the backend boundary.
+type JoinedBroadcastChannel struct {
+	ID         int64
+	AccessHash int64
+	Title      string
+	Username   string
+	Protected  bool
+}
+
 // Client is the surface sync, backfill, and local-action paths use to talk
 // to Telegram. Both the real (gotd-backed) and fake test implementations
 // implement this.
@@ -193,6 +211,9 @@ type Client interface {
 	// payload, but they do occupy message ids, so silently dropping them would
 	// make a full page look short and mislead callers paginating on page size.
 	GetHistory(ctx context.Context, peer InputPeer, minID, offsetID int64, limit int) ([]HistoryMessage, error)
+	SearchChannelMessages(ctx context.Context, peer InputPeer, query string, offsetID int64, limit int) ([]HistoryMessage, error)
+	GetChannelMessage(ctx context.Context, peer InputPeer, msgID int64) (HistoryMessage, error)
+	GetJoinedBroadcastChannel(ctx context.Context, channelID int64) (JoinedBroadcastChannel, error)
 
 	// GetFileDocument resolves one Telegram message into a downloadable
 	// document descriptor without downloading the bytes.
@@ -231,6 +252,7 @@ type Client interface {
 	GetChannelPts(ctx context.Context, peer InputPeer) (int64, error)
 
 	ListOwnedBroadcastChannels(ctx context.Context) ([]OwnedBroadcastChannel, error)
+	ListJoinedBroadcastChannels(ctx context.Context) ([]JoinedBroadcastChannel, error)
 	CreateBroadcastChannel(ctx context.Context, title, about string) (OwnedBroadcastChannel, error)
 	CreateMegagroup(ctx context.Context, title, about string) (InputPeer, error)
 	ExportInviteLink(ctx context.Context, peer InputPeer, requestNeeded bool) (string, error)

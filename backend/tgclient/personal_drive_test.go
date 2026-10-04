@@ -38,6 +38,8 @@ type dialogChannel struct {
 	left        bool
 	topMessage  int
 	createdDate int
+	username    string
+	protected   bool
 }
 
 func dialogsPage(rows ...dialogChannel) tg.MessagesDialogsClass {
@@ -57,6 +59,8 @@ func dialogsPage(rows ...dialogChannel) tg.MessagesDialogsClass {
 			Megagroup:  row.megagroup,
 			Left:       row.left,
 			Date:       row.createdDate,
+			Username:   row.username,
+			Noforwards: row.protected,
 		})
 		if row.topMessage > 0 {
 			result.Messages = append(result.Messages, &tg.Message{
@@ -67,6 +71,35 @@ func dialogsPage(rows ...dialogChannel) tg.MessagesDialogsClass {
 		}
 	}
 	return result
+}
+
+func TestCollectJoinedBroadcastChannelsIncludesArchivedNonOwnersAndProtection(t *testing.T) {
+	main := &scriptedDialogsQuery{responses: []tg.MessagesDialogsClass{
+		dialogsPage(
+			dialogChannel{id: 101, title: "Joined public", broadcast: true, username: "public"},
+			dialogChannel{id: 102, title: "Group", megagroup: true},
+		),
+		&tg.MessagesDialogsSlice{},
+	}}
+	archive := &scriptedDialogsQuery{responses: []tg.MessagesDialogsClass{
+		dialogsPage(
+			dialogChannel{id: 101, title: "Duplicate", broadcast: true},
+			dialogChannel{id: 103, title: "Protected archive", broadcast: true, protected: true},
+			dialogChannel{id: 104, title: "Left", broadcast: true, left: true},
+		),
+		&tg.MessagesDialogsSlice{},
+	}}
+	got, err := collectJoinedBroadcastChannels(t.Context(), main, archive)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []JoinedBroadcastChannel{
+		{ID: 101, AccessHash: 1101, Title: "Joined public", Username: "public"},
+		{ID: 103, AccessHash: 1103, Title: "Protected archive", Protected: true},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("joined channels = %#v, want %#v", got, want)
+	}
 }
 
 func TestCollectOwnedBroadcastChannelsPaginatesFiltersAndDeduplicates(t *testing.T) {
