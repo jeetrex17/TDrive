@@ -70,6 +70,7 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
     GetFileList: resolves([]),
     GetPhotoBackupState: resolves({ settings: { enabled: false }, sources: [], status: { phase: 'idle' } }),
     ListResumableUploads: resolves([]),
+    ListResumableDownloads: resolves({ result: { ok: true }, jobs: [] }),
     GetFolderContents: resolves({ folders: [], files: [] }),
     GetFolderStats: resolves([]),
     GetStorageUsed: resolves(0),
