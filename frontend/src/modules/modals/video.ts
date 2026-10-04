@@ -61,7 +61,7 @@ import { attachHls, prefersJsPlayer, type HlsSource } from "../video/hls-source"
 import { MediaPrefetcher, readyToPrefetch, warmMediaEdges } from "../video/video-prefetch";
 import { VideoGeometryController } from "../video/video-geometry";
 import { SEEK_STEP_SECONDS, VOLUME_STEP, VideoTransportController } from "../video/video-transport";
-import { bindVideoDOM, byID, collectVideoDOM, type VideoDOM } from "../video/video-dom";
+import { bindVideoDOM, collectVideoDOM, videoDOMLive, type VideoDOM } from "../video/video-dom";
 import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from "../../ui/modals/modal-a11y";
 import { bindTouchGestures, type TouchGestureHandlers } from "../../ui/preview/touch-gestures";
 import { videoPlaybackPreferences } from "../../ui/video/video-preferences-store";
@@ -98,22 +98,6 @@ let settingsReturnFocus: HTMLElement | null = null;
 let playlistOpen = false;
 let playlistReturnFocus: HTMLElement | null = null;
 let activePlaylist: ActiveVideoPlaylist | null = null;
-let modalEl: HTMLElement | null = null;
-let stageEl: HTMLElement | null = null;
-let topbarEl: HTMLElement | null = null;
-let controlsEl: HTMLElement | null = null;
-let filenameEl: HTMLElement | null = null;
-let metaEl: HTMLElement | null = null;
-let closeBtnEl: HTMLButtonElement | null = null;
-let videoEl: HTMLVideoElement | null = null;
-let loadingEl: HTMLElement | null = null;
-let loadingStatusEl: HTMLElement | null = null;
-let errorEl: HTMLElement | null = null;
-let errorMessageEl: HTMLElement | null = null;
-let errorRetryBtnEl: HTMLButtonElement | null = null;
-let playBtnEl: HTMLButtonElement | null = null;
-let speedBtnEl: HTMLButtonElement | null = null;
-let speedMenuEl: HTMLElement | null = null;
 let audioPicker: TrackPicker | null = null;
 let subtitlePicker: TrackPicker | null = null;
 
@@ -140,19 +124,23 @@ let a11y: ReturnType<typeof installModalA11y> | null = null;
 let videoHostObserver: MutationObserver | null = null;
 let videoHostEl: HTMLElement | null = null;
 let unbindVideoDOM: (() => void) | null = null;
-let unbindSpeedMenu: (() => void) | null = null;
 let unbindTouchGestures: (() => void) | null = null;
 // Where the last stage pointer came from: touch taps go through the phone
 // recogniser, and a tap that began on the chrome is the chrome's to handle.
 let stagePointerTouch = false;
 let stagePointerOnChrome = false;
-let videoDOM: VideoDOM | null = null;
+let videoDOM: VideoDOM = collectVideoDOM(null);
 let geometry: VideoGeometryController | null = null;
 let transport: VideoTransportController | null = null;
 let videoSetupComplete = false;
+let controlListeners: AbortController | null = null;
+
+function byID<T extends HTMLElement>(id: string): T | null {
+    return videoHostEl?.querySelector<T>(`#${id}`) ?? null;
+}
 
 function isOpen() {
-    return Boolean(modalEl && modalEl.style.display !== "none");
+    return Boolean(videoDOM.modal && videoDOM.modal.style.display !== "none");
 }
 
 // The throughput line in the title bar and the buffering status both read from
@@ -176,8 +164,8 @@ function isNativeFallbackActive() {
 }
 
 function setChromeVisible(visible: boolean) {
-    modalEl?.classList.toggle("is-video-chrome-visible", visible);
-    modalEl?.classList.toggle("is-video-cursor-hidden", !visible && !hasError && !isNativeFallbackActive());
+    videoDOM.modal?.classList.toggle("is-video-chrome-visible", visible);
+    videoDOM.modal?.classList.toggle("is-video-cursor-hidden", !visible && !hasError && !isNativeFallbackActive());
 }
 
 
@@ -207,47 +195,47 @@ function revealChrome() {
 }
 
 function setLoading(visible: boolean) {
-    if (!loadingEl) return;
-    modalEl?.classList.toggle("is-video-loading", visible);
+    if (!videoDOM.loading) return;
+    videoDOM.modal?.classList.toggle("is-video-loading", visible);
     if (loadingTimer) {
         clearTimeout(loadingTimer);
         loadingTimer = null;
     }
     if (!visible) {
-        loadingEl.style.display = "none";
-        loadingEl.setAttribute("aria-hidden", "true");
+        videoDOM.loading.style.display = "none";
+        videoDOM.loading.setAttribute("aria-hidden", "true");
         updateLoadingStatus();
         return;
     }
     updateLoadingStatus();
     loadingTimer = setTimeout(() => {
         loadingTimer = null;
-        if (!loadingEl || hasError) return;
-        loadingEl.style.display = "flex";
-        loadingEl.setAttribute("aria-hidden", "false");
+        if (!videoDOM.loading || hasError) return;
+        videoDOM.loading.style.display = "flex";
+        videoDOM.loading.setAttribute("aria-hidden", "false");
     }, LOADING_DEBOUNCE_MS);
 }
 
 function updateLoadingStatus() {
-    if (!loadingStatusEl) return;
+    if (!videoDOM.loadingStatus) return;
     if (loadingStatusOverride) {
-        loadingStatusEl.textContent = loadingStatusOverride;
+        videoDOM.loadingStatus.textContent = loadingStatusOverride;
         return;
     }
     if (!activeAdapter) {
-        loadingStatusEl.textContent = "Opening video";
+        videoDOM.loadingStatus.textContent = "Opening video";
         return;
     }
     const activity = streamActivity.label;
     if (activity === "Rate-limited") {
-        loadingStatusEl.textContent = "Buffering · Rate-limited";
+        videoDOM.loadingStatus.textContent = "Buffering · Rate-limited";
         return;
     }
     if (activity.startsWith("Streaming ")) {
-        loadingStatusEl.textContent = `Buffering · ${activity.slice("Streaming ".length)}`;
+        videoDOM.loadingStatus.textContent = `Buffering · ${activity.slice("Streaming ".length)}`;
         return;
     }
-    loadingStatusEl.textContent = "Buffering";
+    videoDOM.loadingStatus.textContent = "Buffering";
 }
 
 function setLoadingStatusOverride(message: string) {
@@ -270,27 +258,27 @@ let errorPrimaryAction: ErrorAction | null = null;
 function setError(message: string, primary: ErrorAction | null = null) {
     hasError = true;
     errorPrimaryAction = primary;
-    if (errorRetryBtnEl) errorRetryBtnEl.textContent = primary ? primary.label : "Retry";
+    if (videoDOM.errorRetryButton) videoDOM.errorRetryButton.textContent = primary ? primary.label : "Retry";
     loadingStatusOverride = "";
     setLoading(false);
     streamActivity.stop();
-    if (errorMessageEl) errorMessageEl.textContent = message;
-    if (errorEl) errorEl.style.display = "block";
-    modalEl?.classList.add("is-video-error");
+    if (videoDOM.errorMessage) videoDOM.errorMessage.textContent = message;
+    if (videoDOM.error) videoDOM.error.style.display = "block";
+    videoDOM.modal?.classList.add("is-video-error");
     setChromeVisible(true);
     clearChromeTimer();
-    if (isOpen()) errorRetryBtnEl?.focus({ preventScroll: true });
+    if (isOpen()) videoDOM.errorRetryButton?.focus({ preventScroll: true });
 }
 
 function clearError() {
-    const restoreFocus = Boolean(errorEl?.contains(document.activeElement));
+    const restoreFocus = Boolean(videoDOM.error?.contains(document.activeElement));
     hasError = false;
     errorPrimaryAction = null;
-    if (errorRetryBtnEl) errorRetryBtnEl.textContent = "Retry";
-    errorMessageEl?.replaceChildren();
-    if (errorEl) errorEl.style.display = "none";
-    modalEl?.classList.remove("is-video-error");
-    if (restoreFocus && isOpen()) (closeBtnEl || playBtnEl)?.focus({ preventScroll: true });
+    if (videoDOM.errorRetryButton) videoDOM.errorRetryButton.textContent = "Retry";
+    videoDOM.errorMessage?.replaceChildren();
+    if (videoDOM.error) videoDOM.error.style.display = "none";
+    videoDOM.modal?.classList.remove("is-video-error");
+    if (restoreFocus && isOpen()) (videoDOM.closeButton || videoDOM.playButton)?.focus({ preventScroll: true });
 }
 
 function retryVideoOpen() {
@@ -381,10 +369,10 @@ function syncAspectButton() {
 }
 
 function applyHtmlPicture() {
-    if (!videoEl || !stageEl) return;
-    const rect = stageEl.getBoundingClientRect();
-    const style = htmlPictureStyle(playbackPreferences.pictureMode, rect.width, rect.height, videoEl.videoWidth, videoEl.videoHeight);
-    Object.assign(videoEl.style, style);
+    if (!videoDOM.video || !videoDOM.stage) return;
+    const rect = videoDOM.stage.getBoundingClientRect();
+    const style = htmlPictureStyle(playbackPreferences.pictureMode, rect.width, rect.height, videoDOM.video.videoWidth, videoDOM.video.videoHeight);
+    Object.assign(videoDOM.video.style, style);
 }
 
 function getActiveVideoPanel(): HTMLElement | null {
@@ -395,11 +383,11 @@ function getActiveVideoPanel(): HTMLElement | null {
 
 function syncActivePanelGeometry() {
     const panel = getActiveVideoPanel();
-    if (!panel || !modalEl) return;
+    if (!panel || !videoDOM.modal) return;
     const shell = byID("video-shell")?.getBoundingClientRect();
     if (!shell) return;
-    const top = Math.max(0, (topbarEl?.getBoundingClientRect().bottom ?? shell.top) - shell.top);
-    const bottom = Math.max(0, shell.bottom - (controlsEl?.getBoundingClientRect().top ?? shell.bottom));
+    const top = Math.max(0, (videoDOM.topbar?.getBoundingClientRect().bottom ?? shell.top) - shell.top);
+    const bottom = Math.max(0, shell.bottom - (videoDOM.controls?.getBoundingClientRect().top ?? shell.bottom));
     panel.style.setProperty("--video-panel-top", `${top}px`);
     panel.style.setProperty("--video-panel-bottom", `${bottom}px`);
     geometry?.syncFallbackNativeViewportInsets();
@@ -414,7 +402,7 @@ function showSettingsPanel(section: SettingsSection) {
     panel.hidden = false;
     panel.setAttribute("aria-hidden", "false");
     panel.inert = false;
-    modalEl?.classList.add("has-video-settings");
+    videoDOM.modal?.classList.add("has-video-settings");
     byID("video-picture-button")?.setAttribute("aria-expanded", "true");
     const picture = byID("video-picture-settings");
     const appearance = byID("video-subtitle-settings");
@@ -438,7 +426,7 @@ function hideSettingsPanel(restoreFocus = false) {
         panel.setAttribute("aria-hidden", "true");
         panel.inert = true;
     }
-    modalEl?.classList.remove("has-video-settings");
+    videoDOM.modal?.classList.remove("has-video-settings");
     byID("video-picture-button")?.setAttribute("aria-expanded", "false");
     if ((restoreFocus || focusInside) && settingsReturnFocus?.isConnected) settingsReturnFocus.focus({ preventScroll: true });
     geometry?.syncFallbackNativeViewportInsets();
@@ -456,7 +444,7 @@ function showVideoPlaylist() {
     panel.hidden = false;
     panel.inert = false;
     panel.setAttribute("aria-hidden", "false");
-    modalEl?.classList.add("has-video-playlist");
+    videoDOM.modal?.classList.add("has-video-playlist");
     byID("video-playlist-button")?.setAttribute("aria-expanded", "true");
     setVideoPlaylistOpen(true);
     syncActivePanelGeometry();
@@ -479,7 +467,7 @@ export function hideVideoPlaylist(restoreFocus = false): void {
         panel.inert = true;
         panel.setAttribute("aria-hidden", "true");
     }
-    modalEl?.classList.remove("has-video-playlist");
+    videoDOM.modal?.classList.remove("has-video-playlist");
     byID("video-playlist-button")?.setAttribute("aria-expanded", "false");
     setVideoPlaylistOpen(false);
     if ((restoreFocus || focusInside) && playlistReturnFocus?.isConnected) {
@@ -490,15 +478,15 @@ export function hideVideoPlaylist(restoreFocus = false): void {
     applyHtmlPicture();
 }
 
-function bindVideoPlaylist() {
+function bindVideoPlaylist(signal: AbortSignal) {
     byID("video-playlist-button")?.addEventListener("click", (event) => {
         event.stopPropagation();
         if (playlistOpen) hideVideoPlaylist(true);
         else showVideoPlaylist();
-    });
+    }, { signal });
 }
 
-function bindSettingsPanel() {
+function bindSettingsPanel(signal: AbortSignal) {
     const panel = byID("video-settings-panel");
     byID("video-picture-button")?.addEventListener("click", (event) => {
         event.stopPropagation();
@@ -508,15 +496,15 @@ function bindSettingsPanel() {
             showSettingsPanel("picture");
             panel?.querySelector<HTMLButtonElement>("[data-picture-mode]")?.focus();
         }
-    });
+    }, { signal });
     byID("video-aspect-button")?.addEventListener("click", (event) => {
         event.stopPropagation();
         const next = PICTURE_MODES[(PICTURE_MODES.indexOf(playbackPreferences.pictureMode) + 1) % PICTURE_MODES.length];
         updatePlaybackPreferences({ ...playbackPreferences, pictureMode: next });
         revealChrome();
-    });
+    }, { signal });
     syncAspectButton();
-    byID("video-settings-close")?.addEventListener("click", () => closeOpenMenu());
+    byID("video-settings-close")?.addEventListener("click", () => closeOpenMenu(), { signal });
     panel?.addEventListener("click", (event) => {
         const button = (event.target as HTMLElement).closest<HTMLElement>("[data-settings-section]");
         if (!button) return;
@@ -524,13 +512,13 @@ function bindSettingsPanel() {
         const requested = button.dataset.settingsSection;
         showSettingsSection(SETTINGS_SECTIONS.find((value) => value === requested) ?? "picture");
         settingsReturnFocus = returnFocus;
-    });
+    }, { signal });
     panel?.addEventListener("keydown", (event) => {
         if (event.key !== "Escape") return;
         event.preventDefault();
         event.stopPropagation();
         closeOpenMenu();
-    });
+    }, { signal });
 }
 
 function trackPickers() {
@@ -545,16 +533,16 @@ function isAnyMenuOpen() {
 // through the pickers instead would close the panel first and reopen it, which
 // reads as the popover dismissing itself on a tab click.
 function showSettingsSection(section: SettingsSection) {
-    speedMenuEl?.classList.remove("is-open");
+    videoDOM.speedMenu?.classList.remove("is-open");
     for (const picker of trackPickers()) picker.setMenuOpen(false);
     showSettingsPanel(section);
     if (section === "audio") audioPicker?.setMenuOpen(true);
     else if (section === "subtitle") subtitlePicker?.setMenuOpen(true);
     else if (section === "speed") {
-        speedMenuEl?.classList.add("is-open");
+        videoDOM.speedMenu?.classList.add("is-open");
         clearChromeTimer();
         requestAnimationFrame(() => {
-            if (isSpeedMenuOpen() && !speedMenuEl?.contains(document.activeElement)) {
+            if (isSpeedMenuOpen() && !videoDOM.speedMenu?.contains(document.activeElement)) {
                 byID("video-speed-slider")?.focus({ preventScroll: true });
             }
         });
@@ -613,7 +601,7 @@ function applyState(state: PlayerState) {
     }
     schedulePlaybackHint(state);
     transport?.sync(state);
-    syncSpeedControls(speedBtnEl, speedMenuEl, state.rate);
+    syncSpeedControls(videoDOM.speedButton ?? null, videoDOM.speedMenu ?? null, state.rate);
     syncNativeTracks(state.tracks);
     applyHtmlPicture();
     setLoading(state.loading);
@@ -747,22 +735,22 @@ async function safelyCloseNativeMedia(token: string) {
 function preloadPoster(url: string, token: string) {
     const image = new Image();
     image.onload = () => {
-        if (videoEl && isOpen() && activeMediaToken === token) videoEl.poster = url;
+        if (videoDOM.video && isOpen() && activeMediaToken === token) videoDOM.video.poster = url;
     };
     image.src = url;
 }
 
 function updateMediaText(name: string, size: number) {
-    if (filenameEl) filenameEl.textContent = name || "Video";
+    if (videoDOM.filename) videoDOM.filename.textContent = name || "Video";
     mediaMetaBaseText = `${videoFormatLabel(name)}${size ? ` · ${formatBytes(size)}` : ""}`;
     mediaMetaBytes = size || 0;
     renderMediaMeta();
 }
 
 function renderMediaMeta() {
-    if (!metaEl) return;
+    if (!videoDOM.meta) return;
     const activity = streamActivity.label;
-    metaEl.textContent = activity ? `${mediaMetaBaseText} · ${activity}` : mediaMetaBaseText;
+    videoDOM.meta.textContent = activity ? `${mediaMetaBaseText} · ${activity}` : mediaMetaBaseText;
 }
 
 function syncPlaylistButton() {
@@ -861,6 +849,8 @@ function handleNaturalMediaEnd(attempt: VideoOpenAttempt, adapter: PlayerAdapter
 }
 
 async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => boolean) {
+    const video = videoDOM.video;
+    if (!video) return;
     let opened: MediaOpenResult | null = null;
     let adapter: HtmlVideoAdapter | null = null;
     try {
@@ -872,7 +862,8 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
             () => openMedia(attempt.target.id),
         );
         if (!opened) {
-            if (isCurrent()) await closeVideoModal();
+            // Closing queues teardown after this ownership transition finishes.
+            if (isCurrent()) void closeVideoModal();
             return;
         }
         if (!isCurrent() || !isOpen()) {
@@ -896,7 +887,13 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
                 await safelyCloseMedia(opened.token);
                 return;
             }
-            hlsSource = await attachHls(videoEl!, opened.hlsUrl, () => adapter?.refresh());
+            hlsSource = await attachHls(video, opened.hlsUrl, () => adapter?.refresh());
+        }
+        // The shell can close while HLS attaches to its media element.
+        if (!isCurrent() || !isOpen()) {
+            hlsSource?.destroy();
+            await safelyCloseMedia(opened.token);
+            return;
         }
 
         const displayName = opened.info.name || opened.name || attempt.target.name || "Video";
@@ -907,7 +904,7 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
         if (isMobilePlatform() && opened.thumbnailUrl) preloadPoster(`${opened.thumbnailUrl}?t=0`, opened.token);
         activeMediaEncrypted = Boolean(opened.info.encrypted);
 
-        adapter = new HtmlVideoAdapter(videoEl!, opened, {
+        adapter = new HtmlVideoAdapter(video, opened, {
             mediaError: (code, state) => handleHtmlMediaError(attempt, adapter!, code, state),
             playbackError: handleHtmlPlaybackError,
             revealChrome,
@@ -1039,7 +1036,8 @@ async function openNativePlayback(
                 () => openNativeMedia(attempt.target.id, rect),
             );
         if (!result) {
-            if (isCurrent()) await closeVideoModal();
+            // Closing queues teardown after this ownership transition finishes.
+            if (isCurrent()) void closeVideoModal();
             return;
         }
         opened = result;
@@ -1161,9 +1159,9 @@ function activateNativePlayback(
 }
 
 async function openVideoTarget(target: VideoOpenTarget, playbackIntent: PlaybackIntent | null): Promise<void> {
-    const host = byID<HTMLElement>("video-modal");
+    const host = document.getElementById("video-modal");
     if (videoHostEl !== host || !videoSetupComplete) activateVideoModal();
-    if (!modalEl || !videoEl || !filenameEl || !metaEl) return;
+    if (!videoDOM.modal || !videoDOM.video || !videoDOM.filename || !videoDOM.meta) return;
 
     const attempt: VideoOpenAttempt = {
         generation: playbackTransitions.begin(),
@@ -1176,19 +1174,19 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
     activeOpenAttempt = attempt;
 
     updateMediaText(target.name || "Video", target.size || 0);
-    videoEl.removeAttribute("poster");
+    videoDOM.video.removeAttribute("poster");
     clearError();
     setLoadingStatusOverride("");
     setLoading(true);
     setChromeVisible(true);
-    modalEl.style.display = "flex";
-    modalEl.setAttribute("aria-hidden", "false");
+    videoDOM.modal.style.display = "flex";
+    videoDOM.modal.setAttribute("aria-hidden", "false");
     // Take the phone's system bars for the duration. A player is the one
     // surface that wants the whole screen, and on Android it is also the only
     // way to be rid of the band the system paints behind the navigation
     // buttons, which lands on top of the picture.
     setImmersive(true);
-    activateModalOwnership(modalEl);
+    activateModalOwnership(videoDOM.modal);
     a11y?.activate();
     void geometry?.syncFullscreenState();
 
@@ -1232,31 +1230,33 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
 export async function openVideoModal(target: VideoOpenTarget, playlist?: VideoPlaylistLaunch): Promise<void> {
     const normalized = normalizeVideoTarget(target);
     if (!normalized) return;
-    const host = byID<HTMLElement>("video-modal");
+    const host = document.getElementById("video-modal");
     if (videoHostEl !== host || !videoSetupComplete) activateVideoModal();
-    if (!modalEl || !videoEl || !filenameEl || !metaEl) return;
+    if (!videoDOM.modal || !videoDOM.video || !videoDOM.filename || !videoDOM.meta) return;
     installVideoPlaylist(normalized, playlist);
     await openVideoTarget(normalized, null);
 }
 
 export async function closeVideoModal() {
-    if (!modalEl) return;
+    const modal = videoDOM.modal;
+    if (!modal) return;
     const generation = playbackTransitions.begin();
     await mediaPrefetcher.discard();
+    if (!playbackTransitions.isCurrent(generation) || videoDOM.modal !== modal) return;
     activeOpenAttempt = null;
     hideVideoPlaylist();
     activePlaylist = null;
     resetVideoPlaylist();
     clearChromeTimer();
     await geometry?.exitVideoFullscreen();
-    if (!playbackTransitions.isCurrent(generation)) return;
-    modalEl.style.display = "none";
-    modalEl.setAttribute("aria-hidden", "true");
+    if (!playbackTransitions.isCurrent(generation) || videoDOM.modal !== modal) return;
+    modal.style.display = "none";
+    modal.setAttribute("aria-hidden", "true");
     setImmersive(false);
-    deactivateModalOwnership(modalEl);
+    deactivateModalOwnership(modal);
     a11y?.deactivate();
     await playbackTransitions.run(generation, async () => releaseActive());
-    if (!playbackTransitions.isCurrent(generation)) return;
+    if (!playbackTransitions.isCurrent(generation) || videoDOM.modal !== modal) return;
     clearError();
     setLoadingStatusOverride("");
     setLoading(false);
@@ -1264,11 +1264,11 @@ export async function closeVideoModal() {
 
 
 function isSpeedMenuOpen() {
-    return Boolean(speedMenuEl?.classList.contains("is-open"));
+    return Boolean(videoDOM.speedMenu?.classList.contains("is-open"));
 }
 
 function speedMenuButtons() {
-    return Array.from(speedMenuEl?.querySelectorAll<HTMLButtonElement>("[data-rate]") || []);
+    return Array.from(videoDOM.speedMenu?.querySelectorAll<HTMLButtonElement>("[data-rate]") || []);
 }
 
 function setSpeedMenuOpen(open: boolean) {
@@ -1276,12 +1276,12 @@ function setSpeedMenuOpen(open: boolean) {
         closeMenus("speed");
         showSettingsPanel("speed");
     }
-    speedMenuEl?.classList.toggle("is-open", open);
+    videoDOM.speedMenu?.classList.toggle("is-open", open);
     if (!open && settingsSection === "speed") hideSettingsPanel();
     if (open) {
         clearChromeTimer();
         requestAnimationFrame(() => {
-            if (isSpeedMenuOpen() && !speedMenuEl?.contains(document.activeElement)) {
+            if (isSpeedMenuOpen() && !videoDOM.speedMenu?.contains(document.activeElement)) {
                 byID("video-speed-slider")?.focus({ preventScroll: true });
             }
         });
@@ -1295,28 +1295,28 @@ function closeSpeedMenu(restoreFocus = false) {
     setSpeedMenuOpen(false);
     if (restoreFocus) byID("video-picture-button")?.focus({ preventScroll: true });
 }
-function bindSpeedMenu() {
-    speedBtnEl?.addEventListener("click", (event) => {
+function bindSpeedMenu(signal: AbortSignal) {
+    videoDOM.speedButton?.addEventListener("click", (event) => {
         event.stopPropagation();
         if (!activeAdapter) return;
         activeAdapter.setSpeed(nextPresetRate(currentState.rate));
         revealChrome();
-    });
-    speedMenuEl?.addEventListener("click", (event) => {
+    }, { signal });
+    videoDOM.speedMenu?.addEventListener("click", (event) => {
         const button = (event.target as HTMLElement | null)?.closest<HTMLButtonElement>("[data-rate]");
         if (!button || !activeAdapter) return;
         activeAdapter.setSpeed(Number(button.dataset.rate || 1));
         closeSpeedMenu(true);
         revealChrome();
-    });
-    speedMenuEl?.addEventListener("input", (event) => {
+    }, { signal });
+    videoDOM.speedMenu?.addEventListener("input", (event) => {
         const input = event.target;
         if (!(input instanceof HTMLInputElement) || input.id !== "video-speed-slider") return;
         const rate = parseCustomPlaybackRate(input.value);
         if (rate !== null) activeAdapter?.setSpeed(rate);
         revealChrome();
-    });
-    speedMenuEl?.addEventListener("submit", (event) => {
+    }, { signal });
+    videoDOM.speedMenu?.addEventListener("submit", (event) => {
         event.preventDefault();
         event.stopPropagation();
         if (!activeAdapter) return;
@@ -1329,8 +1329,8 @@ function bindSpeedMenu() {
         activeAdapter.setSpeed(rate);
         closeSpeedMenu(true);
         revealChrome();
-    });
-    speedMenuEl?.addEventListener("keydown", (event) => {
+    }, { signal });
+    videoDOM.speedMenu?.addEventListener("keydown", (event) => {
         if (!isSpeedMenuOpen()) return;
         const target = event.target as HTMLElement | null;
         if (target?.closest(".video-speed-custom, .video-speed-adjustment")) {
@@ -1342,19 +1342,18 @@ function bindSpeedMenu() {
             return;
         }
         handleMenuKeydown(event, speedMenuButtons(), () => closeSpeedMenu(true));
-    });
+    }, { signal });
     const onDocumentClick = (event: MouseEvent) => {
         const target = event.target as Node | null;
         if (target && byID("video-settings-panel")?.contains(target)) return;
-        if (isSpeedMenuOpen() && !(target && (speedMenuEl?.contains(target) || speedBtnEl?.contains(target)))) {
+        if (isSpeedMenuOpen() && !(target && (videoDOM.speedMenu?.contains(target) || videoDOM.speedButton?.contains(target)))) {
             closeSpeedMenu();
         }
         for (const picker of trackPickers()) {
             if (picker.isOpen() && !picker.contains(target)) picker.close();
         }
     };
-    document.addEventListener("click", onDocumentClick);
-    return () => document.removeEventListener("click", onDocumentClick);
+    document.addEventListener("click", onDocumentClick, { signal });
 }
 
 function targetShouldUseOwnKeyboard(target: HTMLElement | null, event: KeyboardEvent) {
@@ -1455,7 +1454,7 @@ function videoTouchHandlers(): TouchGestureHandlers {
     return {
         tap: () => {
             if (!isOpen() || hasError || stagePointerOnChrome) return;
-            if (modalEl?.classList.contains("is-video-chrome-visible")) {
+            if (videoDOM.modal?.classList.contains("is-video-chrome-visible")) {
                 clearChromeTimer();
                 setChromeVisible(false);
             } else {
@@ -1463,8 +1462,8 @@ function videoTouchHandlers(): TouchGestureHandlers {
             }
         },
         doubleTap: (x) => {
-            if (!isOpen() || hasError || stagePointerOnChrome || !stageEl) return;
-            const { left, width } = stageEl.getBoundingClientRect();
+            if (!isOpen() || hasError || stagePointerOnChrome || !videoDOM.stage) return;
+            const { left, width } = videoDOM.stage.getBoundingClientRect();
             const across = (x - left) / Math.max(1, width);
             if (across < 1 / 3) transport?.seekBy(-SEEK_STEP_SECONDS);
             else if (across > 2 / 3) transport?.seekBy(SEEK_STEP_SECONDS);
@@ -1511,22 +1510,22 @@ export function teardownVideoModal(): void {
     activePlaylist = null;
     resetVideoPlaylist();
     clearChromeTimer();
-    if (modalEl) {
-        modalEl.style.display = "none";
-        modalEl.setAttribute("aria-hidden", "true");
+    if (videoDOM.modal) {
+        videoDOM.modal.style.display = "none";
+        videoDOM.modal.setAttribute("aria-hidden", "true");
     }
 
     setImmersive(false);
-    if (modalEl) deactivateModalOwnership(modalEl);
+    if (videoDOM.modal) deactivateModalOwnership(videoDOM.modal);
     a11y?.deactivate();
     a11y = null;
+    controlListeners?.abort();
+    controlListeners = null;
     unbindVideoDOM?.();
     unbindVideoDOM = null;
-    unbindSpeedMenu?.();
-    unbindSpeedMenu = null;
     unbindTouchGestures?.();
     unbindTouchGestures = null;
-    stageEl?.removeEventListener("pointerdown", trackStagePointer);
+    videoDOM.stage?.removeEventListener("pointerdown", trackStagePointer);
     nativeStateRouter.unbind();
     unsubscribeEncryptedMediaSessionsClosed?.();
     unsubscribeEncryptedMediaSessionsClosed = null;
@@ -1535,29 +1534,13 @@ export function teardownVideoModal(): void {
     geometry?.destroy();
     transport = null;
     geometry = null;
-    videoDOM = null;
+    videoDOM = collectVideoDOM(null);
     audioPicker = null;
     subtitlePicker = null;
 
     videoHostObserver?.disconnect();
     videoHostObserver = null;
 
-    modalEl = null;
-    stageEl = null;
-    topbarEl = null;
-    controlsEl = null;
-    filenameEl = null;
-    metaEl = null;
-    closeBtnEl = null;
-    videoEl = null;
-    loadingEl = null;
-    loadingStatusEl = null;
-    errorEl = null;
-    errorMessageEl = null;
-    errorRetryBtnEl = null;
-    playBtnEl = null;
-    speedBtnEl = null;
-    speedMenuEl = null;
     settingsSection = null;
     settingsReturnFocus = null;
     playlistOpen = false;
@@ -1567,51 +1550,35 @@ export function teardownVideoModal(): void {
 }
 
 export function activateVideoModal(): () => void {
-    const host = byID<HTMLElement>("video-modal");
+    const host = document.getElementById("video-modal");
     if (!host) {
         if (videoSetupComplete || videoHostEl) teardownVideoModal();
         return () => {};
     }
-    if (videoSetupComplete && videoHostEl === host && videoDOM?.modal === host) return teardownVideoModal;
+    if (videoSetupComplete && videoHostEl === host && videoDOM.modal === host && videoDOMLive(videoDOM)) return teardownVideoModal;
     if (videoSetupComplete || videoHostEl) teardownVideoModal();
 
     videoHostEl = host;
     videoHostObserver = new MutationObserver(() => {
-        if (!host.isConnected) teardownVideoModal();
+        if (!videoDOMLive(videoDOM)) teardownVideoModal();
     });
     videoHostObserver.observe(document.body, { childList: true, subtree: true });
 
-    videoDOM = collectVideoDOM();
-    ({
-        modal: modalEl,
-        stage: stageEl,
-        topbar: topbarEl,
-        controls: controlsEl,
-        filename: filenameEl,
-        meta: metaEl,
-        closeButton: closeBtnEl,
-        video: videoEl,
-        loading: loadingEl,
-        loadingStatus: loadingStatusEl,
-        error: errorEl,
-        errorMessage: errorMessageEl,
-        errorRetryButton: errorRetryBtnEl,
-        playButton: playBtnEl,
-        speedButton: speedBtnEl,
-        speedMenu: speedMenuEl,
-    } = videoDOM);
+    videoDOM = collectVideoDOM(host);
+    controlListeners = new AbortController();
     audioPicker = new TrackPicker("Audio", null, (player, id) => {
         if (id !== null) player.setAudioTrack(id);
-    }, videoDOM.audioPicker, trackPickerHost);
+    }, videoDOM.audioPicker, trackPickerHost, controlListeners.signal);
     subtitlePicker = new TrackPicker(
         "Subtitles",
         "Off",
         (player, id) => player.setSubtitleTrack(id),
         videoDOM.subtitlePicker,
         trackPickerHost,
+        controlListeners.signal,
     );
 
-    if (!modalEl || !videoEl || !stageEl) {
+    if (!videoDOM.modal || !videoDOM.video || !videoDOM.stage) {
         console.error("Video modal setup failed. Missing #video-modal, #video-stage, or #video-player.");
         teardownVideoModal();
         return () => {};
@@ -1647,7 +1614,7 @@ export function activateVideoModal(): () => void {
     });
 
     videoSetupComplete = true;
-    a11y = installModalA11y(modalEl, {
+    a11y = installModalA11y(videoDOM.modal, {
         requestClose: () => {
             if (playlistOpen) {
                 hideVideoPlaylist(true);
@@ -1662,16 +1629,16 @@ export function activateVideoModal(): () => void {
             }
             void closeVideoModal();
         },
-        initialFocus: () => playBtnEl || closeBtnEl,
+        initialFocus: () => videoDOM.playButton || videoDOM.closeButton || null,
         restoreFocus: "#file-list",
     });
     bindEncryptedMediaLifecycle();
     nativeStateRouter.bind();
-    if (speedMenuEl) speedMenuEl.innerHTML = speedMenuMarkup();
+    if (videoDOM.speedMenu) videoDOM.speedMenu.innerHTML = speedMenuMarkup();
     transport.bind();
-    unbindSpeedMenu = bindSpeedMenu();
-    bindSettingsPanel();
-    bindVideoPlaylist();
+    bindSpeedMenu(controlListeners.signal);
+    bindSettingsPanel(controlListeners.signal);
+    bindVideoPlaylist(controlListeners.signal);
     unbindVideoDOM = bindVideoDOM(videoDOM, {
         close: () => { void closeVideoModal(); },
         retry: retryVideoOpen,
@@ -1690,8 +1657,8 @@ export function activateVideoModal(): () => void {
         applyHtmlPicture();
     });
     if (isMobilePlatform()) {
-        stageEl.addEventListener("pointerdown", trackStagePointer);
-        unbindTouchGestures = bindTouchGestures(stageEl, videoTouchHandlers());
+        videoDOM.stage.addEventListener("pointerdown", trackStagePointer);
+        unbindTouchGestures = bindTouchGestures(videoDOM.stage, videoTouchHandlers());
     }
     applyState(EMPTY_PLAYER_STATE);
     return teardownVideoModal;

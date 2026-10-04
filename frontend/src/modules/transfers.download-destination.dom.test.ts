@@ -115,6 +115,17 @@ describe('android', () => {
         await vi.waitFor(() => expect(bindings.DiscardResumableDownload).toHaveBeenCalledWith(101, 'job-42'));
     });
 
+    it('keeps the receipt when Android does not confirm a public destination', async () => {
+        mocks.saveToDownloads.mockResolvedValue('');
+        bindings.DownloadFile.mockResolvedValue(success('/sandbox/Downloads/plan.pdf', 'job-42'));
+        const mod = await loadModule();
+        mod.enqueueDownload(42, 'plan.pdf', 10);
+
+        await vi.waitFor(() => expect(mocks.saveToDownloads).toHaveBeenCalledWith('/sandbox/Downloads/plan.pdf', 'job-42'));
+        await vi.waitFor(() => expect(lastNote()).toBe('Saved inside TDrive, not in your Downloads folder'));
+        expect(bindings.DiscardResumableDownload).not.toHaveBeenCalled();
+    });
+
     it('moves a folder too, which is the case that had no way out at all', async () => {
         mocks.saveToDownloads.mockResolvedValue('Download/Holiday');
         const mod = await loadModule();

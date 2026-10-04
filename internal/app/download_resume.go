@@ -48,11 +48,11 @@ func (a *App) ResumeDownload(channelID int64, jobID, requestID string) DownloadR
 	if err != nil {
 		return DownloadResult{Result: operationFailure(err)}
 	}
-	downloadCtx, runID, err := a.beginDownload()
+	downloadCtx, finish, err := a.transfers.beginDownload(a.appContext())
 	if err != nil {
 		return DownloadResult{Result: operationFailure(err), JobID: jobID}
 	}
-	defer a.endDownload(runID)
+	defer finish()
 	if job.Status == "needs_destination" {
 		path, err := a.chooseDownloadPath(job.Name)
 		if err != nil {

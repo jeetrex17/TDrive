@@ -89,6 +89,12 @@ not pull a key out from under a live mount; see [Encryption](encryption.md).
 A drive switch also stops photo backup before changing the engine's active drive,
 preventing an old scoped worker from following the newly selected destination.
 
+[`transferState`](../../internal/app/transfer_state.go) owns the GUI upload and
+download cancellation slots, picker-source ownership and shared mobile
+keep-awake state. Replacing a transfer cancels its predecessor, but the old
+completion can clear only its own slot. The phone stays awake until both active
+directions finish. Resuming an upload refuses to replace an existing upload.
+
 ## Frontend ownership and readiness
 
 The application is hybrid, with Svelte owning substantial rendered surfaces.

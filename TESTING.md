@@ -190,10 +190,11 @@ not establish browser layout, image decoding or video playback.
   records, DOM, requests and leases. Exercise stale results after a generation,
   drive or viewport change when modifying asynchronous ownership.
 - Configure relevant Wails service responses explicitly and assert their effects.
-  The current [browser mock](frontend/e2e/wails-mock.ts) has permissive defaults:
-  missing setup can return success. Do not rely on that fallback to prove service
-  behavior. New harness paths should surface unexpected application calls and
-  explicitly allow intentionally ignored platform calls.
+  The [browser mock](frontend/e2e/wails-mock.ts) rejects unknown or unconfigured
+  application calls and fails the journey even if the UI catches that error.
+  Shared startup plans and an explicit native-housekeeping allowlist keep boot
+  behavior repeatable; configure scenario-specific results rather than adding
+  permissive fallbacks.
 - Keep wire/version tests in their owning backend package and UI translation
   tests at the adapter or app boundary. Regenerate changed Wails bindings and
   verify callers; do not hand-edit generated code or repeat mock echoes per method.

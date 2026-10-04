@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NativeMediaTrack } from './media-tracks';
 import type { TrackSwitching } from './player-adapters';
-import { TrackPicker, type TrackPickerHost } from './track-picker';
+import { TrackPicker } from './track-picker';
 import type { TrackPickerDOM } from './video-dom';
 
 function track(overrides: Partial<NativeMediaTrack> & { id: number }): NativeMediaTrack {
@@ -77,6 +77,19 @@ const englishAndJapanese = [
     track({ id: 1, language: 'eng', selected: true, default: true }),
     track({ id: 2, language: 'jpn' }),
 ];
+
+it('stops applying track changes when its activation ends', () => {
+    const lifetime = new AbortController();
+    const picker = new TrackPicker('Audio', null, (target, id) => {
+        if (id !== null) target.setAudioTrack(id);
+    }, dom, host, lifetime.signal);
+    picker.update(englishAndJapanese, true);
+    lifetime.abort();
+    const replacement = audioPicker();
+    replacement.update(englishAndJapanese, true);
+    dom.button?.click();
+    expect(player.setAudioTrack).toHaveBeenCalledExactlyOnceWith(2);
+});
 
 describe('showing and hiding the track pill', () => {
     it('reports the pill appearing, so the caller can re-measure the control row', () => {

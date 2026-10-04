@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -78,12 +79,13 @@ func TestResumableDownloadRejectsInvalidJobIDsBeforeServiceLookup(t *testing.T) 
 }
 
 func TestDownloadSlotRejectsConcurrentStartUntilPreviousRunEnds(t *testing.T) {
-	app := &App{ctx: context.Background()}
-	activeCtx, activeRunID, err := app.beginDownload()
+	app := &App{ctx: t.Context()}
+	activeCtx, finishActive, err := app.transfers.beginDownload(app.ctx)
 	if err != nil {
 		t.Fatalf("start first download: %v", err)
 	}
-	if _, _, err := app.beginDownload(); err != errDownloadBusy {
+	t.Cleanup(finishActive)
+	if _, _, err := app.transfers.beginDownload(app.ctx); !errors.Is(err, errDownloadBusy) {
 		t.Fatalf("concurrent start error = %v, want download busy", err)
 	}
 	if activeCtx.Err() != nil {
@@ -93,16 +95,16 @@ func TestDownloadSlotRejectsConcurrentStartUntilPreviousRunEnds(t *testing.T) {
 	if activeCtx.Err() != context.Canceled {
 		t.Fatalf("active download context = %v, want canceled", activeCtx.Err())
 	}
-	if _, _, err := app.beginDownload(); err != errDownloadBusy {
+	if _, _, err := app.transfers.beginDownload(app.ctx); !errors.Is(err, errDownloadBusy) {
 		t.Fatalf("start before canceled run exits = %v, want download busy", err)
 	}
-	app.endDownload(activeRunID)
-	newCtx, newRunID, err := app.beginDownload()
+	finishActive()
+	newCtx, finishNew, err := app.transfers.beginDownload(app.ctx)
 	if err != nil || newCtx.Err() != nil {
 		t.Fatalf("start after previous run ended: context=%v, error=%v", newCtx, err)
 	}
-	app.endDownload(newRunID)
-	if app.downloadCancel != nil {
+	finishNew()
+	if app.transfers.active[downloadTransfer] != nil {
 		t.Fatal("finished download left an active cancel handle")
 	}
 }

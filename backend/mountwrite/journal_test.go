@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -402,6 +403,76 @@ func TestSQLiteJournalReportsClosedDatabaseFailures(t *testing.T) {
 	}
 	if _, err := journal.ListRecoverable(ctx); err == nil {
 		t.Fatal("list on closed database should fail")
+	}
+}
+
+func TestSQLiteJournalDetectsTypedUniquenessConstraints(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	db := openJournalDB(t, filepath.Join(t.TempDir(), "unique.db"))
+	if _, err := db.ExecContext(ctx, `
+		CREATE TABLE uniqueness_probe (
+			id INTEGER PRIMARY KEY,
+			name TEXT NOT NULL UNIQUE
+		)`,
+	); err != nil {
+		t.Fatalf("create uniqueness probe: %v", err)
+	}
+	if _, err := db.ExecContext(ctx, `INSERT INTO uniqueness_probe (id, name) VALUES (1, 'first')`); err != nil {
+		t.Fatalf("seed uniqueness probe: %v", err)
+	}
+
+	_, primaryKeyErr := db.ExecContext(ctx, `INSERT INTO uniqueness_probe (id, name) VALUES (1, 'other')`)
+	if !isUniqueConstraint(primaryKeyErr) {
+		t.Fatalf("primary key duplicate was not detected as uniqueness constraint: %v", primaryKeyErr)
+	}
+	if !isUniqueConstraint(fmt.Errorf("wrapped sqlite error: %w", primaryKeyErr)) {
+		t.Fatalf("wrapped primary key duplicate was not detected as uniqueness constraint: %v", primaryKeyErr)
+	}
+
+	_, uniqueErr := db.ExecContext(ctx, `INSERT INTO uniqueness_probe (id, name) VALUES (2, 'first')`)
+	if !isUniqueConstraint(uniqueErr) {
+		t.Fatalf("unique index duplicate was not detected as uniqueness constraint: %v", uniqueErr)
+	}
+	if !isUniqueConstraint(fmt.Errorf("wrapped sqlite error: %w", uniqueErr)) {
+		t.Fatalf("wrapped unique index duplicate was not detected as uniqueness constraint: %v", uniqueErr)
+	}
+
+	_, notNullErr := db.ExecContext(ctx, `INSERT INTO uniqueness_probe (id, name) VALUES (3, NULL)`)
+	if isUniqueConstraint(notNullErr) {
+		t.Fatalf("not-null constraint was detected as uniqueness constraint: %v", notNullErr)
+	}
+	if isUniqueConstraint(errors.New("UNIQUE constraint failed: synthetic text only")) {
+		t.Fatal("plain text error was detected as uniqueness constraint")
+	}
+}
+
+func TestSQLiteJournalDuplicateCreateUsesTypedConstraintDetection(t *testing.T) {
+	t.Parallel()
+
+	ctx := t.Context()
+	db := openJournalDB(t, filepath.Join(t.TempDir(), "journal.db"))
+	if err := EnsureJournalSchema(ctx, db); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	journal, err := NewSQLiteJournal(db)
+	if err != nil {
+		t.Fatalf("new journal: %v", err)
+	}
+	now := time.Unix(1_700_000_000, 0).UTC()
+	record := JournalRecord{
+		OperationID: "duplicate-operation",
+		Mutation:    Mutation{Kind: MutationPut, DriveID: 42, DestinationParentID: "", DestinationName: "notes.txt"},
+		State:       StateReceiving,
+		CreatedAt:   now,
+		UpdatedAt:   now,
+	}
+	if err := journal.Create(ctx, record); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	if err := journal.Create(ctx, record); !errors.Is(err, ErrOperationExists) {
+		t.Fatalf("duplicate create error = %v, want ErrOperationExists", err)
 	}
 }
 

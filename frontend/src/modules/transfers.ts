@@ -5,7 +5,7 @@
 // hover popover via pushTransferStart/updateTransferProgress/markTransferDone.
 // Completed transfers stay in the bell's "Recent" panel until cleared.
 
-import { invalidateFolderIndex, state, setTransferDirectionActive, type DownloadQueueItem } from '../state';
+import { invalidateFolderIndex, state, setTransferDirectionActive, type DownloadQueueItem, type UploadTransfer } from '../state';
 import { createFolder, downloadFile, downloadFolder, importPaths, isAndroidPlatform, isMobilePlatform, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
 import { canSaveToDownloads, saveToDownloads } from './android-downloads';
 import { rememberDownloadSharePath } from '../ui/mobile/mobile-shell-store';
@@ -776,7 +776,7 @@ function activateUploadProgressEvents(): void {
         }
 
         const hadItem = state.uploadTransfers.has(uploadId);
-        const item = state.uploadTransfers.get(uploadId) || {
+        const item: UploadTransfer = state.uploadTransfers.get(uploadId) || {
             id: uploadId,
             name: filename,
             size: 0,
@@ -1353,7 +1353,7 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
     state.uploadBatch = { total: paths.length, done: 0, failed: 0 };
 
     const aggregated = paths.length > 1;
-    const nextTransfers = new Map();
+    const nextTransfers = new Map<string | number, UploadTransfer>();
     if (aggregated) {
         uploadBatchFailureReasons.length = 0;
         uploadBatch = new TransferBatch(paths.length);
@@ -1369,7 +1369,7 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
         // bounded state instead, so a batch of any size retains none of this.
         for (let i = 0; i < paths.length; i++) {
             const p = String(paths[i] ?? "");
-            const name = p ? p.split(/[/\\]/).pop() : "Untitled";
+            const name = p ? p.split(/[/\\]/).pop() ?? "Untitled" : "Untitled";
             nextTransfers.set(i, {
                 id: i,
                 name,

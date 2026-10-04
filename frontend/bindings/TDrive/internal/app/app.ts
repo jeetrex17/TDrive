@@ -557,6 +557,10 @@ export function UnmountDrive(): $CancellablePromise<$models.MountView> {
     return $Call.ByID(1851039664);
 }
 
+/**
+ * UploadToDriveFS uploads the selected batch. Encryption is chosen per batch;
+ * encrypted uploads require an already unlocked vault.
+ */
 export function UploadToDriveFS(filePaths: string[] | null, parentIDs: string[] | null, encrypt: boolean): $CancellablePromise<$models.UploadResult> {
     return $Call.ByID(4020749391, filePaths, parentIDs, encrypt);
 }
