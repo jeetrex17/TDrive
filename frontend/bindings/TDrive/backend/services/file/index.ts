@@ -3,5 +3,6 @@
 
 export type {
     ImportPlan,
+    ResumableDownload,
     ResumableUpload
 } from "./models.js";

@@ -81,6 +81,7 @@ type App struct {
 	transferMu     sync.Mutex
 	uploadCancel   context.CancelFunc
 	downloadCancel context.CancelFunc
+	downloadRunID  uint64
 	// keepAwake mirrors the phone's idle-timer override so it is only toggled
 	// when the transfer state actually flips. Guarded by transferMu.
 	keepAwake bool
@@ -325,24 +326,31 @@ func (a *App) CancelUploadByID(uploadID int) {
 	}
 }
 
-// beginDownload / endDownload / CancelDownload do the same for the active
-// download.
-func (a *App) beginDownload() context.Context {
-	ctx, cancel := context.WithCancel(a.ctx)
+var errDownloadBusy = errors.New("another download is running; pause it before starting a new one")
+
+// beginDownload owns the one active download slot shared by files and folders.
+// A second call must not cancel a transfer started by another frontend action.
+func (a *App) beginDownload() (context.Context, uint64, error) {
 	a.transferMu.Lock()
+	defer a.transferMu.Unlock()
 	if a.downloadCancel != nil {
-		a.downloadCancel()
+		return nil, 0, errDownloadBusy
 	}
+	ctx, cancel := context.WithCancel(a.appContext())
+	a.downloadRunID++
+	runID := a.downloadRunID
 	a.downloadCancel = cancel
 	a.syncTransferKeepAwakeLocked()
-	a.transferMu.Unlock()
-	return ctx
+	return ctx, runID, nil
 }
 
-func (a *App) endDownload() {
+func (a *App) endDownload(runID uint64) {
 	a.transferMu.Lock()
-	a.downloadCancel = nil
-	a.syncTransferKeepAwakeLocked()
+	if a.downloadRunID == runID {
+		a.downloadCancel()
+		a.downloadCancel = nil
+		a.syncTransferKeepAwakeLocked()
+	}
 	a.transferMu.Unlock()
 }
 
@@ -617,9 +625,13 @@ func (a *App) DownloadFile(channelID int64, msgID int, TgMsgID int, requestID st
 	if err != nil {
 		return DownloadResult{Result: operationFailure(err)}
 	}
-	ctx := fileservice.WithDownloadProgressID(a.beginDownload(), requestID)
-	defer a.endDownload()
-	result := svc.Download(ctx, channelID, msgID, TgMsgID, a.chooseDownloadPath)
+	downloadCtx, runID, err := a.beginDownload()
+	if err != nil {
+		return DownloadResult{Result: operationFailure(err)}
+	}
+	ctx := fileservice.WithDownloadProgressID(downloadCtx, requestID)
+	defer a.endDownload(runID)
+	result := svc.StartResumableDownload(ctx, channelID, msgID, TgMsgID, a.chooseDownloadPath)
 	// An iPhone download stays in the app container, so offer the share sheet
 	// as soon as the bytes are on disk: Files can list the container, but
 	// sending the file straight on is the thing worth saving a trip for.
@@ -627,11 +639,7 @@ func (a *App) DownloadFile(channelID int64, msgID int, TgMsgID int, requestID st
 	// Android must not do this. There the host moves the download into public
 	// Downloads once this call returns and deletes the sandbox copy, so a
 	// chooser opened here would be holding a file that is about to vanish.
-	if application.System.IsPlatform(application.PlatformIOS) && result.Status == "success" && result.SavedPath != "" {
-		if err := shareFileNative(result.SavedPath); err != nil {
-			fmt.Printf("Warning: share sheet failed: %v\n", err)
-		}
-	}
+	shareCompletedIOSDownload(result)
 	return downloadOperationResult(result)
 }
 
@@ -647,8 +655,12 @@ func (a *App) DownloadFolder(channelID int64, folderID string, requestID string)
 	if err != nil {
 		return DownloadResult{Result: operationFailure(err)}
 	}
-	ctx := fileservice.WithDownloadProgressID(a.beginDownload(), requestID)
-	defer a.endDownload()
+	downloadCtx, runID, err := a.beginDownload()
+	if err != nil {
+		return DownloadResult{Result: operationFailure(err)}
+	}
+	ctx := fileservice.WithDownloadProgressID(downloadCtx, requestID)
+	defer a.endDownload(runID)
 	result := svc.DownloadFolder(ctx, channelID, folderID, a.chooseDownloadDir)
 	return downloadOperationResult(result)
 }

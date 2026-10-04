@@ -107,6 +107,13 @@ export function DeleteFromTrashPermanently(objectID: string): $CancellablePromis
 }
 
 /**
+ * DiscardResumableDownload removes the job and its private partial bytes.
+ */
+export function DiscardResumableDownload(channelID: number, jobID: string): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(754280266, channelID, jobID);
+}
+
+/**
  * DownloadFile downloads from the explicitly selected drive. The channel is an
  * argument rather than a late ActiveChannelID lookup because a queued frontend
  * transfer may begin after the user has switched drives.
@@ -232,6 +239,14 @@ export function ListMediaPage(cursor: string, limit: number): $CancellablePromis
 }
 
 /**
+ * ListResumableDownloads returns only jobs for the requested drive. The file
+ * service also scopes its journal to the signed-in account.
+ */
+export function ListResumableDownloads(channelID: number): $CancellablePromise<$models.ResumableDownloadsResult> {
+    return $Call.ByID(1931809929, channelID);
+}
+
+/**
  * ListResumableUploads returns backend-confirmed multipart upload checkpoints
  * for the selected drive. The frontend's transfer history is not a receipt.
  */
@@ -349,6 +364,13 @@ export function PausePhotoBackup(): $CancellablePromise<$models.OperationResult>
 }
 
 /**
+ * PauseResumableDownload retains verified bytes for a later attempt.
+ */
+export function PauseResumableDownload(channelID: number, jobID: string): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(2768883090, channelID, jobID);
+}
+
+/**
  * PauseResumableUpload stops the current attempt while retaining its durable
  * Telegram message checkpoints.
  */
@@ -413,6 +435,14 @@ export function ResolveUsernames(userIDs: number[] | null): $CancellablePromise<
  */
 export function RestoreFromTrash(objectID: string): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(2289341816, objectID);
+}
+
+/**
+ * ResumeDownload continues the pinned source and destination of an existing job.
+ * The caller's current drive never retargets the transfer.
+ */
+export function ResumeDownload(channelID: number, jobID: string, requestID: string): $CancellablePromise<$models.DownloadResult> {
+    return $Call.ByID(2308165947, channelID, jobID, requestID);
 }
 
 export function ResumePhotoBackup(): $CancellablePromise<$models.OperationResult> {
