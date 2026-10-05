@@ -7,12 +7,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import DeleteModal from '../../ui/modals/DeleteModal.svelte';
-import { closeDeleteModalView } from '../../ui/modals/delete-modal-store';
+import { closeDeleteModalView, deleteModalState } from '../../ui/modals/delete-modal-store';
 
 const deleteFileMock = vi.fn();
+const restoreMock = vi.fn();
 const appActionMocks = vi.hoisted(() => ({ refreshFiles: vi.fn() }));
 vi.mock('../../../bindings/TDrive/internal/app/app', () => ({
     DeleteFile: (...args: unknown[]) => deleteFileMock(...args),
+    RestoreFromTrash: (...args: unknown[]) => restoreMock(...args),
 }));
 vi.mock('../drive-data', () => ({
     deleteFolder: vi.fn(),
@@ -49,8 +51,29 @@ afterEach(async () => {
     app = null;
     host.remove();
     deleteFileMock.mockReset();
+    restoreMock.mockReset();
     appActionMocks.refreshFiles.mockReset();
     toasts.set([]);
+});
+
+describe('openDeleteModal copy', () => {
+    it('describes moving a file to the Trash, not deleting from Telegram', () => {
+        openDeleteModal({ type: 'file', id: 1, name: 'a.png' });
+        const view = get(deleteModalState);
+        expect(view.title).toBe('Move file to Trash?');
+        expect(view.confirmLabel).toBe('Move to Trash');
+        expect(view.subtitle).toContain('Trash');
+        expect(view.subtitle).not.toContain('Telegram');
+        expect(view.subtitle.toLowerCase()).not.toContain("can't be undone");
+    });
+
+    it('describes moving a folder and its contents to the Trash', () => {
+        openDeleteModal({ type: 'folder', id: 'd:1', name: 'Docs' });
+        const view = get(deleteModalState);
+        expect(view.title).toBe('Move folder to Trash?');
+        expect(view.subtitle).toContain('everything inside it');
+        expect(view.subtitle).toContain('Trash');
+    });
 });
 
 describe('confirmDelete (single file)', () => {
@@ -75,15 +98,34 @@ describe('confirmDelete (single file)', () => {
         await vi.waitFor(() => expect(appActionMocks.refreshFiles).toHaveBeenCalledTimes(1));
     });
 
-    it('says nothing on success: the row the user was looking at is gone', async () => {
+    it('confirms the move to Trash on success', async () => {
         deleteFileMock.mockResolvedValue({ ok: true });
 
         openDeleteModal({ type: 'file', id: 43, name: 'real.png' });
         flushSync();
         click('#delete-confirm');
 
-        await vi.waitFor(() => expect(appActionMocks.refreshFiles).toHaveBeenCalledTimes(1));
-        expect(get(toasts)).toEqual([]);
+        await vi.waitFor(() => expect(get(toasts)).toHaveLength(1));
+        const [toast] = get(toasts);
+        expect(toast.level).toBe('success');
+        expect(toast.title).toBe('Moved to Trash');
+        expect(toast.action?.label).toBe('Undo');
+    });
+
+    it('restores the file from the Trash when Undo is pressed', async () => {
+        deleteFileMock.mockResolvedValue({ ok: true });
+        restoreMock.mockResolvedValue({ ok: true });
+
+        openDeleteModal({ type: 'file', id: 43, name: 'real.png' });
+        flushSync();
+        click('#delete-confirm');
+
+        await vi.waitFor(() => expect(get(toasts)).toHaveLength(1));
+        get(toasts)[0].action?.run();
+
+        // The just-deleted file is addressed in the trash as `f:<msgId>`.
+        await vi.waitFor(() => expect(restoreMock).toHaveBeenCalledWith('f:43'));
+        await vi.waitFor(() => expect(appActionMocks.refreshFiles).toHaveBeenCalledTimes(2));
     });
 
     it('still says so when it fails, because nothing else on screen will', async () => {

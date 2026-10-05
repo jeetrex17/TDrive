@@ -29,19 +29,18 @@
     font-size: 0.95rem;
     line-height: 1.35;
 }
+/* The name of the thing being deleted, as plain emphasised text. It used to sit
+   in a bordered, filled box that read as an input waiting to be typed into. */
 .delete-target-name {
     max-height: 5.5rem;
-    margin: 10px 0 14px;
-    padding: 10px 12px;
+    margin: var(--space-1) 0 var(--space-4);
     overflow: auto;
     overflow-wrap: anywhere;
     word-break: break-word;
     color: var(--color-text);
-    font-size: var(--type-sm);
-    line-height: 1.35;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--overlay-white-1);
+    font-size: var(--type-base);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-snug);
 }
 .field-help {
     color: var(--text-muted);
