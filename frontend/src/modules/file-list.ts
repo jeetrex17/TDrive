@@ -36,6 +36,7 @@ import type { FileListStateAction } from '../ui/file-list/types';
 import { fileListRowForElement } from '../ui/file-list/row-lookup';
 import { activeFileRowKey, setActiveFileRowKey } from '../ui/file-list/row-state-store';
 import { pageJumpIndex, typeAheadIndex } from '../ui/file-list/keyboard';
+import { ScrollMemory } from '../ui/file-list/scroll-memory';
 import { rowMetaLine } from '../ui/file-list/row-meta';
 import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
 import { bindSwipeActions } from '../ui/file-list/swipe-actions';
@@ -72,6 +73,9 @@ type FileRefreshRequest = {
     view: FileViewIdentity;
     presentation: FileRefreshPresentation;
     folderEpoch: number;
+    // The scroll offset to land on once the view's rows are published: a saved
+    // offset when returning up to a view, otherwise 0 (the top).
+    restoreScrollTop: number;
 };
 
 type LoadedFileData = {
@@ -154,7 +158,18 @@ export function canOwnerActOnFile(file: Pick<FileRowInput, 'uploaderID' | 'uploa
 // a refresh keeps the current grid visible. It intentionally includes the drive
 // so two root folders from different drives never share scroll or selection.
 let lastRenderedFileView: FileViewIdentity | null = null;
+// The folder depth of that view, so a refresh can tell a step up (shallower)
+// from a step down and restore scroll only when returning to a view.
+let lastRenderedDepth = 0;
 let fileRefreshToken = 0;
+
+// Where each view was left scrolled, so going back up lands where the reader
+// was. Capped well above a realistic open-folder trail; the oldest is evicted.
+const scrollMemory = new ScrollMemory(32);
+
+function viewKey(view: FileViewIdentity): string {
+    return `${view.channelId}:${view.folderId}`;
+}
 
 function sameFileView(left: FileViewIdentity | null, right: FileViewIdentity): boolean {
     return left?.channelId === right.channelId && left.folderId === right.folderId;
@@ -162,6 +177,8 @@ function sameFileView(left: FileViewIdentity | null, right: FileViewIdentity): b
 
 export function resetFileListScrollRestore(): void {
     lastRenderedFileView = null;
+    lastRenderedDepth = 0;
+    scrollMemory.clear();
 }
 
 
@@ -767,6 +784,7 @@ function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, d
         state.telegramRootCacheDriveKey = String(request.view.channelId);
     }
     lastRenderedFileView = request.view;
+    lastRenderedDepth = state.folderPath.length;
 
     // Where the keyboard sat before the republish, so a delete or move can hand
     // it to the neighbour rather than drop it on <body>.
@@ -792,7 +810,9 @@ function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, d
 
         reconcileSelection(list, logical);
         syncDriveRowTabStops(list, focusKey ? rowForSelectionKey(list, focusKey) : null);
+        const restoring = !preserveScroll && request.restoreScrollTop > 0;
         if (preserveScroll) list.scrollTop = scrollTop;
+        else if (restoring) list.scrollTop = request.restoreScrollTop;
         applyPendingFocus(list);
 
         // Opening a folder or removing the focused row leaves focus on <body> (or
@@ -802,8 +822,10 @@ function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, d
         // dialog, an input or the row the reader is on is never disturbed.
         const focusLoose = document.activeElement === document.body || document.activeElement === list;
         if (!isMobilePlatform() && state.pendingFocus === null && focusLoose) {
-            if (focusKey) setFocusedLogicalRow(focusKey, { preventScroll: true });
-            else list.focus({ preventScroll: true });
+            // When a scroll position was just restored, take the keyboard without
+            // moving a row into view, which would scroll away from it.
+            if (restoring || !focusKey) list.focus({ preventScroll: true });
+            else setFocusedLogicalRow(focusKey, { preventScroll: true });
         }
         resolveUploaderChipsForRows(rows, () => isCurrentFileRequest(request));
     };
@@ -887,9 +909,21 @@ export function refreshFiles({ background = false }: RefreshFilesOptions = {}): 
         channelId: Number(state.activeChannel?.id ?? 0),
         folderId: state.currentFolderId,
     };
-    const presentation: FileRefreshPresentation = background || sameFileView(lastRenderedFileView, view)
+    const sameView = sameFileView(lastRenderedFileView, view);
+    const presentation: FileRefreshPresentation = background || sameView
         ? 'same-view-refresh'
         : 'foreground-navigation';
+
+    // Leaving a view remembers where it was; a step up (to a shallower folder:
+    // the breadcrumb, Back, the parent shortcut, Android Back) restores the
+    // view being returned to, while opening a folder forward starts at the top.
+    let restoreScrollTop = 0;
+    if (!sameView) {
+        if (lastRenderedFileView) scrollMemory.save(viewKey(lastRenderedFileView), list.scrollTop);
+        if (lastRenderedFileView && state.folderPath.length < lastRenderedDepth) {
+            restoreScrollTop = scrollMemory.get(viewKey(view)) ?? 0;
+        }
+    }
 
     resetFolderCaches();
     const request: FileRefreshRequest = {
@@ -897,6 +931,7 @@ export function refreshFiles({ background = false }: RefreshFilesOptions = {}): 
         view,
         presentation,
         folderEpoch: state.folderSizeEpoch,
+        restoreScrollTop,
     };
 
     if (presentation === 'foreground-navigation') {
