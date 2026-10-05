@@ -234,6 +234,34 @@ func TestSourceAccountGenerationAndPermissions(t *testing.T) {
 	}
 }
 
+func TestDrivesAreNeverChannelSources(t *testing.T) {
+	ctx := t.Context()
+	fake := tgclient.NewFake(testAccountID)
+	fake.SeedJoinedBroadcastChannels(
+		tgclient.JoinedBroadcastChannel{ID: 7801, AccessHash: 81, Title: "Archive"},
+		tgclient.JoinedBroadcastChannel{ID: 7802, AccessHash: 82, Title: "News"},
+	)
+	sources, _, db := sourceFixture(t, fake, fake)
+	// Added as a source, then picked as the personal drive.
+	if _, err := sources.Connect(ctx, 7801); err != nil {
+		t.Fatal(err)
+	}
+	if err := projection.InsertChannel(db, projection.Channel{ChannelID: 7801, AccessHash: 81, Title: "Archive", Kind: projection.KindPersonal}); err != nil {
+		t.Fatal(err)
+	}
+
+	candidates, err := sources.ListCandidates(ctx)
+	if err != nil || len(candidates) != 1 || candidates[0].ChannelID != 7802 {
+		t.Fatalf("candidates = %#v, %v", candidates, err)
+	}
+	if _, err := sources.Connect(ctx, 7801); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("connect a drive: %v, want ErrUnavailable", err)
+	}
+	if connected, err := sources.ListConnected(ctx); err != nil || len(connected) != 0 {
+		t.Fatalf("connected = %#v, %v", connected, err)
+	}
+}
+
 func TestPostRestrictionsBlockExternalOpen(t *testing.T) {
 	fake := tgclient.NewFake(testAccountID)
 	fake.SeedJoinedBroadcastChannels(tgclient.JoinedBroadcastChannel{ID: testChannelID, AccessHash: 77, Title: "Cinema"})

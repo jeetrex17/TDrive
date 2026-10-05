@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"TDrive/backend/media"
+	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
 )
 
@@ -172,9 +173,13 @@ func (s *Service) ListCandidates(ctx context.Context) ([]SourceInfo, error) {
 	if err != nil {
 		return nil, err
 	}
+	drives, err := s.drives()
+	if err != nil {
+		return nil, err
+	}
 	out := make([]SourceInfo, 0, len(channels))
 	for _, channel := range channels {
-		if channel.ID <= 0 || channel.AccessHash == 0 {
+		if channel.ID <= 0 || channel.AccessHash == 0 || drives[channel.ID] {
 			continue
 		}
 		source := SourceInfo{ChannelID: channel.ID, Title: channel.Title, Username: channel.Username,
@@ -190,8 +195,28 @@ func (s *Service) ListCandidates(ctx context.Context) ([]SourceInfo, error) {
 	return out, nil
 }
 
+// drives returns the channels this device keeps as TDrive drives. A drive's
+// posts are TDrive's own storage: headers, file parts and encrypted bodies,
+// which would list as noise and fail to play, so a drive is never a source.
+func (s *Service) drives() (map[int64]bool, error) {
+	channels, err := projection.ListChannels(s.db)
+	if err != nil {
+		return nil, fmt.Errorf("channel source: list drives: %w", err)
+	}
+	ids := make(map[int64]bool, len(channels))
+	for _, channel := range channels {
+		ids[channel.ChannelID] = true
+	}
+	return ids, nil
+}
+
 func (s *Service) ListConnected(ctx context.Context) ([]SourceInfo, error) {
 	accountID, err := s.account(ctx)
+	if err != nil {
+		return nil, err
+	}
+	// Read before the rows below hold the only connection.
+	drives, err := s.drives()
 	if err != nil {
 		return nil, err
 	}
@@ -207,6 +232,10 @@ func (s *Service) ListConnected(ctx context.Context) ([]SourceInfo, error) {
 		var protected int
 		if err := rows.Scan(&source.ChannelID, &source.Title, &source.Username, &protected, &source.Generation); err != nil {
 			return nil, err
+		}
+		// Added before it became a drive.
+		if drives[source.ChannelID] {
+			continue
 		}
 		source.AccountID, source.Connected, source.Protected = accountID, true, protected != 0
 		out = append(out, source)
@@ -236,6 +265,13 @@ func (s *Service) ConnectWithGate(ctx context.Context, channelID, expectedAccoun
 		return SourceInfo{}, err
 	}
 	if accountID != expectedAccountID {
+		return SourceInfo{}, ErrUnavailable
+	}
+	drive, err := projection.ChannelExists(s.db, channelID)
+	if err != nil {
+		return SourceInfo{}, err
+	}
+	if drive {
 		return SourceInfo{}, ErrUnavailable
 	}
 	// Picked from the list the dialog walk just produced, so normally this
