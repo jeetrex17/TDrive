@@ -17,10 +17,6 @@ let selectionAnchorKey = '';
 
 type LogicalFileListRow = FolderListRow | FileListFileRow;
 
-function emitSelectionChange(): void {
-    window.dispatchEvent(new Event('tdrive:selectionchange'));
-}
-
 /**
  * A row element's identity, and the only thing selection reads off the markup.
  * Every other field it needs belongs to the row itself and is fetched from the
@@ -102,20 +98,10 @@ function renderedRowsByKey(list: HTMLElement): Map<string, HTMLElement> {
 }
 export function updateSelectionBar(): void {
     syncSelectedRowKeys();
-    if (!state.selectionBarEl) {
-        emitSelectionChange();
-        return;
-    }
+    if (!state.selectionBarEl) return;
     const count = state.selectedItems.size;
     setSelectionCount(count);
-    if (count === 0) {
-        state.selectionBarEl.style.display = 'none';
-        emitSelectionChange();
-        return;
-    }
-
-    state.selectionBarEl.style.display = 'flex';
-    emitSelectionChange();
+    state.selectionBarEl.style.display = count === 0 ? 'none' : 'flex';
 }
 
 export function clearSelection({ keepAnchor = false }: { keepAnchor?: boolean } = {}): void {
@@ -313,45 +299,11 @@ export function ensureRowSelectedForContextMenu(row: HTMLElement): void {
 }
 
 export function getSelectionPayload(): FileCommandItem[] {
-    return Array.from(state.selectedItems.values(), (item): FileCommandItem => {
-        if (item.type === 'folder') {
-            return {
-                type: 'folder',
-                id: item.id,
-                name: item.name,
-                channelId: item.channelId,
-                parentId: item.parentId,
-                canDelete: item.canDelete,
-                canRename: item.canRename,
-            };
-        }
-        if (item.source === 'tg') {
-            return {
-                type: 'file',
-                id: item.id,
-                name: item.name,
-                channelId: item.channelId,
-                size: item.size,
-                source: 'tg',
-                parentId: item.parentId,
-                uploaderID: item.uploaderID,
-                canDelete: item.canDelete,
-                canRename: item.canRename,
-            };
-        }
-        return {
-            type: 'file',
-            id: item.id,
-            name: item.name,
-            channelId: item.channelId,
-            size: item.size,
-            source: 'fs',
-            parentId: item.parentId,
-            uploaderID: item.uploaderID,
-            canDelete: item.canDelete,
-            canRename: item.canRename,
-        };
-    });
+    // The stored items already carry the folder/telegram/filesystem shape that
+    // logicalRowToSelectionItem built; the payload only has to drop the live row
+    // element, which modals and the backend have no use for. Rebuilding the three
+    // branches here was a second copy of that mapping, free to drift from it.
+    return Array.from(state.selectedItems.values(), ({ row: _row, ...payload }) => payload);
 }
 
 export function openSelectedItemsDelete(): void {
