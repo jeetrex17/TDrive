@@ -250,7 +250,8 @@ func TestPostRestrictionsBlockExternalOpen(t *testing.T) {
 			HasMedia: true, DocumentID: test.id + 100, DocumentAccessHash: 55,
 			MediaSize: 16, DocumentName: "clip.mp4", MimeType: "video/mp4"}
 		if test.message.Paid {
-			message.DocumentID = 0
+			// A paid post as the client reports it: no document at all.
+			message = tgclient.HistoryMessage{ChannelID: testChannelID, MsgID: test.id}
 		}
 		message.NoForwards = test.message.NoForwards
 		message.TTLSeconds = test.message.TTLSeconds

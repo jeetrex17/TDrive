@@ -85,8 +85,10 @@ type HistoryMessage struct {
 	Duration           float64 // seconds, from the video or audio attribute; 0 when unknown
 	NoForwards         bool
 	TTLSeconds         int
-	Paid               bool
-	Thumbs             []FileThumb
+	// Paid marks paid media. It holds no document this account can read, so
+	// HasMedia stays false and drive sync never adopts it as a file.
+	Paid   bool
+	Thumbs []FileThumb
 	// Placeholder marks an entry that occupies a message id but carries no
 	// content: a service event, or the stub left where a message was deleted.
 	// It is reported so page lengths match what Telegram sent, and callers

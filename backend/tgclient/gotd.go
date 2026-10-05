@@ -444,7 +444,7 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 			}
 		}
 	} else if _, ok := fullMsg.Media.(*tg.MessageMediaPaidMedia); ok {
-		hasMedia, paid = true, true
+		paid = true
 	}
 
 	return HistoryMessage{

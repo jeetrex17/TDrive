@@ -59,8 +59,15 @@ func TestHistoryMessagePreservesExternalMediaRestrictionsAndAttributes(t *testin
 		!message.NoForwards || message.TTLSeconds != 30 {
 		t.Fatalf("document metadata = %+v, ok %t", message, ok)
 	}
-	paid, ok := historyMessageFromTG(&tg.Message{ID: 18, Media: &tg.MessageMediaPaidMedia{}})
-	if !ok || !paid.Paid || !paid.HasMedia || paid.DocumentID != 0 {
+}
+
+// A personal drive adopts any captionless message with media as a file, so a
+// paid post, whose document this account cannot read, must report none.
+func TestHistoryMessageReportsPaidMediaWithoutAFile(t *testing.T) {
+	t.Parallel()
+	paid, ok := historyMessageFromTG(&tg.Message{ID: 18, Message: "Members cut",
+		Media: &tg.MessageMediaPaidMedia{StarsAmount: 50}})
+	if !ok || !paid.Paid || paid.HasMedia || paid.DocumentID != 0 || paid.MediaSize != 0 || paid.Text != "Members cut" {
 		t.Fatalf("paid media = %+v, ok %t", paid, ok)
 	}
 }
