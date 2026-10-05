@@ -92,7 +92,7 @@
 
     <div id="move-list" class="move-list">
         {#if $browse.listing.status === 'loading'}
-            <div class="move-list-empty">Loading folders...</div>
+            <div class="move-list-empty">Loading folders…</div>
         {:else if $browse.listing.folders.length === 0}
             <div class="move-list-empty">No folders here.</div>
         {:else}

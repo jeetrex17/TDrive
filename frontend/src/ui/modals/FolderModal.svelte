@@ -52,14 +52,14 @@
     titleId="folder-modal-title"
     subtitle="Create a folder in the current location."
     initialFocus="#new-folder-name"
-    restoreFocus="#new-folder-btn"
+    restoreFocus="#file-list"
     onClose={close}
 >
+    <label class="field-label" for="new-folder-name">Folder name</label>
     <input
         id="new-folder-name"
         type="text"
-        aria-label="Folder name"
-        placeholder="Folder name"
+        placeholder="e.g. Invoices"
         autocomplete="off"
         bind:value={name}
         disabled={$folderModalState.inFlight}

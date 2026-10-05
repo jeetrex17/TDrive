@@ -121,6 +121,14 @@ describe('RenameModal', () => {
         expect(body).toContain('id="rename-input"');
     });
 
+    it('gives the field a visible label tied to the input', () => {
+        openRenameModalView({ type: 'file', id: 42, name: 'a.txt' });
+
+        const { body } = render(RenameModal, { props: { onSubmit: () => {} } });
+
+        expect(body).toContain('<label class="field-label" for="rename-input">File name</label>');
+    });
+
     it('renders the store error inline', () => {
         openRenameModalView({ type: 'file', id: 42, name: 'a.txt' });
         setRenameModalError("Name can't include / or \\.");
@@ -307,7 +315,7 @@ describe('JoinRequestsModal', () => {
 
         joinRequestsList.set({ status: 'loading' });
         expect(render(JoinRequestsModal, { props: { onAction: noop } }).body)
-            .toContain('Loading requests...');
+            .toContain('Loading requests…');
 
         joinRequestsList.set({ status: 'ready', rows: [], actingUserId: 0 });
         expect(render(JoinRequestsModal, { props: { onAction: noop } }).body)
@@ -365,7 +373,7 @@ describe('MoveModal', () => {
         });
 
         expect(body).toContain('Move 2 items');
-        expect(body).toContain('Loading folders...');
+        expect(body).toContain('Loading folders…');
         expect(body).toContain('My Drive');
     });
 });

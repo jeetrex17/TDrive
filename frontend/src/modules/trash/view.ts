@@ -3,7 +3,7 @@
 // A trashed item is the same item it was an hour ago, so it is shown the way it
 // was shown then: the real file list, the real thumbnails, the same columns and
 // the same sort. Only two things differ, and both are deliberate -- a row's
-// actions are Restore and Delete forever rather than Open and Download, and the
+// actions are Restore and Delete permanently rather than Open and Download, and the
 // meta column carries the countdown, because how long is left is the one fact a
 // trash exists to tell you.
 //
@@ -29,9 +29,9 @@ function fileMsgId(objectId: string): number {
 }
 
 /**
- * Restore and Delete forever, in that order: the recoverable action comes
+ * Restore and Delete permanently, in that order: the recoverable action comes
  * first, and the irreversible one sits furthest from the row's own click
- * target. Delete forever only ever asks -- it never acts on the button.
+ * target. Delete permanently only ever asks -- it never acts on the button.
  */
 function trashActions(entry: TrashEntry): FileListAction[] {
     return [
@@ -48,8 +48,8 @@ function trashActions(entry: TrashEntry): FileListAction[] {
         {
             kind: 'purge',
             className: 'row-purge',
-            title: `Delete ${entry.name} forever`,
-            label: `Delete ${entry.name} forever`,
+            title: `Delete ${entry.name} permanently`,
+            label: `Delete ${entry.name} permanently`,
             onClick: (event) => {
                 event.stopPropagation();
                 askPurgeTrashEntry(entry);
@@ -79,7 +79,7 @@ export function trashRow(entry: TrashEntry, now: number, channelId: number): Fol
         // quietly falling back to the file's age.
         timeLabel: countdown.label,
         actions: trashActions(entry),
-        // Restore and Delete forever belong on the row on every shell. The
+        // Restore and Delete permanently belong on the row on every shell. The
         // phone's overflow sheet and its Move swipe are built for a live item
         // and have nothing to offer a deleted one.
         actionsInline: true,

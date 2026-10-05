@@ -42,18 +42,29 @@
     font-weight: var(--weight-semibold);
     line-height: var(--leading-snug);
 }
+/* A visible label above a dialog field. The input keeps its accessible name
+   from the `for`/id link, so the placeholder no longer has to stand in for it. */
+.field-label {
+    display: block;
+    margin-bottom: var(--space-1-5);
+    color: var(--text-main);
+    font-size: var(--type-sm);
+    font-weight: var(--weight-medium);
+}
+/* Help text is already the muted role; the extra opacity put it under the
+   contrast floor in more than half the themes, so it is gone. */
 .field-help {
     color: var(--text-muted);
-    font-size: 0.78rem;
+    font-size: var(--type-sm);
     line-height: 1.35;
     margin: -8px 0 16px;
-    opacity: 0.78;
 }
 .modal-actions { display: flex; gap: 12px; justify-content: flex-end; align-items: center; }
-/* One size for both: the filled button is the heavier of the two by colour,
-   and it should not be the taller one as well. */
+/* Desktop dialog buttons are the 36px control size; the filled button is the
+   heavier of the two by colour and should not be the taller one as well. The
+   phone sheet overrides these to the 44px touch floor below. */
 .modal-actions .primary-btn,
-.modal-actions .secondary-btn { width: auto; min-height: 44px; padding: 12px 16px; }
+.modal-actions .secondary-btn { width: auto; min-height: var(--control-lg); padding: 0 var(--space-4); }
 .modal-empty {
     padding: 14px;
     color: var(--text-muted);

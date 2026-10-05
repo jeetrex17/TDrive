@@ -54,7 +54,7 @@ describe('trashRow', () => {
         expect(expiring.metaLabel).toBe('Purging soon');
     });
 
-    it('offers restore before delete forever, and nothing else', () => {
+    it('offers restore before delete permanently, and nothing else', () => {
         const row = trashRow(entry(), NOW, 41);
         expect(row.actions.map((action) => action.kind)).toEqual(['restore', 'purge']);
     });
