@@ -6,7 +6,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/gotd/td/bin"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 )
 
 func TestDocumentOfClassifiesMessages(t *testing.T) {
@@ -69,6 +71,39 @@ func TestHistoryMessageReportsPaidMediaWithoutAFile(t *testing.T) {
 		Media: &tg.MessageMediaPaidMedia{StarsAmount: 50}})
 	if !ok || !paid.Paid || paid.HasMedia || paid.DocumentID != 0 || paid.MediaSize != 0 || paid.Text != "Members cut" {
 		t.Fatalf("paid media = %+v, ok %t", paid, ok)
+	}
+}
+
+type invokerFunc func(ctx context.Context, input bin.Encoder, output bin.Decoder) error
+
+func (f invokerFunc) Invoke(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
+	return f(ctx, input, output)
+}
+
+// A channel photo holds a background download slot while it loads, so a flood
+// wait must come back to the caller rather than be waited out in place.
+func TestChannelPhotoIsOneRequest(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	var answer error = tgerr.New(420, "FLOOD_WAIT_120")
+	api := tg.NewClient(invokerFunc(func(_ context.Context, _ bin.Encoder, output bin.Decoder) error {
+		calls++
+		if answer != nil {
+			return answer
+		}
+		var buf bin.Buffer
+		if err := (&tg.UploadFile{Type: &tg.StorageFileJpeg{}, Bytes: []byte("jpeg")}).Encode(&buf); err != nil {
+			return err
+		}
+		return output.Decode(&buf)
+	}))
+	peer := InputPeer{ChannelID: 101, AccessHash: 1101}
+	if _, err := channelPhoto(t.Context(), api, peer, 7); calls != 1 || !tgerr.Is(err, "FLOOD_WAIT") {
+		t.Fatalf("flood wait: %d requests, err %v", calls, err)
+	}
+	answer = nil
+	if photo, err := channelPhoto(t.Context(), api, peer, 7); err != nil || string(photo) != "jpeg" || calls != 2 {
+		t.Fatalf("photo = %q, %v after %d requests", photo, err, calls)
 	}
 }
 

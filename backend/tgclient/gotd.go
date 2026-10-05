@@ -655,22 +655,38 @@ func (g *Gotd) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, 
 // background file lane. The primary connection follows FILE_MIGRATE itself,
 // so a photo on another data center needs nothing more.
 func (g *Gotd) DownloadChannelPhoto(ctx context.Context, peer InputPeer, photoID int64) ([]byte, error) {
-	var buf bytes.Buffer
+	var photo []byte
 	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
 		release, err := AcquireBackgroundGetFileSlots(ctx, 1)
 		if err != nil {
 			return err
 		}
 		defer release()
-		buf.Reset()
-		location := &tg.InputPeerPhotoFileLocation{Peer: toPeer(peer), PhotoID: photoID}
-		_, err = downloader.NewDownloader().Download(api, location).Stream(ctx, &buf)
+		photo, err = channelPhoto(ctx, api, peer, photoID)
 		return err
 	})
 	if err != nil {
 		return nil, fmt.Errorf("tgclient: download channel photo: %w", err)
 	}
-	return buf.Bytes(), nil
+	return photo, nil
+}
+
+// channelPhoto asks for the whole photo, a few kilobytes, in one request. A
+// flood wait goes back to the caller's bounded retry: gotd's downloader would
+// wait out every one, however long, while holding the lane.
+func channelPhoto(ctx context.Context, api *tg.Client, peer InputPeer, photoID int64) ([]byte, error) {
+	result, err := api.UploadGetFile(ctx, &tg.UploadGetFileRequest{
+		Location: &tg.InputPeerPhotoFileLocation{Peer: toPeer(peer), PhotoID: photoID},
+		Limit:    1 << 20, // the most one request returns
+	})
+	if err != nil {
+		return nil, err
+	}
+	file, ok := result.(*tg.UploadFile)
+	if !ok {
+		return nil, fmt.Errorf("unexpected upload.getFile result %T", result)
+	}
+	return file.Bytes, nil
 }
 
 func (g *Gotd) DownloadFileThumbnail(ctx context.Context, peer InputPeer, msgID int64, thumbType string, w io.Writer) error {
