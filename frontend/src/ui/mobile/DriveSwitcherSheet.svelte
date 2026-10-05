@@ -2,7 +2,6 @@
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
     import Link2Icon from '@lucide/svelte/icons/link-2';
     import XIcon from '@lucide/svelte/icons/x';
-    import RadioIcon from '@lucide/svelte/icons/radio';
     import {
         handleDriveClick,
         handlePendingClick,
@@ -13,8 +12,17 @@
     import { openJoinDriveModal } from '../../modules/modals/join-drive';
     import { openNewDriveModal } from '../../modules/modals/new-drive';
     import DriveList from '../sidebar/DriveList.svelte';
-    import { driveSwitcherOpen, closeDriveSwitcher } from './mobile-shell-store';
-    import { channelSurfaceOpen, openChannelSurface } from '../channels/channel-surface-store';
+    import { activeTab, driveSwitcherOpen, closeDriveSwitcher } from './mobile-shell-store';
+    import ChannelNav from '../channels/ChannelNav.svelte';
+    import type { ChannelSource } from '../channels/channel-model';
+    import { channelSources, openChannel } from '../channels/channel-store';
+    import {
+        channelPhoto,
+        loadChannelSources,
+        openChannelPicker,
+        showChannel,
+        showChannelActions,
+    } from '../../modules/channel-sources';
 
     let sheetEl = $state<HTMLElement | null>(null);
     let scrimEl = $state<HTMLElement | null>(null);
@@ -32,13 +40,6 @@
     // overlay layer above it carries the drive row's own action menu, and that
     // has to stay reachable with the sheet still open.
     let hiddenBehind: HTMLElement[] = [];
-
-    // The source surface replaces the Files destination. Close the drive sheet
-    // reactively as well as in its row handler so a click cannot leave the
-    // sheet visually stranded above the new surface during event bubbling.
-    $effect(() => {
-        if ($channelSurfaceOpen) closeDriveSwitcher();
-    });
 
     function hideBehind(): void {
         const shell = sheetEl?.parentElement;
@@ -160,7 +161,17 @@
         closeDriveSwitcher();
         openNewDriveModal();
     }
-    function openChannels(): void { closeDriveSwitcher(); openChannelSurface(); }
+
+    // A channel is shown where the Files tab draws, like the trash.
+    function openSourceChannel(source: ChannelSource): void {
+        activeTab.set('files');
+        showChannel(source);
+    }
+
+    function addChannel(): void {
+        closeDriveSwitcher();
+        openChannelPicker();
+    }
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -211,18 +222,12 @@
          this listener needs no key handler of its own. -->
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions, a11y_click_events_have_key_events -->
     <nav id="drives-nav" class="switcher-list" tabindex="-1" aria-label="Drives" onclick={onDriveNavClick}>
-        <!-- The source and drive groups mirror the desktop navigation while
-             keeping each group discoverable to assistive technology. -->
-        <section class="switcher-group" aria-label="Personal drives">
+        <!-- Two groups rather than one list: the phone shows the same split the
+             desktop sidebar does, and each is its own stacking column. -->
+        <div class="switcher-group">
             <DriveList kind="personal" onDriveClick={handleDriveClick} />
-        </section>
-        <section class="switcher-group" aria-label="Channel sources">
-            <button class="drive-item" type="button" onclick={openChannels}>
-                <RadioIcon class="icon" size={18} strokeWidth={2} aria-hidden="true" />
-                <span class="drive-item-title">Channels</span>
-            </button>
-        </section>
-        <section class="switcher-group" aria-label="Shared drives">
+        </div>
+        <div class="switcher-group">
             <DriveList
                 kind="shared"
                 onDriveClick={handleDriveClick}
@@ -230,7 +235,18 @@
                 onPendingClick={handlePendingClick}
                 onPendingActions={showPendingActionsMenu}
             />
-        </section>
+        </div>
+        <div class="switcher-group">
+            <ChannelNav
+                sources={$channelSources}
+                activeId={$openChannel?.channelId ?? null}
+                loadPhoto={channelPhoto}
+                onSelect={openSourceChannel}
+                onActions={showChannelActions}
+                onAdd={addChannel}
+                onRetry={loadChannelSources}
+            />
+        </div>
     </nav>
 
     <div class="switcher-actions">

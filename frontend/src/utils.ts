@@ -27,6 +27,19 @@ export function formatDate(unixTimestamp: number): string {
     return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
 }
 
+/** "4:05" or "1:02:09", the way a player's clock reads. */
+export function formatDuration(value: number): string {
+    if (!Number.isFinite(value) || value < 0) return '0:00';
+    const total = Math.floor(value);
+    const hours = Math.floor(total / 3600);
+    const minutes = Math.floor((total % 3600) / 60);
+    const seconds = total % 60;
+    if (hours > 0) {
+        return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+    return `${minutes}:${String(seconds).padStart(2, '0')}`;
+}
+
 export function formatBytes(bytes: number): string {
     if (bytes === 0) return '0 B';
     const k = 1024;

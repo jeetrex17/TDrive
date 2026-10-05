@@ -69,13 +69,14 @@ test('drive switcher opens from the header and closes', async ({ page }) => {
 
     await page.getByRole('button', { name: /Switch drive/ }).click();
     await expect(page.locator('.drive-switcher-sheet')).toHaveClass(/open/);
-    const personalGroup = page.getByRole('region', { name: 'Personal drives' });
-    const sharedGroup = page.getByRole('region', { name: 'Shared drives' });
-    await expect(personalGroup.getByRole('button', { name: 'My Drive', exact: true })).toBeVisible();
-    await expect(sharedGroup.getByRole('button', { name: 'Team assets', exact: true })).toBeVisible();
+    // Personal drives and shared drives are still two groups in the sheet, in
+    // that order, the way the desktop sidebar splits them.
+    const groups = page.locator('.drive-switcher-sheet .switcher-group');
+    await expect(groups.nth(0).getByRole('button', { name: 'My Drive', exact: true })).toBeVisible();
+    await expect(groups.nth(1).getByRole('button', { name: 'Team assets', exact: true })).toBeVisible();
     const list = page.locator('.drive-switcher-sheet .switcher-list');
     expect(await list.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
-    const sharedRow = sharedGroup.locator('.sidebar-drive-row');
+    const sharedRow = groups.nth(1).locator('.sidebar-drive-row');
     const action = sharedRow.getByRole('button', { name: 'Actions for Team assets' });
     const [rowBox, actionBox] = await Promise.all([sharedRow.boundingBox(), action.boundingBox()]);
     expect(rowBox).not.toBeNull();

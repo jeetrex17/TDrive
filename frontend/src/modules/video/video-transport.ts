@@ -10,6 +10,7 @@ import {
     type PlayerAdapter,
     type PlayerState,
 } from './player-adapters';
+import { formatDuration } from '../../utils';
 import { nativeSeekOverlayAvailable } from './video-geometry';
 import type { VideoDOM } from './video-dom';
 
@@ -46,18 +47,6 @@ function clamp(value: number, min: number, max: number): number {
 
 function percent(value: number, total: number): number {
     return total > 0 ? clamp((value / total) * 100, 0, 100) : 0;
-}
-
-function formatTime(value: number): string {
-    if (!Number.isFinite(value) || value < 0) return '0:00';
-    const total = Math.floor(value);
-    const hours = Math.floor(total / 3600);
-    const minutes = Math.floor((total % 3600) / 60);
-    const seconds = total % 60;
-    if (hours > 0) {
-        return `${hours}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
-    }
-    return `${minutes}:${String(seconds).padStart(2, '0')}`;
 }
 
 function setSliderARIA(el: HTMLElement | null, value: number, min: number, max: number, text: string): void {
@@ -263,8 +252,8 @@ export class VideoTransportController {
         const { dom } = this.context;
         const timelineTime = this.scrubPreviewSeconds ?? state.currentTime;
         this.syncEndTime(state);
-        if (dom.time) dom.time.textContent = formatTime(timelineTime);
-        if (dom.duration) dom.duration.textContent = state.duration > 0 ? formatTime(state.duration) : '--:--';
+        if (dom.time) dom.time.textContent = formatDuration(timelineTime);
+        if (dom.duration) dom.duration.textContent = state.duration > 0 ? formatDuration(state.duration) : '--:--';
 
         const played = percent(timelineTime, state.duration);
         if (dom.scrubberPlayed) dom.scrubberPlayed.style.width = `${played}%`;
@@ -275,7 +264,7 @@ export class VideoTransportController {
             timelineTime,
             0,
             Math.max(0, state.duration),
-            `${formatTime(timelineTime)} of ${state.duration > 0 ? formatTime(state.duration) : 'unknown'}`,
+            `${formatDuration(timelineTime)} of ${state.duration > 0 ? formatDuration(state.duration) : 'unknown'}`,
         );
     }
 
@@ -495,7 +484,7 @@ export class VideoTransportController {
 
     private updateThumbnailTooltip(seconds: number): void {
         const { scrubberTooltipImage, scrubberTooltip, scrubberTooltipTime } = this.context.dom;
-        if (scrubberTooltipTime) scrubberTooltipTime.textContent = formatTime(seconds);
+        if (scrubberTooltipTime) scrubberTooltipTime.textContent = formatDuration(seconds);
         const bucket = this.thumbnailBucket(seconds);
         this.currentPreviewBucket = bucket;
         const cached = this.thumbnailObjectURLs.get(bucket);
@@ -798,9 +787,9 @@ export class VideoTransportController {
         const { scrubber, scrubberPlayed, scrubberThumb, time } = this.context.dom;
         if (scrubberPlayed) scrubberPlayed.style.width = `${played}%`;
         if (scrubberThumb) scrubberThumb.style.left = `${played}%`;
-        if (time) time.textContent = formatTime(seconds);
+        if (time) time.textContent = formatDuration(seconds);
         setSliderARIA(scrubber, seconds, 0, Math.max(0, this.context.getState().duration),
-            `${formatTime(seconds)} of ${formatTime(this.context.getState().duration)}`);
+            `${formatDuration(seconds)} of ${formatDuration(this.context.getState().duration)}`);
     }
 
     private volumeFromEvent(event: PointerEvent | MouseEvent): number {

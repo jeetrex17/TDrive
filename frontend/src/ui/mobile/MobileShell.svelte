@@ -29,10 +29,10 @@
     import { sidebarState } from '../sidebar/sidebar-store';
     import { breadcrumbPath } from '../chrome/breadcrumb-store';
     import { fileListView } from '../file-list/file-list-store';
-    import ChannelSurface from '../channels/ChannelSurface.svelte';
-    import { playChannelMedia, openChannelTelegram } from '../channels/channel-actions';
-    import { channelSurfaceOpen, closeChannelSurface } from '../channels/channel-surface-store';
-    import { connectChannelSource, disconnectChannelSource, listChannelMedia, listChannelSourceCandidates, listConnectedChannelSources } from '../../api';
+    import ChannelView from '../channels/ChannelView.svelte';
+    import { closeChannel, openChannel } from '../channels/channel-store';
+    import { openChannelPost, openInTelegram, showChannelActions, showPostActions } from '../../modules/channel-sources';
+    import { listChannelMedia } from '../../api';
 
     interface Props {
         dashboardVisible: boolean;
@@ -43,9 +43,12 @@
     // Selecting rows swaps the tab bar for the selection bar (spec 2.5); the
     // count comes from the shared selection store the controller feeds.
     const selecting = $derived(Boolean($selectionBarState.active || $selectionBarState.count > 0));
+    // A Telegram channel is a place the Files tab shows, like the trash, but
+    // it brings its own top bar and list, so it replaces the drive's.
+    const inChannel = $derived($activeTab === 'files' && $openChannel !== null);
     // Files and Photos share one content region (the file list vs the gallery);
     // Transfers and Account are their own panels.
-    const showMain = $derived($activeTab === 'files' || $activeTab === 'photos');
+    const showMain = $derived(($activeTab === 'files' && !inChannel) || $activeTab === 'photos');
     // An empty Files view already places Upload and Create folder in its
     // center. Keep that focused state in charge rather than floating a second
     // creation control over it.
@@ -54,28 +57,13 @@
         && $fileListView.stateKind === 'empty'
         && Boolean($fileListView.actions?.length),
     );
-    // Nothing is uploaded into the trash, so the button does not float over it.
+    // Nothing is uploaded into the trash or a channel, so the button does not
+    // float over either.
     const showContextAction = $derived(
         $activeTab === 'photos'
-        || ($activeTab === 'files' && !emptyFilesOwnsCreation && $sidebarState.virtualView !== 'trash'),
+        || ($activeTab === 'files' && !inChannel && !emptyFilesOwnsCreation && $sidebarState.virtualView !== 'trash'),
     );
     const contextualActionVisible = $derived(showContextAction && !selecting && !$keyboardOpen);
-    let channelEntryTab = $state<MobileTab | null>(null);
-
-    // Some platform actions select a tab without going through the tab bar
-    // (notification routing and the sync ring, for example). Keep Channels as
-    // a proper destination by dismissing its overlay for any of those changes.
-    $effect(() => {
-        if (!$channelSurfaceOpen) {
-            channelEntryTab = null;
-            return;
-        }
-        if (channelEntryTab === null) {
-            channelEntryTab = $activeTab;
-            return;
-        }
-        if (channelEntryTab !== $activeTab) closeChannelSurface();
-    });
 
     // Publish the upload button's footprint so anything else that floats over
     // the content can stand off it. The toast stack is the one that matters:
@@ -130,8 +118,9 @@
         if (tab === 'files') {
             if (appState.virtualView === 'photos') exitPhotos();
             // Tapping Files while in the trash is how a phone leaves it: there
-            // is no breadcrumb up there to leave by.
+            // is no breadcrumb up there to leave by. A channel works the same.
             else if (appState.virtualView === 'trash') closeTrash();
+            closeChannel();
         } else if (tab === 'photos') {
             enterPhotos();
         }
@@ -201,6 +190,7 @@
     class:is-scrolled={scrolled}
     class:is-selecting={selecting}
     class:has-context-action={contextualActionVisible}
+    class:in-channel={inChannel}
     hidden={!dashboardVisible}
     aria-hidden={dashboardVisible ? undefined : 'true'}
 >
@@ -237,6 +227,23 @@
             </div>
         </main>
 
+        <div class="mobile-panel" data-tab="channel" hidden={!inChannel}>
+            {#if dashboardVisible && $openChannel}
+                {#key `${$openChannel.channelId}:${$openChannel.generation}`}
+                    <ChannelView
+                        mobile
+                        source={$openChannel}
+                        fetchMedia={listChannelMedia}
+                        onOpenPost={openChannelPost}
+                        onOpenTelegram={openInTelegram}
+                        onActions={showChannelActions}
+                        onPostActions={showPostActions}
+                        onBack={closeChannel}
+                    />
+                {/key}
+            {/if}
+        </div>
+
         <div class="mobile-panel" data-tab="transfers" hidden={$activeTab !== 'transfers'}>
             <TransfersTab />
         </div>
@@ -244,11 +251,6 @@
             <AccountTab />
         </div>
     </div>
-    {#if dashboardVisible && $channelSurfaceOpen}
-        <div class="mobile-channel-surface">
-            <ChannelSurface loadConnected={listConnectedChannelSources} loadCandidates={listChannelSourceCandidates} connect={(source) => connectChannelSource(source.channelId, source.accountId)} disconnect={(source) => disconnectChannelSource(source.channelId, source.accountId, source.generation)} fetchMedia={listChannelMedia} play={playChannelMedia} openTelegram={openChannelTelegram} onClose={closeChannelSurface} />
-        </div>
-    {/if}
 
     <!-- The selection bar sits above the tab bar and replaces it while
          selecting. It keeps its id and its inline display: none because the

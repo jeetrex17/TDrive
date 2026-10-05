@@ -7,7 +7,7 @@ import { sidebarState } from '../sidebar/sidebar-store';
 import { activeTab } from './mobile-shell-store';
 import { selectionBarState } from '../selection/selection-bar-store';
 import { fileListView } from '../file-list/file-list-store';
-import { closeChannelSurface, openChannelSurface } from '../channels/channel-surface-store';
+import { channelSources, closeChannel, EMPTY_CHANNEL_SOURCES, openChannelId } from '../channels/channel-store';
 
 let target: HTMLElement;
 let component: Record<string, unknown> | null = null;
@@ -24,7 +24,7 @@ function scrollTo(selector: string, top: number): void {
 }
 
 beforeEach(() => {
-    closeChannelSurface();
+    closeChannel();
     activeTab.set('files');
     selectionBarState.set({ count: 0 });
     fileListView.set({ kind: 'state', stateKind: 'loading', title: 'Loading files' });
@@ -36,7 +36,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-    closeChannelSurface();
+    closeChannel();
+    channelSources.set(EMPTY_CHANNEL_SOURCES);
     if (component) unmount(component);
     component = null;
     target.remove();
@@ -89,15 +90,22 @@ describe('scroll divider', () => {
 });
 
 describe('mobile hierarchy', () => {
-    it('leaves Channels when a platform action selects another tab', () => {
-        openChannelSurface();
+    it('shows a channel where Files draws, with its own bar and nothing to upload', () => {
+        channelSources.set({ status: 'ready', sources: [{ channelId: 51, title: 'Field Recordings', username: 'fieldrec', connected: true, protected: false, accountId: '7', generation: 'g' }] });
+        openChannelId.set(51);
         flushSync();
-        expect(target.querySelector('.mobile-channel-surface')).not.toBeNull();
+        const channel = target.querySelector('.mobile-panel[data-tab="channel"]') as HTMLElement;
+        expect(channel.hidden).toBe(false);
+        expect(channel.querySelector('h1')?.textContent).toBe('Field Recordings');
+        expect((target.querySelector('main.mobile-panel') as HTMLElement).hidden).toBe(true);
+        expect(shell().classList.contains('in-channel')).toBe(true);
+        expect((target.querySelector('.mobile-context-action') as HTMLElement).hidden).toBe(true);
 
+        // The tab bar stays: another tab covers the channel without closing it.
         activeTab.set('transfers');
         flushSync();
-
-        expect(target.querySelector('.mobile-channel-surface')).toBeNull();
+        expect(channel.hidden).toBe(true);
+        expect(shell().classList.contains('in-channel')).toBe(false);
     });
 
     it('keeps Upload/Create contextual to drive content instead of a fifth destination', () => {

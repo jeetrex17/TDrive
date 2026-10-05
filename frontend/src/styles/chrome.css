@@ -1,8 +1,11 @@
 /* === DASHBOARD LAYOUT === */
 .dashboard-container { display: flex; height: 100vh; }
-.main-content { position: relative; }
-.channel-surface-host { position: absolute; inset: 0; z-index: 2; min-width: 0; min-height: 0; }
-.channel-surface-host[hidden] { display: none; }
+
+/* A Telegram channel takes the drive's place below the header, the way Photos
+   and the trash do. The drive's views stay mounted underneath because their
+   controllers hold them by id. Nothing can be uploaded into a channel. */
+.main-content.channel-mode > :is(.drive-breadcrumb, .file-table-header, .file-list-box, .gallery-view),
+.main-content.channel-mode .upload-menu-wrap { display: none; }
 
 .sidebar {
     width: 240px; flex-shrink: 0; background: var(--bg-sidebar); border-right: 1px solid var(--color-surface-1);
@@ -124,3 +127,4 @@
     white-space: nowrap;
 }
 .uploader-chip:empty { display: none; }
+

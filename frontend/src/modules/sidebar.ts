@@ -17,7 +17,7 @@ import { openJoinRequestsModal } from './modals/join-requests';
 import { notify } from './notifications';
 import { humanizeBackendError } from './errors';
 import { enterPhotos, exitPhotos } from './gallery';
-import { closeChannelSurface } from '../ui/channels/channel-surface-store';
+import { closeChannel } from '../ui/channels/channel-store';
 import { closeTrash } from './trash/controller';
 import { showContextMenu, type ContextMenuItem } from './context-menu';
 import {
@@ -33,10 +33,7 @@ export function activateSidebar(): () => void {
     const photosButton = document.getElementById('nav-photos');
     const onNewDrive = () => openNewDriveModal();
     const onJoinDrive = () => openJoinDriveModal();
-    const onPhotos = () => {
-        closeChannelSurface();
-        enterPhotos();
-    };
+    const onPhotos = () => enterPhotos();
 
     newButton?.addEventListener('click', onNewDrive);
     joinButton?.addEventListener('click', onJoinDrive);
@@ -76,7 +73,7 @@ export function renderSidebar() {
 
 
 export function handleDriveClick(channelId: number): void {
-    closeChannelSurface();
+    closeChannel();
     if (Number(channelId) === Number(state.activeChannel?.id)) {
         // Clicking the already-active drive is how you leave one of its virtual
         // views. Without this the trash is a dead end: it has no breadcrumb to

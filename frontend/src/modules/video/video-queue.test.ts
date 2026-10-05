@@ -34,6 +34,14 @@ describe("normalizing a video target", () => {
         expect(normalizeVideoTarget(target({ key: "  " }))).not.toHaveProperty("key");
         expect(normalizeVideoTarget(target({ key: " row-7 " }))?.key).toBe("row-7");
     });
+
+    it("keeps the target's own opener and title, which a channel post cannot play without", () => {
+        const open = async () => { throw new Error("not called"); };
+        const normalized = normalizeVideoTarget(target({ open, title: " Dawn chorus " }));
+        expect(normalized?.open).toBe(open);
+        expect(normalized?.title).toBe("Dawn chorus");
+        expect(normalizeVideoTarget(target({ title: " " }))).not.toHaveProperty("title");
+    });
 });
 
 describe("building the active playlist", () => {
@@ -124,6 +132,11 @@ describe("playlist rows", () => {
     it("keys duplicate files apart by position, so two rows never collapse into one", () => {
         expect(playlistItemIdentity({ id: 7, name: "a.mp4" }, 0)).toBe("video:7:0");
         expect(playlistItemIdentity({ id: 7, name: "a.mp4" }, 1)).toBe("video:7:1");
+    });
+
+    it("names a row by its title when it has one, and still labels the container from the file name", () => {
+        const [row] = playlistViewItems(createActivePlaylist(target({ title: "Dawn chorus" }), true));
+        expect(row).toMatchObject({ name: "Dawn chorus", format: "MKV" });
     });
 
     it("numbers the rows from one and labels each with its container", () => {

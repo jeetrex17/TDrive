@@ -3,6 +3,7 @@
     import FileIcon from '@lucide/svelte/icons/file';
     import FolderIcon from '@lucide/svelte/icons/folder';
     import EyeIcon from '@lucide/svelte/icons/eye';
+    import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
     import PlayIcon from '@lucide/svelte/icons/play';
     import DownloadIcon from '@lucide/svelte/icons/download';
     import PencilIcon from '@lucide/svelte/icons/pencil';
@@ -40,6 +41,7 @@
         upload: UploadIcon,
         'folder-new': FolderPlusIcon,
         refresh: RefreshCwIcon,
+        external: ExternalLinkIcon,
     };
 
     const DETAIL_ICONS: Record<ContextMenuDetailIcon, typeof FileIcon> = {

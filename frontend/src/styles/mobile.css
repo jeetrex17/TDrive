@@ -117,8 +117,6 @@ html.mobile .main-content {
     min-height: 0;
     padding: 0 var(--inset-right) 0 var(--inset-left);
 }
-html.mobile .mobile-channel-surface { position: absolute; inset: 0; z-index: 3; min-width: 0; min-height: 0; background: var(--color-canvas); }
-html.mobile .mobile-channel-surface[hidden] { display: none; }
 
 html.mobile .mobile-scroll {
     flex: 1 1 auto;
@@ -153,6 +151,9 @@ html.mobile .mobile-topbar {
 html.mobile .mobile-shell.is-scrolled .mobile-topbar {
     border-bottom-color: var(--color-border-soft);
 }
+/* A channel draws its own bar, with a way back and its search, so the shell's
+   steps aside while one is showing. */
+html.mobile .mobile-shell.in-channel > .mobile-topbar { display: none; }
 
 html.mobile .topbar-row {
     display: flex;
