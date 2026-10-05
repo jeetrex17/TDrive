@@ -99,6 +99,11 @@ test("a channel video queues the channel's other videos in the player's playlist
     await playlist.click();
     await expect(page.locator('#video-playlist-panel')).toContainText('Videos in Field Recordings');
     await expect(page.locator('#video-playlist-panel')).toContainText('Coastline at night');
-    expect((await mock.calls('OpenChannelMedia')).map((call) => call.args)).toEqual([[50, 71, 7, 'source-a']]);
+    // Every video opens through its channel, never as a drive file. The tiny
+    // fixture is within the prefetch lead at once, so the player may already
+    // be warming the next one.
+    const opened = (await mock.calls('OpenChannelMedia')).map((call) => call.args);
+    expect(opened[0]).toEqual([50, 71, 7, 'source-a']);
+    for (const args of opened.slice(1)) expect(args).toEqual([50, 69, 7, 'source-a']);
     expect(await mock.calls('OpenMedia')).toEqual([]);
 });
