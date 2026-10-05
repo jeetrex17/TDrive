@@ -298,9 +298,19 @@ function fileActions(name: string): FileListAction[] {
     return actions;
 }
 
+// The accessible name a screen reader announces for a row: the kind and name,
+// then the size and date it can see in the columns, so a reader hears what a
+// sighted user reads across the row rather than the name alone. Existing
+// `getByRole('row', { name: 'File: ...' })` selectors match this as a substring.
+function rowAnnouncement(prefix: string, name: string, sizeLabel: string, dateLabel: string): string {
+    return [`${prefix}: ${name}`, sizeLabel, dateLabel].filter(Boolean).join(', ');
+}
+
 export function buildFolderRow(folder: FolderRowInput, parentId: string, overrides: Partial<FolderListRow> = {}): FolderListRow {
     const id = String(folder.id || overrides.id || '');
     const name = String(folder.name || overrides.name || 'Folder');
+    const folderSize = overrides.size ?? 0;
+    const folderModified = overrides.modifiedTime ?? 0;
     return {
         kind: 'folder',
         key: overrides.key || `folder:${id}`,
@@ -311,9 +321,14 @@ export function buildFolderRow(folder: FolderRowInput, parentId: string, overrid
         parentId: String(overrides.parentId ?? folder.parentId ?? parentId ?? ''),
         metaLabel: overrides.metaLabel ?? '—',
         sizeLabel: overrides.sizeLabel ?? '…',
-        size: overrides.size ?? 0,
-        modifiedTime: overrides.modifiedTime ?? 0,
-        ariaLabel: overrides.ariaLabel ?? `Folder: ${name}`,
+        size: folderSize,
+        modifiedTime: folderModified,
+        ariaLabel: overrides.ariaLabel ?? rowAnnouncement(
+            'Folder',
+            name,
+            folderSize > 0 ? formatBytes(folderSize) : '',
+            folderModified > 0 ? formatDate(folderModified) : '',
+        ),
         timeLabel: overrides.timeLabel,
         actionsInline: overrides.actionsInline,
         actions: overrides.actions ?? [folderAction()],
@@ -333,6 +348,8 @@ export function buildFileRow(file: FileRowInput, parentId: string, overrides: Pa
     const encrypted = Boolean(file.encrypted ?? overrides.encrypted ?? false);
     const canDelete = Boolean(file.canDelete ?? overrides.canDelete ?? canOwnerActOnFile(file));
     const canRename = Boolean(file.canRename ?? overrides.canRename ?? canDelete);
+    const metaLabel = overrides.metaLabel ?? formatDate(uploadTime);
+    const sizeLabel = overrides.sizeLabel ?? formatBytes(size);
 
     return {
         kind: 'file',
@@ -346,9 +363,14 @@ export function buildFileRow(file: FileRowInput, parentId: string, overrides: Pa
         source,
         parentId: String(overrides.parentId ?? parentId ?? ''),
         size,
-        metaLabel: overrides.metaLabel ?? formatDate(uploadTime),
-        sizeLabel: overrides.sizeLabel ?? formatBytes(size),
-        ariaLabel: overrides.ariaLabel ?? `File: ${name}`,
+        metaLabel,
+        sizeLabel,
+        ariaLabel: overrides.ariaLabel ?? rowAnnouncement(
+            'File',
+            name,
+            sizeLabel,
+            uploadTime > 0 ? formatDate(uploadTime) : '',
+        ),
         timeLabel: overrides.timeLabel,
         actionsInline: overrides.actionsInline,
         uploaderID,

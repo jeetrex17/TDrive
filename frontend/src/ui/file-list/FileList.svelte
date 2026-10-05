@@ -32,7 +32,7 @@
         setFileThumbnailRoot,
         teardownFileThumbnails,
     } from './file-thumbnail-controller';
-    import type { FileListAction, FileListFileRow, FileListRow, FolderListRow } from './types';
+    import type { FileListAction, FileListFileRow, FileListRow, FileListView, FolderListRow } from './types';
 
     type InteractiveRow = FolderListRow | FileListFileRow;
 
@@ -212,26 +212,43 @@
         updateViewport();
     }
 
-    function applyMobileListSemantics(): void {
-        if (!mobile || !list) return;
-        // The shell starts as a desktop grid so it can render before the mobile
-        // portal mounts. A phone row is one two-line item, not four cells, and
-        // leaving these attributes in place makes a screen reader invent a
-        // header and announce a table that is not on screen.
-        list.setAttribute('role', 'list');
-        list.removeAttribute('aria-colcount');
-        list.removeAttribute('aria-rowcount');
-        list.removeAttribute('aria-multiselectable');
+    function applyListSemantics(view: FileListView): void {
+        if (!list) return;
+        // A grid or a list may contain only rows or items. The loading, empty
+        // and error messages are neither, and their own role=status/alert is
+        // invalid as a direct child of one, so while a message shows the
+        // container drops to a plain labelled group.
+        if (view.kind === 'state') {
+            list.setAttribute('role', 'group');
+            list.removeAttribute('aria-colcount');
+            list.removeAttribute('aria-rowcount');
+            list.removeAttribute('aria-multiselectable');
+            return;
+        }
+        if (mobile) {
+            // The shell starts as a desktop grid so it can render before the
+            // mobile portal mounts. A phone row is one two-line item, not four
+            // cells, and leaving these attributes in place makes a screen reader
+            // invent a header and announce a table that is not on screen.
+            list.setAttribute('role', 'list');
+            list.removeAttribute('aria-colcount');
+            list.removeAttribute('aria-rowcount');
+            list.removeAttribute('aria-multiselectable');
+            return;
+        }
+        // aria-rowcount is written by renderFileListRows alongside the rows.
+        list.setAttribute('role', 'grid');
+        list.setAttribute('aria-colcount', '4');
+        list.setAttribute('aria-multiselectable', 'true');
     }
 
     onMount(() => {
         list = document.getElementById('file-list');
         if (!list) return;
         setFileThumbnailRoot(list);
-        applyMobileListSemantics();
-        const unsubscribeListSemantics = mobile
-            ? fileListView.subscribe(applyMobileListSemantics)
-            : () => {};
+        // subscribe fires immediately with the current view, which also seeds the
+        // initial semantics.
+        const unsubscribeListSemantics = fileListView.subscribe(applyListSemantics);
         const onScroll = () => {
             updateViewport();
             retainKeyboardFocus();

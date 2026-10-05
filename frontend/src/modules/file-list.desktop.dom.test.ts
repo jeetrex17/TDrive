@@ -54,7 +54,7 @@ vi.mock('./drive-data', () => ({ calculateVisibleFolderStats: vi.fn() }));
 vi.mock('./folder-index', () => ({ refreshFolderIndex: vi.fn(() => Promise.resolve({ children: new Map() })), collectDescendants: vi.fn(() => []) }));
 
 import FileList from '../ui/file-list/FileList.svelte';
-import { activateFileList, buildFileRow, buildFolderRow, renderFileListRows } from './file-list';
+import { activateFileList, buildFileRow, buildFolderRow, renderFileListRows, renderFileState } from './file-list';
 import { state } from '../state';
 import { refreshFolderIndex, collectDescendants } from './folder-index';
 import type { FileListFileRow } from '../ui/file-list/types';
@@ -356,6 +356,26 @@ describe('desktop keyboard focus', () => {
         press(row('file:41'), 'ContextMenu');
         row('file:41').dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }));
         expect(listener).toHaveBeenCalledTimes(2);
+    });
+});
+
+describe('list semantics', () => {
+    it('is a grid for rows and a labelled group for a state message', () => {
+        expect(list.getAttribute('role')).toBe('grid');
+        expect(list.getAttribute('aria-colcount')).toBe('4');
+        renderFileState(list, 'loading', 'Loading files');
+        flushSync();
+        expect(list.getAttribute('role')).toBe('group');
+        expect(list.hasAttribute('aria-colcount')).toBe(false);
+    });
+
+    it('announces a file row with its size and date, keeping the File: prefix', () => {
+        renderFileListRows(list, [buildFileRow({ id: 7, name: 'report.pdf', size: 2048, date: 1_700_000_000 }, '')]);
+        flushSync();
+        const label = row('file:7').getAttribute('aria-label') ?? '';
+        expect(label.startsWith('File: report.pdf')).toBe(true);
+        expect(label).toContain('2 KB');
+        expect(label.split(',').length).toBeGreaterThanOrEqual(3);
     });
 });
 
