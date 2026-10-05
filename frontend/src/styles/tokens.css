@@ -29,6 +29,10 @@
     --inset-right: env(safe-area-inset-right, 0px);
 
     --font-ui: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    /* Body and metadata read at regular; labels and file names at medium;
+       headings, buttons and the active item at semibold; strong is for the
+       one title a screen has. */
+    --weight-regular: 400;
     --weight-medium: 500;
     --weight-semibold: 600;
     --weight-strong: 700;
@@ -39,9 +43,14 @@
     --radius-xl: 16px;
     --radius-pill: 999px;
 
+    /* Steps of four, with the half steps a dense row or an icon gap needs. */
+    --space-0-5: 2px;
     --space-1: 4px;
+    --space-1-5: 6px;
     --space-2: 8px;
+    --space-2-5: 10px;
     --space-3: 12px;
+    --space-3-5: 14px;
     --space-4: 16px;
     --space-5: 20px;
     --space-6: 24px;
@@ -63,11 +72,32 @@
     --z-toast: 500;
     --z-app-state: 600;
 
+    /* Whole pixels at the default root size (11, 12, 13, 14, 16, 17, 20, 22,
+       28), so WebKit, WebView2 and WebKitGTK round a size the same way. */
+    --type-2xs: 0.6875rem;
     --type-xs: 0.75rem;
-    --type-sm: 0.85rem;
-    --type-base: 0.9rem;
+    --type-sm: 0.8125rem;
+    --type-base: 0.875rem;
     --type-md: 1rem;
-    --type-lg: 1.05rem;
+    --type-lg: 1.0625rem;
+    --type-xl: 1.25rem;
+    --type-2xl: 1.375rem;
+    --type-3xl: 1.75rem;
+
+    --leading-tight: 1.2;
+    --leading-snug: 1.35;
+    --leading-normal: 1.5;
+
+    /* Heights a pointer-driven control comes in, and the smallest side a
+       finger gets (Apple asks for 44pt; WCAG 2.5.8 accepts no less than 24). */
+    --control-sm: 28px;
+    --control-md: 32px;
+    --control-lg: 36px;
+    --touch-target: 44px;
+
+    /* Accent used as text. A palette whose accent is too light to read on its
+       own surfaces points this at a darker step; the rest inherit the accent. */
+    --color-accent-text: var(--color-accent);
 
     /* Compatibility aliases used by the current frontend modules. */
     --bg-dark: var(--color-canvas);
