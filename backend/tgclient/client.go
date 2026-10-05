@@ -21,6 +21,9 @@ var (
 	ErrMessageNotFound = errors.New("tgclient: message not found")
 	ErrNotFile         = errors.New("tgclient: message is not a file")
 	ErrEmptyDocument   = errors.New("tgclient: empty document")
+	// ErrChannelUnavailable means the account left the channel or can no
+	// longer see it, as opposed to a lookup that merely failed this time.
+	ErrChannelUnavailable = errors.New("tgclient: channel unavailable to this account")
 	// ErrSendOutcomeUnknown means Telegram may have accepted an idempotent
 	// write even though the client did not receive a usable receipt. Callers
 	// must retry with the same random_id before abandoning remote artifacts.
@@ -213,7 +216,9 @@ type Client interface {
 	GetHistory(ctx context.Context, peer InputPeer, minID, offsetID int64, limit int) ([]HistoryMessage, error)
 	SearchChannelMessages(ctx context.Context, peer InputPeer, query string, offsetID int64, limit int) ([]HistoryMessage, error)
 	GetChannelMessage(ctx context.Context, peer InputPeer, msgID int64) (HistoryMessage, error)
-	GetJoinedBroadcastChannel(ctx context.Context, channelID int64) (JoinedBroadcastChannel, error)
+	// GetBroadcastChannel looks up one joined broadcast channel, returning
+	// ErrChannelUnavailable once the account cannot see it.
+	GetBroadcastChannel(ctx context.Context, peer InputPeer) (JoinedBroadcastChannel, error)
 	// DownloadChannelPhoto returns the small (160px) JPEG of a channel's
 	// profile photo.
 	DownloadChannelPhoto(ctx context.Context, peer InputPeer, photoID int64) ([]byte, error)

@@ -41,6 +41,8 @@ type Fake struct {
 	joinedBroadcast []JoinedBroadcastChannel
 	channelPhotos   map[int64][]byte // keyed by photo ID
 	photoDownloads  int
+	dialogWalks     int
+	channelLookups  int
 	invites         map[string]InviteInfo
 	joinRequests    map[int64][]JoinRequest
 	requestedJoins  []string
@@ -876,18 +878,28 @@ func (f *Fake) ListOwnedBroadcastChannels(context.Context) ([]OwnedBroadcastChan
 func (f *Fake) ListJoinedBroadcastChannels(context.Context) ([]JoinedBroadcastChannel, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.dialogWalks++
 	return append([]JoinedBroadcastChannel(nil), f.joinedBroadcast...), nil
 }
 
-func (f *Fake) GetJoinedBroadcastChannel(_ context.Context, channelID int64) (JoinedBroadcastChannel, error) {
+func (f *Fake) GetBroadcastChannel(_ context.Context, peer InputPeer) (JoinedBroadcastChannel, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.channelLookups++
 	for _, channel := range f.joinedBroadcast {
-		if channel.ID == channelID {
+		if channel.ID == peer.ChannelID {
 			return channel, nil
 		}
 	}
-	return JoinedBroadcastChannel{}, fmt.Errorf("tgclient.Fake: joined channel %d not found", channelID)
+	return JoinedBroadcastChannel{}, ErrChannelUnavailable
+}
+
+// TelegramReads counts dialog walks and single-channel lookups, so tests can
+// hold paging to its budget.
+func (f *Fake) TelegramReads() (dialogWalks, channelLookups int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.dialogWalks, f.channelLookups
 }
 
 func (f *Fake) DownloadChannelPhoto(_ context.Context, _ InputPeer, photoID int64) ([]byte, error) {

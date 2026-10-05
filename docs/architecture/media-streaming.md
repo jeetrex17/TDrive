@@ -52,10 +52,14 @@ removes that metadata and revokes its media sessions; it never leaves the
 Telegram channel. Channel messages are read directly from Telegram and never
 parsed as TDX control operations or inserted into the TDrive drive projection.
 
-[`channelsource.Service`](../../backend/channelsource/service.go) validates
-membership and content protection before each bounded history/search page and
-before an individual open. Pages are newest first, scan at most four batches
-of up to 100 Telegram messages, and continue from the oldest raw message ID.
+[`channelsource.Service`](../../backend/channelsource/service.go) checks
+membership and content protection with one `channels.getChannels` lookup by
+the stored access hash; only a channel added before access hashes were kept
+needs a dialog walk, once. The first page and every individual open look the
+channel up again. Older pages reuse a lookup up to a minute old, because an
+open rechecks before anything plays. Pages are newest first, scan at most four
+batches of up to 100 Telegram messages, and continue from the oldest raw
+message ID.
 Search uses Telegram's channel message search; it is scoped to searchable post
 text/captions rather than a locally indexed filename library. The initial
 supported media are document-backed video and audio recognized by the player;

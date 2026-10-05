@@ -222,7 +222,7 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 	e.reads = e.newReadService()
 	e.media = e.newMediaService()
 	if backend.DB != nil {
-		sources, err := channelsource.NewService(backend.DB, e.tg, e.media)
+		sources, err := channelsource.NewService(backend.DB, e.tg, e.media, e.ActorID)
 		if err != nil {
 			return nil, err
 		}

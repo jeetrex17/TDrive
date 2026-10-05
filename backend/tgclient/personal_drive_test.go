@@ -187,3 +187,24 @@ func TestFakeOwnedBroadcastChannelsReturnCopies(t *testing.T) {
 		t.Fatalf("fake returned aliased state: %#v", second)
 	}
 }
+
+func TestBroadcastChannelFromAnswersOnlyForAJoinedBroadcast(t *testing.T) {
+	t.Parallel()
+	peer := InputPeer{ChannelID: 101, AccessHash: 1101}
+	answer := func(chats ...tg.ChatClass) tg.MessagesChatsClass { return &tg.MessagesChats{Chats: chats} }
+	joined, err := broadcastChannelFrom(answer(&tg.Channel{ID: 101, Broadcast: true, Title: " News ", Noforwards: true,
+		Photo: &tg.ChatPhoto{PhotoID: 7}}), peer)
+	if err != nil || joined != (JoinedBroadcastChannel{ID: 101, AccessHash: 1101, Title: "News", Protected: true, PhotoID: 7}) {
+		t.Fatalf("joined channel = %#v, %v", joined, err)
+	}
+	for name, chats := range map[string]tg.MessagesChatsClass{
+		"left":      answer(&tg.Channel{ID: 101, Broadcast: true, Left: true}),
+		"group":     answer(&tg.Channel{ID: 101, Megagroup: true}),
+		"forbidden": answer(&tg.ChannelForbidden{ID: 101, Broadcast: true}),
+		"missing":   answer(),
+	} {
+		if _, err := broadcastChannelFrom(chats, peer); !errors.Is(err, ErrChannelUnavailable) {
+			t.Errorf("%s: err = %v, want ErrChannelUnavailable", name, err)
+		}
+	}
+}

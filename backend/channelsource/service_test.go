@@ -37,7 +37,7 @@ func sourceFixture(t *testing.T, client tgclient.Client, ranges tgclient.RangeCl
 	}
 	streams := media.NewService(media.Config{DB: db, Ranges: ranges})
 	t.Cleanup(func() { _ = streams.Close() })
-	sources, err := NewService(db, client, streams)
+	sources, err := NewService(db, client, streams, client.SelfID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,7 +77,7 @@ func TestJoinedSourcesPageAndStreamWithoutProjection(t *testing.T) {
 	if err != nil || !connected.Connected || connected.Generation == "" {
 		t.Fatalf("connect = %#v, %v", connected, err)
 	}
-	reopened, err := NewService(db, fake, streams)
+	reopened, err := NewService(db, fake, streams, fake.SelfID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -355,5 +355,45 @@ func TestExternalReferenceRefreshRejectsReplacement(t *testing.T) {
 				t.Fatalf("refreshed response = %d %q resolves=%d", response.StatusCode, got, ranges.resolves.Load())
 			}
 		})
+	}
+}
+
+// Listing every dialog cost a request per hundred chats, and it used to run
+// for each page, search and open. Paging now costs history reads plus one
+// small lookup when a channel is first loaded or a post opens.
+func TestPagingLooksTheChannelUpWithoutWalkingDialogs(t *testing.T) {
+	ctx := t.Context()
+	fake := tgclient.NewFake(testAccountID)
+	fake.SeedJoinedBroadcastChannels(tgclient.JoinedBroadcastChannel{ID: testChannelID, AccessHash: 77, Title: "Cinema"})
+	for id := int64(1); id <= 3; id++ {
+		seedVideo(fake, testChannelID, id, []byte("video data"))
+	}
+	sources, _, _ := sourceFixture(t, fake, fake)
+	if _, err := sources.ListCandidates(ctx); err != nil {
+		t.Fatal(err)
+	}
+	connected, err := sources.Connect(ctx, testChannelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	first, err := sources.Page(ctx, testChannelID, 0, 1, "", "video")
+	if err != nil || len(first.Items) != 1 || !first.HasMore {
+		t.Fatalf("first page = %#v, %v", first, err)
+	}
+	older, err := sources.Page(ctx, testChannelID, first.NextOffsetID, 1, "", "video")
+	if err != nil || len(older.Items) != 1 || older.Items[0].MsgID >= first.Items[0].MsgID {
+		t.Fatalf("older page = %#v, %v", older, err)
+	}
+	if walks, lookups := fake.TelegramReads(); walks != 1 || lookups != 1 {
+		t.Fatalf("after two pages: %d dialog walks and %d lookups, want 1 (the picker's) and 1", walks, lookups)
+	}
+	opened, err := sources.Open(ctx, testChannelID, first.Items[0].MsgID, connected.AccountID, connected.Generation)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { sources.media.CloseExternalSessions(connected.AccountID, testChannelID) })
+	if walks, lookups := fake.TelegramReads(); walks != 1 || lookups != 2 || opened.Token == "" {
+		t.Fatalf("after an open: %d dialog walks and %d lookups, want 1 and 2", walks, lookups)
 	}
 }

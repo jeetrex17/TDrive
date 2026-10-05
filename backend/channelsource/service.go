@@ -34,6 +34,8 @@ type SourceInfo struct {
 	Available  bool   `json:"available"`
 	AccountID  int64  `json:"account_id"`
 	Generation string `json:"generation,omitempty"`
+
+	accessHash int64 // the stored peer hash, for lookups; never leaves the backend
 }
 
 type MediaItem struct {
@@ -63,8 +65,14 @@ type Service struct {
 	db    *sql.DB
 	tg    tgclient.Client
 	media *media.Service
+	self  func(context.Context) (int64, error)
 	mu    sync.Mutex // serializes connection generation and media publication
 	retry tgclient.FloodWaitRetryPolicy
+
+	// The last lookup of each channel, which older pages reuse instead of
+	// asking Telegram about the channel itself again.
+	lookupsMu sync.Mutex
+	lookups   map[[2]int64]lookedUp // keyed by account and channel
 
 	// The latest dialog walk, for photos of channels not added yet. A walk is
 	// far too heavy to repeat per avatar.
@@ -74,8 +82,20 @@ type Service struct {
 	walkedAt time.Time
 }
 
-func NewService(db *sql.DB, tg tgclient.Client, mediaService *media.Service) (*Service, error) {
-	if db == nil || tg == nil || mediaService == nil {
+type lookedUp struct {
+	channel tgclient.JoinedBroadcastChannel
+	at      time.Time
+}
+
+// channelTTL is how long a lookup serves the older pages of a channel. A first
+// page, a search and every open look the channel up afresh, so a channel that
+// turns on protection shows it on the next load and never streams after.
+const channelTTL = time.Minute
+
+// NewService takes self, which names the signed-in account. The engine passes
+// its cached ActorID, so nothing here asks Telegram who the user is.
+func NewService(db *sql.DB, tg tgclient.Client, mediaService *media.Service, self func(context.Context) (int64, error)) (*Service, error) {
+	if db == nil || tg == nil || mediaService == nil || self == nil {
 		return nil, fmt.Errorf("channel source: dependencies unavailable")
 	}
 	_, err := db.Exec(`CREATE TABLE IF NOT EXISTS connected_channel_sources (
@@ -96,7 +116,7 @@ func NewService(db *sql.DB, tg tgclient.Client, mediaService *media.Service) (*S
 	if err := addPhotoColumns(db); err != nil {
 		return nil, err
 	}
-	return &Service{db: db, tg: tg, media: mediaService, retry: tgclient.FloodWaitRetryPolicy{
+	return &Service{db: db, tg: tg, media: mediaService, self: self, retry: tgclient.FloodWaitRetryPolicy{
 		MaxRetries: 2, MaxWait: 30 * time.Second, MaxTotalWait: time.Minute,
 	}}, nil
 }
@@ -106,7 +126,7 @@ func (s *Service) telegram(ctx context.Context, call func() error) error {
 }
 
 func (s *Service) account(ctx context.Context) (int64, error) {
-	id, err := s.tg.SelfID(ctx)
+	id, err := s.self(ctx)
 	if err != nil {
 		return 0, fmt.Errorf("channel source: Telegram account: %w", err)
 	}
@@ -127,9 +147,9 @@ func newGeneration() (string, error) {
 func (s *Service) connected(ctx context.Context, accountID, channelID int64) (SourceInfo, error) {
 	var source SourceInfo
 	var protected int
-	err := s.db.QueryRowContext(ctx, `SELECT title, username, protected, generation
+	err := s.db.QueryRowContext(ctx, `SELECT title, username, protected, generation, access_hash
 		FROM connected_channel_sources WHERE account_id=? AND channel_id=?`, accountID, channelID).
-		Scan(&source.Title, &source.Username, &protected, &source.Generation)
+		Scan(&source.Title, &source.Username, &protected, &source.Generation, &source.accessHash)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SourceInfo{}, ErrNotConnected
 	}
@@ -218,14 +238,14 @@ func (s *Service) ConnectWithGate(ctx context.Context, channelID, expectedAccoun
 	if accountID != expectedAccountID {
 		return SourceInfo{}, ErrUnavailable
 	}
-	var channel tgclient.JoinedBroadcastChannel
-	err = s.telegram(ctx, func() error {
-		var callErr error
-		channel, callErr = s.tg.GetJoinedBroadcastChannel(ctx, channelID)
-		return callErr
-	})
+	// Picked from the list the dialog walk just produced, so normally this
+	// costs no request at all.
+	channel, ok, err := s.joined(ctx, accountID, channelID)
 	if err != nil {
-		return SourceInfo{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
+		return SourceInfo{}, err
+	}
+	if !ok {
+		return SourceInfo{}, ErrUnavailable
 	}
 	if currentAccount, err := s.account(ctx); err != nil || currentAccount != accountID {
 		return SourceInfo{}, ErrUnavailable
@@ -302,7 +322,7 @@ func (s *Service) DisconnectWithGate(ctx context.Context, channelID, expectedAcc
 	return tokens, err
 }
 
-func (s *Service) current(ctx context.Context, channelID int64) (SourceInfo, tgclient.JoinedBroadcastChannel, error) {
+func (s *Service) current(ctx context.Context, channelID int64, fresh bool) (SourceInfo, tgclient.JoinedBroadcastChannel, error) {
 	accountID, err := s.account(ctx)
 	if err != nil {
 		return SourceInfo{}, tgclient.JoinedBroadcastChannel{}, err
@@ -311,17 +331,22 @@ func (s *Service) current(ctx context.Context, channelID int64) (SourceInfo, tgc
 	if err != nil {
 		return SourceInfo{}, tgclient.JoinedBroadcastChannel{}, err
 	}
-	var channel tgclient.JoinedBroadcastChannel
-	err = s.telegram(ctx, func() error {
-		var callErr error
-		channel, callErr = s.tg.GetJoinedBroadcastChannel(ctx, channelID)
-		return callErr
-	})
-	if err != nil {
-		return SourceInfo{}, tgclient.JoinedBroadcastChannel{}, fmt.Errorf("%w: %v", ErrUnavailable, err)
+	peer := tgclient.InputPeer{ChannelID: channelID, AccessHash: source.accessHash}
+	if peer.AccessHash == 0 {
+		// Added before access hashes were kept: the dialog walk knows it, and
+		// the refresh below stores it so this happens once.
+		joined, ok, err := s.joined(ctx, accountID, channelID)
+		if err != nil {
+			return SourceInfo{}, tgclient.JoinedBroadcastChannel{}, err
+		}
+		if !ok {
+			return SourceInfo{}, tgclient.JoinedBroadcastChannel{}, ErrUnavailable
+		}
+		peer.AccessHash = joined.AccessHash
 	}
-	if channel.AccessHash == 0 {
-		return SourceInfo{}, tgclient.JoinedBroadcastChannel{}, ErrUnavailable
+	channel, err := s.lookup(ctx, accountID, peer, fresh)
+	if err != nil {
+		return SourceInfo{}, tgclient.JoinedBroadcastChannel{}, err
 	}
 	// A new profile photo drops the stored one, so the next avatar request
 	// fetches the picture the channel shows now.
@@ -333,6 +358,37 @@ func (s *Service) current(ctx context.Context, channelID int64) (SourceInfo, tgc
 	}
 	source.Title, source.Username, source.Protected, source.Available = channel.Title, channel.Username, channel.Protected, true
 	return source, channel, nil
+}
+
+// lookup asks Telegram for one channel alone, or, unless fresh is set, answers
+// from a lookup made within channelTTL.
+func (s *Service) lookup(ctx context.Context, accountID int64, peer tgclient.InputPeer, fresh bool) (tgclient.JoinedBroadcastChannel, error) {
+	key := [2]int64{accountID, peer.ChannelID}
+	s.lookupsMu.Lock()
+	recent, ok := s.lookups[key]
+	s.lookupsMu.Unlock()
+	if !fresh && ok && time.Since(recent.at) < channelTTL {
+		return recent.channel, nil
+	}
+	var channel tgclient.JoinedBroadcastChannel
+	err := s.telegram(ctx, func() error {
+		var callErr error
+		channel, callErr = s.tg.GetBroadcastChannel(ctx, peer)
+		return callErr
+	})
+	if errors.Is(err, tgclient.ErrChannelUnavailable) {
+		return tgclient.JoinedBroadcastChannel{}, ErrUnavailable
+	}
+	if err != nil {
+		return tgclient.JoinedBroadcastChannel{}, fmt.Errorf("channel source: look up channel: %w", err)
+	}
+	s.lookupsMu.Lock()
+	if s.lookups == nil {
+		s.lookups = make(map[[2]int64]lookedUp)
+	}
+	s.lookups[key] = lookedUp{channel: channel, at: time.Now()}
+	s.lookupsMu.Unlock()
+	return channel, nil
 }
 
 func telegramURL(channel tgclient.JoinedBroadcastChannel, msgID int64) string {
@@ -376,7 +432,7 @@ func (s *Service) Page(ctx context.Context, channelID, offsetID int64, limit int
 	if channelID <= 0 || offsetID < 0 || limit < 1 || limit > 100 || len(search) > 120 || (kind != "all" && kind != "video" && kind != "audio") {
 		return MediaPage{}, ErrInvalidPage
 	}
-	source, channel, err := s.current(ctx, channelID)
+	source, channel, err := s.current(ctx, channelID, offsetID == 0)
 	if err != nil {
 		return MediaPage{}, err
 	}
@@ -384,9 +440,10 @@ func (s *Service) Page(ctx context.Context, channelID, offsetID int64, limit int
 	search = strings.TrimSpace(search)
 	page := MediaPage{ChannelID: channelID, AccountID: source.AccountID,
 		Generation: source.Generation, Items: make([]MediaItem, 0, limit)}
-	// History includes text and unsupported media. Scan at most four bounded
-	// batches so a run of ordinary posts does not bury older playable items.
-	batchSize := min(100, max(limit, 40))
+	// History includes text and unsupported media. Read Telegram's largest
+	// batch, at most four times, so a run of ordinary posts does not bury
+	// older playable items and a sparse channel is not a request per forty.
+	const batchSize = 100
 	cursor := offsetID
 	for range 4 {
 		var messages []tgclient.HistoryMessage
@@ -449,7 +506,7 @@ func (s *Service) OpenWithGate(ctx context.Context, channelID, msgID, expectedAc
 	if channelID <= 0 || msgID <= 0 {
 		return media.OpenResult{}, ErrUnavailable
 	}
-	source, channel, err := s.current(ctx, channelID)
+	source, channel, err := s.current(ctx, channelID, true)
 	if err != nil {
 		return media.OpenResult{}, err
 	}

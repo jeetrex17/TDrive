@@ -61,7 +61,7 @@ func TestPhotoBackfillsAChannelAddedByAnEarlierBuild(t *testing.T) {
 	fake.SeedChannelPhoto(501, []byte("picture"))
 	streams := media.NewService(media.Config{DB: db, Ranges: fake})
 	t.Cleanup(func() { _ = streams.Close() })
-	sources, err := NewService(db, fake, streams)
+	sources, err := NewService(db, fake, streams, fake.SelfID)
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -117,12 +117,24 @@ func (c *externalRangeClient) ResolveDocument(ctx context.Context, _ tgclient.In
 	if msgID != c.original.MsgID {
 		return tgclient.DocumentRef{}, ErrExternalReplaced
 	}
-	channel, err := c.client.GetJoinedBroadcastChannel(ctx, c.peer.ChannelID)
-	if err != nil || channel.Protected {
+	// A failed lookup is returned as it is: a flood wait or a dropped
+	// connection is the reader's to retry, and calling it a restriction
+	// ended playback on a hiccup.
+	channel, err := c.client.GetBroadcastChannel(ctx, c.peer)
+	if errors.Is(err, tgclient.ErrChannelUnavailable) {
+		return tgclient.DocumentRef{}, ErrExternalRestricted
+	}
+	if err != nil {
+		return tgclient.DocumentRef{}, err
+	}
+	if channel.Protected {
 		return tgclient.DocumentRef{}, ErrExternalRestricted
 	}
 	message, err := c.client.GetChannelMessage(ctx, c.peer, msgID)
-	if err != nil || message.NoForwards || message.TTLSeconds > 0 || message.Paid {
+	if err != nil {
+		return tgclient.DocumentRef{}, err
+	}
+	if message.NoForwards || message.TTLSeconds > 0 || message.Paid {
 		return tgclient.DocumentRef{}, ErrExternalRestricted
 	}
 	if message.DocumentID != c.original.DocumentID || message.MediaSize != c.original.Size || message.DocumentAccessHash != c.original.AccessHash {
