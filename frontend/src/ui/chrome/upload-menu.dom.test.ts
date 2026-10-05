@@ -106,17 +106,20 @@ describe('Upload sheet accessibility', () => {
         const uploadSheet = sheet();
         const files = target.querySelector<HTMLButtonElement>('#upload-menu-files');
         const newFolder = target.querySelector<HTMLButtonElement>('#upload-menu-new-folder');
+        const close = target.querySelector<HTMLButtonElement>('.upload-sheet-close');
         expect(uploadSheet.getAttribute('role')).toBe('dialog');
         expect(uploadSheet.getAttribute('aria-modal')).toBe('true');
         expect(uploadSheet.getAttribute('aria-label')).toBe('Upload options');
         expect(background.inert).toBe(true);
         expect(document.activeElement).toBe(files);
 
+        // The Close control is the first focusable, so Tab from the last item
+        // loops back to it rather than escaping the sheet.
         newFolder?.focus();
         const tab = new KeyboardEvent('keydown', { key: 'Tab', bubbles: true, cancelable: true });
         document.dispatchEvent(tab);
         expect(tab.defaultPrevented).toBe(true);
-        expect(document.activeElement).toBe(files);
+        expect(document.activeElement).toBe(close);
 
         document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
         await tick();
@@ -125,6 +128,22 @@ describe('Upload sheet accessibility', () => {
         expect(background.inert).toBe(false);
         expect(document.activeElement).toBe(target.querySelector('#upload-btn'));
         background.remove();
+    });
+
+    it('dismisses from the Close control and restores the trigger', async () => {
+        const trigger = target.querySelector<HTMLButtonElement>('#upload-btn');
+        openSheet();
+        await tick();
+        flushSync();
+
+        const close = target.querySelector<HTMLButtonElement>('.upload-sheet-close');
+        expect(close?.getAttribute('aria-label')).toBe('Close');
+        close?.click();
+        await tick();
+        flushSync();
+
+        expect(sheet().style.display).toBe('none');
+        expect(document.activeElement).toBe(trigger);
     });
 
     it('lets Android BACK dismiss the modal sheet', async () => {

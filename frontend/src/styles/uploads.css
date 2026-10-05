@@ -45,6 +45,46 @@
 }
 .upload-menu-item svg { width: 18px; height: 18px; flex-shrink: 0; }
 
+/* Separates creating a folder from uploading: two different kinds of action. */
+.upload-menu-sep {
+    height: 1px;
+    margin: var(--space-1) var(--space-1);
+    background: var(--color-border-soft);
+}
+
+/* The phone sheet is opaque (mobile.css sets its surface), so it has no use for
+   the frosted-popover blur it would otherwise inherit from glass.css. */
+html.mobile .upload-menu.is-sheet {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+}
+html.mobile .upload-menu.is-sheet .upload-menu-sep { margin: var(--space-1) 0; }
+
+/* A quiet, labelled close in the sheet's corner, a full touch target. The scrim
+   and swipe dismiss too, but both are hidden from assistive technology. */
+html.mobile .upload-menu.is-sheet .upload-sheet-close {
+    position: absolute;
+    top: var(--space-1);
+    right: var(--space-1-5);
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--touch-target);
+    height: var(--touch-target);
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: background-color var(--motion-fast) var(--ease-standard);
+}
+html.mobile .upload-menu.is-sheet .upload-sheet-close:active { background: var(--overlay-neutral-2); }
+html.mobile .upload-menu.is-sheet .upload-sheet-close:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--overlay-accent-3);
+}
+
 /* Import dialog: the "will be skipped" note for oversize files. */
 .import-options-note {
     margin: 2px 0 0;

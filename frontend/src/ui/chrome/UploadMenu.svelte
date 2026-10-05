@@ -3,7 +3,7 @@
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
     import FolderUpIcon from '@lucide/svelte/icons/folder-up';
     import PlusIcon from '@lucide/svelte/icons/plus';
-    import UploadIcon from '@lucide/svelte/icons/upload';
+    import XIcon from '@lucide/svelte/icons/x';
     import { tick } from 'svelte';
     import { isMobilePlatform } from '../../api';
     import { prefersReducedMotion } from '../mobile/motion';
@@ -137,11 +137,19 @@
         sheet.style.transform = '';
     }
 
-    // Arrow-key navigation between the menu items.
+    // Arrow-key navigation between the menu items, in their visual order.
     function onMenuKeydown(event: KeyboardEvent): void {
+        // The desktop popover is not a modal, so Tab should leave it rather than
+        // tab through hidden items behind the user. Close and let focus move on
+        // from the trigger. The phone sheet loops Tab through its modal owner.
+        if (event.key === 'Tab' && !asSheet) {
+            closeMenu(false);
+            buttonEl?.focus();
+            return;
+        }
         if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
         event.preventDefault();
-        const items = [filesEl, newFolderEl, folderEl].filter(Boolean) as HTMLElement[];
+        const items = [filesEl, folderEl, newFolderEl].filter(Boolean) as HTMLElement[];
         if (!items.length) return;
         const idx = items.indexOf(document.activeElement as HTMLElement);
         const next = event.key === 'ArrowDown' ? (idx + 1) % items.length : (idx - 1 + items.length) % items.length;
@@ -170,16 +178,15 @@
          a glyph over a label, with the same pill the active tab wears, filled
          rather than tinted because this one acts instead of navigating. The
          menu behind it creates a folder as readily as it uploads a file, so a
-         plus says what the button does. Beside the word Upload on a desktop the
-         tray reads as the verb it accompanies. -->
+         plus and the word "New" cover both without naming only one of them. -->
     {#if isMobilePlatform()}
         <span class="upload-btn-pill" aria-hidden="true">
             <PlusIcon class="btn-icon" size={24} strokeWidth={2.2} />
         </span>
     {:else}
-        <UploadIcon class="btn-icon" size={16} strokeWidth={2} aria-hidden="true" />
+        <PlusIcon class="btn-icon" size={16} strokeWidth={2} aria-hidden="true" />
     {/if}
-    Upload
+    New
 </button>
 <div
     bind:this={overlayEl}
@@ -213,26 +220,33 @@
             onpointerup={onHandlePointerUp}
             onpointercancel={onHandlePointerUp}
         ><span></span></div>
+        <!-- A visible, labelled way out. The scrim and swipe dismiss too, but
+             both are hidden from assistive technology. -->
+        <button type="button" class="upload-sheet-close" aria-label="Close" onclick={() => closeMenu(true)}>
+            <XIcon size={20} strokeWidth={2} aria-hidden="true" />
+        </button>
     {/if}
     <button bind:this={filesEl} id="upload-menu-files" class="upload-menu-item" type="button" role={asSheet ? undefined : 'menuitem'} onclick={() => activate(onFiles)}>
         <FileUpIcon size={18} strokeWidth={1.8} aria-hidden="true" />
         {onNewFolder ? 'Upload files' : 'Files'}
     </button>
-    {#if onNewFolder}
-        <button bind:this={newFolderEl} id="upload-menu-new-folder" class="upload-menu-item" type="button" role={asSheet ? undefined : 'menuitem'} onclick={chooseNewFolder}>
-            <FolderPlusIcon size={18} strokeWidth={1.8} aria-hidden="true" />
-            New folder
-        </button>
-    {/if}
     {#if onFolder}
         <button bind:this={folderEl} id="upload-menu-folder" class="upload-menu-item" type="button" role={asSheet ? undefined : 'menuitem'} onclick={chooseFolder}>
             <FolderUpIcon size={18} strokeWidth={1.8} aria-hidden="true" />
             {onNewFolder ? 'Upload folder' : 'Folder'}
         </button>
     {/if}
-    <!-- No Cancel row. The sheet already has three ways out that cost less than
-         reading a fourth option: the scrim, a downward swipe, and Android's
-         back. A Cancel button in a sheet this short mostly adds a line of text
-         that has to be read and dismissed as not-what-you-want. -->
+    {#if onNewFolder}
+        <!-- Creating a folder is a different kind of action from uploading, so it
+             sits below a separator rather than in the same group. -->
+        <div class="upload-menu-sep" role="separator"></div>
+        <button bind:this={newFolderEl} id="upload-menu-new-folder" class="upload-menu-item" type="button" role={asSheet ? undefined : 'menuitem'} onclick={chooseNewFolder}>
+            <FolderPlusIcon size={18} strokeWidth={1.8} aria-hidden="true" />
+            New folder
+        </button>
+    {/if}
+    <!-- No Cancel row. The sheet already has four ways out that cost less than
+         reading a fifth option: the Close button above, the scrim, a downward
+         swipe, and Android's back. -->
     </div>
 </div>

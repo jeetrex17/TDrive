@@ -27,6 +27,7 @@
     } from '../modules/channel-sources';
     import { clearSelection, openSelectedItemsDelete, openSelectedItemsDownload, openSelectedItemsMove } from '../modules/selection';
     import { chooseFilesForCurrentFolder, chooseFolderForCurrentFolder } from '../modules/transfers';
+    import { openNewFolderModal } from '../modules/modals/folder';
     import {
         handleDriveClick,
         handlePendingClick,
@@ -218,6 +219,7 @@
                         <UploadMenu
                             onFiles={chooseFilesForCurrentFolder}
                             onFolder={chooseFolderForCurrentFolder}
+                            onNewFolder={openNewFolderModal}
                         />
                     {/if}
                 </div>

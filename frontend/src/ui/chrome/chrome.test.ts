@@ -128,4 +128,23 @@ describe('UploadMenu', () => {
         expect(body).toContain('id="upload-menu-files"');
         expect(body).not.toContain('id="upload-menu-folder"');
     });
+
+    it('adds New folder below a separator and labels the trigger "New"', () => {
+        const { body } = render(UploadMenu, { props: { onFiles: noop, onFolder: noop, onNewFolder: noop } });
+
+        expect(body).toContain('id="upload-menu-new-folder"');
+        // Order: upload files, upload folder, separator, then New folder.
+        const files = body.indexOf('id="upload-menu-files"');
+        const folder = body.indexOf('id="upload-menu-folder"');
+        const sep = body.indexOf('upload-menu-sep');
+        const newFolder = body.indexOf('id="upload-menu-new-folder"');
+        expect(files).toBeLessThan(folder);
+        expect(folder).toBeLessThan(sep);
+        expect(sep).toBeLessThan(newFolder);
+
+        // The trigger now covers both upload and create, so it reads "New".
+        const trigger = body.match(/id="upload-btn"[\s\S]*?<\/button>/)?.[0] ?? '';
+        expect(trigger).toContain('New');
+        expect(trigger).not.toContain('Upload');
+    });
 });
