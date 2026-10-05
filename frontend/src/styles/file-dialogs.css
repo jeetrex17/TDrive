@@ -37,7 +37,9 @@
     transition: background 0.15s ease, border-color 0.15s ease;
 }
 .move-back-btn svg { width: 16px; height: 16px; }
-.move-back-btn:hover { background: var(--bg-panel); }
+@media (hover: hover) {
+    .move-back-btn:hover { background: var(--bg-panel); }
+}
 .move-back-btn:disabled {
     opacity: 0.45;
     cursor: not-allowed;
@@ -65,7 +67,9 @@
     white-space: nowrap;
     transition: background 0.15s ease;
 }
-.move-crumb:hover { background: var(--bg-panel); }
+@media (hover: hover) {
+    .move-crumb:hover { background: var(--bg-panel); }
+}
 .move-crumb-sep { color: var(--text-muted); }
 
 .move-list {
@@ -87,17 +91,29 @@
     cursor: pointer;
     transition: background 0.12s ease, border-color 0.12s ease;
 }
-.move-item:hover {
-    background: var(--overlay-white-1);
-    border-color: var(--color-border-soft);
+@media (hover: hover) {
+    .move-item:hover {
+        background: var(--overlay-white-1);
+        border-color: var(--color-border-soft);
+    }
+    .move-item.is-disabled:hover {
+        background: transparent;
+        border-color: transparent;
+    }
 }
 .move-item.is-disabled {
-    opacity: 0.35;
+    /* A blocked destination says why rather than only dimming, so the opacity
+       stays readable instead of the 0.35 that turned the name to a ghost. */
+    opacity: 0.6;
     cursor: not-allowed;
 }
-.move-item.is-disabled:hover {
-    background: transparent;
-    border-color: transparent;
+/* The reason a folder can't be a destination, in place of its drill-in chevron. */
+.move-item-reason {
+    flex-shrink: 0;
+    color: var(--text-muted);
+    font-size: var(--type-xs);
+    font-weight: var(--weight-regular);
+    white-space: nowrap;
 }
 .move-item-icon {
     width: 20px;
@@ -130,6 +146,16 @@
     color: var(--text-muted);
     font-size: 0.85rem;
     font-weight: 600;
+}
+
+/* Why the confirm is disabled, tied to it with aria-describedby. */
+.move-disabled-reason {
+    margin: 0;
+    padding: var(--space-2) 18px;
+    color: var(--text-muted);
+    font-size: var(--type-sm);
+    line-height: 1.35;
+    text-align: right;
 }
 
 .move-modal-footer {
@@ -746,13 +772,28 @@ html.mobile .action-sheet-sep {
 
 /* Move sheet: the drill-down card owns its own padded sections, so drop the
    sheet's horizontal padding and let it fill; the footer stacks like other
-   sheet actions. */
+   sheet actions. A fixed height keeps the sheet still as folders change, rather
+   than resizing on every step. */
 html.mobile .move-modal-card.modal-sheet {
     padding-left: 0;
     padding-right: 0;
     max-width: 100%;
+    height: 80dvh;
 }
 html.mobile .move-modal-card .modal-sheet-body { padding: 0; }
+
+/* Phone targets: the back button, crumbs and folder rows all meet 44px. */
+html.mobile .move-back-btn {
+    width: var(--touch-target);
+    height: var(--touch-target);
+}
+html.mobile .move-crumb {
+    min-height: var(--touch-target);
+    padding: var(--space-2) var(--space-2);
+}
+html.mobile .move-item {
+    min-height: var(--touch-target);
+}
 html.mobile .move-modal-footer {
     flex-direction: column-reverse;
     gap: var(--space-2);

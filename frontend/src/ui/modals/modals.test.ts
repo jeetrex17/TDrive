@@ -22,6 +22,7 @@ import { joinRequestsList, joinRequestsModal } from './join-requests-modal-store
 import { logoutModal } from './logout-modal-store';
 import { closeLeaveDriveModalView, openLeaveDriveModalView } from './leave-drive-modal-store';
 import { moveBrowse, moveModal, resetMoveBrowse } from './move-modal-store';
+import { sidebarState } from '../sidebar/sidebar-store';
 import { uploadOptionsModal } from './upload-options-modal-store';
 
 const noop = () => {};
@@ -372,6 +373,8 @@ describe('MoveModal', () => {
         expect(body).toContain('Move to "');
         expect(body).toContain('Open me');
         expect(body).toContain('is-disabled');
+        // A blocked folder says why rather than offering a dead drill-in.
+        expect(body).toContain("Can't move here");
     });
 
     it('renders the loading state at the root', () => {
@@ -384,6 +387,40 @@ describe('MoveModal', () => {
 
         expect(body).toContain('Move 2 items');
         expect(body).toContain('Loading folders…');
-        expect(body).toContain('My Drive');
+    });
+
+    it('names the active drive as the root rather than always "My Drive"', () => {
+        sidebarState.set({
+            personal: [],
+            shared: [{ id: 9, title: 'Team Drive', kind: 'shared', isActive: true, inviteLink: '' }],
+            pending: [],
+            activeChannelId: 9,
+            virtualView: null,
+        });
+        resetMoveBrowse('');
+        moveModal.open({ title: 'Move 1 item' });
+
+        const { body } = render(MoveModal, {
+            props: { onOpenFolder: noop, onCrumb: noop, onBack: noop, onConfirm: noop },
+        });
+
+        expect(body).toContain('Team Drive');
+        expect(body).not.toContain('My Drive');
+        sidebarState.set({ personal: [], shared: [], pending: [], activeChannelId: null, virtualView: null });
+    });
+
+    it('explains why a destination is disabled and ties it to the confirm', () => {
+        resetMoveBrowse(''); // the items already live at the root
+        moveModal.open({ title: 'Move "a.txt"' });
+
+        const { body } = render(MoveModal, {
+            props: { onOpenFolder: noop, onCrumb: noop, onBack: noop, onConfirm: noop },
+        });
+
+        expect(body).toContain('id="move-disabled-reason"');
+        expect(body).toContain('already in this folder');
+        const confirm = body.match(/<button[^>]*id="move-confirm"[^>]*>/)?.[0] ?? '';
+        expect(confirm).toContain('aria-describedby="move-disabled-reason"');
+        expect(confirm).toContain('disabled');
     });
 });
