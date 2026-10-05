@@ -8,11 +8,12 @@ import { tick } from 'svelte';
 import { get } from 'svelte/store';
 import { breadcrumbPath } from '../ui/chrome/breadcrumb-store';
 import type { ContextMenuDetail } from '../ui/menus/context-menu-store';
-import { clearSelection, deselectRow, handleRowSelection, isRowSelected, reconcileSelection, selectRow, getRowKey } from './selection';
+import { clearSelection, deselectRow, extendSelectionToIndex, handleRowSelection, isRowSelected, reconcileSelection, selectAllRows, selectRow, getRowKey } from './selection';
 import { openRenameModal } from './modals/rename';
 import { openDeleteModal } from './modals/delete';
 import { openNewFolderModal } from './modals/folder';
-import { navigateToFolder } from './navigation';
+import { notify } from './notifications';
+import { navigateBack, navigateToFolder } from './navigation';
 import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop';
 import {
     getAllFsMsgIds,
@@ -33,7 +34,8 @@ import { appActions, type RefreshFilesOptions } from './app-actions';
 import { getInteractiveFileListRows, showFileListRows, showFileListState, updateFileListRows, type InteractiveFileListRow } from '../ui/file-list/file-list-store';
 import type { FileListStateAction } from '../ui/file-list/types';
 import { fileListRowForElement } from '../ui/file-list/row-lookup';
-import { setActiveFileRowKey } from '../ui/file-list/row-state-store';
+import { activeFileRowKey, setActiveFileRowKey } from '../ui/file-list/row-state-store';
+import { pageJumpIndex, typeAheadIndex } from '../ui/file-list/keyboard';
 import { rowMetaLine } from '../ui/file-list/row-meta';
 import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
 import { bindSwipeActions } from '../ui/file-list/swipe-actions';
@@ -529,7 +531,10 @@ function deleteRow(row: InteractiveFileListRow) {
         });
         return;
     }
-    if (!row.canDelete) return;
+    if (!row.canDelete) {
+        notify({ level: 'info', title: 'You can only delete files you uploaded' });
+        return;
+    }
     openDeleteModal({
         ...fileCommandFor(row, row.parentId || state.currentFolderId),
         canDelete: row.canDelete,
@@ -548,7 +553,10 @@ function renameRow(row: InteractiveFileListRow) {
         });
         return;
     }
-    if (!row.canRename) return;
+    if (!row.canRename) {
+        notify({ level: 'info', title: 'You can only rename files you uploaded' });
+        return;
+    }
     openRenameModal(fileCommandFor(row, row.parentId || state.currentFolderId));
 }
 
@@ -758,17 +766,42 @@ function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, d
     }
     lastRenderedFileView = request.view;
 
+    // Where the keyboard sat before the republish, so a delete or move can hand
+    // it to the neighbour rather than drop it on <body>.
+    const previousRows = getInteractiveFileListRows();
+    const previousActiveKey = get(activeFileRowKey);
+    const previousIndex = previousRows.findIndex((row) => row.selectionKey === previousActiveKey);
+
     const afterPublish = () => {
         if (!isCurrentFileRequest(request)) return;
-        reconcileSelection(list, getInteractiveFileListRows());
-        syncDriveRowTabStops(list);
+        const logical = getInteractiveFileListRows();
+
+        // The row that should hold the keyboard next: the one that had it if it
+        // survived, its neighbour by position when a delete or move removed it,
+        // otherwise the first row of a freshly entered view.
+        let focusKey = '';
+        if (previousActiveKey && logical.some((row) => row.selectionKey === previousActiveKey)) {
+            focusKey = previousActiveKey;
+        } else if (preserveScroll && previousIndex >= 0 && logical.length) {
+            focusKey = logical[Math.min(previousIndex, logical.length - 1)].selectionKey;
+        } else if (logical.length) {
+            focusKey = logical[0].selectionKey;
+        }
+
+        reconcileSelection(list, logical);
+        syncDriveRowTabStops(list, focusKey ? rowForSelectionKey(list, focusKey) : null);
         if (preserveScroll) list.scrollTop = scrollTop;
         applyPendingFocus(list);
-        // Opening a folder unmounts the row that had the keyboard, and with
-        // it the keyboard: focus fell to <body> and the arrows went dead.
-        // Only a view change, and only when nothing else has taken focus.
-        if (!preserveScroll && state.pendingFocus === null && document.activeElement === document.body && !isMobilePlatform()) {
-            list.focus({ preventScroll: true });
+
+        // Opening a folder or removing the focused row leaves focus on <body> (or
+        // on the container), where the arrows go dead. Put it on a real row so
+        // they work at once and no list-wide ring flashes; the container is the
+        // fallback only for an empty folder. Only when focus is loose, so a
+        // dialog, an input or the row the reader is on is never disturbed.
+        const focusLoose = document.activeElement === document.body || document.activeElement === list;
+        if (!isMobilePlatform() && state.pendingFocus === null && focusLoose) {
+            if (focusKey) setFocusedLogicalRow(focusKey, { preventScroll: true });
+            else list.focus({ preventScroll: true });
         }
         resolveUploaderChipsForRows(rows, () => isCurrentFileRequest(request));
     };
@@ -997,6 +1030,34 @@ function handleListClick(e: MouseEvent) {
     handleRowSelection(element, e, getInteractiveFileListRows());
 }
 
+// The parent-folder shortcut is Cmd+Up on a Mac and Alt+Up on Windows and
+// Linux, matching each platform's own file manager.
+const isMacLike = /Mac|iPhone|iPad|iPod/i.test(
+    (typeof navigator !== 'undefined' && (navigator.platform || navigator.userAgent)) || '',
+);
+
+// Type-ahead: printable keys build a short buffer that jumps to the next
+// matching row, cleared after a pause so a new word starts fresh.
+const TYPE_AHEAD_IDLE_MS = 700;
+let typeAheadBuffer = '';
+let typeAheadTimer: ReturnType<typeof setTimeout> | undefined;
+
+function clearTypeAhead(): void {
+    typeAheadBuffer = '';
+    if (typeAheadTimer) {
+        clearTimeout(typeAheadTimer);
+        typeAheadTimer = undefined;
+    }
+}
+
+// How many rows a page key moves: the rows that fit the viewport, less one so a
+// landmark row stays on screen. Falls back to a single row before layout.
+function pageRowCount(list: HTMLElement, renderedRows: HTMLElement[]): number {
+    const sample = renderedRows[0]?.getBoundingClientRect().height || 0;
+    if (sample <= 0 || list.clientHeight <= 0) return 1;
+    return Math.max(1, Math.floor(list.clientHeight / sample) - 1);
+}
+
 function handleListKeyDown(e: KeyboardEvent) {
     const target = e.target as HTMLElement | null;
     const action = target?.closest<HTMLButtonElement>('.row-actions button');
@@ -1018,21 +1079,48 @@ function handleListKeyDown(e: KeyboardEvent) {
 
     const current = activeRowFromEventTarget(e.target) || renderedRows[0];
     const currentRow = fileListRowForElement(current);
-    const currentIndex = Math.max(0, logicalRows.findIndex((row) => row.selectionKey === currentRow?.selectionKey));
-    let nextKey: string | null = null;
+    // The focused row may have scrolled out of the virtual window, leaving only
+    // the stored key to say where the keyboard is.
+    const activeKey = currentRow?.selectionKey || get(activeFileRowKey);
+    const currentIndex = Math.max(0, logicalRows.findIndex((row) => row.selectionKey === activeKey));
 
+    // Select the whole folder. The trash has nothing to act on a selection with,
+    // so it opts out.
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'a') {
+        if (isTrashMode()) return;
+        e.preventDefault();
+        selectAllRows(logicalRows);
+        return;
+    }
+
+    // Up to the parent folder.
+    if (e.key === 'ArrowUp' && ((isMacLike && e.metaKey) || (!isMacLike && e.altKey))) {
+        if (isTrashMode() || isSearchMode()) return;
+        e.preventDefault();
+        navigateBack();
+        return;
+    }
+
+    const extendsSelection = e.shiftKey && !isTrashMode();
+    let targetIndex = -1;
     switch (e.key) {
         case 'ArrowDown':
-            nextKey = logicalRows[Math.min(logicalRows.length - 1, currentIndex + 1)]?.selectionKey ?? null;
+            targetIndex = Math.min(logicalRows.length - 1, currentIndex + 1);
             break;
         case 'ArrowUp':
-            nextKey = logicalRows[Math.max(0, currentIndex - 1)]?.selectionKey ?? null;
+            targetIndex = Math.max(0, currentIndex - 1);
+            break;
+        case 'PageDown':
+            targetIndex = pageJumpIndex(currentIndex, logicalRows.length, pageRowCount(list, renderedRows), 1);
+            break;
+        case 'PageUp':
+            targetIndex = pageJumpIndex(currentIndex, logicalRows.length, pageRowCount(list, renderedRows), -1);
             break;
         case 'Home':
-            nextKey = logicalRows[0]?.selectionKey ?? null;
+            targetIndex = 0;
             break;
         case 'End':
-            nextKey = logicalRows[logicalRows.length - 1]?.selectionKey ?? null;
+            targetIndex = logicalRows.length - 1;
             break;
         case 'ArrowRight': {
             const firstAction = current.querySelector<HTMLButtonElement>('.row-actions button:not(:disabled)');
@@ -1042,6 +1130,9 @@ function handleListKeyDown(e: KeyboardEvent) {
             return;
         }
         case ' ':
+            // The trash has nothing to select; Space there would otherwise open
+            // the live selection bar for a deleted item.
+            if (isTrashMode()) return;
             e.preventDefault();
             handleRowSelection(current, e, logicalRows);
             return;
@@ -1068,13 +1159,25 @@ function handleListKeyDown(e: KeyboardEvent) {
             e.preventDefault();
             triggerRowContextMenu(current);
             return;
-        default:
+        default: {
+            // Printable keys drive type-ahead; a shortcut combo or Space is not
+            // one of them.
+            if (e.key.length !== 1 || e.key === ' ' || e.metaKey || e.ctrlKey || e.altKey) return;
+            typeAheadBuffer += e.key;
+            if (typeAheadTimer) clearTimeout(typeAheadTimer);
+            typeAheadTimer = setTimeout(clearTypeAhead, TYPE_AHEAD_IDLE_MS);
+            const index = typeAheadIndex(logicalRows.map((row) => row.name), typeAheadBuffer, currentIndex);
+            if (index < 0) return;
+            e.preventDefault();
+            setFocusedLogicalRow(logicalRows[index].selectionKey, { preventScroll: false });
             return;
+        }
     }
 
-    if (!nextKey) return;
+    if (targetIndex < 0 || targetIndex >= logicalRows.length) return;
     e.preventDefault();
-    setFocusedLogicalRow(nextKey, { preventScroll: false });
+    if (extendsSelection) extendSelectionToIndex(logicalRows, targetIndex, currentIndex);
+    setFocusedLogicalRow(logicalRows[targetIndex].selectionKey, { preventScroll: false });
 }
 
 function handleListDblClick(e: MouseEvent) {
@@ -1166,6 +1269,9 @@ async function handleListDrop(e: DragEvent) {
 export function activateFileList(): () => void {
     const list = document.getElementById('file-list');
     if (!list) return () => {};
+
+    // A fresh list starts with an empty type-ahead buffer.
+    clearTypeAhead();
 
     const onDrop = (event: DragEvent) => {
         void handleListDrop(event);

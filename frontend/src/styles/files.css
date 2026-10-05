@@ -168,8 +168,14 @@
     padding: 0 10px;
     outline: none;
 }
+/* The container is focusable only to catch the keyboard when a row cannot hold
+   it (an empty folder, or a focused row scrolled out of the virtual window).
+   The focus indicator belongs on the row, so a ring around the whole list is
+   never right, whether focus arrived by mouse, keyboard or script. */
+.file-list-box:focus,
 .file-list-box:focus-visible {
-    box-shadow: inset var(--focus-ring);
+    outline: none;
+    box-shadow: none;
 }
 
 .file-state {

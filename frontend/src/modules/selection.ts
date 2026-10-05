@@ -8,6 +8,7 @@ import { notify } from './notifications';
 import { setSelectionCount, setSelectionModeActive } from '../ui/selection/selection-bar-store';
 import { setSelectedFileRowKeys } from '../ui/file-list/row-state-store';
 import { fileListRowForElement } from '../ui/file-list/row-lookup';
+import { rangeSelectionKeys } from '../ui/file-list/keyboard';
 import type { FileCommandItem, FileListFileRow, FolderListRow } from '../ui/file-list/types';
 
 const SELECTABLE_ROW_SELECTOR = '.drive-row[data-type="folder"], .drive-row[data-type="file"]';
@@ -242,6 +243,60 @@ export function handleRowSelection(
     selectRow(row, index);
 }
 
+// Rebuilds the selection from a set of logical rows, attaching the rendered
+// element where the windowed list currently shows one. Shared by select-all and
+// range extension, which both replace the selection wholesale.
+function setSelectionFromRows(rows: readonly LogicalFileListRow[]): void {
+    const list = document.getElementById('file-list');
+    const renderedByKey = list ? renderedRowsByKey(list) : new Map<string, HTMLElement>();
+    state.selectedItems.clear();
+    for (const row of rows) {
+        state.selectedItems.set(row.selectionKey, logicalRowToSelectionItem(row, renderedByKey.get(row.selectionKey)));
+    }
+    updateSelectionBar();
+}
+
+// Selects every row of the current folder, keeping the anchor where it is so a
+// following Shift+Arrow still extends from the same point.
+export function selectAllRows(logicalRows: readonly LogicalFileListRow[]): void {
+    if (logicalRows.length === 0) return;
+    const anchorIndex = selectionAnchorKey
+        ? logicalRows.findIndex((row) => row.selectionKey === selectionAnchorKey)
+        : -1;
+    setSelectionFromRows(logicalRows);
+    if (anchorIndex < 0) {
+        selectionAnchorKey = logicalRows[0].selectionKey;
+        state.selectionAnchorIndex = 0;
+    } else {
+        state.selectionAnchorIndex = anchorIndex;
+    }
+}
+
+// Extends the selection from the current anchor to `targetIndex`, the model a
+// Shift+Arrow shares with a Shift+Click. The range is rebuilt each time so
+// pulling back toward the anchor deselects the tail. Falls back to anchoring on
+// the target when nothing is anchored yet.
+export function extendSelectionToIndex(
+    logicalRows: readonly LogicalFileListRow[],
+    targetIndex: number,
+    fallbackAnchorIndex: number = targetIndex,
+): void {
+    if (targetIndex < 0 || targetIndex >= logicalRows.length) return;
+    // With a selection in progress the anchor is its start; with none, the key
+    // or index left over from an earlier selection means nothing, so the range
+    // starts from the caller's current row instead.
+    let anchorIndex = state.selectedItems.size > 0 && selectionAnchorKey
+        ? logicalRows.findIndex((row) => row.selectionKey === selectionAnchorKey)
+        : -1;
+    if (anchorIndex < 0 || anchorIndex >= logicalRows.length) {
+        anchorIndex = Math.min(logicalRows.length - 1, Math.max(0, fallbackAnchorIndex));
+        selectionAnchorKey = logicalRows[anchorIndex].selectionKey;
+        state.selectionAnchorIndex = anchorIndex;
+    }
+    const keys = new Set(rangeSelectionKeys(logicalRows, anchorIndex, targetIndex));
+    setSelectionFromRows(logicalRows.filter((row) => keys.has(row.selectionKey)));
+}
+
 export function ensureRowSelectedForContextMenu(row: HTMLElement): void {
     const list = document.getElementById('file-list');
     const rows = list ? Array.from(list.querySelectorAll<HTMLElement>(SELECTABLE_ROW_SELECTOR)) : [];
@@ -355,7 +410,11 @@ export function activateSelectionBar(): () => void {
         clearSelection();
     };
     const onKeydown = (event: KeyboardEvent) => {
-        if (event.key === 'Escape') clearSelection();
+        // A menu or dialog that closed on this same Escape has already claimed
+        // it (both call preventDefault), so clearing the selection as well would
+        // make one press do two things. Only an Escape nothing else wanted
+        // clears the selection.
+        if (event.key === 'Escape' && !event.defaultPrevented) clearSelection();
     };
 
     list?.addEventListener('click', onListClick);

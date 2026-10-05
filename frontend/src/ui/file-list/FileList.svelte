@@ -164,6 +164,24 @@
         viewportHeight = list.clientHeight;
     }
 
+    // Keep the keyboard in the list when its focused row scrolls out of the
+    // virtual window and unmounts. Without this, focus falls to <body>, keydown
+    // stops reaching the list's delegated handler, and the arrows go dead. The
+    // container (tabindex="-1") catches it; the delegated handler resolves the
+    // active row from its stored key, so the arrows pick up where they left off.
+    function retainKeyboardFocus(): void {
+        if (!list) return;
+        const active = document.activeElement;
+        if (!(active instanceof HTMLElement) || !active.classList.contains('drive-row') || !list.contains(active)) return;
+        const key = active.dataset.rowKey ?? '';
+        const index = key ? visibleRows.findIndex((row) => row.kind !== 'pending-folder' && row.selectionKey === key) : -1;
+        if (index < 0) return;
+        const slack = rowHeight * WINDOW_OVERSCAN;
+        if (rowOffset(index + 1, rowMetrics) < scrollTop - slack || rowOffset(index, rowMetrics) > scrollTop + viewportHeight + slack) {
+            list.focus({ preventScroll: true });
+        }
+    }
+
     function measureRow(element: HTMLElement): { destroy: () => void } {
         const update = () => {
             const style = getComputedStyle(element);
@@ -214,7 +232,10 @@
         const unsubscribeListSemantics = mobile
             ? fileListView.subscribe(applyMobileListSemantics)
             : () => {};
-        const onScroll = () => updateViewport();
+        const onScroll = () => {
+            updateViewport();
+            retainKeyboardFocus();
+        };
         const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateViewport);
         list.addEventListener('scroll', onScroll, { passive: true });
         resizeObserver?.observe(list);
@@ -278,6 +299,7 @@
         <button
             class={`action-icon ${action.className}`}
             type="button"
+            tabindex="-1"
             title={action.title}
             aria-label={action.label}
             onclick={(event) => onActionClick(event, row, action)}

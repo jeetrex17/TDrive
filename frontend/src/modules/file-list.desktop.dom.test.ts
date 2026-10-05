@@ -27,8 +27,8 @@ const modals = vi.hoisted(() => ({
 
 const actions = vi.hoisted(() => ({
     playVideo: vi.fn(), openFile: vi.fn(), triggerRefresh: vi.fn(), refreshFiles: vi.fn(),
-    navigateToFolder: vi.fn(), enqueueDownload: vi.fn(), enqueueFolderDownload: vi.fn(),
-    preview: vi.fn(),
+    navigateToFolder: vi.fn(), navigateBack: vi.fn(), enqueueDownload: vi.fn(), enqueueFolderDownload: vi.fn(),
+    preview: vi.fn(), notify: vi.fn(),
 }));
 
 vi.mock('../api', () => api);
@@ -38,7 +38,8 @@ vi.mock('./modals/rename', () => ({ openRenameModal: modals.openRenameModal }));
 vi.mock('./modals/move', () => ({ openMoveModal: modals.openMoveModal }));
 vi.mock('./modals/folder', () => ({ openNewFolderModal: modals.openNewFolderModal }));
 vi.mock('./app-actions', () => ({ appActions: () => actions }));
-vi.mock('./navigation', () => ({ navigateToFolder: actions.navigateToFolder }));
+vi.mock('./navigation', () => ({ navigateToFolder: actions.navigateToFolder, navigateBack: actions.navigateBack }));
+vi.mock('./notifications', () => ({ notify: actions.notify }));
 vi.mock('./transfers', () => ({
     chooseFilesForCurrentFolder: vi.fn(),
     enqueueDownload: actions.enqueueDownload,
@@ -126,20 +127,22 @@ describe('acting on a row from the keyboard', () => {
         });
     });
 
-    it('refuses to delete a row the published row says cannot be deleted', () => {
+    it('refuses to delete a row the published row says cannot be deleted, and says why', () => {
         publish({ canDelete: false });
 
         press(row('file:41'), 'Delete');
 
         expect(modals.openDeleteModal).not.toHaveBeenCalled();
+        expect(actions.notify).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringContaining('delete') }));
     });
 
-    it('refuses to rename a row the published row says cannot be renamed', () => {
+    it('refuses to rename a row the published row says cannot be renamed, and says why', () => {
         publish({ canRename: false });
 
         press(row('file:41'), 'F2');
 
         expect(modals.openRenameModal).not.toHaveBeenCalled();
+        expect(actions.notify).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringContaining('rename') }));
     });
 
     it('renames a folder by its id rather than by a number parsed out of it', () => {
@@ -356,6 +359,38 @@ describe('desktop keyboard focus', () => {
     });
 });
 
+describe('desktop keyboard shortcuts', () => {
+    it('selects the whole folder with the select-all accelerator', () => {
+        press(row('folder:design'), 'a'); // no modifier: type-ahead, not select-all
+        expect(state.selectedItems.size).toBe(0);
+        row('folder:design').dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true, cancelable: true }));
+        expect(state.selectedItems.size).toBe(2);
+    });
+
+    it('does not select the folder from the trash', () => {
+        state.virtualView = 'trash';
+        row('folder:design').dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true, cancelable: true }));
+        expect(state.selectedItems.size).toBe(0);
+    });
+
+    it('extends the selection with Shift and an arrow', () => {
+        row('folder:design').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', shiftKey: true, bubbles: true, cancelable: true }));
+        expect(state.selectedItems.has('folder:design')).toBe(true);
+        expect(state.selectedItems.has('file:41')).toBe(true);
+    });
+
+    it('jumps to the next row whose name starts with the typed character', async () => {
+        press(row('folder:design'), 'p');
+        await vi.waitFor(() => expect(document.activeElement).toBe(row('file:41')));
+    });
+
+    it('goes up to the parent folder on the platform accelerator', () => {
+        // metaKey and altKey both set so the test holds whichever this platform uses.
+        row('file:41').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', metaKey: true, altKey: true, bubbles: true, cancelable: true }));
+        expect(actions.navigateBack).toHaveBeenCalledTimes(1);
+    });
+});
+
 describe('desktop drag target safety', () => {
     it('does not commit a drop rejected by the folder permission check', () => {
         state.dragState = { items: [], parentId: '', blocked: new Set(), row: row('file:41') };
@@ -433,7 +468,7 @@ it('supports keyboard navigation from the list container without a focused row',
 
 it('does not consume unrelated keys or move focus into absent actions', () => {
     publish({ actions: [] });
-    for (const key of ['ArrowRight', 'F10', 'a']) {
+    for (const key of ['ArrowRight', 'F10', 'Tab']) {
         const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
         row('file:41').dispatchEvent(event);
         expect(event.defaultPrevented).toBe(false);
