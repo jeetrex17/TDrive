@@ -58,3 +58,82 @@
 .icon-btn:active { transform: translateY(0.5px) scale(0.98); }
 .icon-btn svg { width: 18px; height: 18px; }
 
+/* === SEGMENTED CONTROL ===
+   A row of toggle buttons that re-render one region (Photos' grid and
+   timeline, a channel's media kinds). aria-pressed rather than a tablist:
+   the options are views of the same content, not separate panels. */
+.segmented {
+    display: inline-flex;
+    padding: 2px;
+    gap: 2px;
+    border-radius: var(--radius-pill);
+    background: var(--bg-panel);
+}
+.segmented button {
+    border: 0;
+    padding: 5px 14px;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--text-muted);
+    font: inherit;
+    font-size: var(--type-xs);
+    font-weight: var(--weight-semibold);
+    cursor: pointer;
+    transition: color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
+}
+.segmented button:hover { color: var(--text-main); }
+.segmented button[aria-pressed="true"] { background: var(--surface-control); color: var(--text-main); }
+.segmented button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+@media (prefers-reduced-motion: reduce) {
+    .segmented button { transition: none; }
+}
+
+/* === SEARCH FIELD ===
+   A framed field with a leading glyph. The global input rule is styled for
+   the sign-in forms, so the input inside is reset to bare text. */
+.search-field {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    height: 32px;
+    padding: 0 var(--space-2) 0 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-md);
+    background: var(--color-surface-0);
+    color: var(--text-muted);
+    transition: border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
+}
+.search-field:focus-within { border-color: var(--accent); box-shadow: var(--focus-ring); }
+.search-field input,
+.search-field input:focus {
+    flex: 1 1 auto;
+    min-width: 0;
+    height: 100%;
+    margin: 0;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    outline: none;
+    box-shadow: none;
+    background: transparent;
+    color: var(--color-text);
+    font-size: var(--type-sm);
+}
+.search-field input::placeholder { color: var(--text-muted); }
+
+/* An inline action inside a sentence: "Older posts did not load. Try again" */
+.link-button {
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-xs);
+    background: none;
+    color: var(--accent);
+    font: inherit;
+    font-weight: var(--weight-semibold);
+    cursor: pointer;
+}
+.link-button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+
+@media (prefers-reduced-motion: reduce) {
+    .search-field { transition: none; }
+}

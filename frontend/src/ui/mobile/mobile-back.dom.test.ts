@@ -16,6 +16,7 @@ import { breadcrumbPath } from '../chrome/breadcrumb-store';
 import { closeTopSheet, pushSheet } from '../modals/sheet-stack';
 import { selectionBarState } from '../selection/selection-bar-store';
 import { sidebarState } from '../sidebar/sidebar-store';
+import { openChannelId } from '../channels/channel-store';
 import { activateMobileBack, BACK_BRIDGE, handleBackPress } from './mobile-back';
 import { activeTab, driveSwitcherOpen } from './mobile-shell-store';
 
@@ -26,6 +27,7 @@ beforeEach(() => {
     selectionBarState.set({ count: 0 });
     activeTab.set('files');
     breadcrumbPath.set([]);
+    openChannelId.set(null);
     exitPhotos.mockClear();
     navigateBack.mockClear();
     clearSelection.mockClear();
@@ -50,6 +52,16 @@ describe('android back', () => {
         expect(handleBackPress()).toBe(true);
         expect(closeTrash).toHaveBeenCalledTimes(1);
         expect(exitPhotos).not.toHaveBeenCalled();
+    });
+
+    // A channel covers the drive without being one of its views; before it was
+    // named here BACK left the app, or walked the hidden drive's folders.
+    it('leaves a channel before the folders of the drive under it', () => {
+        openChannelId.set(51);
+        breadcrumbPath.set([{ id: 'd:1', name: 'Reports' }]);
+        expect(handleBackPress()).toBe(true);
+        expect(get(openChannelId)).toBeNull();
+        expect(navigateBack).not.toHaveBeenCalled();
     });
 
     it('returns to the files tab from another tab and closes the trash with it', () => {

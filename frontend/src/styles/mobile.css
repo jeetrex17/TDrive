@@ -151,6 +151,9 @@ html.mobile .mobile-topbar {
 html.mobile .mobile-shell.is-scrolled .mobile-topbar {
     border-bottom-color: var(--color-border-soft);
 }
+/* A channel draws its own bar, with a way back and its search, so the shell's
+   steps aside while one is showing. */
+html.mobile .mobile-shell.in-channel > .mobile-topbar { display: none; }
 
 html.mobile .topbar-row {
     display: flex;
@@ -922,7 +925,10 @@ html.mobile .mobile-sheet {
     background: var(--color-surface-1);
     border-radius: var(--radius-xl) var(--radius-xl) 0 0;
     box-shadow: var(--shadow-lg);
-    transform: translateY(100%);
+    /* A percentage of a capped sheet can still leave an edge in view on some
+       WebViews. Move a closed sheet by the viewport height so it is wholly
+       below the glass before another full-screen destination appears. */
+    transform: translateY(100dvh);
     transition: transform var(--motion-slow) var(--ease-enter);
 }
 html.mobile .mobile-sheet.open { transform: translateY(0); }

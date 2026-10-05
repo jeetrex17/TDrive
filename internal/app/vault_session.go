@@ -76,6 +76,15 @@ func (a *App) runWithClosedMountForLogout(action func() error) error {
 		return fmt.Errorf("eject TDrive before changing the encryption session: %w", err)
 	}
 	defer release()
+	// A channel URL is an account-scoped capability. Revoke it before the
+	// optional remote logout RPC or local credential cleanup can block, while
+	// this gate prevents a concurrent OpenChannelMedia publication.
+	if a.engine != nil && a.engine.MediaService() != nil {
+		tokens := a.engine.MediaService().CloseAllExternalSessions()
+		if a.media != nil {
+			a.media.closeExternalNativeMedia(tokens)
+		}
+	}
 	if err := a.lockEncryptionSessionLocked(ctx); err != nil {
 		return err
 	}

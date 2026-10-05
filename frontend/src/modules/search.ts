@@ -15,6 +15,7 @@ import { getInteractiveFileListRows } from '../ui/file-list/file-list-store';
 import { setPhotosMode } from './gallery';
 import { setTrashMode } from './trash/view';
 import { trashOpen } from './trash/controller';
+import { closeChannel } from '../ui/channels/channel-store';
 import { getFolderIndexDriveKey, refreshFolderIndex } from './folder-index';
 import { canOpenFileViewer, isVideoFile } from './media-types';
 import { enqueueDownload, enqueueFolderDownload } from './transfers';
@@ -335,6 +336,8 @@ export async function runGlobalSearch() {
         setTrashMode(false);
         trashOpen.set(false);
     }
+    // And for a Telegram channel, which covers the list the results land in.
+    closeChannel();
 
     const token = ++activeToken;
     const driveKey = getFolderIndexDriveKey() ?? 'none';

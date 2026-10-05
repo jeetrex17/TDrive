@@ -7,7 +7,7 @@ import { writable } from 'svelte/store';
  */
 export type ContextMenuIcon =
     | 'open' | 'play' | 'download' | 'rename' | 'move' | 'delete'
-    | 'upload' | 'folder-new' | 'refresh';
+    | 'upload' | 'folder-new' | 'refresh' | 'external';
 
 export type ContextMenuItem =
     | {

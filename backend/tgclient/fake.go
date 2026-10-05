@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -35,16 +36,21 @@ type Fake struct {
 	failNextSend   bool
 	transientFails int // counter; pre-injects ErrInjectedTransport this many times before succeeding
 
-	channels       map[int64]fakeChannel
-	ownedBroadcast []OwnedBroadcastChannel
-	invites        map[string]InviteInfo
-	joinRequests   map[int64][]JoinRequest
-	requestedJoins []string
-	hiddenRequests []HiddenJoinRequest
-	leftChannels   []InputPeer
-	users          map[int64]UserProfile
-	selfCalls      int
-	resolveCalls   int
+	channels        map[int64]fakeChannel
+	ownedBroadcast  []OwnedBroadcastChannel
+	joinedBroadcast []JoinedBroadcastChannel
+	channelPhotos   map[int64][]byte // keyed by photo ID
+	photoDownloads  int
+	dialogWalks     int
+	channelLookups  int
+	invites         map[string]InviteInfo
+	joinRequests    map[int64][]JoinRequest
+	requestedJoins  []string
+	hiddenRequests  []HiddenJoinRequest
+	leftChannels    []InputPeer
+	users           map[int64]UserProfile
+	selfCalls       int
+	resolveCalls    int
 
 	pts                  int64 // channel pts counter; incremented on every history-mutating event
 	events               []fakeEvent
@@ -163,6 +169,14 @@ func (f *Fake) SeedHistory(msgs ...HistoryMessage) {
 	}
 }
 
+// SeedDocumentBody supplies bytes for a seeded history document without
+// invoking the fake's upload mutation path.
+func (f *Fake) SeedDocumentBody(msgID int64, body []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fileBodies[msgID] = bytes.Clone(body)
+}
+
 // InjectFloodWaits causes the next n sends (control or file) to fail with
 // ErrFloodWait before succeeding. Drives backoff tests.
 func (f *Fake) InjectFloodWaits(n int) {
@@ -264,11 +278,39 @@ func (f *Fake) SeedOwnedBroadcastChannels(channels ...OwnedBroadcastChannel) {
 	defer f.mu.Unlock()
 	f.ownedBroadcast = append([]OwnedBroadcastChannel(nil), channels...)
 	for _, channel := range channels {
+		f.joinedBroadcast = append(f.joinedBroadcast, JoinedBroadcastChannel{ID: channel.ID, AccessHash: channel.AccessHash, Title: channel.Title})
 		peer := InputPeer{ChannelID: channel.ID, AccessHash: channel.AccessHash}
 		f.channels[channel.ID] = fakeChannel{Peer: peer, Title: channel.Title}
 		if channel.ID >= f.nextChannelID {
 			f.nextChannelID = channel.ID + 1
 		}
+	}
+}
+
+// SeedChannelPhoto supplies the bytes DownloadChannelPhoto returns for photoID.
+func (f *Fake) SeedChannelPhoto(photoID int64, body []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.channelPhotos == nil {
+		f.channelPhotos = make(map[int64][]byte)
+	}
+	f.channelPhotos[photoID] = bytes.Clone(body)
+}
+
+// PhotoDownloads counts DownloadChannelPhoto calls, so tests can tell a
+// stored photo from a downloaded one.
+func (f *Fake) PhotoDownloads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.photoDownloads
+}
+
+func (f *Fake) SeedJoinedBroadcastChannels(channels ...JoinedBroadcastChannel) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.joinedBroadcast = append([]JoinedBroadcastChannel(nil), channels...)
+	for _, channel := range channels {
+		f.channels[channel.ID] = fakeChannel{Peer: InputPeer{ChannelID: channel.ID, AccessHash: channel.AccessHash}, Title: channel.Title}
 	}
 }
 
@@ -523,6 +565,9 @@ func (f *Fake) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID i
 	// offsetID pages older than a prior page.
 	for i := len(f.history) - 1; i >= 0; i-- {
 		m := f.history[i]
+		if m.ChannelID != 0 && m.ChannelID != peer.ChannelID {
+			continue
+		}
 		if minID > 0 && m.MsgID <= minID {
 			continue
 		}
@@ -559,16 +604,24 @@ func (f *Fake) GetFileDocument(ctx context.Context, peer InputPeer, msgID int64)
 }
 
 func (f *Fake) ResolveDocument(ctx context.Context, peer InputPeer, msgID int64) (DocumentRef, error) {
-	doc, err := f.GetFileDocument(ctx, peer, msgID)
+	message, err := f.GetChannelMessage(ctx, peer, msgID)
 	if err != nil {
 		return DocumentRef{}, err
+	}
+	if !message.HasMedia || message.MediaSize <= 0 {
+		return DocumentRef{}, ErrNotFile
+	}
+	documentID := message.DocumentID
+	if documentID == 0 {
+		documentID = msgID
 	}
 	return DocumentRef{
 		Peer:       peer,
 		MsgID:      msgID,
-		Size:       doc.Size,
-		Name:       doc.Name,
-		DocumentID: msgID,
+		Size:       message.MediaSize,
+		Name:       message.DocumentName,
+		DocumentID: documentID,
+		AccessHash: message.DocumentAccessHash,
 	}, nil
 }
 
@@ -820,6 +873,72 @@ func (f *Fake) ListOwnedBroadcastChannels(context.Context) ([]OwnedBroadcastChan
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return append([]OwnedBroadcastChannel(nil), f.ownedBroadcast...), nil
+}
+
+func (f *Fake) ListJoinedBroadcastChannels(context.Context) ([]JoinedBroadcastChannel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dialogWalks++
+	return append([]JoinedBroadcastChannel(nil), f.joinedBroadcast...), nil
+}
+
+func (f *Fake) GetBroadcastChannel(_ context.Context, peer InputPeer) (JoinedBroadcastChannel, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.channelLookups++
+	for _, channel := range f.joinedBroadcast {
+		if channel.ID == peer.ChannelID {
+			return channel, nil
+		}
+	}
+	return JoinedBroadcastChannel{}, ErrChannelUnavailable
+}
+
+// TelegramReads counts dialog walks and single-channel lookups, so tests can
+// hold paging to its budget.
+func (f *Fake) TelegramReads() (dialogWalks, channelLookups int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.dialogWalks, f.channelLookups
+}
+
+func (f *Fake) DownloadChannelPhoto(_ context.Context, _ InputPeer, photoID int64) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.photoDownloads++
+	body, ok := f.channelPhotos[photoID]
+	if !ok {
+		return nil, fmt.Errorf("tgclient.Fake: channel photo %d not found", photoID)
+	}
+	return bytes.Clone(body), nil
+}
+
+func (f *Fake) GetChannelMessage(_ context.Context, peer InputPeer, msgID int64) (HistoryMessage, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, message := range f.history {
+		if message.MsgID == msgID && (message.ChannelID == 0 || message.ChannelID == peer.ChannelID) {
+			return message, nil
+		}
+	}
+	return HistoryMessage{}, ErrMessageNotFound
+}
+
+func (f *Fake) SearchChannelMessages(ctx context.Context, peer InputPeer, query string, offsetID int64, limit int) ([]HistoryMessage, error) {
+	history, err := f.GetHistory(ctx, peer, 0, offsetID, len(f.history))
+	if err != nil {
+		return nil, err
+	}
+	out := make([]HistoryMessage, 0, min(limit, len(history)))
+	for _, message := range history {
+		if strings.Contains(strings.ToLower(message.Text), strings.ToLower(query)) {
+			out = append(out, message)
+			if len(out) == limit {
+				break
+			}
+		}
+	}
+	return out, nil
 }
 
 func (f *Fake) CreateBroadcastChannel(_ context.Context, title, about string) (OwnedBroadcastChannel, error) {

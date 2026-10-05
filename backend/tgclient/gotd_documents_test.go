@@ -3,10 +3,13 @@ package tgclient
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 
+	"github.com/gotd/td/bin"
 	"github.com/gotd/td/tg"
+	"github.com/gotd/td/tgerr"
 )
 
 func TestDocumentOfClassifiesMessages(t *testing.T) {
@@ -41,6 +44,85 @@ func TestHistoryMessagePreservesOutgoingChannelPost(t *testing.T) {
 	})
 	if !ok || !message.Outgoing || message.FromID != 0 || message.Text != "part" {
 		t.Fatalf("history message = %+v, ok %t", message, ok)
+	}
+}
+
+func TestHistoryMessagePreservesExternalMediaRestrictionsAndAttributes(t *testing.T) {
+	t.Parallel()
+	document := &tg.Document{ID: 441, AccessHash: 992, Size: 1024, MimeType: "video/x-matroska",
+		Attributes: []tg.DocumentAttributeClass{
+			&tg.DocumentAttributeFilename{FileName: "recording.mkv"},
+			&tg.DocumentAttributeVideo{Duration: 754.5},
+		}}
+	media := &tg.MessageMediaDocument{Document: document}
+	media.SetTTLSeconds(30)
+	message, ok := historyMessageFromTG(&tg.Message{ID: 17, Noforwards: true, Media: media})
+	if !ok || message.DocumentID != 441 || message.DocumentAccessHash != 992 || message.MediaSize != 1024 ||
+		message.MimeType != "video/x-matroska" || message.DocumentName != "recording.mkv" || message.Duration != 754.5 ||
+		!message.NoForwards || message.TTLSeconds != 30 {
+		t.Fatalf("document metadata = %+v, ok %t", message, ok)
+	}
+}
+
+func TestRestrictionsApplyEverywhereOrOnThisPlatform(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		platform   string
+		restricted bool
+	}{{"all", true}, {runtime.GOOS, true}, {"web", false}} {
+		reasons := []tg.RestrictionReason{{Platform: test.platform, Reason: "terms", Text: "Not available"}}
+		message, _ := historyMessageFromTG(&tg.Message{ID: 19, RestrictionReason: reasons})
+		peer := InputPeer{ChannelID: 101, AccessHash: 1101}
+		channel, err := broadcastChannelFrom(&tg.MessagesChats{Chats: []tg.ChatClass{
+			&tg.Channel{ID: 101, Broadcast: true, Restricted: true, RestrictionReason: reasons},
+		}}, peer)
+		if err != nil || message.Restricted != test.restricted || channel.Restricted != test.restricted {
+			t.Errorf("platform %q: post %t, channel %t (%v), want %t", test.platform, message.Restricted, channel.Restricted, err, test.restricted)
+		}
+	}
+}
+
+// A personal drive adopts any captionless message with media as a file, so a
+// paid post, whose document this account cannot read, must report none.
+func TestHistoryMessageReportsPaidMediaWithoutAFile(t *testing.T) {
+	t.Parallel()
+	paid, ok := historyMessageFromTG(&tg.Message{ID: 18, Message: "Members cut",
+		Media: &tg.MessageMediaPaidMedia{StarsAmount: 50}})
+	if !ok || !paid.Paid || paid.HasMedia || paid.DocumentID != 0 || paid.MediaSize != 0 || paid.Text != "Members cut" {
+		t.Fatalf("paid media = %+v, ok %t", paid, ok)
+	}
+}
+
+type invokerFunc func(ctx context.Context, input bin.Encoder, output bin.Decoder) error
+
+func (f invokerFunc) Invoke(ctx context.Context, input bin.Encoder, output bin.Decoder) error {
+	return f(ctx, input, output)
+}
+
+// A channel photo holds a background download slot while it loads, so a flood
+// wait must come back to the caller rather than be waited out in place.
+func TestChannelPhotoIsOneRequest(t *testing.T) {
+	t.Parallel()
+	calls := 0
+	var answer error = tgerr.New(420, "FLOOD_WAIT_120")
+	api := tg.NewClient(invokerFunc(func(_ context.Context, _ bin.Encoder, output bin.Decoder) error {
+		calls++
+		if answer != nil {
+			return answer
+		}
+		var buf bin.Buffer
+		if err := (&tg.UploadFile{Type: &tg.StorageFileJpeg{}, Bytes: []byte("jpeg")}).Encode(&buf); err != nil {
+			return err
+		}
+		return output.Decode(&buf)
+	}))
+	peer := InputPeer{ChannelID: 101, AccessHash: 1101}
+	if _, err := channelPhoto(t.Context(), api, peer, 7); calls != 1 || !tgerr.Is(err, "FLOOD_WAIT") {
+		t.Fatalf("flood wait: %d requests, err %v", calls, err)
+	}
+	answer = nil
+	if photo, err := channelPhoto(t.Context(), api, peer, 7); err != nil || string(photo) != "jpeg" || calls != 2 {
+		t.Fatalf("photo = %q, %v after %d requests", photo, err, calls)
 	}
 }
 

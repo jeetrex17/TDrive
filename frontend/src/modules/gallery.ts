@@ -20,6 +20,7 @@ import { albumsView, galleryView, photosMode, type PhotosMode } from '../ui/gall
 import { albumsWorthShowing, buildAlbumTiles, type AlbumTile } from '../ui/gallery/album-view';
 import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
 import { clearSidebarVirtualView, setSidebarVirtualView } from '../ui/sidebar/sidebar-store';
+import { closeChannel } from '../ui/channels/channel-store';
 import type { PreviewNavigationItem } from './modals/preview';
 import { setFileThumbnailsActive } from '../ui/file-list/file-thumbnail-controller';
 import { isVideoFile } from './media-types';
@@ -387,6 +388,7 @@ async function openGalleryLightbox(item: GalleryItem): Promise<void> {
 // --- view switching (wired from the sidebar Photos item) ---
 
 export function enterPhotos(): void {
+    closeChannel();
     if (state.virtualView === 'photos') return;
     // Entering recomputes the album grid and picks the view again, so a folder
     // that filled up or emptied while away is reflected on arrival.

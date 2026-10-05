@@ -20,6 +20,9 @@ export interface LogicalFile {
     "encryption_version": number;
     "multipart": boolean;
     "segments": Segment[] | null;
+    "source_kind"?: string;
+    "source_account_id"?: number;
+    "source_generation"?: string;
 }
 
 export interface MediaStats {

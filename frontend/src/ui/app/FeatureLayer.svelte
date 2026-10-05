@@ -1,5 +1,7 @@
 <script lang="ts">
+    import { listChannelSourceCandidates } from '../../api';
     import { activateLiveSyncEvents } from '../../modules/channels';
+    import { activateChannelSources, addChannel, channelPhoto, closeChannelPicker, showChannel } from '../../modules/channel-sources';
     import { activateContextMenu } from '../../modules/context-menu';
     import { activateDropOverlay } from '../../modules/drop-overlay';
     import { renderEncryptionSettingsEntry } from '../../modules/encryption';
@@ -79,6 +81,8 @@
     import UploadOptionsModal from '../modals/UploadOptionsModal.svelte';
     import TrashConfirmModal from '../trash/TrashConfirmModal.svelte';
     import MountSelectionModal from '../mount/MountSelectionModal.svelte';
+    import ChannelPickerModal from '../channels/ChannelPickerModal.svelte';
+    import { channelPickerOpen, channelSources } from '../channels/channel-store';
     import ToastStack from '../notifications/ToastStack.svelte';
     import PreviewModal from '../preview/PreviewModal.svelte';
     import DropOverlay from '../transfers/DropOverlay.svelte';
@@ -107,6 +111,7 @@
             activateConnectivityWatch(),
             activateLiveSyncEvents(),
             activateUpdates(),
+            activateChannelSources(),
         ];
         let previewActivationCancelled = false;
         let deactivatePreview = () => {};
@@ -206,6 +211,17 @@
     </div>
     <div id="logout-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <LogoutModal onConfirm={confirmLogout} />
+    </div>
+    <div id="channel-picker-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
+        <ChannelPickerModal
+            open={$channelPickerOpen}
+            loadCandidates={listChannelSourceCandidates}
+            added={$channelSources.sources}
+            loadPhoto={channelPhoto}
+            onAdd={addChannel}
+            onOpen={showChannel}
+            onClose={closeChannelPicker}
+        />
     </div>
 
     <!-- The trash and the confirm it raises share one component. The confirm's

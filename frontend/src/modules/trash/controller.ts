@@ -10,6 +10,7 @@ import { trashConfirmModal } from '../../ui/trash/trash-confirm-store';
 import type { OperationResult } from '../../types';
 import { invalidateFolderIndex, state } from '../../state';
 import { clearSearch } from '../search';
+import { closeChannel } from '../../ui/channels/channel-store';
 import { renderTrashError, renderTrashRows } from './view';
 import { appActions } from '../app-actions';
 import { humanizeBackendError } from '../errors';
@@ -42,6 +43,7 @@ let loadGeneration = 0;
  * refreshFiles decide what to draw.
  */
 export function openTrash(): void {
+    closeChannel();
     if (state.virtualView === 'trash') return;
     trashOpen.set(true);
     state.virtualView = 'trash';

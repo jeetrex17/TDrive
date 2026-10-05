@@ -24,10 +24,22 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as channelsource$0 from "../../backend/channelsource/models.js";
+
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
 export function ApproveJoinRequest(channelID: number, userID: number): $CancellablePromise<void> {
     return $Call.ByID(1493059448, channelID, userID);
+}
+
+/**
+ * ChannelSourcePhoto returns a channel's small profile photo as base64, or ""
+ * when the channel has none.
+ */
+export function ChannelSourcePhoto(channelID: number): $CancellablePromise<string> {
+    return $Call.ByID(4072411592, channelID);
 }
 
 /**
@@ -37,6 +49,10 @@ export function ApproveJoinRequest(channelID: number, userID: number): $Cancella
  */
 export function CheckPendingJoin(inviteHash: string): $CancellablePromise<$models.JoinDriveResult> {
     return $Call.ByID(1157529205, inviteHash);
+}
+
+export function ConnectChannelSource(channelID: number, expectedAccountID: number): $CancellablePromise<channelsource$0.SourceInfo> {
+    return $Call.ByID(1204296522, channelID, expectedAccountID);
 }
 
 export function CreatePersonalDrive(): $CancellablePromise<void> {
@@ -51,6 +67,10 @@ export function CreatePersonalDrive(): $CancellablePromise<void> {
  */
 export function CreateSharedDrive(title: string, requireApproval: boolean): $CancellablePromise<$models.ChannelInfo> {
     return $Call.ByID(1236363253, title, requireApproval);
+}
+
+export function DisconnectChannelSource(channelID: number, expectedAccountID: number, expectedGeneration: string): $CancellablePromise<void> {
+    return $Call.ByID(4108487598, channelID, expectedAccountID, expectedGeneration);
 }
 
 /**
@@ -97,12 +117,28 @@ export function LeaveSharedDrive(channelID: number): $CancellablePromise<void> {
     return $Call.ByID(1505555140, channelID);
 }
 
+export function ListChannelMedia(channelID: number, offsetID: number, limit: number, search: string, kind: string): $CancellablePromise<channelsource$0.MediaPage> {
+    return $Call.ByID(3045371403, channelID, offsetID, limit, search, kind);
+}
+
+/**
+ * ListChannelSourceCandidates includes joined broadcast channels in primary
+ * and archived Telegram dialogs. This does not create TDrive drives.
+ */
+export function ListChannelSourceCandidates(): $CancellablePromise<channelsource$0.SourceInfo[] | null> {
+    return $Call.ByID(1986335738);
+}
+
 /**
  * ListChannels returns every drive known to this client (personal first,
  * then shared in joined-at order). Used to render the sidebar.
  */
 export function ListChannels(): $CancellablePromise<$models.ChannelInfo[] | null> {
     return $Call.ByID(2199839146);
+}
+
+export function ListConnectedChannelSources(): $CancellablePromise<channelsource$0.SourceInfo[] | null> {
+    return $Call.ByID(3611549410);
 }
 
 /**

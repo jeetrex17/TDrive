@@ -6,7 +6,7 @@
     import Link2Icon from '@lucide/svelte/icons/link-2';
     import SearchIcon from '@lucide/svelte/icons/search';
     import Trash2Icon from '@lucide/svelte/icons/trash-2';
-    import { isMobilePlatform, listMountableDrives } from '../api';
+    import { isMobilePlatform, listChannelMedia, listMountableDrives } from '../api';
     import tdriveLogo from '../assets/images/tdrive-logo.png';
     import { openEncryptionSettingsModal } from '../modules/modals/encryption-settings';
     import { openLogoutModal } from '../modules/modals/logout';
@@ -14,6 +14,17 @@
     import { cancelTransfersInDirection, cancelUploadFile, clearHistory } from '../modules/notif-bell';
     import { ensureProfileLoaded } from '../modules/profile-menu';
     import { askEmptyTrash, openTrash, trashBusyKey, trashEntries } from '../modules/trash/controller';
+    import {
+        channelPhoto,
+        loadChannelSources,
+        openChannelPicker,
+        openChannelPost,
+        openInTelegram,
+        recentChannelPages,
+        showChannel,
+        showChannelActions,
+        showPostActions,
+    } from '../modules/channel-sources';
     import { clearSelection, openSelectedItemsDelete, openSelectedItemsDownload, openSelectedItemsMove } from '../modules/selection';
     import { chooseFilesForCurrentFolder, chooseFolderForCurrentFolder } from '../modules/transfers';
     import {
@@ -35,6 +46,9 @@
     import DriveList from './sidebar/DriveList.svelte';
     import MountControl from './mount/MountControl.svelte';
     import FeatureLayer from './app/FeatureLayer.svelte';
+    import ChannelNav from './channels/ChannelNav.svelte';
+    import ChannelView from './channels/ChannelView.svelte';
+    import { channelSources, openChannel } from './channels/channel-store';
 
     interface Props {
         dashboardVisible: boolean;
@@ -142,6 +156,22 @@
                         {/if}
                     </div>
                 </div>
+                <!-- Telegram channels the user added: read-only places beside
+                     the drives, opened in the main area without changing the
+                     active drive. -->
+                {#if dashboardVisible}
+                    <div class="drives-section">
+                        <ChannelNav
+                            sources={$channelSources}
+                            activeId={$openChannel?.channelId ?? null}
+                            loadPhoto={channelPhoto}
+                            onSelect={showChannel}
+                            onActions={showChannelActions}
+                            onAdd={openChannelPicker}
+                            onRetry={loadChannelSources}
+                        />
+                    </div>
+                {/if}
             </div>
 
             <div class="drives-actions">
@@ -164,7 +194,7 @@
         </div>
     </aside>
 
-    <main class="main-content">
+    <main class="main-content" class:channel-mode={dashboardVisible && $openChannel !== null}>
         <header>
             <div class="search-bar">
                 <SearchIcon class="search-icon" size={16} strokeWidth={2} aria-hidden="true" />
@@ -310,6 +340,20 @@
                 <PhotosSurface />
             {/if}
         </div>
+        <!-- Keyed by connection so re-adding a channel starts a fresh view
+             instead of paging with the old connection. -->
+        {#if dashboardVisible && $openChannel}
+            {#key `${$openChannel.channelId}:${$openChannel.generation}`}
+                <ChannelView
+                    source={$openChannel}
+                    fetchMedia={listChannelMedia}
+                    onOpenPost={openChannelPost}
+                    onOpenTelegram={openInTelegram}
+                    onPostActions={showPostActions}
+                    recentPages={recentChannelPages}
+                />
+            {/key}
+        {/if}
     </main>
 </div>
 

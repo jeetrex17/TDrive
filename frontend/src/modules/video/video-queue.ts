@@ -12,16 +12,26 @@
  * owns the shape of the queue at the moment it is built.
  */
 
+import type { MediaOpenResult } from "../../api";
 import { videoFormatLabel } from "../media-types";
 import type { VideoPlaylistViewItem } from "../../ui/video/video-playlist-store";
 
 /** A video the player can be pointed at. `key` is the file list's stable row key, when it has one. */
 export interface VideoOpenTarget {
     id: number;
+    /** The file name. Its extension picks the player, so it is never replaced by `title`. */
     name: string;
+    /** What to show instead of the file name, such as a channel post's caption. */
+    title?: string;
     key?: string;
     size?: number;
     encrypted?: boolean;
+    /**
+     * Opens media that is not a drive file, such as a Telegram channel post,
+     * through its own capability. Its id means nothing to the active drive, so
+     * every open of it, a retry or a playlist switch alike, goes through here.
+     */
+    open?: () => Promise<MediaOpenResult>;
 }
 
 /** What a caller hands the player when opening one video out of a list. */
@@ -52,12 +62,15 @@ export interface ActiveVideoPlaylist {
 export function normalizeVideoTarget(target: VideoOpenTarget): VideoOpenTarget | null {
     const id = Number(target.id || 0);
     if (!Number.isFinite(id) || id <= 0) return null;
-    const normalized = {
+    const normalized: VideoOpenTarget = {
         id,
         name: String(target.name || "Video"),
         size: Math.max(0, Number(target.size) || 0),
         encrypted: Boolean(target.encrypted),
     };
+    const title = String(target.title || "").trim();
+    if (title) normalized.title = title;
+    if (target.open) normalized.open = target.open;
     const key = String(target.key || "").trim();
     return key ? { ...normalized, key } : normalized;
 }
@@ -125,7 +138,7 @@ export function playlistItemIdentity(item: VideoOpenTarget, index: number): stri
 export function playlistViewItems(playlist: ActiveVideoPlaylist): readonly VideoPlaylistViewItem[] {
     return playlist.items.map((item, index) => ({
         id: playlistItemIdentity(item, index),
-        name: item.name,
+        name: item.title || item.name,
         size: item.size || 0,
         format: videoFormatLabel(item.name),
         position: index + 1,

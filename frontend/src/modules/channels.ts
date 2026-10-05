@@ -27,6 +27,7 @@ import {
     syncChannel,
 } from '../api';
 import type { DriveChannel, JoinDriveResult, JoinRequest, PendingJoin } from '../types';
+import { closeChannel } from '../ui/channels/channel-store';
 import { runGlobalSearch } from './search';
 import type { RefreshFilesOptions } from './app-actions';
 import { driveSyncStatus, type DriveSyncState } from '../ui/mobile/mobile-shell-store';
@@ -246,7 +247,11 @@ export async function leaveSharedDrive(channelId: number): Promise<void> {
 }
 
 export async function switchActiveChannel(channelId: number): Promise<void> {
-    if (!channelId || state.channelSwitchInProgress) return;
+    if (!channelId) return;
+    // Every way into a drive, from the sidebar, the phone's Account tab or a
+    // drive just made or joined, leaves a Telegram channel the main area shows.
+    closeChannel();
+    if (state.channelSwitchInProgress) return;
     // Invalidate an explicit refresh immediately, before the native switch
     // resolves. Otherwise an older request for the drive we are leaving can
     // still publish during the switch window.

@@ -13,6 +13,7 @@ export * from "./api/runtime";
 export { BackendInvocationError } from "./api/gateway";
 export * from "./api/session";
 export * from "./api/updates";
+export * from "./api/channel-sources";
 
 export type {
     DownloadResult,

@@ -22,7 +22,9 @@ import (
 // APIs rather than to the local projection, which is why they fail in ways
 // (approval pending, admin-only, flood wait) no file operation ever produces.
 type DriveService struct {
-	host serviceHost
+	host               serviceHost
+	closeExternalMedia func([]string)
+	connectSourceGate  func(func() error) error
 }
 
 func newDriveService(host serviceHost) *DriveService {

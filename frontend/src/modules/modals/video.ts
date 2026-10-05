@@ -288,9 +288,9 @@ function retryVideoOpen() {
         run();
         return;
     }
-    const target = activeOpenAttempt?.target;
-    if (!target) return;
-    void openVideoTarget(target, null);
+    const attempt = activeOpenAttempt;
+    if (!attempt) return;
+    void openVideoTarget(attempt.target, null);
 }
 
 function handleHtmlPlaybackError(detail: string) {
@@ -575,10 +575,21 @@ function closeOpenMenu() {
 // the end and fully buffered, so auto-next starts without a cold round-trip to
 // Telegram. A single slot is enough: only the immediate next item is useful.
 const mediaPrefetcher = new MediaPrefetcher<MediaOpenResult>({
-    open: (id) => openMedia(id),
+    open: (id) => {
+        // Only ever the next queued item. Should the queue change underneath,
+        // open nothing rather than guess what the id meant.
+        const item = activePlaylist?.items.find((entry) => entry.id === id);
+        return item ? openTarget(item) : Promise.reject(new Error("video is no longer queued"));
+    },
     close: (token) => safelyCloseMedia(token),
     warm: (session) => warmMediaEdges(session.url, session.info.plaintextSize || session.info.storedSize || 0),
 });
+
+// A target with its own capability opens through it; a drive file opens by id.
+// A channel post's id is only a message id, so it must never reach openMedia.
+function openTarget(target: VideoOpenTarget): Promise<MediaOpenResult> {
+    return target.open ? target.open() : openMedia(target.id);
+}
 
 function nextPlaylistTarget(): VideoOpenTarget | null {
     if (!activePlaylist?.autoNext) return null;
@@ -740,8 +751,8 @@ function preloadPoster(url: string, token: string) {
     image.src = url;
 }
 
-function updateMediaText(name: string, size: number) {
-    if (videoDOM.filename) videoDOM.filename.textContent = name || "Video";
+function updateMediaText(name: string, size: number, title = "") {
+    if (videoDOM.filename) videoDOM.filename.textContent = title || name || "Video";
     mediaMetaBaseText = `${videoFormatLabel(name)}${size ? ` · ${formatBytes(size)}` : ""}`;
     mediaMetaBytes = size || 0;
     renderMediaMeta();
@@ -857,9 +868,10 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
         // A prefetched session was opened while the file was already unlocked,
         // so only a cold open can reach the vault prompt. A null here is the
         // user dismissing that prompt, which is not an error to surface.
-        opened = mediaPrefetcher.take(attempt.target.id) ?? await accessEncryptedResource(
+        const prefetched = mediaPrefetcher.take(attempt.target.id);
+        opened = prefetched ?? await accessEncryptedResource(
             Boolean(attempt.target.encrypted),
-            () => openMedia(attempt.target.id),
+            () => openTarget(attempt.target),
         );
         if (!opened) {
             // Closing queues teardown after this ownership transition finishes.
@@ -898,7 +910,7 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
 
         const displayName = opened.info.name || opened.name || attempt.target.name || "Video";
         const displaySize = opened.info.plaintextSize || opened.info.storedSize || attempt.target.size || 0;
-        updateMediaText(displayName, displaySize);
+        updateMediaText(displayName, displaySize, attempt.target.title);
         transport?.beginSession(opened.thumbnailUrl);
         activeMediaToken = opened.token;
         if (isMobilePlatform() && opened.thumbnailUrl) preloadPoster(`${opened.thumbnailUrl}?t=0`, opened.token);
@@ -971,7 +983,7 @@ function handleHtmlMediaError(
     // A repackaged container that still will not decode has nothing left to
     // retry: the streams inside are ones this device has no decoder for. Point
     // at the one thing that can still work rather than at a button that cannot.
-    const action = undecodable && isRemuxableVideo(attempt.target.name)
+    const action = !attempt.target.open && undecodable && isRemuxableVideo(attempt.target.name)
         ? downloadInstead(attempt.target)
         : null;
     void playbackTransitions.run(attempt.generation, async (isCurrent) => {
@@ -1021,12 +1033,24 @@ async function openNativePlayback(
     attempt: VideoOpenAttempt,
     rect: NativeMediaRect,
     isCurrent: () => boolean,
-    existing: MediaOpenResult | null = null,
+    warmed: MediaOpenResult | null = null,
     intent: PlaybackIntent | null = null,
 ) {
+    let existing = warmed;
     let opened: NativeMediaOpenResult | null = null;
     let owner: "none" | "html" | "native" | "adapter" = existing ? "html" : "none";
     try {
+        // A target with its own capability cannot be opened natively by id, so
+        // its session is opened here, where a failure reaches the reader, and
+        // the native player attaches to it.
+        if (!existing && attempt.target.open) {
+            existing = await attempt.target.open();
+            owner = "html";
+            if (!isCurrent() || !isOpen()) {
+                await safelyCloseMedia(existing.token);
+                return;
+            }
+        }
         // Re-attaching an existing session never re-prompts: its token was only
         // handed out after the file was unlocked once.
         const result = existing
@@ -1126,7 +1150,7 @@ function activateNativePlayback(
     activeMediaEncrypted = Boolean(opened.info.encrypted);
     const displayName = opened.info.name || opened.name || attempt.target.name || "Video";
     const displaySize = opened.info.plaintextSize || opened.info.storedSize || attempt.target.size || 0;
-    updateMediaText(displayName, displaySize);
+    updateMediaText(displayName, displaySize, attempt.target.title);
     transport?.beginSession(opened.thumbnailUrl);
 
     const adapter = new NativeMpvAdapter(opened, {
@@ -1173,7 +1197,7 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
     };
     activeOpenAttempt = attempt;
 
-    updateMediaText(target.name || "Video", target.size || 0);
+    updateMediaText(target.name || "Video", target.size || 0, target.title);
     videoDOM.video.removeAttribute("poster");
     clearError();
     setLoadingStatusOverride("");
@@ -1200,7 +1224,7 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
         const format = videoFormatLabel(target.name);
         setError(
             `iOS cannot open ${format} files. Download it to play in another app.`,
-            downloadInstead(target),
+            target.open ? null : downloadInstead(target),
         );
         return;
     }

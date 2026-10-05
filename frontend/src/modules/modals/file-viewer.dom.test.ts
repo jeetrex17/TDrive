@@ -130,6 +130,22 @@ describe('encrypted file viewer lifecycle', () => {
         expect(mocks.enqueueDownload).toHaveBeenCalledWith(4, 'plain.txt', 10);
     });
 
+    it('uses an explicit channel source for audio and leaves it read-only', async () => {
+        const openChannelAudio = vi.fn().mockResolvedValue(opened('channel-audio', false, 'field-note.mp3'));
+
+        await openFileViewer({ id: 4, name: 'field-note.mp3', size: 10 }, openChannelAudio);
+        flushSync();
+
+        expect(openChannelAudio).toHaveBeenCalledOnce();
+        expect(mocks.openStream).not.toHaveBeenCalled();
+        expect(get(fileViewerState)).toMatchObject({ open: true, readOnly: true });
+        expect(get(fileViewerState).token).toBe('channel-audio');
+        expect(host.querySelector<HTMLButtonElement>('[aria-label="Download"]')).toBeNull();
+        mocks.enqueueDownload.mockClear();
+        downloadActiveFile();
+        expect(mocks.enqueueDownload).not.toHaveBeenCalled();
+    });
+
     it('registers the lock listener only once', () => {
         activateFileViewerModal();
         expect(mocks.eventsOn.mock.calls.filter(([name]) => name === 'encrypted_media_sessions_closed')).toHaveLength(1);

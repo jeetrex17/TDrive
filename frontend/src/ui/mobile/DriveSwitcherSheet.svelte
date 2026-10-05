@@ -12,7 +12,17 @@
     import { openJoinDriveModal } from '../../modules/modals/join-drive';
     import { openNewDriveModal } from '../../modules/modals/new-drive';
     import DriveList from '../sidebar/DriveList.svelte';
-    import { driveSwitcherOpen, closeDriveSwitcher } from './mobile-shell-store';
+    import { activeTab, driveSwitcherOpen, closeDriveSwitcher } from './mobile-shell-store';
+    import ChannelNav from '../channels/ChannelNav.svelte';
+    import type { ChannelSource } from '../channels/channel-model';
+    import { channelSources, openChannel } from '../channels/channel-store';
+    import {
+        channelPhoto,
+        loadChannelSources,
+        openChannelPicker,
+        showChannel,
+        showChannelActions,
+    } from '../../modules/channel-sources';
 
     let sheetEl = $state<HTMLElement | null>(null);
     let scrimEl = $state<HTMLElement | null>(null);
@@ -151,6 +161,17 @@
         closeDriveSwitcher();
         openNewDriveModal();
     }
+
+    // A channel is shown where the Files tab draws, like the trash.
+    function openSourceChannel(source: ChannelSource): void {
+        activeTab.set('files');
+        showChannel(source);
+    }
+
+    function addChannel(): void {
+        closeDriveSwitcher();
+        openChannelPicker();
+    }
 </script>
 
 <svelte:window onkeydown={onKeydown} />
@@ -213,6 +234,17 @@
                 onDriveActions={showSharedActionsMenu}
                 onPendingClick={handlePendingClick}
                 onPendingActions={showPendingActionsMenu}
+            />
+        </div>
+        <div class="switcher-group">
+            <ChannelNav
+                sources={$channelSources}
+                activeId={$openChannel?.channelId ?? null}
+                loadPhoto={channelPhoto}
+                onSelect={openSourceChannel}
+                onActions={showChannelActions}
+                onAdd={addChannel}
+                onRetry={loadChannelSources}
             />
         </div>
     </nav>

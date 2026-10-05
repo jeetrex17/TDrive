@@ -17,6 +17,7 @@ import { openJoinRequestsModal } from './modals/join-requests';
 import { notify } from './notifications';
 import { humanizeBackendError } from './errors';
 import { enterPhotos, exitPhotos } from './gallery';
+import { closeChannel } from '../ui/channels/channel-store';
 import { closeTrash } from './trash/controller';
 import { showContextMenu, type ContextMenuItem } from './context-menu';
 import {
@@ -72,6 +73,7 @@ export function renderSidebar() {
 
 
 export function handleDriveClick(channelId: number): void {
+    closeChannel();
     if (Number(channelId) === Number(state.activeChannel?.id)) {
         // Clicking the already-active drive is how you leave one of its virtual
         // views. Without this the trash is a dead end: it has no breadcrumb to

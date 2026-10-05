@@ -237,7 +237,7 @@ func (s *Server) handleSessionBytes(w http.ResponseWriter, r *http.Request, pref
 	size := session.Size()
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Content-Type", session.MimeType())
-	if session.Encrypted() || streamKindForName(session.Name()) == StreamKindImage {
+	if session.Encrypted() || session.External() || streamKindForName(session.Name()) == StreamKindImage {
 		setMediaNoStore(w.Header())
 	}
 	if r.Method == http.MethodOptions {
@@ -295,7 +295,7 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 		return
 	}
-	if session.Encrypted() {
+	if session.Encrypted() || session.External() {
 		setMediaNoStore(w.Header())
 	}
 	seconds, err := strconv.ParseFloat(r.URL.Query().Get("t"), 64)
@@ -307,7 +307,7 @@ func (s *Server) handleThumbnail(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case err == nil:
 		w.Header().Set("Content-Type", videoThumbMime)
-		if !session.Encrypted() {
+		if !session.Encrypted() && !session.External() {
 			w.Header().Set("Cache-Control", "private, max-age=86400")
 		}
 		w.Header().Set("Content-Length", strconv.Itoa(len(data)))

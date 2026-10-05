@@ -376,9 +376,9 @@
             <h3 id="file-viewer-title" class="file-viewer-title" title={$fileViewerState.title}>
                 {$fileViewerState.title || 'Open file'}
             </h3>
-            <button class="file-viewer-action is-icon-only" type="button" onclick={onDownload} aria-label="Download" title="Download">
+            {#if !$fileViewerState.readOnly}<button class="file-viewer-action is-icon-only" type="button" onclick={onDownload} aria-label="Download" title="Download">
                 <DownloadIcon aria-hidden="true" />
-            </button>
+            </button>{/if}
         </div>
         {#if shouldShowMarkdownToggle()}
             <div class="file-viewer-subbar">
@@ -417,9 +417,9 @@
             {#if shouldShowMarkdownToggle()}
                 {@render markdownToggle()}
             {/if}
-            <button class="file-viewer-action" type="button" onclick={onDownload} aria-label="Download" title="Download">
+            {#if !$fileViewerState.readOnly}<button class="file-viewer-action" type="button" onclick={onDownload} aria-label="Download" title="Download">
                 <DownloadIcon aria-hidden="true" />
-            </button>
+            </button>{/if}
             <button class="file-viewer-close" type="button" onclick={onClose} aria-label="Close file" title="Close">
                 <XIcon strokeWidth={2.2} aria-hidden="true" />
             </button>

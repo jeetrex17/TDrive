@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -418,19 +420,33 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 		mediaSize          int64
 		documentName       string
 		documentAccessHash int64
+		documentID         int64
+		mimeType           string
+		duration           float64
+		ttlSeconds         int
+		paid               bool
 	)
 	if media, ok := fullMsg.Media.(*tg.MessageMediaDocument); ok {
 		hasMedia = true
+		ttlSeconds, _ = media.GetTTLSeconds()
 		if doc, ok := media.Document.(*tg.Document); ok {
 			mediaSize = doc.Size
+			documentID = doc.ID
+			mimeType = doc.MimeType
 			documentAccessHash = doc.AccessHash
 			for _, attr := range doc.Attributes {
-				if fname, ok := attr.(*tg.DocumentAttributeFilename); ok {
-					documentName = fname.FileName
-					break
+				switch value := attr.(type) {
+				case *tg.DocumentAttributeFilename:
+					documentName = value.FileName
+				case *tg.DocumentAttributeVideo:
+					duration = value.Duration
+				case *tg.DocumentAttributeAudio:
+					duration = float64(value.Duration)
 				}
 			}
 		}
+	} else if _, ok := fullMsg.Media.(*tg.MessageMediaPaidMedia); ok {
+		paid = true
 	}
 
 	return HistoryMessage{
@@ -443,7 +459,23 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 		MediaSize:          mediaSize,
 		DocumentName:       documentName,
 		DocumentAccessHash: documentAccessHash,
+		DocumentID:         documentID,
+		MimeType:           mimeType,
+		Duration:           duration,
+		NoForwards:         fullMsg.Noforwards,
+		TTLSeconds:         ttlSeconds,
+		Paid:               paid,
+		Restricted:         restrictedHere(fullMsg.RestrictionReason),
 	}, true
+}
+
+// restrictedHere reports whether Telegram withholds content on this platform,
+// as official clients read it: a reason for every platform, or for this one.
+// The phone platforms Telegram names, "ios" and "android", are GOOS values.
+func restrictedHere(reasons []tg.RestrictionReason) bool {
+	return slices.ContainsFunc(reasons, func(reason tg.RestrictionReason) bool {
+		return reason.Platform == "all" || reason.Platform == runtime.GOOS
+	})
 }
 
 func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID int64, limit int) ([]HistoryMessage, error) {
@@ -485,6 +517,52 @@ func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID i
 	} else {
 		slog.Debug("tgclient: MessagesGetHistory returned", "channel_id", peer.ChannelID, "messages", len(out))
 	}
+	return out, err
+}
+
+func (g *Gotd) SearchChannelMessages(ctx context.Context, peer InputPeer, query string, offsetID int64, limit int) ([]HistoryMessage, error) {
+	var out []HistoryMessage
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		result, err := api.MessagesSearch(ctx, &tg.MessagesSearchRequest{
+			Peer: toPeer(peer), Q: query, Filter: &tg.InputMessagesFilterEmpty{},
+			OffsetID: int(offsetID), Limit: limit,
+		})
+		if err != nil {
+			return err
+		}
+		var messages []tg.MessageClass
+		switch value := result.(type) {
+		case *tg.MessagesMessages:
+			messages = value.Messages
+		case *tg.MessagesMessagesSlice:
+			messages = value.Messages
+		case *tg.MessagesChannelMessages:
+			messages = value.Messages
+		}
+		for _, message := range messages {
+			if converted, ok := historyMessageFromTG(message); ok {
+				out = append(out, converted)
+			}
+		}
+		return nil
+	})
+	return out, err
+}
+
+func (g *Gotd) GetChannelMessage(ctx context.Context, peer InputPeer, msgID int64) (HistoryMessage, error) {
+	var out HistoryMessage
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		messages, err := channelMessages(ctx, api, peer, []int64{msgID})
+		if err != nil {
+			return err
+		}
+		converted, ok := historyMessageFromTG(messages[msgID])
+		if !ok || converted.Placeholder || converted.MsgID != msgID {
+			return ErrMessageNotFound
+		}
+		out = converted
+		return nil
+	})
 	return out, err
 }
 
@@ -583,6 +661,44 @@ func (g *Gotd) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, 
 		slog.Debug("tgclient: DownloadFileAt completed", "channel_id", peer.ChannelID, "msg_id", msgID, "block_retries", retried)
 	}
 	return err
+}
+
+// DownloadChannelPhoto fetches a channel's small profile photo on the
+// background file lane. The primary connection follows FILE_MIGRATE itself,
+// so a photo on another data center needs nothing more.
+func (g *Gotd) DownloadChannelPhoto(ctx context.Context, peer InputPeer, photoID int64) ([]byte, error) {
+	var photo []byte
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		release, err := AcquireBackgroundGetFileSlots(ctx, 1)
+		if err != nil {
+			return err
+		}
+		defer release()
+		photo, err = channelPhoto(ctx, api, peer, photoID)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tgclient: download channel photo: %w", err)
+	}
+	return photo, nil
+}
+
+// channelPhoto asks for the whole photo, a few kilobytes, in one request. A
+// flood wait goes back to the caller's bounded retry: gotd's downloader would
+// wait out every one, however long, while holding the lane.
+func channelPhoto(ctx context.Context, api *tg.Client, peer InputPeer, photoID int64) ([]byte, error) {
+	result, err := api.UploadGetFile(ctx, &tg.UploadGetFileRequest{
+		Location: &tg.InputPeerPhotoFileLocation{Peer: toPeer(peer), PhotoID: photoID},
+		Limit:    1 << 20, // the most one request returns
+	})
+	if err != nil {
+		return nil, err
+	}
+	file, ok := result.(*tg.UploadFile)
+	if !ok {
+		return nil, fmt.Errorf("unexpected upload.getFile result %T", result)
+	}
+	return file.Bytes, nil
 }
 
 func (g *Gotd) DownloadFileThumbnail(ctx context.Context, peer InputPeer, msgID int64, thumbType string, w io.Writer) error {

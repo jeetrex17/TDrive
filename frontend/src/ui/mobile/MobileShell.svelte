@@ -29,6 +29,10 @@
     import { sidebarState } from '../sidebar/sidebar-store';
     import { breadcrumbPath } from '../chrome/breadcrumb-store';
     import { fileListView } from '../file-list/file-list-store';
+    import ChannelView from '../channels/ChannelView.svelte';
+    import { closeChannel, openChannel } from '../channels/channel-store';
+    import { openChannelPost, openInTelegram, recentChannelPages, showChannelActions, showPostActions } from '../../modules/channel-sources';
+    import { listChannelMedia } from '../../api';
 
     interface Props {
         dashboardVisible: boolean;
@@ -39,9 +43,12 @@
     // Selecting rows swaps the tab bar for the selection bar (spec 2.5); the
     // count comes from the shared selection store the controller feeds.
     const selecting = $derived(Boolean($selectionBarState.active || $selectionBarState.count > 0));
+    // A Telegram channel is a place the Files tab shows, like the trash, but
+    // it brings its own top bar and list, so it replaces the drive's.
+    const inChannel = $derived($activeTab === 'files' && $openChannel !== null);
     // Files and Photos share one content region (the file list vs the gallery);
     // Transfers and Account are their own panels.
-    const showMain = $derived($activeTab === 'files' || $activeTab === 'photos');
+    const showMain = $derived(($activeTab === 'files' && !inChannel) || $activeTab === 'photos');
     // An empty Files view already places Upload and Create folder in its
     // center. Keep that focused state in charge rather than floating a second
     // creation control over it.
@@ -50,10 +57,11 @@
         && $fileListView.stateKind === 'empty'
         && Boolean($fileListView.actions?.length),
     );
-    // Nothing is uploaded into the trash, so the button does not float over it.
+    // Nothing is uploaded into the trash or a channel, so the button does not
+    // float over either.
     const showContextAction = $derived(
         $activeTab === 'photos'
-        || ($activeTab === 'files' && !emptyFilesOwnsCreation && $sidebarState.virtualView !== 'trash'),
+        || ($activeTab === 'files' && !inChannel && !emptyFilesOwnsCreation && $sidebarState.virtualView !== 'trash'),
     );
     const contextualActionVisible = $derived(showContextAction && !selecting && !$keyboardOpen);
 
@@ -110,8 +118,9 @@
         if (tab === 'files') {
             if (appState.virtualView === 'photos') exitPhotos();
             // Tapping Files while in the trash is how a phone leaves it: there
-            // is no breadcrumb up there to leave by.
+            // is no breadcrumb up there to leave by. A channel works the same.
             else if (appState.virtualView === 'trash') closeTrash();
+            closeChannel();
         } else if (tab === 'photos') {
             enterPhotos();
         }
@@ -181,6 +190,7 @@
     class:is-scrolled={scrolled}
     class:is-selecting={selecting}
     class:has-context-action={contextualActionVisible}
+    class:in-channel={inChannel}
     hidden={!dashboardVisible}
     aria-hidden={dashboardVisible ? undefined : 'true'}
 >
@@ -216,6 +226,24 @@
                 {/if}
             </div>
         </main>
+
+        <div class="mobile-panel" data-tab="channel" hidden={!inChannel}>
+            {#if dashboardVisible && $openChannel}
+                {#key `${$openChannel.channelId}:${$openChannel.generation}`}
+                    <ChannelView
+                        mobile
+                        source={$openChannel}
+                        fetchMedia={listChannelMedia}
+                        onOpenPost={openChannelPost}
+                        onOpenTelegram={openInTelegram}
+                        onActions={showChannelActions}
+                        onPostActions={showPostActions}
+                        onBack={closeChannel}
+                        recentPages={recentChannelPages}
+                    />
+                {/key}
+            {/if}
+        </div>
 
         <div class="mobile-panel" data-tab="transfers" hidden={$activeTab !== 'transfers'}>
             <TransfersTab />

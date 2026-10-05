@@ -21,6 +21,9 @@ var (
 	ErrMessageNotFound = errors.New("tgclient: message not found")
 	ErrNotFile         = errors.New("tgclient: message is not a file")
 	ErrEmptyDocument   = errors.New("tgclient: empty document")
+	// ErrChannelUnavailable means the account left the channel or can no
+	// longer see it, as opposed to a lookup that merely failed this time.
+	ErrChannelUnavailable = errors.New("tgclient: channel unavailable to this account")
 	// ErrSendOutcomeUnknown means Telegram may have accepted an idempotent
 	// write even though the client did not receive a usable receipt. Callers
 	// must retry with the same random_id before abandoning remote artifacts.
@@ -67,16 +70,26 @@ type InputPeer struct {
 // HistoryMessage is the subset of a tg.Message that sync/backfill/read paths care about.
 // We deliberately avoid leaking the gotd types so the fake stays cheap.
 type HistoryMessage struct {
+	ChannelID          int64 // optional in fakes; production history is scoped by the request peer
 	MsgID              int64
 	Date               int64
 	FromID             int64
-	Outgoing           bool // Telegram marks messages sent by the current account.
+	Outgoing           bool   // Telegram marks messages sent by the current account.
 	Text               string // caption for media messages, body for text messages
 	HasMedia           bool
 	MediaSize          int64
 	DocumentName       string
 	DocumentAccessHash int64
-	Thumbs             []FileThumb
+	DocumentID         int64
+	MimeType           string
+	Duration           float64 // seconds, from the video or audio attribute; 0 when unknown
+	NoForwards         bool
+	TTLSeconds         int
+	// Paid marks paid media. It holds no document this account can read, so
+	// HasMedia stays false and drive sync never adopts it as a file.
+	Paid       bool
+	Restricted bool // Telegram withholds the post on this platform
+	Thumbs     []FileThumb
 	// Placeholder marks an entry that occupies a message id but carries no
 	// content: a service event, or the stub left where a message was deleted.
 	// It is reported so page lengths match what Telegram sent, and callers
@@ -157,6 +170,18 @@ type OwnedBroadcastChannel struct {
 	HasActivity bool
 }
 
+// JoinedBroadcastChannel is a channel visible to this account, including
+// archived dialogs. AccessHash stays entirely behind the backend boundary.
+type JoinedBroadcastChannel struct {
+	ID         int64
+	AccessHash int64
+	Title      string
+	Username   string
+	Protected  bool
+	Restricted bool  // Telegram withholds the channel on this platform
+	PhotoID    int64 // the current profile photo; 0 when the channel has none
+}
+
 // Client is the surface sync, backfill, and local-action paths use to talk
 // to Telegram. Both the real (gotd-backed) and fake test implementations
 // implement this.
@@ -193,6 +218,14 @@ type Client interface {
 	// payload, but they do occupy message ids, so silently dropping them would
 	// make a full page look short and mislead callers paginating on page size.
 	GetHistory(ctx context.Context, peer InputPeer, minID, offsetID int64, limit int) ([]HistoryMessage, error)
+	SearchChannelMessages(ctx context.Context, peer InputPeer, query string, offsetID int64, limit int) ([]HistoryMessage, error)
+	GetChannelMessage(ctx context.Context, peer InputPeer, msgID int64) (HistoryMessage, error)
+	// GetBroadcastChannel looks up one joined broadcast channel, returning
+	// ErrChannelUnavailable once the account cannot see it.
+	GetBroadcastChannel(ctx context.Context, peer InputPeer) (JoinedBroadcastChannel, error)
+	// DownloadChannelPhoto returns the small (160px) JPEG of a channel's
+	// profile photo.
+	DownloadChannelPhoto(ctx context.Context, peer InputPeer, photoID int64) ([]byte, error)
 
 	// GetFileDocument resolves one Telegram message into a downloadable
 	// document descriptor without downloading the bytes.
@@ -231,6 +264,7 @@ type Client interface {
 	GetChannelPts(ctx context.Context, peer InputPeer) (int64, error)
 
 	ListOwnedBroadcastChannels(ctx context.Context) ([]OwnedBroadcastChannel, error)
+	ListJoinedBroadcastChannels(ctx context.Context) ([]JoinedBroadcastChannel, error)
 	CreateBroadcastChannel(ctx context.Context, title, about string) (OwnedBroadcastChannel, error)
 	CreateMegagroup(ctx context.Context, title, about string) (InputPeer, error)
 	ExportInviteLink(ctx context.Context, peer InputPeer, requestNeeded bool) (string, error)

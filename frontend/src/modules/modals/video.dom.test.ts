@@ -1760,6 +1760,27 @@ describe("video chrome interactions", () => {
 });
 
 describe("fatal video error card", () => {
+    it("retries an explicit channel source without opening the matching drive file", async () => {
+        const channelOpen = vi
+            .fn()
+            .mockRejectedValueOnce(new Error("channel session expired"))
+            .mockResolvedValueOnce(mediaOpenResult(44, "channel-retry-token"));
+        const errorLog = vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+
+        await videoModule.openVideoModal({ id: 44, name: "same-id.mp4", size: 1024, open: channelOpen });
+
+        const retry = document.querySelector<HTMLButtonElement>("#video-error-retry");
+        await vi.waitFor(() => expect(retry?.closest<HTMLElement>("#video-error")?.style.display).toBe("block"));
+        retry?.click();
+
+        await vi.waitFor(() => expect(channelOpen).toHaveBeenCalledTimes(2));
+        expect(apiMocks.openMedia).not.toHaveBeenCalled();
+        await vi.waitFor(() => expect(document.querySelector<HTMLVideoElement>("#video-player")?.getAttribute("src")).toContain("channel-retry-token"));
+        errorLog.mockRestore();
+    });
+
     it("retries the failed HTML target without exposing backend detail", async () => {
         const retried = mediaOpenResult(44, "retry-html-token");
         let resolveRetry: (() => void) | undefined;
@@ -1977,6 +1998,26 @@ describe("folder video playlist", () => {
         await nextTasks();
         expect(apiMocks.openMedia).toHaveBeenCalledTimes(2);
         expect(apiMocks.closeMedia).not.toHaveBeenCalledWith("warm-61");
+    });
+
+    it("plays a channel playlist through each post's own capability, never by message id", async () => {
+        const first = vi.fn().mockResolvedValue(mediaOpenResult(71, "channel-71"));
+        const second = vi.fn().mockResolvedValue(mediaOpenResult(70, "channel-70"));
+        const videoModule = await import("./video");
+        deactivateVideo = videoModule.activateVideoModal();
+        const posts = [
+            { id: 71, name: "Telegram media 71.mp4", title: "Dawn chorus", key: "channel:50:71", open: first },
+            { id: 70, name: "Telegram media 70.mp4", title: "Coastline", key: "channel:50:70", open: second },
+        ];
+        await videoModule.openVideoModal(posts[0], { title: "Videos in Field Recordings", currentIndex: 0, items: posts });
+        expect(document.querySelector("#video-filename")?.textContent).toBe("Dawn chorus");
+
+        document.querySelector<HTMLVideoElement>("#video-player")?.dispatchEvent(new Event("ended"));
+        await vi.waitFor(() => expect(second).toHaveBeenCalled());
+        await vi.waitFor(() => expect(document.querySelector("#video-filename")?.textContent).toBe("Coastline"));
+        expect(first).toHaveBeenCalledOnce();
+        expect(apiMocks.openMedia).not.toHaveBeenCalled();
+        expect(document.querySelector("#video-playlist-button")?.getAttribute("aria-label")).toBe("Playlist, 2 of 2");
     });
 
     it("does not advance when auto-next is disabled", async () => {

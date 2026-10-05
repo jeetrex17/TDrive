@@ -52,6 +52,7 @@ import (
 	"TDrive/backend"
 	"TDrive/backend/auth"
 	"TDrive/backend/backfill"
+	"TDrive/backend/channelsource"
 	"TDrive/backend/datadir"
 	"TDrive/backend/livesync"
 	"TDrive/backend/media"
@@ -134,6 +135,7 @@ type Engine struct {
 	files      *fileservice.Service
 	folders    *folderservice.Service
 	media      *media.Service
+	sources    *channelsource.Service
 	reads      *readservice.Service
 	lifecycle  *lifecycleservice.Service
 	personal   *personaldriveservice.Service
@@ -219,6 +221,13 @@ func New(ctx context.Context, cfg Config) (*Engine, error) {
 	e.files = e.newFileService()
 	e.reads = e.newReadService()
 	e.media = e.newMediaService()
+	if backend.DB != nil {
+		sources, err := channelsource.NewService(backend.DB, e.tg, e.media, e.ActorID)
+		if err != nil {
+			return nil, err
+		}
+		e.sources = sources
+	}
 	e.syncEngine = tdsync.NewEngine(backend.DB, e.tg, peerResolverFn(e.ResolvePeer))
 	e.syncEngine.OnProgress = e.emitDriveScanProgress
 	e.syncEngine.EmitTomb = func(channelID int64, fileMsgID int64) error {
@@ -621,6 +630,13 @@ func (e *Engine) MediaService() *media.Service {
 		e.media = e.newMediaService()
 	}
 	return e.media
+}
+
+func (e *Engine) ChannelSourceService() *channelsource.Service {
+	if e == nil {
+		return nil
+	}
+	return e.sources
 }
 
 func (e *Engine) LifecycleService() *lifecycleservice.Service {

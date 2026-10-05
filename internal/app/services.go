@@ -108,6 +108,15 @@ func (a *App) initServices(version string) {
 	// Same two roles again: the media domain holds the gate only while it
 	// publishes an original-image capability.
 	a.media = newMediaService(a, a)
+	a.drives.closeExternalMedia = a.media.closeExternalNativeMedia
+	a.drives.connectSourceGate = func(save func() error) error {
+		release, err := a.acquireMountLifecycle(a.appContext())
+		if err != nil {
+			return err
+		}
+		defer release()
+		return save()
+	}
 	// The updater closes native players before it replaces the bundle they run
 	// from, which is the one edge between two domain services.
 	a.updates = newUpdateService(a, a, a.media, version)

@@ -730,29 +730,6 @@ html.mobile .preview-unlock-bar {
 .photos-mode-bar { display: none; align-items: center; gap: 10px; margin-left: auto; }
 .main-content.photos-mode .photos-mode-bar { display: flex; }
 
-.photos-modes {
-    display: inline-flex;
-    padding: 2px;
-    gap: 2px;
-    border-radius: var(--radius-pill);
-    background: var(--bg-panel);
-}
-.photos-modes button {
-    border: 0;
-    padding: 5px 14px;
-    border-radius: var(--radius-pill);
-    background: transparent;
-    color: var(--text-muted);
-    font: inherit;
-    font-size: var(--type-xs);
-    font-weight: var(--weight-semibold);
-    cursor: pointer;
-    transition: color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
-}
-.photos-modes button:hover { color: var(--text-main); }
-.photos-modes button[aria-pressed="true"] { background: var(--surface-control); color: var(--text-main); }
-.photos-modes button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-
 /* Leaving an album is a step back up, so it reads like the breadcrumb's back
    control rather than a third kind of navigation. */
 .album-back {

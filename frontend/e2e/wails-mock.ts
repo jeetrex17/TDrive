@@ -86,6 +86,9 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
             invite_link: '',
         },
     ]),
+    // The sidebar lists added Telegram channels from local metadata at startup.
+    ListConnectedChannelSources: resolves([]),
+    ChannelSourcePhoto: resolves(''),
     ListMedia: resolves([]),
     ListMediaFolders: resolves([]),
     GetMediaTimeline: resolves({ channel_id: 1, generation: 'test', total_count: 0, page_size: 128, buckets: [], anchors: [] }),
