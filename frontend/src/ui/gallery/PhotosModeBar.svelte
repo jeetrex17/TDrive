@@ -31,7 +31,7 @@
         </button>
         <span class="album-back-count">{albumCount}</span>
     {:else if switchable}
-        <div class="photos-modes" role="group" aria-label="Photos view">
+        <div class="segmented photos-modes" role="group" aria-label="Photos view">
             <button
                 type="button"
                 aria-pressed={mode.kind === 'albums'}
