@@ -14,7 +14,6 @@ import {
 import { getInteractiveFileListRows } from '../ui/file-list/file-list-store';
 import { setPhotosMode } from './gallery';
 import { setTrashMode } from './trash/view';
-import { trashOpen } from './trash/controller';
 import { closeChannel } from '../ui/channels/channel-store';
 import { getFolderIndexDriveKey, refreshFolderIndex } from './folder-index';
 import { canOpenFileViewer, isVideoFile } from './media-types';
@@ -334,7 +333,6 @@ export async function runGlobalSearch() {
     if (state.virtualView === 'trash') {
         state.virtualView = null;
         setTrashMode(false);
-        trashOpen.set(false);
     }
     // And for a Telegram channel, which covers the list the results land in.
     closeChannel();

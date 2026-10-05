@@ -21,7 +21,6 @@ export const EMPTY_TRASH_KEY = '*';
 
 export type TrashStatus = 'idle' | 'loading' | 'ready' | 'error';
 
-export const trashOpen = writable(false);
 /** Always sorted newest-deleted first; nothing downstream re-sorts. */
 export const trashEntries = writable<TrashEntry[]>([]);
 export const trashStatus = writable<TrashStatus>('idle');
@@ -45,7 +44,6 @@ let loadGeneration = 0;
 export function openTrash(): void {
     closeChannel();
     if (state.virtualView === 'trash') return;
-    trashOpen.set(true);
     state.virtualView = 'trash';
     clearSearch();
     appActions().refreshFiles();
@@ -56,7 +54,6 @@ export function openTrash(): void {
 export function closeTrash(): void {
     loadGeneration += 1;
     trashConfirmModal.close();
-    trashOpen.set(false);
     trashBusyKey.set('');
     if (state.virtualView !== 'trash') return;
     state.virtualView = null;

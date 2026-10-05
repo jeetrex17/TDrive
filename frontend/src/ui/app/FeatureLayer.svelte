@@ -224,11 +224,8 @@
         />
     </div>
 
-    <!-- The trash and the confirm it raises share one component. The confirm's
-         host comes last so that, with every overlay on the same --z-modal, the
-         later element in the document is the one drawn on top. -->
-    <div id="trash-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
-    </div>
+    <!-- The trash renders into the file list, not a dialog; only the confirm it
+         raises is a modal here. -->
     <div id="trash-confirm-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <TrashConfirmModal onConfirm={confirmTrashAction} />
     </div>
