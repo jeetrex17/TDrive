@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import { toasts } from '../ui/notifications/toast-store';
-import { activateConnectivityWatch, isOffline } from './connectivity';
+import { activateConnectivityWatch, isOffline, offline } from './connectivity';
 
 const OFFLINE_TOAST_ID = 'connectivity-offline';
 
@@ -24,6 +24,7 @@ afterEach(() => {
     deactivate();
     deactivate = () => {};
     toasts.set([]);
+    offline.set(false);
     setOnLine(true);
 });
 
@@ -81,6 +82,16 @@ describe('connectivity watch', () => {
         window.dispatchEvent(new Event('offline'));
 
         expect(currentToast()).toBeUndefined();
+    });
+
+    // The phone strip reads this store rather than a toast; it must follow the
+    // link both ways whatever the surface does with it.
+    it('tracks the link state in the offline store', () => {
+        deactivate = activateConnectivityWatch();
+        window.dispatchEvent(new Event('offline'));
+        expect(get(offline)).toBe(true);
+        window.dispatchEvent(new Event('online'));
+        expect(get(offline)).toBe(false);
     });
 
     it('treats only an explicit false as offline', () => {

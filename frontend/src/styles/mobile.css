@@ -65,6 +65,27 @@ html.mobile .mobile-body {
     overflow: hidden;
 }
 
+/* The offline strip: a quiet, persistent band under the bar while the link is
+   down. Flat and unalarming -- being offline is a state to note, not an error
+   to sound -- and inset off the glass on a turned phone like the rest. */
+html.mobile .mobile-offline-strip {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 28px;
+    padding:
+        var(--space-1)
+        calc(var(--space-4) + var(--inset-right))
+        var(--space-1)
+        calc(var(--space-4) + var(--inset-left));
+    background: var(--overlay-neutral-2);
+    color: var(--color-text-soft);
+    font-size: var(--mobile-type-meta);
+    font-weight: var(--weight-medium);
+    border-bottom: 1px solid var(--color-border-soft);
+}
+
 /* The selection bar overlays the shell so it can replace the tab bar without a
    layout jump. Reserve its final row-height while it is visible, otherwise the
    last file or thumbnail looks reachable but lands underneath the actions. */
@@ -424,6 +445,15 @@ html.mobile .topbar-search input {
     border-radius: var(--radius-md);
 }
 html.mobile .topbar-search input::placeholder { color: var(--color-text-muted); }
+/* type=search gives the phone keyboard a search key; drop WebKit's own clear
+   button, since the field has its own close control and a reset decoration here
+   would sit under the one the design already draws. */
+html.mobile .topbar-search input::-webkit-search-cancel-button,
+html.mobile .topbar-search input::-webkit-search-decoration {
+    -webkit-appearance: none;
+    appearance: none;
+    display: none;
+}
 html.mobile .topbar-search input:focus-visible {
     outline: none;
     border-color: var(--color-accent);

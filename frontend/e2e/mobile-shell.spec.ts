@@ -219,6 +219,22 @@ test('tapping the active drive in Account opens Files without re-switching', asy
     expect(await mock.calls('SetActiveChannel')).toEqual([]);
 });
 
+// Offline is a persistent strip in the shell, not a toast a tap would dismiss.
+test('a persistent strip reports going offline and clears when the link returns', async ({ page }) => {
+    await bootMobile(page);
+    await expect(page.locator('.mobile-offline-strip')).toHaveCount(0);
+
+    await page.evaluate(() => window.dispatchEvent(new Event('offline')));
+    const strip = page.locator('.mobile-offline-strip');
+    await expect(strip).toBeVisible();
+    await expect(strip).toHaveText("You're offline");
+    // The phone shows the strip instead of the dismissible toast.
+    await expect(page.locator('.toast-title', { hasText: "You're offline" })).toHaveCount(0);
+
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await expect(page.locator('.mobile-offline-strip')).toHaveCount(0);
+});
+
 test('the bars carry safe-area padding', async ({ page }) => {
     await bootMobile(page);
     const shell = page.locator('#success-screen.mobile-shell');

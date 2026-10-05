@@ -11,6 +11,8 @@
  * never "everything is fine".
  */
 
+import { writable } from 'svelte/store';
+import { isMobilePlatform } from '../api';
 import { appActions } from './app-actions';
 import { dismissNotification, notify } from './notifications';
 
@@ -23,7 +25,18 @@ export function isOffline(): boolean {
     return typeof navigator !== 'undefined' && navigator.onLine === false;
 }
 
+/**
+ * Whether the link is known to be down. The phone shell draws a persistent
+ * strip from this, because a toast there is dismissed by any tap -- which left
+ * the one claim that must stay on screen, that you are offline, gone on the
+ * first scroll. Desktop keeps the sticky toast below.
+ */
+export const offline = writable(isOffline());
+
 export function reportOffline(): void {
+    offline.set(true);
+    // The phone shows the strip instead of a toast it cannot keep.
+    if (isMobilePlatform()) return;
     notify({
         id: OFFLINE_TOAST_ID,
         level: 'warning',
@@ -34,6 +47,7 @@ export function reportOffline(): void {
 }
 
 export function reportOnline(): void {
+    offline.set(false);
     // Replacing the offline toast in place, rather than dismissing and adding
     // one, keeps the stack from jumping while the two swap over.
     notify({
