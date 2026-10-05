@@ -30,6 +30,7 @@ import { ensureUserNames, uploaderChipLabel } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
 import { renderTrashRows, setTrashMode } from './trash/view';
 import { canOpenFileViewer, isImageFile, isVideoFile } from './media-types';
+import { openImagePreview } from './image-preview';
 import { appActions, type RefreshFilesOptions } from './app-actions';
 import { getInteractiveFileListRows, showFileListRows, showFileListState, updateFileListRows, type InteractiveFileListRow } from '../ui/file-list/file-list-store';
 import type { FileListStateAction } from '../ui/file-list/types';
@@ -526,26 +527,6 @@ function toggleRowSelection(row: HTMLElement): void {
     }
     const index = getInteractiveFileListRows().findIndex((candidate) => candidate.selectionKey === getRowKey(row));
     selectRow(row, index);
-}
-
-// The phone previews an image in the context of its folder, so swiping moves
-// through the other images here in list order.
-async function openImagePreview(row: FileListFileRow): Promise<void> {
-    const images = getInteractiveFileListRows()
-        .filter((candidate): candidate is FileListFileRow => candidate.kind === 'file' && isImageFile(candidate.name))
-        .map((image) => ({
-            type: 'file',
-            id: Number(image.id),
-            name: image.name,
-            size: image.size,
-            encrypted: image.encrypted,
-            uploaderId: image.uploaderID,
-            uploadTime: image.uploadTime,
-        }));
-    const index = Math.max(0, images.findIndex((image) => String(image.id) === row.id));
-    const preview = await import('./modals/preview');
-    preview.activatePreviewModal();
-    await preview.openPreviewList(images, index);
 }
 
 /**

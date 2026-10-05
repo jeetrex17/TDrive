@@ -10,6 +10,7 @@ import { openNewFolderModal } from './modals/folder';
 import { navigateToFolder } from './navigation';
 import { enqueueDownload, enqueueFolderDownload, importFolderWithParentID, uploadWithParentID } from './transfers';
 import { canOpenFileViewer, isImageFile, isVideoFile } from './media-types';
+import { openImagePreview } from './image-preview';
 import { appActions } from './app-actions';
 import {
     hideContextMenu,
@@ -36,21 +37,6 @@ const DELETE_SHORTCUT = (() => {
         : '';
     return /Mac|iPhone|iPad|iPod/.test(platform) ? '⌫' : 'Del';
 })();
-
-/** Opens the image viewer for one row, the same surface the gallery and the row open. */
-async function openImagePreview(row: FileListFileRow): Promise<void> {
-    const preview = await import('./modals/preview');
-    preview.activatePreviewModal();
-    await preview.openPreviewList([{
-        type: 'file',
-        id: Number.parseInt(row.id, 10),
-        name: row.name,
-        size: row.size,
-        encrypted: row.encrypted,
-        uploaderId: row.uploaderID,
-        uploadTime: row.uploadTime,
-    }], 0);
-}
 
 export function buildFolderContextMenuItems(
     folderID: string,
