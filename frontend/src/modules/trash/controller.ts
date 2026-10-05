@@ -83,7 +83,7 @@ export async function loadTrash(): Promise<void> {
 }
 
 export async function restoreEntry(objectId: string): Promise<void> {
-    if (await mutate(objectId, () => restoreFromTrash(objectId))) {
+    if (await mutate(objectId, 'Could not restore from the Trash', () => restoreFromTrash(objectId))) {
         dropEntry(objectId);
         // The item is back in a folder the user may be looking at.
         invalidateFolderIndex();
@@ -112,13 +112,13 @@ export async function confirmTrashAction(): Promise<void> {
     trashConfirmModal.close();
     if (!target) return;
     if (target.kind === 'empty') {
-        if (await mutate(EMPTY_TRASH_KEY, emptyTrash)) {
+        if (await mutate(EMPTY_TRASH_KEY, 'Could not empty the Trash', emptyTrash)) {
             trashEntries.set([]);
             publishTrashRows();
         }
         return;
     }
-    if (await mutate(target.objectId, () => deleteFromTrashPermanently(target.objectId))) {
+    if (await mutate(target.objectId, 'Could not delete permanently', () => deleteFromTrashPermanently(target.objectId))) {
         dropEntry(target.objectId);
     }
 }
@@ -128,19 +128,23 @@ export async function confirmTrashAction(): Promise<void> {
  * refusal is shown in the backend's own words; only a thrown call error is
  * humanized here.
  */
-async function mutate(key: string, run: () => Promise<OperationResult>): Promise<boolean> {
+async function mutate(
+    key: string,
+    failureTitle: string,
+    run: () => Promise<OperationResult>,
+): Promise<boolean> {
     if (get(trashBusyKey)) return false;
     trashBusyKey.set(key);
     trashError.set('');
     try {
         const result = await run();
         if (!result.ok) {
-            reportMutationRefusal(result.error.message);
+            reportMutationRefusal(failureTitle, result.error.message);
             return false;
         }
         return true;
     } catch (error) {
-        reportMutationRefusal(humanizeBackendError(error));
+        reportMutationRefusal(failureTitle, humanizeBackendError(error));
         return false;
     } finally {
         trashBusyKey.set('');
@@ -155,10 +159,10 @@ async function mutate(key: string, run: () => Promise<OperationResult>): Promise
  * different request failed. As a dialog this was an inline alert; as a full view
  * the equivalent is a toast.
  */
-function reportMutationRefusal(message: string): void {
+function reportMutationRefusal(title: string, message: string): void {
     trashError.set(message);
     if (state.virtualView !== 'trash') return;
-    notify({ level: 'error', title: 'Trash', body: message });
+    notify({ level: 'error', title, body: message });
 }
 
 /**

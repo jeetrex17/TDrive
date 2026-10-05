@@ -314,11 +314,11 @@ describe('JoinRequestsModal', () => {
         joinRequestsModal.open({ driveId: 7, title: 'Team Drive' });
 
         joinRequestsList.set({ status: 'loading' });
-        expect(render(JoinRequestsModal, { props: { onAction: noop } }).body)
+        expect(render(JoinRequestsModal, { props: { onAction: noop, onRetry: noop } }).body)
             .toContain('Loading requests…');
 
         joinRequestsList.set({ status: 'ready', rows: [], actingUserId: 0 });
-        expect(render(JoinRequestsModal, { props: { onAction: noop } }).body)
+        expect(render(JoinRequestsModal, { props: { onAction: noop, onRetry: noop } }).body)
             .toContain('No pending requests.');
 
         joinRequestsList.set({
@@ -326,11 +326,21 @@ describe('JoinRequestsModal', () => {
             rows: [{ userId: 42, displayName: 'Ada L.', username: 'ada', requestedAt: 0 }],
             actingUserId: 0,
         });
-        const { body } = render(JoinRequestsModal, { props: { onAction: noop } });
+        const { body } = render(JoinRequestsModal, { props: { onAction: noop, onRetry: noop } });
         expect(body).toContain('Pending requests for Team Drive.');
         expect(body).toContain('Ada L.');
         expect(body).toContain('>Approve</button>');
         expect(body).toContain('>Reject</button>');
+    });
+
+    it('shows the reason and a Try again control on failure', () => {
+        joinRequestsModal.open({ driveId: 7, title: 'Team Drive' });
+        joinRequestsList.set({ status: 'error', message: 'The network is unreachable.' });
+
+        const { body } = render(JoinRequestsModal, { props: { onAction: noop, onRetry: noop } });
+
+        expect(body).toContain('The network is unreachable.');
+        expect(body).toContain('>Try again</button>');
     });
 });
 

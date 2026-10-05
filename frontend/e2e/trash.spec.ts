@@ -127,7 +127,10 @@ test('a refused restore says so without throwing away a list that is still right
     });
     const list = await openTrash(page, 'desktop');
     await list.locator('.drive-row').nth(1).getByRole('button', { name: 'Restore IMG_0042.jpg' }).click();
-    await expect(page.locator('.toast').filter({ hasText: 'The original folder is gone.' })).toBeVisible();
+    const refusal = page.locator('.toast').filter({ hasText: 'The original folder is gone.' });
+    await expect(refusal).toBeVisible();
+    // The toast names what failed, not just the surface it happened on.
+    await expect(refusal).toContainText('Could not restore from the Trash');
     // A refusal keeps the row: it is still in the trash.
     await expect(list.locator('.drive-row')).toHaveCount(3);
 });

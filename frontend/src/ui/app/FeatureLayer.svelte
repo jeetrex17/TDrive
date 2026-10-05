@@ -47,7 +47,7 @@
         replanImportOptions,
     } from '../../modules/modals/import-options';
     import { submitJoinDrive } from '../../modules/modals/join-drive';
-    import { resolveRequest } from '../../modules/modals/join-requests';
+    import { reloadJoinRequests, resolveRequest } from '../../modules/modals/join-requests';
     import { confirmLeaveDrive } from '../../modules/modals/leave-drive';
     import { confirmLogout } from '../../modules/modals/logout';
     import {
@@ -188,7 +188,7 @@
         <LeaveDriveModal onConfirm={confirmLeaveDrive} />
     </div>
     <div id="join-requests-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
-        <JoinRequestsModal onAction={resolveRequest} />
+        <JoinRequestsModal onAction={resolveRequest} onRetry={reloadJoinRequests} />
     </div>
     <div id="encryption-setup-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <EncryptionSetupModal onCancel={cancelEncryptionSetup} onSubmit={submitEncryptionSetup} />

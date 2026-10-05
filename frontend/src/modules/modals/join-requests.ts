@@ -45,8 +45,13 @@ async function loadRequests(): Promise<void> {
         });
     } catch (err) {
         if (driveId !== activeDriveId) return;
-        joinRequestsList.set({ status: 'error', message: String(err) });
+        joinRequestsList.set({ status: 'error', message: humanizeBackendError(err) });
     }
+}
+
+/** Re-runs the load after a failure, for the dialog's Try again control. */
+export function reloadJoinRequests(): void {
+    void loadRequests();
 }
 
 export async function resolveRequest(userId: number, approved: boolean): Promise<void> {
