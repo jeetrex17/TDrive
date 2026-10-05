@@ -178,6 +178,19 @@ test('a tab round trip keeps the files view and re-tapping files resets it', asy
     await expect(page.getByRole('heading', { name: 'Trash' })).toHaveCount(0);
 });
 
+// Multi-select has a keyboard/pointer path, not only a long press: the overflow
+// menu starts it and Select all then picks every row in the folder.
+test('the overflow menu starts selection and Select all picks every row', async ({ page }) => {
+    await bootMobile(page);
+    await page.getByRole('button', { name: /Sort and more/ }).click();
+    await page.getByRole('menuitem', { name: 'Select' }).click();
+    await expect(page.locator('.topbar-selection')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Select all' }).click();
+    // One folder (Reports) and two files in the drive root.
+    await expect(page.locator('.topbar-selection-count')).toHaveText('3 selected');
+});
+
 test('the bars carry safe-area padding', async ({ page }) => {
     await bootMobile(page);
     const shell = page.locator('#success-screen.mobile-shell');

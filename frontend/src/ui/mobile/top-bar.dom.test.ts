@@ -6,14 +6,24 @@ import { get } from 'svelte/store';
 
 const clearSelection = vi.hoisted(() => vi.fn());
 const startSelectionMode = vi.hoisted(() => vi.fn());
-vi.mock('../../modules/selection', () => ({ clearSelection, startSelectionMode }));
+const selectAllRows = vi.hoisted(() => vi.fn());
+const triggerRefresh = vi.hoisted(() => vi.fn());
+const openTrash = vi.hoisted(() => vi.fn());
+vi.mock('../../modules/selection', () => ({ clearSelection, startSelectionMode, selectAllRows }));
 vi.mock('../../modules/navigation', () => ({ navigateBack: vi.fn(), navigateToIndex: vi.fn() }));
 vi.mock('../../modules/search', () => ({ clearSearch: vi.fn() }));
+vi.mock('../../modules/gallery', () => ({ showPhotos: vi.fn() }));
+vi.mock('../../modules/app-actions', () => ({ appActions: () => ({ triggerRefresh }) }));
 
 import TopBar from './TopBar.svelte';
 import { selectionBarState } from '../selection/selection-bar-store';
 import { sidebarState } from '../sidebar/sidebar-store';
 import { activeTab, driveSwitcherOpen, driveSyncStatus } from './mobile-shell-store';
+
+vi.mock('../../modules/trash/controller', async (importOriginal) => ({
+    ...(await importOriginal<typeof import('../../modules/trash/controller')>()),
+    openTrash,
+}));
 
 let target: HTMLElement;
 let component: Record<string, unknown> | null = null;
@@ -37,6 +47,9 @@ beforeEach(() => {
     driveSwitcherOpen.set(false);
     clearSelection.mockClear();
     startSelectionMode.mockClear();
+    selectAllRows.mockClear();
+    triggerRefresh.mockClear();
+    openTrash.mockClear();
 });
 
 afterEach(() => {
@@ -86,24 +99,46 @@ describe('drive header', () => {
         flushSync();
 
         const menu = target.querySelector<HTMLElement>('[role="menu"]');
-        const options = [...target.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]')];
+        // The menu now mixes the sort radios with the action items beneath them;
+        // arrow keys walk the whole list and wrap around it.
+        const items = [...target.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"], [role="menuitem"]')];
         expect(menu?.id).toBe('mobile-sort-menu');
         expect(trigger?.getAttribute('aria-controls')).toBe('mobile-sort-menu');
         await vi.waitFor(() => expect(document.activeElement).toBe(
-            options.find((option) => option.getAttribute('aria-checked') === 'true'),
+            items.find((item) => item.getAttribute('aria-checked') === 'true'),
         ));
 
         menu?.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true }));
-        expect(document.activeElement).toBe(options[options.length - 1]);
+        expect(document.activeElement).toBe(items[items.length - 1]);
         menu?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
-        expect(document.activeElement).toBe(options[0]);
+        expect(document.activeElement).toBe(items[0]);
         menu?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true }));
-        expect(document.activeElement).toBe(options[0]);
+        expect(document.activeElement).toBe(items[0]);
         menu?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
         flushSync();
 
         expect(target.querySelector('[role="menu"]')).toBeNull();
         await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
+    });
+
+    it('offers Select, Refresh and Trash beside the sort options', () => {
+        render();
+        target.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')?.click();
+        flushSync();
+
+        const actions = [...target.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')];
+        expect(actions.map((item) => item.textContent?.trim())).toEqual(['Select', 'Refresh', 'Trash']);
+
+        actions[0].click();
+        expect(startSelectionMode).toHaveBeenCalledTimes(1);
+        target.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')?.click();
+        flushSync();
+        [...target.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')][1].click();
+        expect(triggerRefresh).toHaveBeenCalledTimes(1);
+        target.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')?.click();
+        flushSync();
+        [...target.querySelectorAll<HTMLButtonElement>('[role="menuitem"]')][2].click();
+        expect(openTrash).toHaveBeenCalledTimes(1);
     });
 });
 
@@ -153,6 +188,25 @@ describe('selection header', () => {
 
         expect((target.querySelector('.topbar-selection') as HTMLElement).textContent)
             .toContain('1 selected');
+    });
+
+    it('offers Select all while selecting files', () => {
+        render();
+        selectionBarState.set({ count: 1 });
+        flushSync();
+
+        const selectAll = target.querySelector<HTMLButtonElement>('.topbar-selectall');
+        expect(selectAll?.textContent?.trim()).toBe('Select all');
+        selectAll?.click();
+        expect(selectAllRows).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not offer Select all while selecting photos', () => {
+        render('photos');
+        selectionBarState.set({ count: 1 });
+        flushSync();
+
+        expect(target.querySelector('.topbar-selectall')).toBeNull();
     });
 
     it('leaves the mode when Done is tapped', () => {

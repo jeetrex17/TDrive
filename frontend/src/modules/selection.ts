@@ -1,6 +1,7 @@
 // Selection handling module for TDrive frontend
 
 import { state } from '../state';
+import { getInteractiveFileListRows } from '../ui/file-list/file-list-store';
 import { openDeleteModal } from './modals/delete';
 import { openMoveModal } from './modals/move';
 import { enqueueDownload, enqueueFolderDownload } from './transfers';
@@ -243,8 +244,10 @@ function setSelectionFromRows(rows: readonly LogicalFileListRow[]): void {
 }
 
 // Selects every row of the current folder, keeping the anchor where it is so a
-// following Shift+Arrow still extends from the same point.
-export function selectAllRows(logicalRows: readonly LogicalFileListRow[]): void {
+// following Shift+Arrow still extends from the same point. The rows come from
+// the list's model, not the DOM, so rows the windowed list has not drawn are
+// selected too.
+export function selectAllRows(logicalRows: readonly LogicalFileListRow[] = getInteractiveFileListRows()): void {
     if (logicalRows.length === 0) return;
     const anchorIndex = selectionAnchorKey
         ? logicalRows.findIndex((row) => row.selectionKey === selectionAnchorKey)

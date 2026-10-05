@@ -10,13 +10,14 @@
     import type { FileSortKey } from '../file-list/file-sort';
     import { navigateBack } from '../../modules/navigation';
     import { showPhotos } from '../../modules/gallery';
+    import { appActions } from '../../modules/app-actions';
     import { clearSearch } from '../../modules/search';
-    import { clearSelection, startSelectionMode } from '../../modules/selection';
+    import { clearSelection, selectAllRows, startSelectionMode } from '../../modules/selection';
     import { albumsView, photosMode } from '../gallery/gallery-store';
     import { pushSheet, type SheetHandle } from '../modals/sheet-stack';
     import { selectionBarState } from '../selection/selection-bar-store';
     import { sidebarState } from '../sidebar/sidebar-store';
-    import { askEmptyTrash, closeTrash, trashEntries } from '../../modules/trash/controller';
+    import { askEmptyTrash, closeTrash, openTrash, trashEntries } from '../../modules/trash/controller';
     import SyncRing from './SyncRing.svelte';
     import {
         activeDrive,
@@ -131,8 +132,17 @@
         sortOptions.find((option) => option.key === $fileSortState.key)?.label ?? 'Name',
     );
 
-    function sortMenuItems(): HTMLButtonElement[] {
-        return Array.from(sortMenuEl?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]') ?? []);
+    // The overflow menu carries the sort radios and, under them, the actions a
+    // phone has nowhere else to reach: Select (multi-select starts on a long
+    // press otherwise), Refresh (a pull otherwise) and the drive's Trash.
+    const menuActions: Array<{ label: string; run: () => void }> = [
+        { label: 'Select', run: () => { startSelectionMode(); closeSort(); } },
+        { label: 'Refresh', run: () => { void appActions().triggerRefresh(); closeSort(); } },
+        { label: 'Trash', run: () => { openTrash(); closeSort(); } },
+    ];
+
+    function menuItems(): HTMLButtonElement[] {
+        return Array.from(sortMenuEl?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"], [role="menuitem"]') ?? []);
     }
 
     function restoreSortFocus(): void {
@@ -152,7 +162,7 @@
         }
         sortOpen = !sortOpen;
         await tick();
-        const items = sortMenuItems();
+        const items = menuItems();
         const checkedIndex = sortOptions.findIndex((option) => option.key === $fileSortState.key);
         items[Math.max(checkedIndex, 0)]?.focus({ preventScroll: true });
     }
@@ -170,7 +180,7 @@
     }
 
     function onSortMenuKeydown(event: KeyboardEvent): void {
-        const items = sortMenuItems();
+        const items = menuItems();
         if (items.length === 0) return;
         const activeIndex = Math.max(items.indexOf(document.activeElement as HTMLButtonElement), 0);
         let targetIndex: number | null = null;
@@ -184,12 +194,12 @@
                 closeSort({ restoreFocus: true });
                 return;
             case 'Enter':
-            case ' ': {
+            case ' ':
+                // Each item owns what it does, radios and actions alike, so the
+                // key just takes the item's own click path.
                 event.preventDefault();
-                const key = (document.activeElement as HTMLElement | null)?.dataset.sortKey as FileSortKey | undefined;
-                if (key) chooseSort(key);
+                (document.activeElement as HTMLElement | null)?.click();
                 return;
-            }
             default: return;
         }
         event.preventDefault();
@@ -237,6 +247,9 @@
         <div class="topbar-row">
             <h1 class="topbar-title topbar-selection-count" aria-live="polite">{selectionLabel}</h1>
             <div class="topbar-actions">
+                {#if active === 'files' && !inTrash}
+                    <button type="button" class="topbar-selectall" onclick={() => selectAllRows()}>Select all</button>
+                {/if}
                 <button type="button" class="topbar-done" onclick={() => clearSelection()}>Done</button>
             </div>
         </div>
@@ -324,7 +337,7 @@
                             bind:this={sortMenuEl}
                             class="topbar-menu"
                             role="menu"
-                            aria-label="Sort by"
+                            aria-label="File options"
                             aria-orientation="vertical"
                             tabindex="-1"
                             onkeydown={onSortMenuKeydown}
@@ -343,6 +356,17 @@
                                     {#if $fileSortState.key === option.key}
                                         <CheckIcon size={16} strokeWidth={2.5} aria-hidden="true" />
                                     {/if}
+                                </button>
+                            {/each}
+                            <div class="topbar-menu-sep" role="separator"></div>
+                            {#each menuActions as action (action.label)}
+                                <button
+                                    type="button"
+                                    class="topbar-menu-item"
+                                    role="menuitem"
+                                    onclick={action.run}
+                                >
+                                    <span>{action.label}</span>
                                 </button>
                             {/each}
                         </div>

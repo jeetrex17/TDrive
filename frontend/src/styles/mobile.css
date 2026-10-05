@@ -354,6 +354,30 @@ html.mobile .topbar-menu-item {
 }
 html.mobile .topbar-menu-item[aria-checked='true'] { color: var(--color-accent); }
 html.mobile .topbar-menu-item:active { background: var(--overlay-neutral-2); }
+/* Splits the sort radios from the actions beneath them. */
+html.mobile .topbar-menu-sep {
+    height: 1px;
+    margin: var(--space-1) 0;
+    background: var(--color-border-soft);
+}
+
+/* Secondary to Done: it sets the selection rather than leaving it, so it stays
+   quiet while Done keeps the accent. */
+html.mobile .topbar-selectall {
+    display: inline-grid;
+    place-items: center;
+    min-width: 44px;
+    height: 44px;
+    padding: 0 var(--space-2);
+    border: 0;
+    background: transparent;
+    color: var(--color-text-soft);
+    font-size: 1rem;
+    font-weight: var(--weight-medium);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+}
+html.mobile .topbar-selectall:active { background: var(--overlay-neutral-2); }
 
 /* The search band collapses to nothing and grows back. Height is animated to a
    known value rather than to `auto`, which no engine interpolates, and the
