@@ -210,7 +210,7 @@
              .photos-mode on it to swap the list for the grid. -->
         <main class="main-content mobile-panel" data-tab="files" hidden={!showMain}>
             <div id="gallery-title" class="gallery-title">Photos</div>
-            <PhotosModeBar />
+            <PhotosModeBar albumInTopBar />
             <div
                 id="file-list"
                 class="file-list-box"

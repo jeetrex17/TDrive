@@ -48,3 +48,38 @@ test('a full album grid draws every cover and keeps each name in its column', as
     const nameBox = await longName.boundingBox();
     expect(nameBox!.width).toBeLessThanOrEqual(first!.width + 1);
 });
+
+// On a phone the album's name and a back button sit in the top bar, Select is
+// offered only where there are photos to pick, and BACK returns to the grid.
+test('inside an album the phone top bar carries its name and a way back', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await routeRenditions(page);
+    await bootTDrive(page, {
+        ...galleryPlans([FIRST_PHOTO]),
+        ListMediaFolders: resolves([
+            { folder_id: 'd:camera', name: 'Camera', item_count: 6, latest_upload_time: FIRST_PHOTO.upload_time, cover_msg_id: FIRST_PHOTO.msg_id, cover_revision: 1, cover_name: FIRST_PHOTO.name },
+            { folder_id: 'd:shots', name: 'Screenshots', item_count: 9, latest_upload_time: FIRST_PHOTO.upload_time - 1, cover_msg_id: FIRST_PHOTO.msg_id, cover_revision: 1, cover_name: FIRST_PHOTO.name },
+        ]),
+    }, { url: '/?mobile=android' });
+    await expect(page.locator('#success-screen.mobile-shell')).toBeVisible();
+    await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: /^Photos/ }).click();
+
+    // The Albums grid has no photos to pick, so no Select; the bar names the view.
+    const bar = page.locator('.topbar-photos');
+    await expect(bar.getByRole('heading', { name: 'Photos' })).toBeVisible();
+    await expect(bar.getByRole('button', { name: 'Select photos' })).toHaveCount(0);
+
+    await page.getByRole('button', { name: /^Camera/ }).click();
+    await expect(bar.getByRole('heading', { name: 'Camera', exact: true })).toBeVisible();
+    await expect(bar.getByRole('button', { name: 'Select photos' })).toBeVisible();
+
+    await bar.getByRole('button', { name: 'Back to albums' }).click();
+    await expect(bar.getByRole('heading', { name: 'Photos' })).toBeVisible();
+    await expect(page.locator('button.album-tile').first()).toBeVisible();
+
+    // Hardware BACK does the same, and is consumed rather than leaving the app.
+    await page.getByRole('button', { name: /^Camera/ }).click();
+    await expect(bar.getByRole('heading', { name: 'Camera', exact: true })).toBeVisible();
+    expect(await page.evaluate(() => window.__tdriveHandleBack?.())).toBe(true);
+    await expect(bar.getByRole('heading', { name: 'Photos' })).toBeVisible();
+});

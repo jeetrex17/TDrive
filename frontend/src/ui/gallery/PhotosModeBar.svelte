@@ -8,6 +8,16 @@
     import { albumsWorthShowing } from './album-view';
     import { albumsView, photosMode } from './gallery-store';
 
+    interface Props {
+        /**
+         * The phone names the open album and offers Back in its top bar, where
+         * every other drill-in puts them, so this bar leaves both out there.
+         */
+        albumInTopBar?: boolean;
+    }
+
+    let { albumInTopBar = false }: Props = $props();
+
     const tiles = $derived($albumsView.status === 'ready' ? $albumsView.tiles : []);
     // With no structure to show, the switch would only offer the view that is
     // already on screen. A dead control invites a click that does nothing.
@@ -25,11 +35,13 @@
 
 <div class="photos-mode-bar">
     {#if mode.kind === 'album'}
-        <button class="album-back" type="button" onclick={() => void showPhotos({ kind: 'albums' })}>
-            <ChevronLeftIcon size={16} strokeWidth={2.2} aria-hidden="true" />
-            <span class="album-back-name">{mode.tile.name}</span>
-        </button>
-        <span class="album-back-count">{albumCount}</span>
+        {#if !albumInTopBar}
+            <button class="album-back" type="button" onclick={() => void showPhotos({ kind: 'albums' })}>
+                <ChevronLeftIcon size={16} strokeWidth={2.2} aria-hidden="true" />
+                <span class="album-back-name">{mode.tile.name}</span>
+            </button>
+            <span class="album-back-count">{albumCount}</span>
+        {/if}
     {:else if switchable}
         <div class="segmented photos-modes" role="group" aria-label="Photos view">
             <button

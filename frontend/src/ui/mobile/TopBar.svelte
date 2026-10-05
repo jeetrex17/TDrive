@@ -9,8 +9,10 @@
     import { fileSortState, setFileSortKey } from '../file-list/file-sort-store';
     import type { FileSortKey } from '../file-list/file-sort';
     import { navigateBack } from '../../modules/navigation';
+    import { showPhotos } from '../../modules/gallery';
     import { clearSearch } from '../../modules/search';
     import { clearSelection, startSelectionMode } from '../../modules/selection';
+    import { albumsView, photosMode } from '../gallery/gallery-store';
     import { pushSheet, type SheetHandle } from '../modals/sheet-stack';
     import { selectionBarState } from '../selection/selection-bar-store';
     import { sidebarState } from '../sidebar/sidebar-store';
@@ -73,6 +75,23 @@
     const selectionLabel = $derived(
         $selectionBarState.count === 1 ? '1 selected' : `${$selectionBarState.count} selected`,
     );
+
+    // Photos: the grid, the timeline, or one album. An album is a drill-in, so
+    // its name and a back button take the bar the way a folder's do; Select is
+    // offered wherever there are photos to pick (the timeline or an album) and
+    // withheld on the Albums grid, whose tiles are folders, not photos.
+    const photosView = $derived($photosMode);
+    const inAlbum = $derived(photosView.kind === 'album');
+    const albumName = $derived(photosView.kind === 'album' ? photosView.tile.name : '');
+    const albumTiles = $derived($albumsView.status === 'ready' ? $albumsView.tiles : []);
+    // The grid's live figure for this folder, not the one the tile carried when
+    // it was tapped, so a refresh that adds photos while it is open moves it.
+    const albumCount = $derived(
+        photosView.kind === 'album'
+            ? (albumTiles.find((tile) => tile.folderId === photosView.tile.folderId)?.countLabel ?? photosView.tile.countLabel)
+            : '',
+    );
+    const canSelectPhotos = $derived(photosView.kind !== 'albums');
 
     let sortOpen = $state(false);
     let sortMenuEl = $state<HTMLElement | null>(null);
@@ -353,21 +372,34 @@
         </div>
     </div>
 
-    <!-- Photos: the same drive, gallery view. -->
-    <div class="topbar-context topbar-plain" hidden={selecting || active !== 'photos'}>
+    <!-- Photos: the same drive, gallery view. Inside an album the bar carries
+         the album's name and a way back to the grid, like a folder does. -->
+    <div class="topbar-context topbar-plain topbar-photos" hidden={selecting || active !== 'photos'}>
         <div class="topbar-row">
-            <div class="topbar-plain-titles">
-                <h1 class="topbar-title">Photos</h1>
-                <span class="topbar-subtitle">{driveName}</span>
-            </div>
-            <div class="topbar-actions">
-                <button
-                    type="button"
-                    class="topbar-done"
-                    aria-label="Select photos"
-                    onclick={startSelectionMode}
-                >Select</button>
-            </div>
+            {#if inAlbum}
+                <button type="button" class="topbar-back" aria-label="Back to albums" onclick={() => void showPhotos({ kind: 'albums' })}>
+                    <ChevronLeftIcon size={24} strokeWidth={2} aria-hidden="true" />
+                </button>
+                <div class="topbar-plain-titles">
+                    <h1 class="topbar-title" title={albumName}>{albumName}</h1>
+                    {#if albumCount}<span class="topbar-subtitle">{albumCount}</span>{/if}
+                </div>
+            {:else}
+                <div class="topbar-plain-titles">
+                    <h1 class="topbar-title">Photos</h1>
+                    <span class="topbar-subtitle">{driveName}</span>
+                </div>
+            {/if}
+            {#if canSelectPhotos}
+                <div class="topbar-actions">
+                    <button
+                        type="button"
+                        class="topbar-done"
+                        aria-label="Select photos"
+                        onclick={startSelectionMode}
+                    >Select</button>
+                </div>
+            {/if}
         </div>
     </div>
 

@@ -28,6 +28,7 @@ import type { MediaFolder } from '../../api/gallery';
 import { state } from '../../state';
 import { activateGallery, renderGallery, teardownGallery } from '../../modules/gallery';
 import { albumsView, galleryView, photosMode } from './gallery-store';
+import { closeTopSheet } from '../modals/sheet-stack';
 import PhotosSurface from './PhotosSurface.svelte';
 import PhotosModeBar from './PhotosModeBar.svelte';
 
@@ -57,8 +58,8 @@ let surface: Record<string, unknown> | null = null;
 let bar: Record<string, unknown> | null = null;
 
 /** Mount what the shells mount: the switch above, the scroll container below. */
-function show(): void {
-    bar = mount(PhotosModeBar, { target: document.body });
+function show(props: { albumInTopBar?: boolean } = {}): void {
+    bar = mount(PhotosModeBar, { target: document.body, props });
     surface = mount(PhotosSurface, { target: host });
     flushSync();
 }
@@ -158,12 +159,48 @@ describe('Photos albums', () => {
         expect(mocks.folderPage).toHaveBeenCalledWith('d:camera', '', 128);
         expect(mocks.page).not.toHaveBeenCalled();
 
+        // Album mode claims the shared back stack, so a BACK press returns to
+        // the grid in place rather than falling through and leaving Photos.
+        expect(closeTopSheet()).toBe(true);
+        await vi.waitFor(() => expect(get(photosMode)).toEqual({ kind: 'albums' }));
+        flushSync();
+        expect(host.querySelectorAll('.album-tile')).toHaveLength(2);
+    });
+
+    it('names the open album as the way back to the grid', async () => {
+        await renderGallery();
+        show();
+        host.querySelector<HTMLButtonElement>('.album-tile')?.click();
+        await vi.waitFor(() => expect(get(photosMode).kind).toBe('album'));
+        flushSync();
+
         const back = document.querySelector<HTMLButtonElement>('.album-back');
         expect(back?.textContent).toContain('Camera');
         back?.click();
         await vi.waitFor(() => expect(get(photosMode)).toEqual({ kind: 'albums' }));
         flushSync();
         expect(host.querySelectorAll('.album-tile')).toHaveLength(2);
+    });
+
+    it('leaves the way back to the top bar on a shell that has one', async () => {
+        await renderGallery();
+        show({ albumInTopBar: true });
+        host.querySelector<HTMLButtonElement>('.album-tile')?.click();
+        await vi.waitFor(() => expect(get(photosMode).kind).toBe('album'));
+        flushSync();
+
+        expect(document.querySelector('.album-back')).toBeNull();
+        expect(document.querySelector('.photos-modes')).toBeNull();
+    });
+
+    it('releases its back-stack claim on teardown', async () => {
+        await renderGallery();
+        show();
+        host.querySelector<HTMLButtonElement>('.album-tile')?.click();
+        await vi.waitFor(() => expect(get(photosMode).kind).toBe('album'));
+        teardownGallery();
+        // Nothing the album registered outlives the gallery.
+        expect(closeTopSheet()).toBe(false);
     });
 
     it('moves the single tab stop with the arrow keys', async () => {

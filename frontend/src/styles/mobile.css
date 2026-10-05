@@ -198,7 +198,15 @@ html.mobile .topbar-done:active { background: var(--overlay-accent-1); }
 /* Empty trash is the bar's one destructive action, and reads as one. */
 html.mobile .topbar-done.topbar-danger { color: var(--color-danger); }
 html.mobile .topbar-done.topbar-danger:active { background: var(--overlay-danger-1); }
-html.mobile .topbar-trash .topbar-plain-titles { flex: 1 1 auto; min-width: 0; }
+html.mobile .topbar-trash .topbar-plain-titles,
+html.mobile .topbar-photos .topbar-plain-titles { flex: 1 1 auto; min-width: 0; }
+/* An album name can be long, so it clips the way a folder's does rather than
+   shoving Select off the trailing edge. */
+html.mobile .topbar-photos .topbar-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 
 /* Drive header: the one bold element (spec 2.2). Name, live sync ring, then the
    kind and item count on a quiet second line. The name opens the switcher; the
