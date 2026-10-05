@@ -26,6 +26,7 @@ const overrides = {
         { id: 2, title: 'Team assets', kind: 'shared', is_active: false, invite_link: 'https://t.me/x' },
     ]),
     GetFolderContents: byFirstArg({ '': resolves(rootContents), r1: resolves(reportsContents) }, resolves({ folders: [], files: [] })),
+    ListTrash: resolves([]),
 };
 
 async function bootMobile(page: Parameters<typeof bootTDrive>[0]) {

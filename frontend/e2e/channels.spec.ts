@@ -52,7 +52,7 @@ test('mobile channels open inside Files with their own way back', async ({ page 
         ListChannelMedia: resolves(mediaPage),
     }, { url: '/?mobile=ios' });
     await page.getByRole('button', { name: /Switch drive/ }).click();
-    await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Field Recordings' }).click();
+    await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Field Recordings', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Field Recordings' })).toBeVisible();
     await expect(page.getByRole('button', { name: /^Play forest-dawn/ })).toBeVisible();
     await expect(page.locator('.tab-bar')).toBeVisible();
@@ -95,7 +95,7 @@ test('picking a drive from the phone Account tab leaves the channel', async ({ p
         SetActiveChannel: resolves(null),
     }, { url: '/?mobile=ios' });
     await page.getByRole('button', { name: /Switch drive/ }).click();
-    await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Field Recordings' }).click();
+    await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Field Recordings', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Field Recordings' })).toBeVisible();
 
     await page.locator('.tab-bar').getByRole('button', { name: /^Account/ }).click();
@@ -130,7 +130,7 @@ test("a channel video queues the channel's other videos in the player's playlist
         CloseMedia: resolves(null),
         UpdateMediaPlayback: resolves(null),
     });
-    await page.locator('.sidebar').getByRole('button', { name: 'Field Recordings' }).click();
+    await page.locator('.sidebar').getByRole('button', { name: 'Field Recordings', exact: true }).click();
     await page.getByRole('button', { name: /^Play Dawn chorus/ }).click();
 
     await expect(page.locator('#video-shell')).toBeVisible();
@@ -156,7 +156,7 @@ test('a channel video bound for the native player reports a failed open', async 
         OpenChannelMedia: rejects('rpc error code 420: FLOOD_WAIT_30'),
         CloseMedia: resolves(null),
     });
-    await page.locator('.sidebar').getByRole('button', { name: 'Field Recordings' }).click();
+    await page.locator('.sidebar').getByRole('button', { name: 'Field Recordings', exact: true }).click();
     await page.getByRole('button', { name: /^Play Feature film/ }).click();
 
     await expect(page.locator('#video-error')).toBeVisible();

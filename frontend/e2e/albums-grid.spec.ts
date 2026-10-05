@@ -1,5 +1,5 @@
 import { bootTDrive, expect, resolves, test } from './wails-mock';
-import { FIRST_PHOTO, galleryPlans, routeRenditions } from './gallery-fixtures';
+import { albumPlans, FIRST_PHOTO, galleryPlans, routeRenditions } from './gallery-fixtures';
 
 /**
  * A realistic grid: enough folders to window, and names long enough to fight
@@ -56,6 +56,9 @@ test('inside an album the phone top bar carries its name and a way back', async 
     await routeRenditions(page);
     await bootTDrive(page, {
         ...galleryPlans([FIRST_PHOTO]),
+        // Folder timeline and page come from the shared album plans; keyed on
+        // 'd:camera', which the Camera tile opens into.
+        ...albumPlans(),
         ListMediaFolders: resolves([
             { folder_id: 'd:camera', name: 'Camera', item_count: 6, latest_upload_time: FIRST_PHOTO.upload_time, cover_msg_id: FIRST_PHOTO.msg_id, cover_revision: 1, cover_name: FIRST_PHOTO.name },
             { folder_id: 'd:shots', name: 'Screenshots', item_count: 9, latest_upload_time: FIRST_PHOTO.upload_time - 1, cover_msg_id: FIRST_PHOTO.msg_id, cover_revision: 1, cover_name: FIRST_PHOTO.name },
