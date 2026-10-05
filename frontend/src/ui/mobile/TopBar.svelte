@@ -14,7 +14,7 @@
     import { clearSearch } from '../../modules/search';
     import { clearSelection, selectAllRows, startSelectionMode } from '../../modules/selection';
     import { albumsView, photosMode } from '../gallery/gallery-store';
-    import { pushSheet, type SheetHandle } from '../modals/sheet-stack';
+    import { pushSheet } from '../modals/sheet-stack';
     import { selectionBarState } from '../selection/selection-bar-store';
     import { sidebarState } from '../sidebar/sidebar-store';
     import { askEmptyTrash, closeTrash, openTrash, trashEntries } from '../../modules/trash/controller';
@@ -225,25 +225,18 @@
     }
 
     // Android BACK unwinds the bar the way it was built up: the menu first,
-    // then the search field, before the press reaches the page underneath.
-    let sortBack: SheetHandle | null = null;
+    // then the search field, before the press reaches the page underneath. Each
+    // claim releases in its effect's cleanup, so an unmount cannot strand it.
     $effect(() => {
-        if (sortOpen) {
-            sortBack ??= pushSheet(() => closeSort({ restoreFocus: true }));
-            return;
-        }
-        sortBack?.release();
-        sortBack = null;
+        if (!sortOpen) return;
+        const back = pushSheet(() => closeSort({ restoreFocus: true }));
+        return () => back.release();
     });
 
-    let searchBack: SheetHandle | null = null;
     $effect(() => {
-        if (searchOpen) {
-            searchBack ??= pushSheet(() => closeSearch());
-            return;
-        }
-        searchBack?.release();
-        searchBack = null;
+        if (!searchOpen) return;
+        const back = pushSheet(() => closeSearch());
+        return () => back.release();
     });
 </script>
 

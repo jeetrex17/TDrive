@@ -23,6 +23,10 @@ html.mobile {
     --mobile-fab-clearance: 0px;
     --selection-bar-reserve: calc(76px + var(--inset-bottom));
     --context-action-clearance: calc(52px + var(--space-4));
+    /* The widest a column of file rows or settings should run before it stops
+       being a line the eye can track; iPads and landscape phones centre within
+       it rather than stretching the phone layout to the glass. */
+    --mobile-reading-width: 720px;
     --mobile-type-caption: 0.75rem;
     --mobile-type-meta: 0.8125rem;
     --mobile-type-body: 0.9375rem;
@@ -54,7 +58,34 @@ html.mobile #success-screen.mobile-shell {
     min-height: 0;
     background: var(--color-canvas);
     overflow: hidden;
+    /* No double-tap zoom on the app chrome. The viewers set their own
+       touch-action for pinch and live in the overlay layer outside this root,
+       so their gestures are untouched. */
+    touch-action: manipulation;
 }
+
+/* Said once for the shell's controls rather than repeated on every surface: no
+   grey flash on tap, and no callout menu on a long press (which the long-press
+   selection and the row menus own instead). */
+html.mobile button,
+html.mobile a,
+html.mobile input,
+html.mobile label,
+html.mobile [role="button"],
+html.mobile [role="menuitem"],
+html.mobile [role="menuitemradio"],
+html.mobile .gallery-cell,
+html.mobile .album-tile {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+}
+
+/* The desktop 8px scrollbar (styles/base.css) has no place on a phone; the file
+   list already hid its own, and every other phone scroller -- Transfers,
+   Account, the photo grid, the drive sheet, the sheet bodies -- hides it here. */
+html.mobile *,
+html.mobile *::-webkit-scrollbar { scrollbar-width: none; }
+html.mobile *::-webkit-scrollbar { width: 0; height: 0; }
 
 html.mobile .mobile-body {
     position: relative;
@@ -744,7 +775,13 @@ html.mobile .mobile-selection-bar {
     z-index: var(--z-selection);
     flex-wrap: wrap;
     gap: var(--space-2);
-    padding: var(--space-3) var(--space-4) calc(var(--space-3) + var(--inset-bottom));
+    /* Side insets so the actions clear the notch and the home bar when the
+       phone is turned; in portrait the insets are zero and nothing moves. */
+    padding:
+        var(--space-3)
+        calc(var(--space-4) + var(--inset-right))
+        calc(var(--space-3) + var(--inset-bottom))
+        calc(var(--space-4) + var(--inset-left));
     background: var(--color-surface-0);
     border-top: 1px solid var(--color-border-soft);
 }
@@ -1321,6 +1358,21 @@ html.mobile .file-row { background-clip: padding-box; }
     /* The settle is travel, so it goes; the row still arrives where the
        gesture asked, just without the glide. */
     html.mobile .file-row { transition: none !important; }
+}
+
+/* ============================ WIDE AND LANDSCAPE ============================ */
+/* On an iPad or a landscape phone the phone layout would otherwise run file
+   names and settings the full width of the glass. Cap the reading column and
+   centre it; the photo grid stays edge to edge and the floating tab bar keeps
+   its own width and reach. */
+@media (min-width: 700px) {
+    html.mobile #file-list,
+    html.mobile .account-tab,
+    html.mobile .transfers-tab {
+        width: 100%;
+        max-width: var(--mobile-reading-width);
+        margin-inline: auto;
+    }
 }
 
 /* ============================ REDUCED MOTION ============================ */
