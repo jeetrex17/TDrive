@@ -8,7 +8,7 @@
     import { isMobilePlatform } from '../../api';
     import { prefersReducedMotion } from '../mobile/motion';
     import { installModalA11y } from '../modals/modal-a11y';
-    import { createSheetDrag, sheetOffset, shouldDismiss } from '../modals/sheet-gesture';
+    import { createSheetDragController } from '../modals/sheet-gesture';
 
     // Desktop anchors this menu under its toolbar button. The phone cannot: the
     // trigger is docked into the middle of the tab bar, hard against the bottom
@@ -87,55 +87,28 @@
         return () => a11y.deactivate();
     });
 
-    // The downward swipe the sheet's grip promises, on the same physics the
-    // other sheets use. Without it the mark was decoration: the one gesture
-    // every phone user tries on a sheet did nothing at all.
-    let dragStartY = 0;
-    let dragDelta = 0;
-    let dragging = false;
-    const drag = createSheetDrag();
-
-    function onHandlePointerDown(event: PointerEvent): void {
-        if (!menuEl) return;
-        dragging = true;
-        dragStartY = event.clientY;
-        dragDelta = 0;
-        drag.start(event);
-        // Neither the entrance nor a previous spring-back may ease the sheet
-        // while a finger is on it: it tracks the thumb 1:1 or not at all.
-        menuEl.style.animation = 'none';
-        menuEl.style.transition = 'none';
-        (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
-    }
-
-    function onHandlePointerMove(event: PointerEvent): void {
-        if (!dragging || !menuEl) return;
-        dragDelta = sheetOffset(event.clientY - dragStartY, menuEl.offsetHeight);
-        drag.track(event);
-        menuEl.style.transform = `translateY(${dragDelta}px)`;
-    }
-
-    function onHandlePointerUp(): void {
-        if (!dragging || !menuEl) return;
-        dragging = false;
-        const sheet = menuEl;
-        const threshold = Math.max(88, sheet.offsetHeight * 0.28);
-        const dismissed = shouldDismiss(dragDelta, drag.velocity(), threshold);
-        dragDelta = 0;
-        drag.reset();
-        sheet.style.animation = '';
-        if (dismissed) {
-            sheet.style.transform = '';
+    // The downward swipe the sheet's grip promises, on the shared physics every
+    // other sheet uses. This host only says how to settle and dismiss.
+    const sheetDrag = createSheetDragController({
+        sheet: () => menuEl,
+        dismiss: () => {
+            if (menuEl) {
+                menuEl.style.animation = '';
+                menuEl.style.transform = '';
+            }
             closeMenu(true);
-            return;
-        }
-        // A pull that did not reach the line slides back rather than snapping,
-        // so the sheet reads as an object the finger let go of.
-        sheet.style.transition = prefersReducedMotion()
-            ? 'none'
-            : 'transform var(--motion-med) var(--ease-standard)';
-        sheet.style.transform = '';
-    }
+        },
+        settle: () => {
+            if (!menuEl) return;
+            menuEl.style.animation = '';
+            // A pull that did not reach the line slides back rather than
+            // snapping, so the sheet reads as an object the finger let go of.
+            menuEl.style.transition = prefersReducedMotion()
+                ? 'none'
+                : 'transform var(--motion-med) var(--ease-standard)';
+            menuEl.style.transform = '';
+        },
+    });
 
     // Arrow-key navigation between the menu items, in their visual order.
     function onMenuKeydown(event: KeyboardEvent): void {
@@ -213,13 +186,15 @@
     >
     {#if asSheet}
         <div
-            class="sheet-handle"
-            aria-hidden="true"
-            onpointerdown={onHandlePointerDown}
-            onpointermove={onHandlePointerMove}
-            onpointerup={onHandlePointerUp}
-            onpointercancel={onHandlePointerUp}
-        ><span></span></div>
+            class="sheet-grab"
+            role="presentation"
+            onpointerdown={sheetDrag.onPointerDown}
+            onpointermove={sheetDrag.onPointerMove}
+            onpointerup={sheetDrag.onPointerUp}
+            onpointercancel={sheetDrag.onPointerUp}
+        >
+            <div class="sheet-handle" aria-hidden="true"><span></span></div>
+        </div>
         <!-- A visible, labelled way out. The scrim and swipe dismiss too, but
              both are hidden from assistive technology. -->
         <button type="button" class="upload-sheet-close" aria-label="Close" onclick={() => closeMenu(true)}>

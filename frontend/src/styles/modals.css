@@ -159,6 +159,15 @@ html.mobile .modal-sheet.is-closing {
    first row, which in an action sheet is a menu item -- a taller grab area
    would take its target from one of them. The drag is a shortcut anyway: the
    scrim, Escape and hardware BACK all close the same sheet. */
+/* The whole top of the sheet is the grab area: the grip plus the title row.
+   touch-action:none so a vertical drag here moves the sheet rather than
+   scrolling the body; the scrolling body keeps its own pan-y. */
+html.mobile .sheet-grab {
+    flex: 0 0 auto;
+    touch-action: none;
+    cursor: grab;
+}
+html.mobile .sheet-grab:active { cursor: grabbing; }
 html.mobile .sheet-handle {
     flex: 0 0 auto;
     align-self: stretch;
@@ -167,10 +176,7 @@ html.mobile .sheet-handle {
     justify-content: center;
     height: 22px;
     margin: 0 calc(-1 * var(--space-4));
-    cursor: grab;
-    touch-action: none;
 }
-html.mobile .sheet-handle:active { cursor: grabbing; }
 html.mobile .sheet-handle span {
     width: 36px;
     height: 5px;

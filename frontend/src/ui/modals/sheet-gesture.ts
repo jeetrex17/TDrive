@@ -89,3 +89,88 @@ export function sheetOffset(rawDelta: number, sheetHeight: number): number {
 export function shouldDismiss(offset: number, velocity: number, threshold: number): boolean {
     return offset + projectOffset(velocity) > threshold;
 }
+
+/** Controls that must swallow a press rather than let it begin a drag. */
+const INTERACTIVE_IN_GRAB = 'button, a, input, select, textarea, [role="button"], [role="menuitem"]';
+
+export interface SheetDragController {
+    onPointerDown: (event: PointerEvent) => void;
+    onPointerMove: (event: PointerEvent) => void;
+    onPointerUp: (event: PointerEvent) => void;
+    /** True while a drag is in progress, for callers that mirror it into state. */
+    isDragging: () => boolean;
+}
+
+export interface SheetDragOptions {
+    /** The sheet element the gesture translates. */
+    sheet: () => HTMLElement | null;
+    /** Dismiss the sheet through its own close path. */
+    dismiss: () => void;
+    /** Return the sheet to rest. Receives release speed in px/s. */
+    settle: (velocity: number) => void;
+    /** Each move reports the clamped offset and the sheet height (for a scrim). */
+    track?: (offset: number, height: number) => void;
+    /** Ready the element for a 1:1 drag; defaults to clearing transition/animation. */
+    grab?: (sheet: HTMLElement) => void;
+    /** Dismiss threshold in px for the sheet height; defaults to max(88, 28%). */
+    threshold?: (height: number) => number;
+}
+
+/**
+ * The pointer wiring every bottom sheet shares: follow the finger down, resist
+ * past the open position, and on release judge where the gesture was heading.
+ * The three sheet hosts differ only in how they settle and dismiss, which they
+ * pass in, so the drag itself has one definition rather than three copies.
+ *
+ * A press that lands on an interactive control does not start a drag, so a
+ * header can be a grab area and still carry working buttons.
+ */
+export function createSheetDragController(options: SheetDragOptions): SheetDragController {
+    const drag = createSheetDrag();
+    let dragging = false;
+    let startY = 0;
+    let delta = 0;
+
+    return {
+        isDragging: () => dragging,
+        onPointerDown(event: PointerEvent): void {
+            const sheet = options.sheet();
+            if (!sheet) return;
+            if (event.target instanceof Element && event.target.closest(INTERACTIVE_IN_GRAB)) return;
+            dragging = true;
+            startY = event.clientY;
+            delta = 0;
+            drag.start(event);
+            if (options.grab) {
+                options.grab(sheet);
+            } else {
+                sheet.style.transition = '';
+                sheet.style.animation = 'none';
+            }
+            (event.currentTarget as HTMLElement | null)?.setPointerCapture?.(event.pointerId);
+        },
+        onPointerMove(event: PointerEvent): void {
+            const sheet = options.sheet();
+            if (!dragging || !sheet) return;
+            delta = sheetOffset(event.clientY - startY, sheet.offsetHeight);
+            drag.track(event);
+            sheet.style.transform = `translateY(${delta}px)`;
+            options.track?.(delta, sheet.offsetHeight || 1);
+        },
+        onPointerUp(): void {
+            const sheet = options.sheet();
+            if (!dragging || !sheet) return;
+            dragging = false;
+            const velocity = drag.velocity();
+            const height = sheet.offsetHeight || 0;
+            const threshold = options.threshold
+                ? options.threshold(height)
+                : Math.max(88, height * 0.28);
+            const dismissed = shouldDismiss(delta, velocity, threshold);
+            delta = 0;
+            drag.reset();
+            if (dismissed) options.dismiss();
+            else options.settle(velocity);
+        },
+    };
+}
