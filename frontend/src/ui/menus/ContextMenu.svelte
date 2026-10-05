@@ -10,12 +10,13 @@
     import FolderInputIcon from '@lucide/svelte/icons/folder-input';
     import Trash2Icon from '@lucide/svelte/icons/trash-2';
     import UploadIcon from '@lucide/svelte/icons/upload';
+    import FolderUpIcon from '@lucide/svelte/icons/folder-up';
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
     import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+    import XIcon from '@lucide/svelte/icons/x';
     import FileTextIcon from '@lucide/svelte/icons/file-text';
     import DatabaseIcon from '@lucide/svelte/icons/database';
     import CalendarIcon from '@lucide/svelte/icons/calendar';
-    import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
     import {
         contextMenuState,
         hideContextMenu,
@@ -39,9 +40,11 @@
         move: FolderInputIcon,
         delete: Trash2Icon,
         upload: UploadIcon,
+        'folder-up': FolderUpIcon,
         'folder-new': FolderPlusIcon,
         refresh: RefreshCwIcon,
         external: ExternalLinkIcon,
+        clear: XIcon,
     };
 
     const DETAIL_ICONS: Record<ContextMenuDetailIcon, typeof FileIcon> = {
@@ -321,6 +324,18 @@
                 <span></span>
             </div>
 
+            <!-- A visible, labelled way out. The scrim and swipe dismiss too, but
+                 both are hidden from assistive technology, so without this an
+                 iOS VoiceOver user has no control to close the sheet with. -->
+            <button
+                type="button"
+                class="action-sheet-close"
+                aria-label="Close"
+                onclick={() => { void dismissAndRestoreFocus(); }}
+            >
+                <XIcon size={20} strokeWidth={2} aria-hidden="true" />
+            </button>
+
             {#if $contextMenuState.header}
                 {@const HeaderIcon = headerIcon}
                 <div class="action-sheet-header">
@@ -374,9 +389,6 @@
                             </dt>
                             <dd>
                                 <span>{detail.value}</span>
-                                {#if detail.icon === 'location'}
-                                    <ChevronRightIcon size={15} strokeWidth={2} aria-hidden="true" />
-                                {/if}
                             </dd>
                         </div>
                     {/each}
@@ -412,6 +424,7 @@
             bind:this={panel}
             class="context-menu-panel"
             role="menu"
+            aria-label="Actions"
             style:left={`${left}px`}
             style:top={`${top}px`}
         >
@@ -427,7 +440,14 @@
                         tabindex="-1"
                         onclick={() => invoke(item)}
                     >
-                        {item.label}
+                        {#if item.icon}
+                            {@const RowIcon = ICONS[item.icon]}
+                            <RowIcon size={16} strokeWidth={1.9} aria-hidden="true" />
+                        {/if}
+                        <span class="context-menu-label">{item.label}</span>
+                        {#if item.shortcut}
+                            <span class="context-menu-shortcut">{item.shortcut}</span>
+                        {/if}
                     </button>
                 {/if}
             {/each}

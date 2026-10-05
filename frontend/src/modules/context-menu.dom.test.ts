@@ -24,7 +24,11 @@ vi.mock('./modals/rename', () => ({ openRenameModal: vi.fn() }));
 vi.mock('./modals/move', () => ({ openMoveModal: vi.fn() }));
 vi.mock('./modals/folder', () => ({ openNewFolderModal: vi.fn() }));
 vi.mock('./navigation', () => ({ navigateToFolder: vi.fn() }));
-vi.mock('./media-types', () => ({ isVideoFile: () => false, canOpenFileViewer: () => false }));
+vi.mock('./media-types', () => ({
+    isVideoFile: () => false,
+    canOpenFileViewer: () => false,
+    isImageFile: (name: string) => name.endsWith('.png'),
+}));
 vi.mock('./app-actions', () => ({ appActions: () => ({ triggerRefresh: vi.fn() }) }));
 vi.mock('../ui/menus/context-menu-store', () => menu);
 
@@ -131,5 +135,39 @@ describe('the row context menu', () => {
         showRowContextMenu(row, 10, 20);
 
         expect(menu.showContextMenu).not.toHaveBeenCalled();
+    });
+
+    it('keeps folder-background actions out of a file menu', () => {
+        showFileListRows([publishedFileRow()]);
+
+        showRowContextMenu(renderRow('file:42'), 10, 20);
+
+        const labels = shownLabels();
+        expect(labels).not.toContain('Upload files');
+        expect(labels).not.toContain('Upload folder');
+        expect(labels).not.toContain('New folder');
+        expect(labels).not.toContain('Refresh');
+    });
+
+    it('offers Open first for an image', () => {
+        showFileListRows([publishedFileRow({
+            key: 'file:fs:7', selectionKey: 'file:7', id: '7', name: 'pic.png', ext: 'PNG',
+        })]);
+
+        showRowContextMenu(renderRow('file:7'), 10, 20);
+
+        expect(shownLabels()[0]).toBe('Open');
+    });
+
+    it('gives Delete a keyboard shortcut hint', () => {
+        showFileListRows([publishedFileRow({ canDelete: true })]);
+
+        showRowContextMenu(renderRow('file:42'), 10, 20);
+
+        const items = menu.showContextMenu.mock.calls[0]?.[2] as ContextMenuItem[];
+        const del = items.find((item): item is Extract<ContextMenuItem, { label: string }> =>
+            item.type !== 'divider' && item.label === 'Delete');
+        expect(del?.shortcut).toBeTruthy();
+        expect(del?.icon).toBe('delete');
     });
 });

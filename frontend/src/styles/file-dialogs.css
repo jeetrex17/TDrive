@@ -441,33 +441,59 @@
 }
 .context-menu button {
     width: 100%;
+    min-height: var(--control-md);
     border: none;
     background: transparent;
     cursor: pointer;
-    padding: 10px var(--space-3);
-    border-radius: var(--radius-md);
+    padding: 0 var(--space-2);
+    border-radius: var(--radius-sm);
     display: flex;
     align-items: center;
-    gap: var(--space-2);
+    gap: var(--space-2-5);
     color: var(--text-main);
     font-size: var(--type-base);
-    font-weight: 700;
+    font-weight: var(--weight-medium);
     transition:
         background-color var(--motion-med) var(--ease-standard),
         color var(--motion-med) var(--ease-standard),
         transform var(--motion-fast) var(--ease-standard);
 }
-.context-menu button:hover { background: var(--bg-panel); }
+.context-menu button svg {
+    flex: 0 0 auto;
+    width: 16px;
+    height: 16px;
+    color: var(--text-muted);
+}
+.context-menu-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+/* The key that does the same thing on the focused row, set apart and quiet. */
+.context-menu-shortcut {
+    flex: 0 0 auto;
+    margin-left: var(--space-4);
+    color: var(--text-muted);
+    font-size: var(--type-xs);
+    font-weight: var(--weight-regular);
+}
+@media (hover: hover) {
+    .context-menu button:hover { background: var(--bg-panel); }
+}
 .context-menu button:focus-visible {
     outline: none;
     background: var(--bg-panel);
     box-shadow: inset 0 0 0 1px var(--overlay-accent-3);
 }
 .context-menu button:active { transform: translateY(0.5px); }
-.context-menu button.danger { color: var(--danger); }
+.context-menu button.danger,
+.context-menu button.danger svg { color: var(--danger); }
 .context-menu .divider {
     height: 1px;
-    background: var(--border);
+    background: var(--color-border-soft);
     margin: var(--space-1) var(--space-2);
 }
 
@@ -505,6 +531,32 @@ html.mobile .action-sheet {
     box-shadow: var(--shadow-lg);
     animation: tdrive-sheet-enter var(--motion-slow) var(--ease-enter) both;
     touch-action: pan-y;
+}
+
+/* A quiet close in the top corner, the full touch target over the handle. The
+   scrim and swipe already dismiss the sheet, but both are hidden from assistive
+   technology; this is the control a screen-reader user reaches. */
+html.mobile .action-sheet-close {
+    position: absolute;
+    top: var(--space-1);
+    right: var(--space-1-5);
+    z-index: 2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: var(--touch-target);
+    height: var(--touch-target);
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--color-text-muted);
+    cursor: pointer;
+    transition: background-color var(--motion-fast) var(--ease-standard);
+}
+html.mobile .action-sheet-close:active { background: var(--overlay-neutral-2); }
+html.mobile .action-sheet-close:focus-visible {
+    outline: none;
+    box-shadow: inset 0 0 0 2px var(--overlay-accent-3);
 }
 
 @keyframes tdrive-scrim-in {
@@ -636,9 +688,6 @@ html.mobile .action-sheet-detail dd {
     text-align: right;
     overflow-wrap: anywhere;
 }
-/* The chevron marks the one line that leads somewhere, so it is muted against
-   the value it follows rather than competing with it. */
-html.mobile .action-sheet-detail dd svg { flex: 0 0 auto; color: var(--color-text-subtle); }
 html.mobile .action-sheet-meta {
     font-size: var(--type-sm);
     color: var(--text-muted);
