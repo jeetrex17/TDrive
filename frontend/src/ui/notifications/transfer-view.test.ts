@@ -166,8 +166,10 @@ describe('transferDetail', () => {
     });
 
     it('does not send a paused transfer looking for a queue that is not there', () => {
-        // Suspended with the app, not waiting behind other work.
-        expect(transferDetail(transfer({ status: 'paused', progress: 40, total: 1_000 }), NOW)).toBe('Paused');
+        // Suspended with the app, not waiting behind other work: the row names
+        // the backgrounding rather than a queue ahead of it.
+        expect(transferDetail(transfer({ status: 'paused', progress: 40, total: 1_000 }), NOW))
+            .toBe('Paused while TDrive was in the background');
         // Stopped is the terminal cousin: put down rather than suspended, so it
         // says when, and Clear may take it.
         expect(transferDetail(transfer({ status: 'stopped', progress: 40, total: 1_000, finishedAt: NOW - 60_000 }), NOW)).toBe('Paused · 1 min ago');
