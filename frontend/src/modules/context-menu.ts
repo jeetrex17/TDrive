@@ -1,6 +1,7 @@
 // Context menu handling for TDrive frontend
 
 import { state } from '../state';
+import { isApplePlatform } from '../utils';
 import { isMobilePlatform } from '../api';
 import { clearSelection, ensureRowSelectedForContextMenu, getSelectionPayload } from './selection';
 import { openDeleteModal } from './modals/delete';
@@ -31,12 +32,7 @@ interface RowMenuOptions {
 // Shown next to Delete in the desktop popover. A Mac keyboard's Delete key is
 // Backspace, which the file list already treats as delete; the glyph matches
 // what the user actually presses.
-const DELETE_SHORTCUT = (() => {
-    const platform = typeof navigator !== 'undefined'
-        ? navigator.platform || navigator.userAgent || ''
-        : '';
-    return /Mac|iPhone|iPad|iPod/.test(platform) ? '⌫' : 'Del';
-})();
+const DELETE_SHORTCUT = isApplePlatform() ? '⌫' : 'Del';
 
 export function buildFolderContextMenuItems(
     folderID: string,

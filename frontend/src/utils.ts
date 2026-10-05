@@ -1,5 +1,11 @@
 // Pure utility functions for TDrive frontend
 
+/** macOS and iOS: the command key is the accelerator and Delete is Backspace. */
+export function isApplePlatform(): boolean {
+    if (typeof navigator === 'undefined') return false;
+    return /Mac|iPhone|iPad|iPod/i.test(navigator.platform || navigator.userAgent || '');
+}
+
 export function escapeHtml(input: unknown): string {
     return String(input ?? "")
         .replace(/&/g, "&amp;")

@@ -1,7 +1,7 @@
 // File list rendering for TDrive frontend
 
 import { state, resetFolderCaches } from '../state';
-import { splitNameAndExt, formatDate, formatBytes } from '../utils';
+import { splitNameAndExt, formatDate, formatBytes, isApplePlatform } from '../utils';
 import { isOffline } from './connectivity';
 import { humanizeBackendError } from './errors';
 import { tick } from 'svelte';
@@ -1073,9 +1073,7 @@ function handleListClick(e: MouseEvent) {
 
 // The parent-folder shortcut is Cmd+Up on a Mac and Alt+Up on Windows and
 // Linux, matching each platform's own file manager.
-const isMacLike = /Mac|iPhone|iPad|iPod/i.test(
-    (typeof navigator !== 'undefined' && (navigator.platform || navigator.userAgent)) || '',
-);
+const isMacLike = isApplePlatform();
 
 // Type-ahead: printable keys build a short buffer that jumps to the next
 // matching row, cleared after a pause so a new word starts fresh.
