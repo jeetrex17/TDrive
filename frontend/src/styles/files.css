@@ -396,15 +396,16 @@
 /* Row actions are quiet until the row is hovered, focused within or selected;
    on a device with no hover they stay visible, since there is no hover to wait
    for. The trash's own Restore/Delete are the row's only affordance, so they
-   never hide (is-inline). */
+   never hide (is-inline). Scoped away from the phone shell, which keeps its
+   overflow button visible even on a hover-capable device (an emulator). */
 @media (hover: hover) {
-    .file-row .row-actions:not(.is-inline) .action-icon {
+    html:not(.mobile) .file-row .row-actions:not(.is-inline) .action-icon {
         opacity: 0;
         transition: opacity var(--motion-fast) var(--ease-standard);
     }
-    .file-row:hover .row-actions:not(.is-inline) .action-icon,
-    .file-row:focus-within .row-actions:not(.is-inline) .action-icon,
-    .drive-row.is-selected .row-actions:not(.is-inline) .action-icon {
+    html:not(.mobile) .file-row:hover .row-actions:not(.is-inline) .action-icon,
+    html:not(.mobile) .file-row:focus-within .row-actions:not(.is-inline) .action-icon,
+    html:not(.mobile) .drive-row.is-selected .row-actions:not(.is-inline) .action-icon {
         opacity: 1;
     }
 }
@@ -466,8 +467,9 @@ html.mobile .file-list-box {
     position: relative;
     /* Breathing room above and below the card. Neither the tab bar nor the
        upload button needs an allowance: the bar sits below the body and the
-       button is docked into it. */
-    padding: var(--space-2) 0 var(--space-6);
+       button is docked into it. The keyboard inset is added so search results
+       clear the keys instead of hiding under them. */
+    padding: var(--space-2) 0 calc(var(--space-6) + var(--inset-keyboard));
     overflow-x: hidden;
     touch-action: pan-y;
     overscroll-behavior-y: contain;
@@ -564,7 +566,9 @@ html.mobile .row-name {
     min-width: 0;
     gap: 12px;
     color: var(--color-text);
-    font-size: 15px;
+    /* A rem token, not px, so iOS Dynamic Type scales the file name with the
+       rest of the chrome instead of leaving it fixed. */
+    font-size: var(--mobile-type-body);
     font-weight: var(--weight-semibold);
     line-height: 1.35;
     user-select: none;
@@ -610,7 +614,7 @@ html.mobile .row-sub {
     gap: 6px;
     min-width: 0;
     color: var(--text-muted);
-    font-size: 13px;
+    font-size: var(--mobile-type-meta);
     font-weight: var(--weight-medium);
     line-height: 1.35;
 }
@@ -642,7 +646,7 @@ html.mobile .uploader-chip {
     border-radius: var(--radius-pill);
     background: var(--overlay-neutral-2);
     color: var(--text-main);
-    font-size: 12px;
+    font-size: var(--mobile-type-caption);
     font-weight: var(--weight-semibold);
     line-height: 1;
     vertical-align: baseline;
@@ -717,11 +721,20 @@ html.mobile .is-selected .row-check {
 html.mobile .is-selected .row-check svg { opacity: 1; }
 
 html.mobile .row-actions { flex: 0 0 auto; gap: 0; }
-/* The phone's actions are always visible: its overflow button and the trash's
-   inline buttons are the row's only reach, with no hover to reveal them. This
-   beats the desktop hover-reveal on a hover-capable device running the phone
-   shell (an emulator or a testing viewport). */
-html.mobile .row-actions .action-icon { opacity: 1; }
+/* The trash's Restore and Delete forever each get a full 44px touch target and
+   real space between, so a thumb cannot catch both. The glyph stays small; an
+   invisible ::after grows the hit area (accessibility-7). */
+html.mobile .row-actions.is-inline { gap: var(--space-3); }
+html.mobile .row-actions.is-inline .action-icon {
+    position: relative;
+    width: var(--control-md);
+    height: var(--control-md);
+}
+html.mobile .row-actions.is-inline .action-icon::after {
+    content: "";
+    position: absolute;
+    inset: calc((var(--control-md) - var(--touch-target)) / 2);
+}
 html.mobile .action-icon.row-more {
     position: relative;
     width: 32px;
@@ -760,12 +773,12 @@ html.mobile .file-state-icon {
 }
 html.mobile .file-state-icon svg { width: 24px; height: 24px; }
 html.mobile .file-state-title {
-    font-size: 17px;
+    font-size: var(--mobile-type-title);
     font-weight: var(--weight-strong);
     text-wrap: balance;
 }
 html.mobile .file-state-body {
-    font-size: 15px;
+    font-size: var(--mobile-type-body);
     line-height: 1.5;
     text-wrap: pretty;
 }
@@ -777,9 +790,9 @@ html.mobile .file-state-actions {
     margin-top: 14px;
 }
 html.mobile .file-state-actions .secondary-btn {
-    min-height: 44px;
+    min-height: var(--touch-target);
     padding: 0 18px;
-    font-size: 15px;
+    font-size: var(--mobile-type-body);
 }
 html.mobile .file-state-actions .secondary-btn:first-child {
     background: var(--accent);

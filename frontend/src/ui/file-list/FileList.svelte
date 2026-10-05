@@ -410,7 +410,7 @@
                         <ItemStatus state={state} onOpenQueue={() => activeTab.set('transfers')} />
                     </div>
                 {/if}
-                <div class="row-actions">
+                <div class={`row-actions${row.actionsInline ? ' is-inline' : ''}`}>
                     {#if row.actionsInline}
                         <!-- Few, important, and with no menu behind them, so the
                              phone shows them the way the desktop does rather
