@@ -6,6 +6,11 @@ export interface MediaItem {
     "date": number;
     "name": string;
     "size": number;
+
+    /**
+     * whole seconds; 0 when Telegram did not say
+     */
+    "duration": number;
     "mime_type": string;
     "kind": string;
     "caption": string;

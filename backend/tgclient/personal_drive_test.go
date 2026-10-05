@@ -40,12 +40,17 @@ type dialogChannel struct {
 	createdDate int
 	username    string
 	protected   bool
+	photoID     int64
 }
 
 func dialogsPage(rows ...dialogChannel) tg.MessagesDialogsClass {
 	result := &tg.MessagesDialogsSlice{Count: len(rows)}
 	for _, row := range rows {
 		peer := &tg.PeerChannel{ChannelID: row.id}
+		var photo tg.ChatPhotoClass = &tg.ChatPhotoEmpty{}
+		if row.photoID != 0 {
+			photo = &tg.ChatPhoto{PhotoID: row.photoID, DCID: 2}
+		}
 		result.Dialogs = append(result.Dialogs, &tg.Dialog{
 			Peer:       peer,
 			TopMessage: row.topMessage,
@@ -61,6 +66,7 @@ func dialogsPage(rows ...dialogChannel) tg.MessagesDialogsClass {
 			Date:       row.createdDate,
 			Username:   row.username,
 			Noforwards: row.protected,
+			Photo:      photo,
 		})
 		if row.topMessage > 0 {
 			result.Messages = append(result.Messages, &tg.Message{
@@ -84,7 +90,7 @@ func TestCollectJoinedBroadcastChannelsIncludesArchivedNonOwnersAndProtection(t 
 	archive := &scriptedDialogsQuery{responses: []tg.MessagesDialogsClass{
 		dialogsPage(
 			dialogChannel{id: 101, title: "Duplicate", broadcast: true},
-			dialogChannel{id: 103, title: "Protected archive", broadcast: true, protected: true},
+			dialogChannel{id: 103, title: "Protected archive", broadcast: true, protected: true, photoID: 5503},
 			dialogChannel{id: 104, title: "Left", broadcast: true, left: true},
 		),
 		&tg.MessagesDialogsSlice{},
@@ -95,7 +101,7 @@ func TestCollectJoinedBroadcastChannelsIncludesArchivedNonOwnersAndProtection(t 
 	}
 	want := []JoinedBroadcastChannel{
 		{ID: 101, AccessHash: 1101, Title: "Joined public", Username: "public"},
-		{ID: 103, AccessHash: 1103, Title: "Protected archive", Protected: true},
+		{ID: 103, AccessHash: 1103, Title: "Protected archive", Protected: true, PhotoID: 5503},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("joined channels = %#v, want %#v", got, want)

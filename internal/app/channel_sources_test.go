@@ -58,7 +58,7 @@ func TestChannelMediaLogoutRevokesAndRejectsInFlightOpen(t *testing.T) {
 	fake.SeedJoinedBroadcastChannels(tgclient.JoinedBroadcastChannel{ID: 7331, AccessHash: 77, Title: "Film club"})
 	fake.SeedHistory(tgclient.HistoryMessage{ChannelID: 7331, MsgID: 42, HasMedia: true,
 		DocumentID: 4343, DocumentAccessHash: 98, DocumentName: "clip.mp4",
-		MimeType: "video/mp4", Video: true, MediaSize: 128})
+		MimeType: "video/mp4", MediaSize: 128})
 	fake.SeedDocumentBody(42, make([]byte, 128))
 	client := &stalledChannelResolve{Fake: fake, entered: make(chan struct{}, 1), release: make(chan struct{})}
 	engine, err := core.New(t.Context(), core.Config{TG: client, SkipDBInit: true,

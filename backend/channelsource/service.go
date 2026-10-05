@@ -9,6 +9,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"math"
 	"net/url"
 	"strings"
 	"sync"
@@ -40,6 +41,7 @@ type MediaItem struct {
 	Date        int64  `json:"date"`
 	Name        string `json:"name"`
 	Size        int64  `json:"size"`
+	Duration    int64  `json:"duration"` // whole seconds; 0 when Telegram did not say
 	MimeType    string `json:"mime_type"`
 	Kind        string `json:"kind"`
 	Caption     string `json:"caption"`
@@ -63,6 +65,13 @@ type Service struct {
 	media *media.Service
 	mu    sync.Mutex // serializes connection generation and media publication
 	retry tgclient.FloodWaitRetryPolicy
+
+	// The latest dialog walk, for photos of channels not added yet. A walk is
+	// far too heavy to repeat per avatar.
+	peersMu  sync.Mutex
+	peers    map[int64]tgclient.JoinedBroadcastChannel
+	peersFor int64 // the account the walk was for
+	walkedAt time.Time
 }
 
 func NewService(db *sql.DB, tg tgclient.Client, mediaService *media.Service) (*Service, error) {
@@ -76,10 +85,16 @@ func NewService(db *sql.DB, tg tgclient.Client, mediaService *media.Service) (*S
 		username TEXT NOT NULL DEFAULT '',
 		protected INTEGER NOT NULL DEFAULT 0,
 		generation TEXT NOT NULL,
+		access_hash INTEGER NOT NULL DEFAULT 0,
+		photo_id INTEGER NOT NULL DEFAULT 0,
+		photo BLOB,
 		PRIMARY KEY(account_id, channel_id)
 	)`)
 	if err != nil {
 		return nil, fmt.Errorf("channel source: create local metadata: %w", err)
+	}
+	if err := addPhotoColumns(db); err != nil {
+		return nil, err
 	}
 	return &Service{db: db, tg: tg, media: mediaService, retry: tgclient.FloodWaitRetryPolicy{
 		MaxRetries: 2, MaxWait: 30 * time.Second, MaxTotalWait: time.Minute,
@@ -131,14 +146,11 @@ func (s *Service) ListCandidates(ctx context.Context) ([]SourceInfo, error) {
 	if err != nil {
 		return nil, err
 	}
-	var channels []tgclient.JoinedBroadcastChannel
-	err = s.telegram(ctx, func() error {
-		var callErr error
-		channels, callErr = s.tg.ListJoinedBroadcastChannels(ctx)
-		return callErr
-	})
+	s.peersMu.Lock()
+	channels, err := s.walkLocked(ctx, accountID)
+	s.peersMu.Unlock()
 	if err != nil {
-		return nil, fmt.Errorf("channel source: list joined channels: %w", err)
+		return nil, err
 	}
 	out := make([]SourceInfo, 0, len(channels))
 	for _, channel := range channels {
@@ -234,8 +246,8 @@ func (s *Service) ConnectWithGate(ctx context.Context, channelID, expectedAccoun
 			return err
 		}
 		_, err := s.db.ExecContext(ctx, `INSERT INTO connected_channel_sources
-			(account_id, channel_id, title, username, protected, generation) VALUES(?,?,?,?,?,?)`,
-			accountID, channelID, channel.Title, channel.Username, channel.Protected, generation)
+			(account_id, channel_id, title, username, protected, generation, access_hash, photo_id) VALUES(?,?,?,?,?,?,?,?)`,
+			accountID, channelID, channel.Title, channel.Username, channel.Protected, generation, channel.AccessHash, channel.PhotoID)
 		if err != nil {
 			return fmt.Errorf("channel source: connect: %w", err)
 		}
@@ -311,6 +323,14 @@ func (s *Service) current(ctx context.Context, channelID int64) (SourceInfo, tgc
 	if channel.AccessHash == 0 {
 		return SourceInfo{}, tgclient.JoinedBroadcastChannel{}, ErrUnavailable
 	}
+	// A new profile photo drops the stored one, so the next avatar request
+	// fetches the picture the channel shows now.
+	if _, err := s.db.ExecContext(ctx, `UPDATE connected_channel_sources
+		SET access_hash=?, photo=CASE WHEN photo_id=? THEN photo ELSE NULL END, photo_id=?
+		WHERE account_id=? AND channel_id=? AND (access_hash<>? OR photo_id<>?)`,
+		channel.AccessHash, channel.PhotoID, channel.PhotoID, source.AccountID, channelID, channel.AccessHash, channel.PhotoID); err != nil {
+		return SourceInfo{}, tgclient.JoinedBroadcastChannel{}, fmt.Errorf("channel source: refresh local metadata: %w", err)
+	}
 	source.Title, source.Username, source.Protected, source.Available = channel.Title, channel.Username, channel.Protected, true
 	return source, channel, nil
 }
@@ -332,7 +352,7 @@ func mediaItem(channel tgclient.JoinedBroadcastChannel, message tgclient.History
 	name := media.ExternalName(message)
 	kind := media.ExternalKind(message)
 	item := MediaItem{MsgID: message.MsgID, Date: message.Date, Name: name, Size: message.MediaSize,
-		MimeType: message.MimeType, Kind: string(kind), Caption: message.Text,
+		Duration: int64(math.Round(message.Duration)), MimeType: message.MimeType, Kind: string(kind), Caption: message.Text,
 		TelegramURL: telegramURL(channel, message.MsgID)}
 	switch {
 	case channel.Protected || message.NoForwards:

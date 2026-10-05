@@ -49,7 +49,7 @@ func seedVideo(fake *tgclient.Fake, channelID, msgID int64, body []byte) tgclien
 		ChannelID: channelID, MsgID: msgID, Date: 123, HasMedia: true,
 		Text: "TDX1|t=f|fake=caption", DocumentName: "clip.mp4",
 		DocumentID: 9001, DocumentAccessHash: 9002, MediaSize: int64(len(body)),
-		MimeType: "video/mp4", Video: true,
+		MimeType: "video/mp4", Duration: 61.6,
 	}
 	fake.SeedHistory(message)
 	fake.SeedDocumentBody(msgID, body)
@@ -103,7 +103,7 @@ func TestJoinedSourcesPageAndStreamWithoutProjection(t *testing.T) {
 		t.Fatalf("flood-wait retry page = %#v, %v", retried, err)
 	}
 	page, err := sources.Page(ctx, testChannelID, 0, 1, "", "video")
-	if err != nil || len(page.Items) != 1 || page.Items[0].MsgID != 1 || !page.Items[0].Streamable {
+	if err != nil || len(page.Items) != 1 || page.Items[0].MsgID != 1 || !page.Items[0].Streamable || page.Items[0].Duration != 62 {
 		t.Fatalf("page = %#v, %v", page, err)
 	}
 	if page.Generation != connected.Generation || page.AccountID != testAccountID || page.Items[0].TelegramURL != "https://t.me/c/7711/1" {
@@ -248,7 +248,7 @@ func TestPostRestrictionsBlockExternalOpen(t *testing.T) {
 	} {
 		message := tgclient.HistoryMessage{ChannelID: testChannelID, MsgID: test.id,
 			HasMedia: true, DocumentID: test.id + 100, DocumentAccessHash: 55,
-			MediaSize: 16, DocumentName: "clip.mp4", MimeType: "video/mp4", Video: true}
+			MediaSize: 16, DocumentName: "clip.mp4", MimeType: "video/mp4"}
 		if test.message.Paid {
 			message.DocumentID = 0
 		}

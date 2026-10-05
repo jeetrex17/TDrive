@@ -35,6 +35,14 @@ export function ApproveJoinRequest(channelID: number, userID: number): $Cancella
 }
 
 /**
+ * ChannelSourcePhoto returns a channel's small profile photo as base64, or ""
+ * when the channel has none.
+ */
+export function ChannelSourcePhoto(channelID: number): $CancellablePromise<string> {
+    return $Call.ByID(4072411592, channelID);
+}
+
+/**
  * CheckPendingJoin checks whether a prior approval-required request has now
  * become a membership. Users call this manually from the sidebar; no realtime
  * Telegram update stream is required for v1.

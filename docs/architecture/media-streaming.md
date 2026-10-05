@@ -45,10 +45,12 @@ multipart completeness before constructing an ordered logical file.
 
 The Channels area connects broadcast channels already joined by the current
 Telegram account, including archived dialogs. Connection metadata is local and
-keyed by account ID and channel ID. Disconnecting removes that metadata and
-revokes its media sessions; it never leaves the Telegram channel. Channel
-messages are read directly from Telegram and never parsed as TDX control
-operations or inserted into the TDrive drive projection.
+keyed by account ID and channel ID. It keeps the channel's access hash and its
+small profile photo, so the sidebar shows avatars without a network request;
+opening a channel notices a new photo and clears the stored one. Disconnecting
+removes that metadata and revokes its media sessions; it never leaves the
+Telegram channel. Channel messages are read directly from Telegram and never
+parsed as TDX control operations or inserted into the TDrive drive projection.
 
 [`channelsource.Service`](../../backend/channelsource/service.go) validates
 membership and content protection before each bounded history/search page and

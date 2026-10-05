@@ -1,6 +1,7 @@
 package app
 
 import (
+	"encoding/base64"
 	"fmt"
 
 	"TDrive/backend/channelsource"
@@ -57,6 +58,20 @@ func (s *DriveService) DisconnectChannelSource(channelID, expectedAccountID int6
 		s.closeExternalMedia(tokens)
 	}
 	return nil
+}
+
+// ChannelSourcePhoto returns a channel's small profile photo as base64, or ""
+// when the channel has none.
+func (s *DriveService) ChannelSourcePhoto(channelID int64) (string, error) {
+	sources, err := s.sourceService()
+	if err != nil {
+		return "", err
+	}
+	photo, err := sources.Photo(s.host.appContext(), channelID)
+	if err != nil || len(photo) == 0 {
+		return "", err
+	}
+	return base64.StdEncoding.EncodeToString(photo), nil
 }
 
 func (s *DriveService) ListChannelMedia(channelID, offsetID int64, limit int, search, kind string) (channelsource.MediaPage, error) {

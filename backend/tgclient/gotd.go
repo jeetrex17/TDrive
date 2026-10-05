@@ -420,8 +420,7 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 		documentAccessHash int64
 		documentID         int64
 		mimeType           string
-		video              bool
-		audio              bool
+		duration           float64
 		ttlSeconds         int
 		paid               bool
 	)
@@ -438,9 +437,9 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 				case *tg.DocumentAttributeFilename:
 					documentName = value.FileName
 				case *tg.DocumentAttributeVideo:
-					video = true
+					duration = value.Duration
 				case *tg.DocumentAttributeAudio:
-					audio = true
+					duration = float64(value.Duration)
 				}
 			}
 		}
@@ -460,8 +459,7 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 		DocumentAccessHash: documentAccessHash,
 		DocumentID:         documentID,
 		MimeType:           mimeType,
-		Video:              video,
-		Audio:              audio,
+		Duration:           duration,
 		NoForwards:         fullMsg.Noforwards,
 		TTLSeconds:         ttlSeconds,
 		Paid:               paid,
@@ -651,6 +649,28 @@ func (g *Gotd) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, 
 		slog.Debug("tgclient: DownloadFileAt completed", "channel_id", peer.ChannelID, "msg_id", msgID, "block_retries", retried)
 	}
 	return err
+}
+
+// DownloadChannelPhoto fetches a channel's small profile photo on the
+// background file lane. The primary connection follows FILE_MIGRATE itself,
+// so a photo on another data center needs nothing more.
+func (g *Gotd) DownloadChannelPhoto(ctx context.Context, peer InputPeer, photoID int64) ([]byte, error) {
+	var buf bytes.Buffer
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		release, err := AcquireBackgroundGetFileSlots(ctx, 1)
+		if err != nil {
+			return err
+		}
+		defer release()
+		buf.Reset()
+		location := &tg.InputPeerPhotoFileLocation{Peer: toPeer(peer), PhotoID: photoID}
+		_, err = downloader.NewDownloader().Download(api, location).Stream(ctx, &buf)
+		return err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("tgclient: download channel photo: %w", err)
+	}
+	return buf.Bytes(), nil
 }
 
 func (g *Gotd) DownloadFileThumbnail(ctx context.Context, peer InputPeer, msgID int64, thumbType string, w io.Writer) error {

@@ -79,8 +79,7 @@ type HistoryMessage struct {
 	DocumentAccessHash int64
 	DocumentID         int64
 	MimeType           string
-	Video              bool
-	Audio              bool
+	Duration           float64 // seconds, from the video or audio attribute; 0 when unknown
 	NoForwards         bool
 	TTLSeconds         int
 	Paid               bool
@@ -173,6 +172,7 @@ type JoinedBroadcastChannel struct {
 	Title      string
 	Username   string
 	Protected  bool
+	PhotoID    int64 // the current profile photo; 0 when the channel has none
 }
 
 // Client is the surface sync, backfill, and local-action paths use to talk
@@ -214,6 +214,9 @@ type Client interface {
 	SearchChannelMessages(ctx context.Context, peer InputPeer, query string, offsetID int64, limit int) ([]HistoryMessage, error)
 	GetChannelMessage(ctx context.Context, peer InputPeer, msgID int64) (HistoryMessage, error)
 	GetJoinedBroadcastChannel(ctx context.Context, channelID int64) (JoinedBroadcastChannel, error)
+	// DownloadChannelPhoto returns the small (160px) JPEG of a channel's
+	// profile photo.
+	DownloadChannelPhoto(ctx context.Context, peer InputPeer, photoID int64) ([]byte, error)
 
 	// GetFileDocument resolves one Telegram message into a downloadable
 	// document descriptor without downloading the bytes.

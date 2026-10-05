@@ -39,6 +39,8 @@ type Fake struct {
 	channels        map[int64]fakeChannel
 	ownedBroadcast  []OwnedBroadcastChannel
 	joinedBroadcast []JoinedBroadcastChannel
+	channelPhotos   map[int64][]byte // keyed by photo ID
+	photoDownloads  int
 	invites         map[string]InviteInfo
 	joinRequests    map[int64][]JoinRequest
 	requestedJoins  []string
@@ -281,6 +283,24 @@ func (f *Fake) SeedOwnedBroadcastChannels(channels ...OwnedBroadcastChannel) {
 			f.nextChannelID = channel.ID + 1
 		}
 	}
+}
+
+// SeedChannelPhoto supplies the bytes DownloadChannelPhoto returns for photoID.
+func (f *Fake) SeedChannelPhoto(photoID int64, body []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.channelPhotos == nil {
+		f.channelPhotos = make(map[int64][]byte)
+	}
+	f.channelPhotos[photoID] = bytes.Clone(body)
+}
+
+// PhotoDownloads counts DownloadChannelPhoto calls, so tests can tell a
+// stored photo from a downloaded one.
+func (f *Fake) PhotoDownloads() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.photoDownloads
 }
 
 func (f *Fake) SeedJoinedBroadcastChannels(channels ...JoinedBroadcastChannel) {
@@ -868,6 +888,17 @@ func (f *Fake) GetJoinedBroadcastChannel(_ context.Context, channelID int64) (Jo
 		}
 	}
 	return JoinedBroadcastChannel{}, fmt.Errorf("tgclient.Fake: joined channel %d not found", channelID)
+}
+
+func (f *Fake) DownloadChannelPhoto(_ context.Context, _ InputPeer, photoID int64) ([]byte, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.photoDownloads++
+	body, ok := f.channelPhotos[photoID]
+	if !ok {
+		return nil, fmt.Errorf("tgclient.Fake: channel photo %d not found", photoID)
+	}
+	return bytes.Clone(body), nil
 }
 
 func (f *Fake) GetChannelMessage(_ context.Context, peer InputPeer, msgID int64) (HistoryMessage, error) {

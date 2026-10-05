@@ -49,13 +49,13 @@ func TestHistoryMessagePreservesExternalMediaRestrictionsAndAttributes(t *testin
 	document := &tg.Document{ID: 441, AccessHash: 992, Size: 1024, MimeType: "video/x-matroska",
 		Attributes: []tg.DocumentAttributeClass{
 			&tg.DocumentAttributeFilename{FileName: "recording.mkv"},
-			&tg.DocumentAttributeVideo{},
+			&tg.DocumentAttributeVideo{Duration: 754.5},
 		}}
 	media := &tg.MessageMediaDocument{Document: document}
 	media.SetTTLSeconds(30)
 	message, ok := historyMessageFromTG(&tg.Message{ID: 17, Noforwards: true, Media: media})
 	if !ok || message.DocumentID != 441 || message.DocumentAccessHash != 992 || message.MediaSize != 1024 ||
-		message.MimeType != "video/x-matroska" || message.DocumentName != "recording.mkv" || !message.Video ||
+		message.MimeType != "video/x-matroska" || message.DocumentName != "recording.mkv" || message.Duration != 754.5 ||
 		!message.NoForwards || message.TTLSeconds != 30 {
 		t.Fatalf("document metadata = %+v, ok %t", message, ok)
 	}

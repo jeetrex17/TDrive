@@ -104,11 +104,15 @@ func collectJoinedBroadcastChannels(ctx context.Context, queries ...dialogs.Quer
 				continue
 			}
 			seen[channel.ID] = struct{}{}
-			out = append(out, JoinedBroadcastChannel{
+			joined := JoinedBroadcastChannel{
 				ID: channel.ID, AccessHash: channel.AccessHash,
 				Title: strings.TrimSpace(channel.Title), Username: channel.Username,
 				Protected: channel.Noforwards,
-			})
+			}
+			if photo, ok := channel.Photo.(*tg.ChatPhoto); ok {
+				joined.PhotoID = photo.PhotoID
+			}
+			out = append(out, joined)
 		}
 		if err := iterator.Err(); err != nil {
 			return nil, fmt.Errorf("tgclient: list joined broadcast channels: %w", err)
