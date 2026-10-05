@@ -49,6 +49,12 @@ export interface ChannelMediaRequest {
 
 export type ChannelMediaFetcher = (request: ChannelMediaRequest) => Promise<ChannelMediaPage>;
 
+/** First pages of channels already opened this session, to show at once on a return visit. */
+export interface ChannelPageMemory {
+    get(source: ChannelSource): readonly ChannelMediaItem[] | undefined;
+    set(source: ChannelSource, items: readonly ChannelMediaItem[]): void;
+}
+
 export type ChannelMediaView =
     | { status: 'idle' }
     | { status: 'loading'; items: readonly ChannelMediaItem[] }

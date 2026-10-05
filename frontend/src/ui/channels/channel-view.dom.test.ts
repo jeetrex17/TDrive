@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import ChannelView from './ChannelView.svelte';
-import type { ChannelMediaFetcher, ChannelMediaItem, ChannelSource } from './channel-model';
+import type { ChannelMediaFetcher, ChannelMediaItem, ChannelMediaPage, ChannelPageMemory, ChannelSource } from './channel-model';
 
 const SOURCE: ChannelSource = { channelId: 51, title: 'Field Recordings', username: 'fieldrec', connected: true, protected: false, accountId: '7', generation: 'g' };
 const VIDEO: ChannelMediaItem = {
@@ -23,8 +23,8 @@ async function settle(): Promise<void> {
     flushSync();
 }
 
-function render(source: ChannelSource, fetchMedia: ChannelMediaFetcher) {
-    const props = { source, fetchMedia, onOpenPost: vi.fn(), onOpenTelegram: vi.fn(), onPostActions: vi.fn() };
+function render(source: ChannelSource, fetchMedia: ChannelMediaFetcher, recentPages?: ChannelPageMemory) {
+    const props = { source, fetchMedia, onOpenPost: vi.fn(), onOpenTelegram: vi.fn(), onPostActions: vi.fn(), recentPages };
     host = document.createElement('div');
     document.body.append(host);
     app = mount(ChannelView, { target: host, props });
@@ -33,6 +33,10 @@ function render(source: ChannelSource, fetchMedia: ChannelMediaFetcher) {
 
 function answering(...items: ChannelMediaItem[]): ChannelMediaFetcher {
     return vi.fn(async (request) => ({ channelId: request.channelId, accountId: '7', generation: 'g', items, nextOffsetId: 0, hasMore: false }));
+}
+
+function kindButton(label: string): HTMLButtonElement | undefined {
+    return Array.from(host?.querySelectorAll<HTMLButtonElement>('.channel-kinds button') ?? []).find((button) => button.textContent === label);
 }
 
 function rowNamed(name: RegExp): HTMLButtonElement | undefined {
@@ -81,7 +85,7 @@ describe('ChannelView', () => {
         const fetchMedia = answering(VIDEO);
         render(SOURCE, fetchMedia);
         await settle();
-        const videos = Array.from(host?.querySelectorAll<HTMLButtonElement>('.channel-kinds button') ?? []).find((button) => button.textContent === 'Videos');
+        const videos = kindButton('Videos');
         videos?.click();
         await settle();
         expect(videos?.getAttribute('aria-pressed')).toBe('true');
@@ -106,6 +110,32 @@ describe('ChannelView', () => {
         expect(host?.textContent).toContain('Sorted among the posts loaded so far.');
         rowNamed(/^Play Episode 10/)?.click();
         expect(props.onOpenPost).toHaveBeenCalledWith(tenth, SOURCE, [second, tenth]);
+    });
+
+    it('opens on the rows from the last visit and swaps in the fresh page', async () => {
+        let answer: (page: ChannelMediaPage) => void = () => {};
+        const fetchMedia = vi.fn<ChannelMediaFetcher>(() => new Promise((resolve) => { answer = resolve; }));
+        const remembered = new Map<number, readonly ChannelMediaItem[]>([[51, [VIDEO]]]);
+        render(SOURCE, fetchMedia, {
+            get: (source) => remembered.get(source.channelId),
+            set: (source, items) => { remembered.set(source.channelId, items); },
+        });
+        await settle();
+        expect(host?.querySelector('.channel-skeleton')).toBeNull();
+        expect(rowNamed(/^Play Dawn/)).toBeDefined();
+
+        const dusk = { ...VIDEO, msgId: 75, caption: 'Dusk on the river' };
+        answer({ channelId: 51, accountId: '7', generation: 'g', items: [dusk, VIDEO], nextOffsetId: 0, hasMore: false });
+        await settle();
+        expect(rowNamed(/^Play Dusk/)).toBeDefined();
+        expect(remembered.get(51)).toEqual([dusk, VIDEO]);
+
+        // A filtered page is not what the next visit should open on.
+        kindButton('Videos')?.click();
+        await settle();
+        answer({ channelId: 51, accountId: '7', generation: 'g', items: [dusk], nextOffsetId: 0, hasMore: false });
+        await settle();
+        expect(remembered.get(51)).toEqual([dusk, VIDEO]);
     });
 
     it('offers a retry when the first page fails', async () => {

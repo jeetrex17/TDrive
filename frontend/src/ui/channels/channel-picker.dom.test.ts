@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
+import { fromStore, writable, type Writable } from 'svelte/store';
 import ChannelPickerModal from './ChannelPickerModal.svelte';
 import type { ChannelSource } from './channel-model';
 
@@ -20,8 +21,25 @@ async function settle(): Promise<void> {
     flushSync();
 }
 
-function render(onAdd = vi.fn(async () => {})) {
-    const props = { open: true, loadCandidates: vi.fn(async () => JOINED), loadPhoto: vi.fn(async () => ''), onAdd, onOpen: vi.fn(), onClose: vi.fn() };
+interface Parent {
+    onAdd?: (source: ChannelSource) => Promise<void>;
+    /** Props the parent can change after mounting. */
+    open?: Writable<boolean>;
+    added?: Writable<readonly ChannelSource[]>;
+}
+
+function render({ onAdd = vi.fn(async () => {}), open = writable(true), added = writable([JOINED[0]]) }: Parent = {}) {
+    const isOpen = fromStore(open);
+    const inSidebar = fromStore(added);
+    const props = {
+        get open() { return isOpen.current; },
+        get added() { return inSidebar.current; },
+        loadCandidates: vi.fn(async (): Promise<ChannelSource[]> => JOINED),
+        loadPhoto: vi.fn(async () => ''),
+        onAdd,
+        onOpen: vi.fn(),
+        onClose: vi.fn(),
+    };
     host = document.createElement('div');
     host.id = 'channel-picker-modal';
     document.body.append(host);
@@ -74,12 +92,33 @@ describe('ChannelPickerModal', () => {
     });
 
     it('stays open and says why when adding fails', async () => {
-        const props = render(vi.fn(async () => { throw new Error('rpc error code 420: FLOOD_WAIT_12'); }));
+        const props = render({ onAdd: vi.fn(async () => { throw new Error('rpc error code 420: FLOOD_WAIT_12'); }) });
         await settle();
         rows()[0].click();
         await settle();
         expect(props.onClose).not.toHaveBeenCalled();
         expect(host?.querySelector('[role="alert"]')?.textContent).toContain('Tech Talks could not be added.');
         expect(rows().every((row) => !row.disabled)).toBe(true);
+    });
+
+    it('opens again on the last list while it refreshes, added as the sidebar has it now', async () => {
+        const open = writable(true);
+        const added = writable<readonly ChannelSource[]>([JOINED[0]]);
+        const props = render({ open, added });
+        await settle();
+        open.set(false);
+        await settle();
+
+        // Removed from the sidebar meanwhile, and Telegram has yet to answer.
+        added.set([]);
+        props.loadCandidates.mockReturnValue(new Promise(() => {}));
+        open.set(true);
+        await settle();
+
+        expect(props.loadCandidates).toHaveBeenCalledTimes(2);
+        expect(host?.querySelector('.is-placeholder')).toBeNull();
+        expect(rows().map((row) => row.getAttribute('aria-label'))).toEqual([
+            'Add Field Recordings', 'Add Tech Talks', 'Add Nature Docs',
+        ]);
     });
 });

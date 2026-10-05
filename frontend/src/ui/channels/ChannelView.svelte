@@ -28,6 +28,7 @@
         type ChannelMediaItem,
         type ChannelMediaKind,
         type ChannelMediaView,
+        type ChannelPageMemory,
         type ChannelSort,
         type ChannelSource,
     } from './channel-model';
@@ -43,10 +44,12 @@
         onPostActions: (x: number, y: number, item: ChannelMediaItem, source: ChannelSource, posts: readonly ChannelMediaItem[]) => void;
         /** Phone only: its top bar needs a way back, desktop leaves by the sidebar. */
         onBack?: () => void;
+        /** The first page from an earlier visit, shown while the fresh one loads. */
+        recentPages?: ChannelPageMemory;
         mobile?: boolean;
     }
 
-    let { source, fetchMedia, onOpenPost, onOpenTelegram, onActions, onPostActions, onBack, mobile = false }: Props = $props();
+    let { source, fetchMedia, onOpenPost, onOpenTelegram, onActions, onPostActions, onBack, recentPages, mobile = false }: Props = $props();
 
     const KINDS: ReadonlyArray<{ value: ChannelMediaKind; label: string }> = [
         { value: 'all', label: 'All' },
@@ -95,6 +98,12 @@
         const pending = pager.load({ append });
         view = pager.snapshot();
         view = await pending;
+        if (!append) remember();
+    }
+
+    // The unfiltered first page is what a return visit shows at once.
+    function remember(): void {
+        if (view.status === 'ready' && kind === 'all' && !appliedQuery) recentPages?.set(source, view.items);
     }
 
     function reload(): void {
@@ -219,7 +228,18 @@
 
     onMount(() => {
         pager.select(source);
-        void load();
+        const recent = recentPages?.get(source);
+        if (recent?.length) {
+            // Shown until the fresh page replaces it. No more pages are asked
+            // for in the meantime, so nothing appends to rows about to go.
+            view = { status: 'ready', items: recent, hasMore: false, capped: false };
+            void pager.load().then((fresh) => {
+                view = fresh;
+                remember();
+            });
+        } else {
+            void load();
+        }
         return () => {
             clearTimeout(searchTimer);
             pager.invalidate();

@@ -82,7 +82,7 @@
     import TrashConfirmModal from '../trash/TrashConfirmModal.svelte';
     import MountSelectionModal from '../mount/MountSelectionModal.svelte';
     import ChannelPickerModal from '../channels/ChannelPickerModal.svelte';
-    import { channelPickerOpen } from '../channels/channel-store';
+    import { channelPickerOpen, channelSources } from '../channels/channel-store';
     import ToastStack from '../notifications/ToastStack.svelte';
     import PreviewModal from '../preview/PreviewModal.svelte';
     import DropOverlay from '../transfers/DropOverlay.svelte';
@@ -216,6 +216,7 @@
         <ChannelPickerModal
             open={$channelPickerOpen}
             loadCandidates={listChannelSourceCandidates}
+            added={$channelSources.sources}
             loadPhoto={channelPhoto}
             onAdd={addChannel}
             onOpen={showChannel}

@@ -27,6 +27,7 @@ import {
     mediaMeta,
     mediaTitle,
     type ChannelMediaItem,
+    type ChannelPageMemory,
     type ChannelSource,
 } from '../ui/channels/channel-model';
 import { showContextMenu, type ContextMenuItem } from '../ui/menus/context-menu-store';
@@ -39,6 +40,17 @@ let loadVersion = 0;
 // One request per channel for the session. A failure is forgotten, so the
 // next time the avatar is shown it tries again.
 const photos = new Map<number, Promise<string>>();
+const firstPages = new Map<string, readonly ChannelMediaItem[]>();
+
+const pageKey = (source: ChannelSource) => `${source.accountId}:${source.channelId}:${source.generation}`;
+
+/** A channel opened before shows its last first page at once while the fresh one loads. */
+export const recentChannelPages: ChannelPageMemory = {
+    get: (source) => firstPages.get(pageKey(source)),
+    set: (source, items) => {
+        firstPages.set(pageKey(source), items);
+    },
+};
 
 /** Reloads the added channels. Only the newest call may publish its answer. */
 export async function loadChannelSources(): Promise<void> {
@@ -62,6 +74,7 @@ export function activateChannelSources(): () => void {
     return () => {
         loadVersion += 1;
         photos.clear();
+        firstPages.clear();
         closeChannel();
         channelPickerOpen.set(false);
         channelSources.set(EMPTY_CHANNEL_SOURCES);

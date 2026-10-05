@@ -20,6 +20,7 @@
         openChannelPicker,
         openChannelPost,
         openInTelegram,
+        recentChannelPages,
         showChannel,
         showChannelActions,
         showPostActions,
@@ -349,6 +350,7 @@
                     onOpenPost={openChannelPost}
                     onOpenTelegram={openInTelegram}
                     onPostActions={showPostActions}
+                    recentPages={recentChannelPages}
                 />
             {/key}
         {/if}

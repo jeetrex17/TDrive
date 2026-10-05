@@ -31,7 +31,7 @@
     import { fileListView } from '../file-list/file-list-store';
     import ChannelView from '../channels/ChannelView.svelte';
     import { closeChannel, openChannel } from '../channels/channel-store';
-    import { openChannelPost, openInTelegram, showChannelActions, showPostActions } from '../../modules/channel-sources';
+    import { openChannelPost, openInTelegram, recentChannelPages, showChannelActions, showPostActions } from '../../modules/channel-sources';
     import { listChannelMedia } from '../../api';
 
     interface Props {
@@ -239,6 +239,7 @@
                         onActions={showChannelActions}
                         onPostActions={showPostActions}
                         onBack={closeChannel}
+                        recentPages={recentChannelPages}
                     />
                 {/key}
             {/if}

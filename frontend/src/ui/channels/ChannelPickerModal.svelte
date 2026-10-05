@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { untrack } from 'svelte';
     import CheckIcon from '@lucide/svelte/icons/check';
     import PlusIcon from '@lucide/svelte/icons/plus';
     import SearchIcon from '@lucide/svelte/icons/search';
@@ -11,13 +12,18 @@
         open: boolean;
         /** Every broadcast channel the account has joined, added or not. */
         loadCandidates: () => Promise<ChannelSource[]>;
+        /**
+         * The channels in TDrive now, as the sidebar lists them. They decide
+         * what reads as added, since a list kept from an earlier open may not.
+         */
+        added: readonly ChannelSource[];
         loadPhoto: (source: ChannelSource) => Promise<string>;
         onAdd: (source: ChannelSource) => Promise<void>;
         onOpen: (source: ChannelSource) => void;
         onClose: () => void;
     }
 
-    let { open, loadCandidates, loadPhoto, onAdd, onOpen, onClose }: Props = $props();
+    let { open, loadCandidates, added, loadPhoto, onAdd, onOpen, onClose }: Props = $props();
 
     type Candidates =
         | { status: 'loading' }
@@ -30,6 +36,9 @@
     let addError = $state('');
     let loadVersion = 0;
 
+    const addedIds = $derived(new Set(added.map((source) => source.channelId)));
+    const isAdded = (source: ChannelSource) => addedIds.has(source.channelId);
+
     // Channels still to add lead; the ones already in TDrive sit at the end.
     const visible = $derived.by(() => {
         if (candidates.status !== 'ready') return [];
@@ -38,19 +47,20 @@
             ? candidates.sources.filter((source) => source.title.toLocaleLowerCase().includes(needle)
                 || source.username.toLocaleLowerCase().includes(needle))
             : candidates.sources;
-        return [...matches.filter((source) => !source.connected), ...matches.filter((source) => source.connected)];
+        return [...matches.filter((source) => !isAdded(source)), ...matches.filter(isAdded)];
     });
 
     // Listing joined channels walks every Telegram dialog, so it happens only
-    // while the picker is open, never on the way into a channel.
+    // while the picker is open, never on the way into a channel. Opened again,
+    // the picker shows the last list until the fresh one lands.
     async function load(): Promise<void> {
         const version = ++loadVersion;
-        candidates = { status: 'loading' };
+        if (candidates.status !== 'ready') candidates = { status: 'loading' };
         try {
             const sources = await loadCandidates();
             if (version === loadVersion) candidates = { status: 'ready', sources };
         } catch (error) {
-            if (version === loadVersion) candidates = { status: 'error', error };
+            if (version === loadVersion && candidates.status !== 'ready') candidates = { status: 'error', error };
         }
     }
 
@@ -59,7 +69,9 @@
         query = '';
         adding = null;
         addError = '';
-        void load();
+        // Only opening reloads. load() reads the list it replaces, which
+        // would otherwise make every answer reload again.
+        untrack(() => void load());
         return () => {
             loadVersion += 1;
         };
@@ -71,7 +83,7 @@
 
     async function choose(source: ChannelSource): Promise<void> {
         if (adding !== null) return;
-        if (source.connected) {
+        if (isAdded(source)) {
             onOpen(source);
             onClose();
             return;
@@ -152,13 +164,14 @@
         {:else}
             {#each visible as source (source.channelId)}
                 {@const busy = adding === source.channelId}
+                {@const inTDrive = isAdded(source)}
                 <button
                     class="channel-picker-row"
-                    class:is-added={source.connected}
+                    class:is-added={inTDrive}
                     type="button"
                     disabled={adding !== null && !busy}
                     aria-busy={busy}
-                    aria-label={source.connected ? `Open ${source.title}, already added` : `Add ${source.title}`}
+                    aria-label={inTDrive ? `Open ${source.title}, already added` : `Add ${source.title}`}
                     onclick={() => void choose(source)}
                 >
                     <ChannelAvatar {source} {loadPhoto} />
@@ -169,7 +182,7 @@
                     <span class="channel-picker-trail" aria-hidden="true">
                         {#if busy}
                             <span class="channel-picker-spinner"></span>
-                        {:else if source.connected}
+                        {:else if inTDrive}
                             <CheckIcon size={14} strokeWidth={2.5} />Added
                         {:else}
                             <span class="channel-picker-plus"><PlusIcon size={14} strokeWidth={2.5} /></span>
