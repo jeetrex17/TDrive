@@ -191,6 +191,34 @@ test('the overflow menu starts selection and Select all picks every row', async 
     await expect(page.locator('.topbar-selection-count')).toHaveText('3 selected');
 });
 
+// A settings page opens at the top with its title and a back button in the top
+// bar, not with its back control buried in the scrolling content.
+test('an account settings page carries its title and back in the top bar', async ({ page }) => {
+    await bootMobile(page);
+    await tab(page, /^Account/).click();
+    await page.getByRole('button', { name: /^Appearance/ }).click();
+
+    const topbar = page.locator('.mobile-topbar');
+    await expect(topbar.getByRole('heading', { name: 'Appearance' })).toBeVisible();
+    await expect(topbar.getByRole('heading', { name: 'Account' })).toHaveCount(0);
+
+    await topbar.getByRole('button', { name: 'Back' }).click();
+    await expect(topbar.getByRole('heading', { name: 'Account' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Appearance/ })).toBeVisible();
+});
+
+// Tapping the drive that is already active just returns to its files; it must
+// not run a full switch (which would stop the backup run and reset to root).
+test('tapping the active drive in Account opens Files without re-switching', async ({ page }) => {
+    const mock = await bootMobile(page);
+    await tab(page, /^Account/).click();
+    await page.getByRole('region', { name: 'Drives' }).getByRole('button', { name: /^My Drive/ }).click();
+
+    await expect(page.locator('.main-content')).toBeVisible();
+    await expect(page.getByRole('button', { name: /Switch drive/ })).toContainText('My Drive');
+    expect(await mock.calls('SetActiveChannel')).toEqual([]);
+});
+
 test('the bars carry safe-area padding', async ({ page }) => {
     await bootMobile(page);
     const shell = page.locator('#success-screen.mobile-shell');

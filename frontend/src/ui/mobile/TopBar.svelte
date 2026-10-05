@@ -20,8 +20,11 @@
     import { askEmptyTrash, closeTrash, openTrash, trashEntries } from '../../modules/trash/controller';
     import SyncRing from './SyncRing.svelte';
     import {
+        ACCOUNT_DETAIL_TITLES,
+        accountDetail,
         activeDrive,
         activeTab,
+        closeAccountDetail,
         ringState,
         fileListCount,
         openDriveSwitcher,
@@ -57,9 +60,17 @@
         : $fileListCount === 1 ? '1 file'
         : `${$fileListCount} files`,
     );
+    // A drive titled the same as its kind ("Personal") would read "Personal ·
+    // Personal · 16 files" with the name above it, so where the two are the same
+    // word the kind is dropped and only the count remains.
+    const kindRepeatsName = $derived(driveName.trim().toLowerCase() === driveKind.toLowerCase());
     // While the search field is open the rows are results, not the drive, so
     // the header says only what kind of drive this is rather than "No files".
-    const driveMeta = $derived(searchOpen ? driveKind : `${driveKind} · ${countLabel}`);
+    const driveMeta = $derived(
+        searchOpen ? (kindRepeatsName ? '' : driveKind)
+        : kindRepeatsName ? countLabel
+        : `${driveKind} · ${countLabel}`,
+    );
     // Inside a folder the row set mixes folders and files, so "items" is the
     // honest noun where the drive header can say "files".
     const itemsLabel = $derived(
@@ -433,9 +444,20 @@
         </div>
     </div>
 
+    <!-- Account: a settings page opened from the list carries its own title and
+         a way back here, the way a folder and the trash do. -->
     <div class="topbar-context topbar-plain" hidden={selecting || active !== 'account'}>
         <div class="topbar-row">
-            <h1 class="topbar-title">Account</h1>
+            {#if $accountDetail}
+                <button type="button" class="topbar-back" aria-label="Back" onclick={() => closeAccountDetail()}>
+                    <ChevronLeftIcon size={24} strokeWidth={2} aria-hidden="true" />
+                </button>
+                <div class="topbar-plain-titles">
+                    <h1 class="topbar-title">{ACCOUNT_DETAIL_TITLES[$accountDetail]}</h1>
+                </div>
+            {:else}
+                <h1 class="topbar-title">Account</h1>
+            {/if}
         </div>
     </div>
 </header>

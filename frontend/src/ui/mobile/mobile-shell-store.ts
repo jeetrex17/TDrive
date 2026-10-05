@@ -1,6 +1,7 @@
-// Reactive state that is local to the phone shell: which tab is showing, whether
-// the drive switcher sheet is open, and the active drive's sync state for the
-// header ring. Desktop never imports this, so the stores stay inert there.
+// Reactive state the phone shell drives: which tab is showing, whether the drive
+// switcher sheet is open, the account detail page, and the active drive's sync
+// state for the header ring. Shared modules (transfers, notifications, channels)
+// read and feed these on every platform; desktop leaves the phone-only ones be.
 
 import { derived, get, writable } from 'svelte/store';
 import { sidebarState } from '../sidebar/sidebar-store';
@@ -16,6 +17,28 @@ export type MobileTab = 'files' | 'photos' | 'transfers' | 'account';
 export const activeTab = writable<MobileTab>('files');
 
 export const driveSwitcherOpen = writable(false);
+
+/**
+ * The Account settings that open as their own page rather than a row: each takes
+ * the whole tab with its title and a back button in the top bar. The state lives
+ * here so the top bar and the Account tab read the same value.
+ */
+export type AccountDetail = 'appearance' | 'backup';
+
+export const ACCOUNT_DETAIL_TITLES: Record<AccountDetail, string> = {
+    appearance: 'Appearance',
+    backup: 'Photo & video backup',
+};
+
+export const accountDetail = writable<AccountDetail | null>(null);
+
+export function openAccountDetail(detail: AccountDetail): void {
+    accountDetail.set(detail);
+}
+
+export function closeAccountDetail(): void {
+    accountDetail.set(null);
+}
 
 /**
  * True while a software keyboard is covering part of the screen.
