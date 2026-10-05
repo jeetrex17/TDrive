@@ -495,7 +495,9 @@ func (s *Service) Page(ctx context.Context, channelID, offsetID int64, limit int
 		if err != nil {
 			return MediaPage{}, fmt.Errorf("channel source: page media: %w", err)
 		}
-		page.HasMore = len(messages) == batchSize
+		// Only an empty batch proves the start of the channel. Telegram leaves
+		// deleted and withheld posts out, so a short one can have more behind it.
+		page.HasMore = len(messages) > 0
 		for index, message := range messages {
 			if message.MsgID <= 0 {
 				continue

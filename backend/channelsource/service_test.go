@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -259,6 +260,48 @@ func TestDrivesAreNeverChannelSources(t *testing.T) {
 	}
 	if connected, err := sources.ListConnected(ctx); err != nil || len(connected) != 0 {
 		t.Fatalf("connected = %#v, %v", connected, err)
+	}
+}
+
+// withheld leaves posts out of history the way Telegram does for deleted or
+// withheld ones, so a batch can come back short with more behind it.
+type withheld struct {
+	tgclient.Client
+	posts map[int64]bool
+}
+
+func (c withheld) GetHistory(ctx context.Context, peer tgclient.InputPeer, minID, offsetID int64, limit int) ([]tgclient.HistoryMessage, error) {
+	messages, err := c.Client.GetHistory(ctx, peer, minID, offsetID, limit)
+	return slices.DeleteFunc(messages, func(message tgclient.HistoryMessage) bool { return c.posts[message.MsgID] }), err
+}
+
+func TestShortBatchIsNotTheStartOfTheChannel(t *testing.T) {
+	ctx := t.Context()
+	fake := tgclient.NewFake(testAccountID)
+	fake.SeedJoinedBroadcastChannels(tgclient.JoinedBroadcastChannel{ID: testChannelID, AccessHash: 77, Title: "Cinema"})
+	for id := int64(1); id <= 150; id++ {
+		fake.SeedHistory(tgclient.HistoryMessage{ChannelID: testChannelID, MsgID: id, HasMedia: true,
+			DocumentID: 9000 + id, DocumentAccessHash: 5, MediaSize: 16, DocumentName: "clip.mp4", MimeType: "video/mp4"})
+	}
+	// The newest post is withheld, so the first batch of 100 holds 99.
+	sources, _, _ := sourceFixture(t, withheld{Client: fake, posts: map[int64]bool{150: true}}, fake)
+	if _, err := sources.Connect(ctx, testChannelID); err != nil {
+		t.Fatal(err)
+	}
+	seen, offset := 0, int64(0)
+	for {
+		page, err := sources.Page(ctx, testChannelID, offset, 100, "", "all")
+		if err != nil {
+			t.Fatal(err)
+		}
+		seen += len(page.Items)
+		if !page.HasMore {
+			break
+		}
+		offset = page.NextOffsetID
+	}
+	if seen != 149 {
+		t.Fatalf("reached %d posts, want all 149 that are not withheld", seen)
 	}
 }
 
