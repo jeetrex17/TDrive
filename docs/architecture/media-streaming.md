@@ -76,9 +76,11 @@ file. A file-reference refresh re-reads the source post and accepts a new
 reference only when the document identity and size still match, preventing
 blocks from different document revisions from mixing in one session.
 
-Channel-level or post-level noforwards, paid media, expiring documents and
+Channel-level or post-level noforwards, paid media, expiring documents,
+posts Telegram restricts for every platform or the running one, and
 unsupported formats cannot be opened in-app; the UI offers a Telegram post
-link. External media responses use `no-store`, and generated video thumbnails
+link. A channel Telegram restricts that way is unavailable, as it is in
+official clients. External media responses use `no-store`, and generated video thumbnails
 remain in session temporary storage. Disconnect, logout and normal session
 close revoke the loopback URL. Native player processes attached to those
 tokens close at the same boundary. Protection or membership changes after a

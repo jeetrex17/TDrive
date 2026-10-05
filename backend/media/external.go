@@ -67,7 +67,7 @@ func (s *Service) OpenExternal(ctx context.Context, source ExternalMedia, publis
 	if source.Client == nil || source.AccountID <= 0 || source.Generation == "" || source.Peer.ChannelID <= 0 || message.MsgID <= 0 {
 		return OpenResult{}, ErrExternalRestricted
 	}
-	if source.Protected || message.NoForwards || message.TTLSeconds > 0 || message.Paid {
+	if source.Protected || message.NoForwards || message.TTLSeconds > 0 || message.Paid || message.Restricted {
 		return OpenResult{}, ErrExternalRestricted
 	}
 	name := ExternalName(message)
@@ -127,14 +127,14 @@ func (c *externalRangeClient) ResolveDocument(ctx context.Context, _ tgclient.In
 	if err != nil {
 		return tgclient.DocumentRef{}, err
 	}
-	if channel.Protected {
+	if channel.Protected || channel.Restricted {
 		return tgclient.DocumentRef{}, ErrExternalRestricted
 	}
 	message, err := c.client.GetChannelMessage(ctx, c.peer, msgID)
 	if err != nil {
 		return tgclient.DocumentRef{}, err
 	}
-	if message.NoForwards || message.TTLSeconds > 0 || message.Paid {
+	if message.NoForwards || message.TTLSeconds > 0 || message.Paid || message.Restricted {
 		return tgclient.DocumentRef{}, ErrExternalRestricted
 	}
 	if message.DocumentID != c.original.DocumentID || message.MediaSize != c.original.Size || message.DocumentAccessHash != c.original.AccessHash {

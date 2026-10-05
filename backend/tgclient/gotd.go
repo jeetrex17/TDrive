@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -463,7 +465,17 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 		NoForwards:         fullMsg.Noforwards,
 		TTLSeconds:         ttlSeconds,
 		Paid:               paid,
+		Restricted:         restrictedHere(fullMsg.RestrictionReason),
 	}, true
+}
+
+// restrictedHere reports whether Telegram withholds content on this platform,
+// as official clients read it: a reason for every platform, or for this one.
+// The phone platforms Telegram names, "ios" and "android", are GOOS values.
+func restrictedHere(reasons []tg.RestrictionReason) bool {
+	return slices.ContainsFunc(reasons, func(reason tg.RestrictionReason) bool {
+		return reason.Platform == "all" || reason.Platform == runtime.GOOS
+	})
 }
 
 func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID int64, limit int) ([]HistoryMessage, error) {

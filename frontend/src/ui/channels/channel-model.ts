@@ -215,6 +215,7 @@ const RESTRICTION_LABELS: Readonly<Record<string, string>> = {
     protected: 'Protected',
     paid: 'Paid',
     expires: 'Expiring',
+    restricted: 'Restricted',
 };
 
 /**

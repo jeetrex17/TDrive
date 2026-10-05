@@ -3,6 +3,7 @@ package tgclient
 import (
 	"context"
 	"errors"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -60,6 +61,24 @@ func TestHistoryMessagePreservesExternalMediaRestrictionsAndAttributes(t *testin
 		message.MimeType != "video/x-matroska" || message.DocumentName != "recording.mkv" || message.Duration != 754.5 ||
 		!message.NoForwards || message.TTLSeconds != 30 {
 		t.Fatalf("document metadata = %+v, ok %t", message, ok)
+	}
+}
+
+func TestRestrictionsApplyEverywhereOrOnThisPlatform(t *testing.T) {
+	t.Parallel()
+	for _, test := range []struct {
+		platform   string
+		restricted bool
+	}{{"all", true}, {runtime.GOOS, true}, {"web", false}} {
+		reasons := []tg.RestrictionReason{{Platform: test.platform, Reason: "terms", Text: "Not available"}}
+		message, _ := historyMessageFromTG(&tg.Message{ID: 19, RestrictionReason: reasons})
+		peer := InputPeer{ChannelID: 101, AccessHash: 1101}
+		channel, err := broadcastChannelFrom(&tg.MessagesChats{Chats: []tg.ChatClass{
+			&tg.Channel{ID: 101, Broadcast: true, Restricted: true, RestrictionReason: reasons},
+		}}, peer)
+		if err != nil || message.Restricted != test.restricted || channel.Restricted != test.restricted {
+			t.Errorf("platform %q: post %t, channel %t (%v), want %t", test.platform, message.Restricted, channel.Restricted, err, test.restricted)
+		}
 	}
 }
 

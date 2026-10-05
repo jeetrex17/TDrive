@@ -235,6 +235,31 @@ func TestSourceAccountGenerationAndPermissions(t *testing.T) {
 	}
 }
 
+func TestRestrictedChannelIsUnavailable(t *testing.T) {
+	ctx := t.Context()
+	fake := tgclient.NewFake(testAccountID)
+	fake.SeedJoinedBroadcastChannels(
+		tgclient.JoinedBroadcastChannel{ID: testChannelID, AccessHash: 77, Title: "Cinema"},
+		tgclient.JoinedBroadcastChannel{ID: 7802, AccessHash: 82, Title: "Withheld", Restricted: true},
+	)
+	sources, _, _ := sourceFixture(t, fake, fake)
+	candidates, err := sources.ListCandidates(ctx)
+	if err != nil || len(candidates) != 1 || candidates[0].ChannelID != testChannelID {
+		t.Fatalf("candidates = %#v, %v", candidates, err)
+	}
+	if _, err := sources.Connect(ctx, 7802); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("connect a restricted channel: %v, want ErrUnavailable", err)
+	}
+	// Restricted after it was added.
+	if _, err := sources.Connect(ctx, testChannelID); err != nil {
+		t.Fatal(err)
+	}
+	fake.SeedJoinedBroadcastChannels(tgclient.JoinedBroadcastChannel{ID: testChannelID, AccessHash: 77, Title: "Cinema", Restricted: true})
+	if _, err := sources.Page(ctx, testChannelID, 0, 20, "", "all"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("page of a restricted channel: %v, want ErrUnavailable", err)
+	}
+}
+
 func TestDrivesAreNeverChannelSources(t *testing.T) {
 	ctx := t.Context()
 	fake := tgclient.NewFake(testAccountID)
@@ -316,6 +341,7 @@ func TestPostRestrictionsBlockExternalOpen(t *testing.T) {
 		{1, tgclient.HistoryMessage{NoForwards: true}, "protected"},
 		{2, tgclient.HistoryMessage{TTLSeconds: 30}, "expires"},
 		{3, tgclient.HistoryMessage{Paid: true}, "paid"},
+		{4, tgclient.HistoryMessage{Restricted: true}, "restricted"},
 	} {
 		message := tgclient.HistoryMessage{ChannelID: testChannelID, MsgID: test.id,
 			HasMedia: true, DocumentID: test.id + 100, DocumentAccessHash: 55,
@@ -327,6 +353,7 @@ func TestPostRestrictionsBlockExternalOpen(t *testing.T) {
 		message.NoForwards = test.message.NoForwards
 		message.TTLSeconds = test.message.TTLSeconds
 		message.Paid = test.message.Paid
+		message.Restricted = test.message.Restricted
 		fake.SeedHistory(message)
 	}
 	sources, _, _ := sourceFixture(t, fake, fake)
@@ -335,11 +362,11 @@ func TestPostRestrictionsBlockExternalOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	page, err := sources.Page(t.Context(), testChannelID, 0, 20, "", "all")
-	if err != nil || len(page.Items) != 3 {
+	if err != nil || len(page.Items) != 4 {
 		t.Fatalf("restricted page = %#v, %v", page, err)
 	}
 	for _, item := range page.Items {
-		want := map[int64]string{1: "protected", 2: "expires", 3: "paid"}[item.MsgID]
+		want := map[int64]string{1: "protected", 2: "expires", 3: "paid", 4: "restricted"}[item.MsgID]
 		if item.Streamable || item.BlockReason != want || item.TelegramURL == "" {
 			t.Errorf("item %d = %#v, want blocked %q", item.MsgID, item, want)
 		}
@@ -373,8 +400,9 @@ func (r *rangeFault) ReadDocumentRange(ctx context.Context, ref tgclient.Documen
 
 type messageSwap struct {
 	*tgclient.Fake
-	changed atomic.Bool
-	protect atomic.Bool
+	changed  atomic.Bool
+	protect  atomic.Bool
+	restrict atomic.Bool
 }
 
 func (s *messageSwap) GetChannelMessage(ctx context.Context, peer tgclient.InputPeer, msgID int64) (tgclient.HistoryMessage, error) {
@@ -385,15 +413,19 @@ func (s *messageSwap) GetChannelMessage(ctx context.Context, peer tgclient.Input
 	if s.protect.Load() {
 		message.NoForwards = true
 	}
+	if s.restrict.Load() {
+		message.Restricted = true
+	}
 	return message, err
 }
 
 func TestExternalReferenceRefreshRejectsReplacement(t *testing.T) {
 	for _, test := range []struct {
-		name                string
-		replaced, protected bool
+		name                            string
+		replaced, protected, restricted bool
 	}{
-		{"same document", false, false}, {"replacement", true, false}, {"protected after open", false, true},
+		{"same document", false, false, false}, {"replacement", true, false, false},
+		{"protected after open", false, true, false}, {"restricted after open", false, false, true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			fake := tgclient.NewFake(testAccountID)
@@ -413,13 +445,14 @@ func TestExternalReferenceRefreshRejectsReplacement(t *testing.T) {
 			}
 			client.changed.Store(test.replaced)
 			client.protect.Store(test.protected)
+			client.restrict.Store(test.restricted)
 			response, err := http.Get(opened.URL)
 			if err != nil {
 				t.Fatal(err)
 			}
 			got, _ := io.ReadAll(response.Body)
 			_ = response.Body.Close()
-			if test.replaced || test.protected {
+			if test.replaced || test.protected || test.restricted {
 				if bytes.Equal(got, body) || ranges.resolves.Load() < 1 {
 					t.Fatalf("restricted/replaced media served complete body; resolves=%d", ranges.resolves.Load())
 				}

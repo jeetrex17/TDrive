@@ -87,8 +87,9 @@ type HistoryMessage struct {
 	TTLSeconds         int
 	// Paid marks paid media. It holds no document this account can read, so
 	// HasMedia stays false and drive sync never adopts it as a file.
-	Paid   bool
-	Thumbs []FileThumb
+	Paid       bool
+	Restricted bool // Telegram withholds the post on this platform
+	Thumbs     []FileThumb
 	// Placeholder marks an entry that occupies a message id but carries no
 	// content: a service event, or the stub left where a message was deleted.
 	// It is reported so page lengths match what Telegram sent, and callers
@@ -177,6 +178,7 @@ type JoinedBroadcastChannel struct {
 	Title      string
 	Username   string
 	Protected  bool
+	Restricted bool  // Telegram withholds the channel on this platform
 	PhotoID    int64 // the current profile photo; 0 when the channel has none
 }
 

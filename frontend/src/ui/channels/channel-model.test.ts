@@ -147,8 +147,8 @@ describe('post presentation', () => {
     });
 
     it('says why Telegram keeps a post, and that an unsupported file is not locked', () => {
-        expect(['protected', 'paid', 'expires', 'unsupported_format', ''].map((code) => restrictionLabel(post(5, { blockReason: code }))))
-            .toEqual(['Protected', 'Paid', 'Expiring', '', '']);
+        expect(['protected', 'paid', 'expires', 'restricted', 'unsupported_format', ''].map((code) => restrictionLabel(post(5, { blockReason: code }))))
+            .toEqual(['Protected', 'Paid', 'Expiring', 'Restricted', '', '']);
         expect(mediaMeta(post(6, { kind: 'unknown', name: 'kit.pdf', size: 1_048_576, date: 0 }))).toBe('PDF · 1 MB');
     });
 

@@ -179,7 +179,7 @@ func (s *Service) ListCandidates(ctx context.Context) ([]SourceInfo, error) {
 	}
 	out := make([]SourceInfo, 0, len(channels))
 	for _, channel := range channels {
-		if channel.ID <= 0 || channel.AccessHash == 0 || drives[channel.ID] {
+		if channel.ID <= 0 || channel.AccessHash == 0 || channel.Restricted || drives[channel.ID] {
 			continue
 		}
 		source := SourceInfo{ChannelID: channel.ID, Title: channel.Title, Username: channel.Username,
@@ -280,7 +280,7 @@ func (s *Service) ConnectWithGate(ctx context.Context, channelID, expectedAccoun
 	if err != nil {
 		return SourceInfo{}, err
 	}
-	if !ok {
+	if !ok || channel.Restricted {
 		return SourceInfo{}, ErrUnavailable
 	}
 	if currentAccount, err := s.account(ctx); err != nil || currentAccount != accountID {
@@ -418,6 +418,10 @@ func (s *Service) lookup(ctx context.Context, accountID int64, peer tgclient.Inp
 	if err != nil {
 		return tgclient.JoinedBroadcastChannel{}, fmt.Errorf("channel source: look up channel: %w", err)
 	}
+	// Telegram withholds it here, so official clients would not show it either.
+	if channel.Restricted {
+		return tgclient.JoinedBroadcastChannel{}, ErrUnavailable
+	}
 	s.lookupsMu.Lock()
 	if s.lookups == nil {
 		s.lookups = make(map[[2]int64]lookedUp)
@@ -447,6 +451,8 @@ func mediaItem(channel tgclient.JoinedBroadcastChannel, message tgclient.History
 		Duration: int64(math.Round(message.Duration)), MimeType: message.MimeType, Kind: string(kind), Caption: message.Text,
 		TelegramURL: telegramURL(channel, message.MsgID)}
 	switch {
+	case message.Restricted:
+		item.BlockReason = "restricted"
 	case channel.Protected || message.NoForwards:
 		item.BlockReason = "protected"
 	case message.Paid:
