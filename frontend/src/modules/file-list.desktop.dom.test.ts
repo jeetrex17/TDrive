@@ -28,6 +28,7 @@ const modals = vi.hoisted(() => ({
 const actions = vi.hoisted(() => ({
     playVideo: vi.fn(), openFile: vi.fn(), triggerRefresh: vi.fn(), refreshFiles: vi.fn(),
     navigateToFolder: vi.fn(), enqueueDownload: vi.fn(), enqueueFolderDownload: vi.fn(),
+    preview: vi.fn(),
 }));
 
 vi.mock('../api', () => api);
@@ -45,6 +46,7 @@ vi.mock('./transfers', () => ({
 }));
 vi.mock('./connectivity', () => ({ isOffline: () => false }));
 vi.mock('./context-menu', () => ({ showRowContextMenu: vi.fn() }));
+vi.mock('./modals/preview', () => ({ activatePreviewModal: vi.fn(), openPreviewList: actions.preview }));
 vi.mock('./gallery', () => ({ renderGallery: vi.fn(), setPhotosMode: vi.fn() }));
 vi.mock('./uploaders', () => ({ ensureUserNames: vi.fn(), uploaderChipLabel: () => null }));
 vi.mock('./drive-data', () => ({ calculateVisibleFolderStats: vi.fn() }));
@@ -225,6 +227,14 @@ describe('desktop activation and lifecycle', () => {
         }
     });
 
+    it('opens an image preview from Enter', async () => {
+        renderFileListRows(list, [buildFileRow({ id: 7, name: 'photo.jpg', size: 9 }, '')]);
+        flushSync();
+        press(row('file:7'), 'Enter');
+        await vi.waitFor(() => expect(actions.preview).toHaveBeenCalledTimes(1));
+        expect(actions.enqueueDownload).not.toHaveBeenCalled();
+    });
+
     it('opens folders and downloads them through distinct affordances', () => {
         press(row('folder:design'), 'Enter');
         row('folder:design').querySelector<HTMLButtonElement>('button.download-folder')?.click();
@@ -247,21 +257,30 @@ describe('desktop activation and lifecycle', () => {
 
     it.each([
         ['movie.mp4', 'playVideo'], ['notes.txt', 'openFile'],
-    ] as const)('opens %s by double-clicking its name', (name, action) => {
+    ] as const)('opens %s by double-clicking anywhere on the row', (name, action) => {
         renderFileListRows(list, [buildFileRow({ id: 41, name }, '')]);
         flushSync();
-        row('file:41').querySelector('.row-name')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        row('file:41').querySelector('.row-meta')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
         expect(actions[action]).toHaveBeenCalledTimes(1);
         expect(modals.openRenameModal).not.toHaveBeenCalled();
     });
 
-    it('renames a non-previewable file only from its name area', () => {
+    it('previews an image on double click and from its row Open action', async () => {
+        renderFileListRows(list, [buildFileRow({ id: 41, name: 'photo.jpg', size: 25 }, '')]);
+        flushSync();
+        expect(row('file:41').querySelector('button.open-image')).not.toBeNull();
+        row('file:41').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        await vi.waitFor(() => expect(actions.preview).toHaveBeenCalledTimes(1));
+        row('file:41').querySelector<HTMLButtonElement>('button.open-image')?.click();
+        await vi.waitFor(() => expect(actions.preview).toHaveBeenCalledTimes(2));
+    });
+
+    it('downloads a plain file on double click and never renames it', () => {
         renderFileListRows(list, [buildFileRow({ id: 41, name: 'bundle.zip', size: 25 }, '')]);
         flushSync();
-        row('file:41').querySelector('.row-meta')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-        expect(modals.openRenameModal).not.toHaveBeenCalled();
         row('file:41').querySelector('.row-name')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-        expect(modals.openRenameModal).toHaveBeenCalledWith(expect.objectContaining({ id: 41, name: 'bundle.zip' }));
+        expect(actions.enqueueDownload).toHaveBeenCalledWith(41, 'bundle.zip', 25, 1);
+        expect(modals.openRenameModal).not.toHaveBeenCalled();
     });
 
     it('leaves removed listeners inactive and reactivation invokes each action once', () => {
@@ -397,11 +416,12 @@ it('deletes a folder and renames a Telegram file with their original identifiers
     expect(modals.openRenameModal).toHaveBeenCalledWith({ type: 'file', id: 99, name: 'raw.zip', size: 300, source: 'tg', parentId: 'origin' });
 });
 
-it('does not rename a read-only archive on double click', () => {
-    renderFileListRows(list, [buildFileRow({ id: 41, name: 'archive.zip', canRename: false }, '')]);
+it('never renames a read-only archive on double click', () => {
+    renderFileListRows(list, [buildFileRow({ id: 41, name: 'archive.zip', size: 10, canRename: false }, '')]);
     flushSync();
     row('file:41').querySelector('.row-name')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
     expect(modals.openRenameModal).not.toHaveBeenCalled();
+    expect(actions.enqueueDownload).toHaveBeenCalledTimes(1);
 });
 
 it('supports keyboard navigation from the list container without a focused row', async () => {

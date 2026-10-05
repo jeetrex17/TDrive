@@ -253,6 +253,15 @@ function fileActions(name: string): FileListAction[] {
             title: "Play",
             label: "Play video",
         });
+    } else if (isImageFile(name || "")) {
+        // An image opens its preview, not the file viewer, so it carries its own
+        // class for the delegated layer to route.
+        actions.push({
+            kind: "open",
+            className: "open-image",
+            title: "Open",
+            label: "Open image",
+        });
     } else if (canOpenFileViewer(name || "")) {
         actions.push({
             kind: "open",
@@ -404,13 +413,18 @@ function activeRowFromEventTarget(target: EventTarget | null) {
         || null;
 }
 
-function triggerRowContextMenu(row: HTMLElement) {
-    const rect = row.getBoundingClientRect();
+// Opens the row's menu by replaying a contextmenu event, so the keyboard menu
+// key and the three-dot button land on the exact menu a right click builds. The
+// anchor is the row for the keyboard, the button for the overflow click, which
+// is where the menu should appear.
+function triggerRowContextMenu(row: HTMLElement, anchor: HTMLElement = row) {
+    const rect = anchor.getBoundingClientRect();
+    const atRow = anchor === row;
     row.dispatchEvent(new MouseEvent("contextmenu", {
         bubbles: true,
         cancelable: true,
-        clientX: rect.left + Math.min(48, rect.width / 2),
-        clientY: rect.top + Math.min(24, rect.height / 2),
+        clientX: atRow ? rect.left + Math.min(48, rect.width / 2) : rect.left,
+        clientY: atRow ? rect.top + Math.min(24, rect.height / 2) : rect.bottom,
     }));
 }
 
@@ -583,7 +597,7 @@ function activateRow(element: HTMLElement, row: InteractiveFileListRow) {
         void appActions().playVideo(target);
         return;
     }
-    if (isMobilePlatform() && isImageFile(target.name)) {
+    if (isImageFile(target.name)) {
         void openImagePreview(row);
         return;
     }
@@ -941,6 +955,16 @@ function handleListClick(e: MouseEvent) {
         return;
     }
 
+    // The three-dot button opens the right-click menu under itself, so the menu
+    // is discoverable without a right click. It stops before the document so the
+    // menu's own outside-click dismissal does not close it in the same tick.
+    const more = (e.target as HTMLElement).closest<HTMLButtonElement>("button.row-more");
+    if (more) {
+        triggerRowContextMenu(element, more);
+        e.stopPropagation();
+        return;
+    }
+
     if (row.kind === "folder") {
         if ((e.target as HTMLElement).closest("button.download-folder")) {
             enqueueFolderDownload(row.id, row.name, 0, row.channelId);
@@ -958,6 +982,10 @@ function handleListClick(e: MouseEvent) {
     }
     if ((e.target as HTMLElement).closest("button.play-video")) {
         void appActions().playVideo(target);
+        return;
+    }
+    if ((e.target as HTMLElement).closest("button.open-image")) {
+        void openImagePreview(row);
         return;
     }
     if ((e.target as HTMLElement).closest("button.open-file")) {
@@ -1050,38 +1078,21 @@ function handleListKeyDown(e: KeyboardEvent) {
 }
 
 function handleListDblClick(e: MouseEvent) {
-    // A phone tap already opened the row; the second tap of a quick pair is not
-    // a rename request.
+    // A double click anywhere on a row opens it, the same as Enter: a folder
+    // navigates, a video plays, an image previews, a viewer file opens, anything
+    // else downloads. Rename has moved to F2 and the menu. The phone already
+    // opened on the first tap, and search and trash keep their own rules.
     if (isTrashMode() || isSearchMode() || isMobilePlatform()) return;
 
-    const row = fileListRowForElement((e.target as HTMLElement).closest(".drive-row"));
-    if (!row) return;
+    const element = (e.target as HTMLElement).closest<HTMLElement>(".drive-row");
+    const row = fileListRowForElement(element);
+    if (!element || !row) return;
 
-    if (row.kind === "folder") {
-        navigateToFolder(row.id, row.name);
-        return;
-    }
-
-    // Rename only from the name area and only when allowed.
-    if (!(e.target as HTMLElement).closest(".row-name")) return;
-    const target = fileTargetForRow(row);
-    if (isVideoFile(target.name)) {
-        e.preventDefault();
-        window.getSelection?.()?.removeAllRanges();
-        void appActions().playVideo(target);
-        return;
-    }
-    if (canOpenFileViewer(target.name)) {
-        e.preventDefault();
-        window.getSelection?.()?.removeAllRanges();
-        void appActions().openFile(target);
-        return;
-    }
-    if (!row.canRename) return;
+    // Opening is the whole point of the double click; the half-made text
+    // selection the two quick clicks leave behind is not.
     e.preventDefault();
-    const selection = window.getSelection?.();
-    if (selection) selection.removeAllRanges();
-    openRenameModal(fileCommandFor(row, state.currentFolderId));
+    window.getSelection?.()?.removeAllRanges();
+    activateRow(element, row);
 }
 
 function handleListDragStart(e: DragEvent) {
