@@ -1,4 +1,5 @@
 <script lang="ts">
+    import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
     import PlusIcon from '@lucide/svelte/icons/plus';
     import ChannelAvatar from './ChannelAvatar.svelte';
     import type { ChannelSource } from './channel-model';
@@ -16,9 +17,30 @@
 
     let { sources, activeId, loadPhoto, onSelect, onActions, onAdd, onRetry }: Props = $props();
 
+    function pointBelow(element: HTMLElement): { x: number; y: number } {
+        const rect = element.getBoundingClientRect();
+        return { x: rect.left, y: rect.bottom + 4 };
+    }
+
     function openActions(event: MouseEvent, source: ChannelSource): void {
         event.preventDefault();
-        onActions(event.clientX, event.clientY, source);
+        // A row click would both open a channel and its menu; the "…" is a
+        // sibling of the row button, so stop it reaching the row.
+        event.stopPropagation();
+        const point = event.clientX || event.clientY
+            ? { x: event.clientX, y: event.clientY }
+            : pointBelow(event.currentTarget as HTMLElement);
+        onActions(point.x, point.y, source);
+    }
+
+    // Desktop keeps no visible "…" on channel rows (owner's decision), so the
+    // keyboard reaches the same actions the way it reaches any context menu:
+    // the Menu key, or Shift+F10, on the focused row.
+    function onRowKeydown(event: KeyboardEvent, source: ChannelSource): void {
+        if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+        event.preventDefault();
+        const point = pointBelow(event.currentTarget as HTMLElement);
+        onActions(point.x, point.y, source);
     }
 </script>
 
@@ -32,18 +54,33 @@
 <div class="drives-list">
     {#each sources.sources as source (source.channelId)}
         {@const active = source.channelId === activeId}
-        <button
-            class="drive-item channel-nav-item"
-            class:active
-            type="button"
-            title={source.title}
-            aria-current={active ? 'page' : undefined}
-            onclick={() => onSelect(source)}
-            oncontextmenu={(event) => openActions(event, source)}
-        >
-            <ChannelAvatar {source} {loadPhoto} />
-            <span class="drive-item-title">{source.title}</span>
-        </button>
+        <div class="channel-nav-row" role="group" aria-label={source.title}>
+            <button
+                class="drive-item channel-nav-item"
+                class:active
+                type="button"
+                title={source.title}
+                aria-current={active ? 'page' : undefined}
+                onclick={() => onSelect(source)}
+                oncontextmenu={(event) => openActions(event, source)}
+                onkeydown={(event) => onRowKeydown(event, source)}
+            >
+                <ChannelAvatar {source} {loadPhoto} />
+                <span class="drive-item-title">{source.title}</span>
+            </button>
+            <!-- Visible only in the phone drive sheet, where a long press has no
+                 counterpart and iOS fires no contextmenu; the desktop sidebar
+                 hides it and uses right-click or the keyboard instead. -->
+            <button
+                class="channel-nav-actions"
+                type="button"
+                aria-haspopup="menu"
+                aria-label={`Actions for ${source.title}`}
+                onclick={(event) => openActions(event, source)}
+            >
+                <EllipsisIcon size={18} strokeWidth={2} aria-hidden="true" />
+            </button>
+        </div>
     {:else}
         {#if sources.status === 'error'}
             <div class="drive-empty channel-nav-error">
@@ -95,6 +132,17 @@
         outline: none;
         box-shadow: var(--focus-ring);
     }
+
+    /* Row and its trailing "…". On desktop the row is the only column and the
+       action button is hidden; the phone sheet adds the button's column. */
+    .channel-nav-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr);
+        align-items: center;
+        min-width: 0;
+    }
+    .channel-nav-row > .drive-item { min-width: 0; }
+    .channel-nav-actions { display: none; }
 
     /* The channel's own picture takes the drive row's icon column. The gap
        gives back the 2px the avatar is wider than an icon, so channel names
@@ -152,6 +200,32 @@
     :global(html.mobile) .channel-nav-item {
         --avatar-size: 28px;
         gap: 12px;
+    }
+
+    /* The sheet gives each channel row the visible "…" the shared drives have,
+       on a 44px target. */
+    :global(html.mobile) .channel-nav-row {
+        grid-template-columns: minmax(0, 1fr) var(--touch-target);
+        width: 100%;
+    }
+    :global(html.mobile) .channel-nav-actions {
+        display: inline-grid;
+        place-items: center;
+        width: var(--touch-target);
+        height: var(--touch-target);
+        border: 0;
+        border-radius: var(--radius-sm);
+        color: var(--text-muted);
+        background: transparent;
+        cursor: pointer;
+    }
+    :global(html.mobile) .channel-nav-actions:active {
+        background: var(--color-surface-2);
+        color: var(--text-main);
+    }
+    :global(html.mobile) .channel-nav-actions:focus-visible {
+        outline: none;
+        box-shadow: var(--focus-ring);
     }
 
     :global(html.mobile) .channel-nav-add-icon {

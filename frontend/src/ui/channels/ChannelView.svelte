@@ -195,6 +195,14 @@
         onPostActions(event.clientX, event.clientY, item, source, shown);
     }
 
+    // The phone row's trailing "…": a visible way into the same actions the long
+    // press opens, positioned under the button rather than at a pointer it has.
+    function openRowActions(event: MouseEvent, item: ChannelMediaItem): void {
+        event.stopPropagation();
+        const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+        onPostActions(rect.left, rect.bottom + 4, item, source, shown);
+    }
+
     // Arrow keys walk the rows the way they walk the file list.
     function onListKeydown(event: KeyboardEvent): void {
         const rows = Array.from((event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('.channel-row-main'));
@@ -295,6 +303,17 @@
                 onclick={() => onOpenTelegram(item.telegramUrl)}
             >
                 <ExternalLinkIcon size={16} strokeWidth={2} aria-hidden="true" />
+            </button>
+        {/if}
+        {#if mobile}
+            <button
+                class="channel-row-actions"
+                type="button"
+                aria-haspopup="menu"
+                aria-label={`Actions for ${mediaTitle(item)}`}
+                onclick={(event) => openRowActions(event, item)}
+            >
+                <EllipsisIcon size={20} strokeWidth={2} aria-hidden="true" />
             </button>
         {/if}
     </li>
@@ -862,6 +881,27 @@
 
     .is-mobile .channel-row-title { font-size: 15px; }
     .is-mobile .channel-row-meta { font-size: 13px; }
+
+    /* The row drops its own right padding so the "…" lands where the padding
+       was, keeping a 44px target without widening the row. */
+    .is-mobile .channel-row-main { padding-right: 2px; }
+    .is-mobile .channel-row-actions {
+        flex: 0 0 auto;
+        display: grid;
+        place-items: center;
+        width: 44px;
+        height: 44px;
+        margin-right: var(--space-1);
+        border: 0;
+        border-radius: var(--radius-md);
+        background: transparent;
+        color: var(--color-text-muted);
+        cursor: pointer;
+        -webkit-tap-highlight-color: transparent;
+        touch-action: manipulation;
+    }
+    .is-mobile .channel-row-actions:active { background: var(--color-surface-2); color: var(--color-text); }
+    .is-mobile .channel-row-actions:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
     .is-mobile .channel-skeleton { margin: 0 var(--space-3); }
     .is-mobile .channel-list-note { font-size: var(--mobile-type-meta); }

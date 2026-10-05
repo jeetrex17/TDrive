@@ -54,4 +54,55 @@ describe('ChannelNav', () => {
         expect(withoutPhoto.textContent).toContain('C');
         expect(loadPhoto).toHaveBeenCalledTimes(2);
     });
+
+    async function mountOne(onActions: () => void): Promise<void> {
+        host = document.createElement('div');
+        document.body.append(host);
+        app = mount(ChannelNav, {
+            target: host,
+            props: {
+                sources: { status: 'ready', sources: [source(50, 'Field Recordings')] },
+                activeId: 50, loadPhoto: vi.fn(async () => ''), onSelect: vi.fn(), onActions,
+                onAdd: vi.fn(), onRetry: vi.fn(),
+            },
+        });
+        await settle();
+    }
+
+    it('opens a row\'s actions through its own button, not the row', async () => {
+        const onActions = vi.fn();
+        const onSelect = vi.fn();
+        host = document.createElement('div');
+        document.body.append(host);
+        app = mount(ChannelNav, {
+            target: host,
+            props: {
+                sources: { status: 'ready', sources: [source(50, 'Field Recordings')] },
+                activeId: 50, loadPhoto: vi.fn(async () => ''), onSelect, onActions, onAdd: vi.fn(), onRetry: vi.fn(),
+            },
+        });
+        await settle();
+
+        host.querySelector<HTMLButtonElement>('.channel-nav-actions')?.click();
+        expect(onActions).toHaveBeenCalledTimes(1);
+        expect(onActions.mock.calls[0][2]).toMatchObject({ channelId: 50 });
+        // Tapping the "…" must not also open the channel.
+        expect(onSelect).not.toHaveBeenCalled();
+    });
+
+    // Desktop shows no "…" on channel rows, so the keyboard reaches the same
+    // actions through the Menu key and Shift+F10 on the focused row.
+    it('opens actions from the keyboard on a focused row', async () => {
+        const onActions = vi.fn();
+        await mountOne(onActions);
+        const row = host!.querySelector<HTMLButtonElement>('.channel-nav-item');
+
+        row?.dispatchEvent(new KeyboardEvent('keydown', { key: 'ContextMenu', bubbles: true }));
+        expect(onActions).toHaveBeenCalledTimes(1);
+        row?.dispatchEvent(new KeyboardEvent('keydown', { key: 'F10', shiftKey: true, bubbles: true }));
+        expect(onActions).toHaveBeenCalledTimes(2);
+        // A plain key is left for the list to handle.
+        row?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        expect(onActions).toHaveBeenCalledTimes(2);
+    });
 });

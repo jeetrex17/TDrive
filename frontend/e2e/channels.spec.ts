@@ -59,9 +59,32 @@ test('mobile channels open inside Files with their own way back', async ({ page 
     await expect(page.locator('.drive-switcher-sheet')).toHaveAttribute('inert', '');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
+    // A post's actions have a visible "…" with a 44px target, not only a long press.
+    const rowActions = page.getByRole('button', { name: /^Actions for forest-dawn/ });
+    await expect(rowActions).toBeVisible();
+    const rowActionsBox = await rowActions.boundingBox();
+    expect(rowActionsBox!.width).toBeGreaterThanOrEqual(44);
+    expect(rowActionsBox!.height).toBeGreaterThanOrEqual(44);
+
     await page.getByRole('button', { name: 'Back' }).click();
     await expect(page.locator('.channel-view')).toHaveCount(0);
     await expect(page.locator('#file-list')).toBeVisible();
+});
+
+test('the phone drive sheet gives channel rows a visible actions button', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await bootTDrive(page, {
+        ListConnectedChannelSources: resolves([source]),
+        ListChannelMedia: resolves(mediaPage),
+    }, { url: '/?mobile=ios' });
+    await page.getByRole('button', { name: /Switch drive/ }).click();
+
+    const row = page.locator('.drive-switcher-sheet .channel-nav-row');
+    const actions = row.getByRole('button', { name: 'Actions for Field Recordings' });
+    await expect(actions).toBeVisible();
+    const box = await actions.boundingBox();
+    expect(box!.width).toBeGreaterThanOrEqual(44);
+    expect(box!.height).toBeGreaterThanOrEqual(44);
 });
 
 test('picking a drive from the phone Account tab leaves the channel', async ({ page }) => {
