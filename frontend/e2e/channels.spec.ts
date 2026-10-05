@@ -64,6 +64,23 @@ test('mobile channels open inside Files with their own way back', async ({ page 
     await expect(page.locator('#file-list')).toBeVisible();
 });
 
+test('picking a drive from the phone Account tab leaves the channel', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await bootTDrive(page, {
+        ListConnectedChannelSources: resolves([source]),
+        ListChannelMedia: resolves(mediaPage),
+        SetActiveChannel: resolves(null),
+    }, { url: '/?mobile=ios' });
+    await page.getByRole('button', { name: /Switch drive/ }).click();
+    await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Field Recordings' }).click();
+    await expect(page.getByRole('heading', { name: 'Field Recordings' })).toBeVisible();
+
+    await page.locator('.tab-bar').getByRole('button', { name: /^Account/ }).click();
+    await page.getByRole('region', { name: 'Drives' }).getByRole('button', { name: /^Personal/ }).click();
+    await expect(page.locator('#file-list')).toBeVisible();
+    await expect(page.locator('.channel-view')).toHaveCount(0);
+});
+
 const FIXTURE = readFileSync(join(__dirname, 'fixtures', 'tiny.mp4'));
 const FIXTURE_URL = 'http://127.0.0.1:4173/__fixtures__/tiny.mp4';
 
