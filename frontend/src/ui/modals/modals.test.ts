@@ -4,6 +4,7 @@ import DeleteModal from './DeleteModal.svelte';
 import EncryptionPasswordModal from './EncryptionPasswordModal.svelte';
 import ImportOptionsModal from './ImportOptionsModal.svelte';
 import JoinRequestsModal from './JoinRequestsModal.svelte';
+import LeaveDriveModal from './LeaveDriveModal.svelte';
 import LogoutModal from './LogoutModal.svelte';
 import MoveModal from './MoveModal.svelte';
 import RenameModal from './RenameModal.svelte';
@@ -19,6 +20,7 @@ import { encryptionPasswordModal } from './encryption-password-modal-store';
 import { importOptionsModal, type ImportOptionsPlan } from './import-options-modal-store';
 import { joinRequestsList, joinRequestsModal } from './join-requests-modal-store';
 import { logoutModal } from './logout-modal-store';
+import { closeLeaveDriveModalView, openLeaveDriveModalView } from './leave-drive-modal-store';
 import { moveBrowse, moveModal, resetMoveBrowse } from './move-modal-store';
 import { uploadOptionsModal } from './upload-options-modal-store';
 
@@ -48,6 +50,7 @@ afterEach(() => {
     joinRequestsModal.close();
     joinRequestsList.set({ status: 'loading' });
     logoutModal.close();
+    closeLeaveDriveModalView();
     moveModal.close();
     resetMoveBrowse('');
     uploadOptionsModal.close();
@@ -140,14 +143,30 @@ describe('RenameModal', () => {
 });
 
 describe('LogoutModal', () => {
-    it('renders both modes with a danger confirm', () => {
+    it('defaults to a non-destructive quick logout', () => {
         logoutModal.open(null);
 
         const { body } = render(LogoutModal, { props: { onConfirm: noop } });
+        const confirm = body.match(/<button[^>]*id="logout-confirm"[^>]*>[^<]*/)?.[0] ?? '';
 
         expect(body).toContain('Quick logout');
-        expect(body).toContain('Log out and reset');
-        expect(body).toContain('class="primary-btn danger"');
+        // The reset choice is still offered as a radio option.
+        expect(body).toContain('>Log out and reset</strong>');
+        // The confirm follows the selected (soft) option: plain primary, not danger.
+        expect(confirm).toContain('primary-btn');
+        expect(confirm).not.toContain('danger');
+        expect(confirm).toContain('>Log out');
+    });
+});
+
+describe('LeaveDriveModal', () => {
+    it('uses the real danger button style', () => {
+        openLeaveDriveModalView({ id: 7, title: 'Team Drive' });
+
+        const { body } = render(LeaveDriveModal, { props: { onConfirm: noop } });
+
+        expect(body).toContain('primary-btn danger-btn');
+        expect(body).toContain('Leave "Team Drive"');
     });
 });
 
