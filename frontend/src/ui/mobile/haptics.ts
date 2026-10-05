@@ -23,25 +23,3 @@ import { playHaptic } from '../../api';
 export function hapticPress(): void {
     playHaptic('impact-light');
 }
-
-/**
- * A discrete value changed under the finger: a sort order, a filter, a detent.
- * Lighter than an impact because nothing was committed, only chosen.
- */
-export function hapticSelection(): void {
-    playHaptic('selection');
-}
-
-/**
- * A real outcome landed. Pair it with the toast or ring that says the same
- * thing visually -- a haptic alone is not a report, and a haptic for an
- * outcome the user cannot see is a riddle.
- */
-export function hapticSuccess(): void {
-    playHaptic('success');
-}
-
-/** A real failure. Same pairing rule as success: never the only signal. */
-export function hapticError(): void {
-    playHaptic('error');
-}
