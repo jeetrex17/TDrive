@@ -221,7 +221,9 @@ describe('FileList phone rows', () => {
         setup();
         showFileListRows([makeFileRow()]);
         flushSync();
-        expect(row().querySelector('button.row-more')).toBeNull();
+        // The grid layout: separate date and size cells, which the phone's
+        // single meta line does not have. The More button lives in both shells.
         expect(row().querySelectorAll('.row-meta')).toHaveLength(2);
+        expect(row().querySelector('button.row-more')).not.toBeNull();
     });
 });

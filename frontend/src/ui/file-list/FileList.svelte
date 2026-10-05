@@ -512,8 +512,23 @@
                 </div>
                 <div class="row-meta" role="gridcell" aria-colindex="2">{row.metaLabel}</div>
                 <div class={`row-meta ${row.kind === 'folder' ? 'folder-size' : ''}`} role="gridcell" aria-colindex="3">{row.sizeLabel}</div>
-                <div class="row-actions" role="gridcell" aria-colindex="4">
+                <div class={`row-actions${row.actionsInline ? ' is-inline' : ''}`} role="gridcell" aria-colindex="4">
                     {@render inlineActions(row, 16)}
+                    {#if !row.actionsInline}
+                        <!-- Opens the same menu as a right click, under the button,
+                             so the row's full set of actions is discoverable
+                             without one. The trash's inline rows have no such
+                             menu, so they omit it. -->
+                        <button
+                            class="action-icon row-more"
+                            type="button"
+                            tabindex="-1"
+                            aria-label={`More actions for ${row.name}`}
+                            aria-haspopup="menu"
+                        >
+                            <EllipsisIcon size={16} strokeWidth={2} aria-hidden="true" />
+                        </button>
+                    {/if}
                 </div>
             </div>
         {/if}

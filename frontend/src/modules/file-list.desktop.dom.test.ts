@@ -466,13 +466,26 @@ it('supports keyboard navigation from the list container without a focused row',
     await vi.waitFor(() => expect(document.activeElement).toBe(row('folder:design')));
 });
 
-it('does not consume unrelated keys or move focus into absent actions', () => {
+it('does not consume unrelated keys', () => {
     publish({ actions: [] });
-    for (const key of ['ArrowRight', 'F10', 'Tab']) {
+    for (const key of ['F10', 'Tab']) {
         const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
         row('file:41').dispatchEvent(event);
         expect(event.defaultPrevented).toBe(false);
     }
+});
+
+it('reaches the More button with ArrowRight even with no quick actions', () => {
+    publish({ actions: [] });
+    press(row('file:41'), 'ArrowRight');
+    expect(document.activeElement).toBe(row('file:41').querySelector('button.row-more'));
+});
+
+it('opens the row menu from the three-dot button', () => {
+    const listener = vi.fn();
+    row('file:41').addEventListener('contextmenu', listener);
+    row('file:41').querySelector<HTMLButtonElement>('button.row-more')?.click();
+    expect(listener).toHaveBeenCalledTimes(1);
 });
 
 it('uses native drag feedback and clears highlight when a drop is committed', () => {

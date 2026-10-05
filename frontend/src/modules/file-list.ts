@@ -692,7 +692,9 @@ function rowsForLoadedData(data: LoadedFileData, view: FileViewIdentity): FileLi
             return buildFolderRow(folder, view.folderId, {
                 size,
                 modifiedTime,
-                sizeLabel: formatBytes(size),
+                // A folder shows a size only once one is known. Zero reads as "no
+                // files", which is rarely true and never useful, so it stays blank.
+                sizeLabel: size > 0 ? formatBytes(size) : '',
                 metaLabel: modifiedTime > 0 ? formatDate(modifiedTime) : '—',
             });
         });
@@ -826,6 +828,7 @@ function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, d
                 'This folder is empty',
                 'Upload files or create a folder to start organizing this drive.',
                 { label: 'Upload files', onClick: () => chooseFilesForCurrentFolder() },
+                { label: 'New folder', onClick: openNewFolderModal },
             );
         }
         afterFileListPaint(list, afterPublish);
