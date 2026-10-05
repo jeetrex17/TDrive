@@ -127,6 +127,18 @@ describe('search scheduling', () => {
         expect(mocks.search).toHaveBeenCalledTimes(1);
     });
 
+    it('blurs the phone search field on Enter so results are not under the keyboard', async () => {
+        deactivateSearchBar = activateSearchBar();
+        const input = document.getElementById('search-input') as HTMLInputElement;
+        input.value = 'report';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.focus();
+        expect(document.activeElement).toBe(input);
+
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+        expect(document.activeElement).not.toBe(input);
+    });
+
     it('cancels pending debounce work when the search is cleared', async () => {
         deactivateSearchBar = activateSearchBar();
         const input = document.getElementById('search-input') as HTMLInputElement;

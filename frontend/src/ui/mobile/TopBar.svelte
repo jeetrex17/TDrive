@@ -396,7 +396,8 @@
             <input
                 bind:this={searchInputEl}
                 id="search-input"
-                type="text"
+                type="search"
+                enterkeyhint="search"
                 placeholder="Search this drive"
                 autocomplete="off"
                 autocapitalize="off"

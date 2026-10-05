@@ -827,18 +827,26 @@
     .channel-topbar-kinds .channel-kinds { display: flex; }
     .channel-topbar-kinds .channel-kinds button {
         flex: 1 1 0;
-        min-height: 32px;
+        min-height: var(--touch-target);
         font-size: var(--mobile-type-meta);
     }
 
     .is-mobile .channel-scroll {
-        padding: var(--space-2) 0 var(--space-6);
+        /* The search field opens into this list, so its bottom clears the
+           keyboard as well as the tab bar; otherwise the last posts sit under
+           the keys while the user is typing to filter them. */
+        padding: var(--space-2) 0 calc(var(--space-6) + var(--inset-keyboard));
         scrollbar-width: none;
         overscroll-behavior-y: contain;
         -webkit-overflow-scrolling: touch;
     }
 
-    .is-mobile .channel-rows { gap: 0; margin: 0 var(--space-3); }
+    /* Landscape puts the notch or the navigation bar on a side, so the rows
+       stand off it like the rest of the shell rather than running under it. */
+    .is-mobile .channel-rows {
+        gap: 0;
+        margin: 0 calc(var(--space-3) + var(--inset-right)) 0 calc(var(--space-3) + var(--inset-left));
+    }
 
     .is-mobile .channel-row {
         border-radius: 0;
@@ -903,8 +911,18 @@
     .is-mobile .channel-row-actions:active { background: var(--color-surface-2); color: var(--color-text); }
     .is-mobile .channel-row-actions:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
-    .is-mobile .channel-skeleton { margin: 0 var(--space-3); }
-    .is-mobile .channel-list-note { font-size: var(--mobile-type-meta); }
+    .is-mobile .channel-skeleton {
+        margin: 0 calc(var(--space-3) + var(--inset-right)) 0 calc(var(--space-3) + var(--inset-left));
+    }
+    .is-mobile .channel-list-note { font-size: var(--mobile-type-meta); flex-wrap: wrap; }
+    /* Retry / Try again / Load older posts are the one way on from a stuck list,
+       so on a phone each is a 44px target instead of a zero-padding text link. */
+    .is-mobile .channel-list-note .link-button {
+        display: inline-flex;
+        align-items: center;
+        min-height: var(--touch-target);
+        padding: 0 var(--space-2);
+    }
 
     @media (prefers-reduced-motion: reduce) {
         .channel-topbar,

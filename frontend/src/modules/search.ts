@@ -436,6 +436,9 @@ export function activateSearchBar(): () => void {
             if (!String(state.searchQuery || '').trim()) return;
             event.preventDefault();
             void runGlobalSearch();
+            // On a phone the keyboard otherwise stays up over the results the
+            // search just produced; blurring reveals them.
+            if (isMobilePlatform()) input.blur();
         }
     };
     const handleFindShortcut = (event: KeyboardEvent) => {
