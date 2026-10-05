@@ -72,6 +72,10 @@
     let searchInput = $state<HTMLInputElement | null>(null);
     let searchOpen = $state(false);
     let scrolled = $state(false);
+    // Reaching the end loads older posts only while they keep adding rows. In
+    // a channel with few videos the end stays in view, so without this it
+    // would page through the whole history, request after request.
+    let olderAddedRows = $state(true);
     let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
     const items = $derived('items' in view ? view.items : []);
@@ -95,9 +99,11 @@
     });
 
     async function load(append = false): Promise<void> {
+        const shown = items.length;
         const pending = pager.load({ append });
         view = pager.snapshot();
         view = await pending;
+        olderAddedRows = !append || items.length > shown;
         if (!append) remember();
     }
 
@@ -433,6 +439,11 @@
                 <div class="channel-list-note">
                     Sorted among the posts loaded so far.
                     <button class="link-button" type="button" onclick={() => void load(true)}>Load older posts</button>
+                </div>
+            {:else if view.status === 'ready' && view.hasMore && !olderAddedRows}
+                <div class="channel-list-note">
+                    Nothing more in the posts checked.
+                    <button class="link-button" type="button" onclick={() => void load(true)}>Look further back</button>
                 </div>
             {:else if view.status === 'ready' && view.hasMore}
                 <div bind:this={sentinel} class="channel-sentinel" aria-hidden="true"></div>

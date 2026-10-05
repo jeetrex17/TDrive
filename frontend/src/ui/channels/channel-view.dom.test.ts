@@ -45,6 +45,7 @@ function rowNamed(name: RegExp): HTMLButtonElement | undefined {
 }
 
 afterEach(async () => {
+    vi.unstubAllGlobals();
     if (app) await unmount(app);
     host?.remove();
     app = null;
@@ -136,6 +137,30 @@ describe('ChannelView', () => {
         answer({ channelId: 51, accountId: '7', generation: 'g', items: [dusk], nextOffsetId: 0, hasMore: false });
         await settle();
         expect(remembered.get(51)).toEqual([dusk, VIDEO]);
+    });
+
+    it('stops loading older posts on its own once a page adds none', async () => {
+        // The end of the list is always in view, as it is in a short list.
+        vi.stubGlobal('IntersectionObserver', class {
+            constructor(private readonly callback: IntersectionObserverCallback) {}
+            observe(): void {
+                queueMicrotask(() => this.callback([{ isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver));
+            }
+            disconnect(): void {}
+        });
+        const fetchMedia = vi.fn<ChannelMediaFetcher>(async (request) => ({
+            channelId: 51, accountId: '7', generation: 'g', items: request.offsetId === 0 ? [VIDEO] : [],
+            nextOffsetId: request.offsetId === 0 ? 900 : request.offsetId - 100, hasMore: true,
+        }));
+        render(SOURCE, fetchMedia);
+        await settle();
+        await settle();
+        expect(fetchMedia).toHaveBeenCalledTimes(2);
+
+        Array.from(host?.querySelectorAll<HTMLButtonElement>('button') ?? []).find((button) => button.textContent === 'Look further back')?.click();
+        await settle();
+        expect(fetchMedia).toHaveBeenCalledTimes(3);
+        expect(fetchMedia).toHaveBeenLastCalledWith(expect.objectContaining({ offsetId: 800 }));
     });
 
     it('offers a retry when the first page fails', async () => {
