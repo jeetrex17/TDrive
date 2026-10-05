@@ -45,9 +45,13 @@ export function handleBackPress(): boolean {
         return true;
     }
     // Files is home. Every other destination steps back to it rather than out,
-    // which is the one rule a phone's bottom bar is expected to keep.
+    // which is the one rule a phone's bottom bar is expected to keep. Back
+    // returns to Files as it was left -- a folder, an open channel or the trash
+    // are all kept. Only the gallery is left behind, because it shares the Files
+    // region but belongs to the Photos tab, and a background tab's Back lands on
+    // Files rather than the view the re-sync effect would otherwise relight.
     if (get(activeTab) === 'transfers' || get(activeTab) === 'account') {
-        leaveVirtualView();
+        if (get(sidebarState).virtualView === 'photos') exitPhotos();
         activeTab.set('files');
         return true;
     }

@@ -160,6 +160,24 @@ test('the back bridge pops one folder level and then leaves the app', async ({ p
     expect(atRoot).toBe(false);
 });
 
+// A folder, a channel or the trash the Files tab is showing survives a trip to
+// another tab; only re-tapping the active Files tab resets it to the drive root.
+test('a tab round trip keeps the files view and re-tapping files resets it', async ({ page }) => {
+    await bootMobile(page);
+    await tab(page, /^Account/).click();
+    await page.getByRole('button', { name: 'Trash' }).click();
+    await expect(page.getByRole('heading', { name: 'Trash' })).toBeVisible();
+
+    await tab(page, /^Transfers/).click();
+    await expect(page.getByRole('heading', { name: 'Transfers' })).toBeVisible();
+    await tab(page, /^Files/).click();
+    await expect(page.getByRole('heading', { name: 'Trash' })).toBeVisible();
+
+    await tab(page, /^Files/).click();
+    await expect(page.getByRole('button', { name: /Switch drive/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Trash' })).toHaveCount(0);
+});
+
 test('the bars carry safe-area padding', async ({ page }) => {
     await bootMobile(page);
     const shell = page.locator('#success-screen.mobile-shell');

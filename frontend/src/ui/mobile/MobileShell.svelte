@@ -111,16 +111,18 @@
         lastDepth = depth;
     });
 
+    // Files and Photos share the drive's content region; Photos is reached
+    // through its own tab but is the gallery view of the same drive, keyed by
+    // virtualView === 'photos'. A folder, an open channel and the trash are all
+    // Files-tab state. Switching tabs keeps that state so a trip to Transfers or
+    // Account and back lands where the user left off; only re-tapping the active
+    // tab resets it to the drive root.
     function selectTab(tab: MobileTab): void {
         const reselect = get(activeTab) === tab;
-        // Photos is a view of the same drive, so entering/leaving it toggles the
-        // existing gallery virtual view rather than navigating away.
         if (tab === 'files') {
+            // Leaving the gallery reveals the file list (or the channel or trash)
+            // the Files tab was already showing underneath it.
             if (appState.virtualView === 'photos') exitPhotos();
-            // Tapping Files while in the trash is how a phone leaves it: there
-            // is no breadcrumb up there to leave by. A channel works the same.
-            else if (appState.virtualView === 'trash') closeTrash();
-            closeChannel();
         } else if (tab === 'photos') {
             enterPhotos();
         }
@@ -132,7 +134,14 @@
     // Re-tapping the active tab returns to the drive root and scrolls to top
     // (interactivity-13): a predictable home base from anywhere in a drive.
     function resetTab(tab: MobileTab): void {
-        if (tab === 'files') navigateToIndex(-1);
+        if (tab === 'files') {
+            // Re-tapping Files is the one way back to the drive root from
+            // anywhere in it: leave the trash or a channel, then climb out of any
+            // open folder.
+            if (appState.virtualView === 'trash') closeTrash();
+            closeChannel();
+            navigateToIndex(-1);
+        }
         scrollActiveToTop(tab);
     }
 
