@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
-import { bootTDrive, resolves } from './wails-mock';
+import { bootTDrive, rejects, resolves } from './wails-mock';
 
 const source = { channel_id: 50, title: 'Field Recordings', username: 'fieldrec', connected: true, protected: false, available: true, account_id: 7, generation: 'source-a' };
 const candidate = { ...source, channel_id: 60, title: 'Tech Talks', username: 'techtalks', connected: false, generation: '' };
@@ -106,4 +106,20 @@ test("a channel video queues the channel's other videos in the player's playlist
     expect(opened[0]).toEqual([50, 71, 7, 'source-a']);
     for (const args of opened.slice(1)) expect(args).toEqual([50, 69, 7, 'source-a']);
     expect(await mock.calls('OpenMedia')).toEqual([]);
+});
+
+test('a channel video bound for the native player reports a failed open', async ({ page }) => {
+    const film = { ...media, msg_id: 72, name: 'feature.mkv', mime_type: 'video/x-matroska', caption: 'Feature film' };
+    const mock = await bootTDrive(page, {
+        ListConnectedChannelSources: resolves([source]),
+        ListChannelMedia: resolves({ ...mediaPage, items: [film] }),
+        OpenChannelMedia: rejects('rpc error code 420: FLOOD_WAIT_30'),
+        CloseMedia: resolves(null),
+    });
+    await page.locator('.sidebar').getByRole('button', { name: 'Field Recordings' }).click();
+    await page.getByRole('button', { name: /^Play Feature film/ }).click();
+
+    await expect(page.locator('#video-error')).toBeVisible();
+    await expect(page.locator('#video-error-retry')).toBeVisible();
+    expect(await mock.calls('OpenNativeMedia')).toEqual([]);
 });

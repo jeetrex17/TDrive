@@ -1033,12 +1033,24 @@ async function openNativePlayback(
     attempt: VideoOpenAttempt,
     rect: NativeMediaRect,
     isCurrent: () => boolean,
-    existing: MediaOpenResult | null = null,
+    warmed: MediaOpenResult | null = null,
     intent: PlaybackIntent | null = null,
 ) {
+    let existing = warmed;
     let opened: NativeMediaOpenResult | null = null;
     let owner: "none" | "html" | "native" | "adapter" = existing ? "html" : "none";
     try {
+        // A target with its own capability cannot be opened natively by id, so
+        // its session is opened here, where a failure reaches the reader, and
+        // the native player attaches to it.
+        if (!existing && attempt.target.open) {
+            existing = await attempt.target.open();
+            owner = "html";
+            if (!isCurrent() || !isOpen()) {
+                await safelyCloseMedia(existing.token);
+                return;
+            }
+        }
         // Re-attaching an existing session never re-prompts: its token was only
         // handed out after the file was unlocked once.
         const result = existing
@@ -1233,11 +1245,8 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
         const rect = await geometry?.prepareNativeRect(isCurrent);
         if (!rect || !isCurrent()) return;
         // A warmed session is attached to rather than opened again, which skips
-        // the Telegram round-trip a fresh native open would repeat. A target
-        // with its own capability cannot be opened natively by id, so it is
-        // always opened here and the native player attaches to its token.
-        const warmed = mediaPrefetcher.take(attempt.target.id)
-            ?? (attempt.target.open ? await attempt.target.open() : null);
+        // the Telegram round-trip a fresh native open would repeat.
+        const warmed = mediaPrefetcher.take(attempt.target.id);
         await openNativePlayback(attempt, rect, isCurrent, warmed, attempt.playbackIntent);
     });
 }
