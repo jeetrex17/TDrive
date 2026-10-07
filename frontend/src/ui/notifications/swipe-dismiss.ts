@@ -93,6 +93,7 @@ export function swipeDismiss(node: HTMLElement, options: SwipeDismissOptions) {
      */
     function leave(): void {
         clearMotionTimer();
+        node.dataset.toastSwiped = 'true';
         if (prefersReducedMotion()) {
             current.onDismiss();
             return;
@@ -172,6 +173,7 @@ export function swipeDismiss(node: HTMLElement, options: SwipeDismissOptions) {
         update(next: SwipeDismissOptions) {
             if (next.revision !== current.revision) {
                 clearMotionTimer();
+                delete node.dataset.toastSwiped;
                 dragging = false;
                 drag.reset();
                 offset = 0;

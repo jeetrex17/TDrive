@@ -228,6 +228,17 @@ test('offline and recovery notices appear below the safe area and expire', async
     const notice = page.locator('#toast-stack .toast', { hasText: "You're offline" });
     await expect(notice).toBeVisible();
     await expect.poll(async () => (await notice.boundingBox())?.y ?? 0).toBeGreaterThanOrEqual(108);
+    const exitMotion = page.evaluate(() => new Promise<{ connected: boolean; animating: boolean }>((resolve) => {
+        const node = document.querySelector<HTMLElement>('#toast-stack .toast')!;
+        node.addEventListener('outrostart', () => {
+            const connected = node.isConnected;
+            requestAnimationFrame(() => resolve({
+                connected,
+                animating: node.getAnimations().some((animation) => animation.playState === 'running'),
+            }));
+        }, { once: true });
+    }));
+    expect(await exitMotion).toEqual({ connected: true, animating: true });
     await expect(notice).toHaveCount(0, { timeout: 8000 });
 
     await page.evaluate(() => window.dispatchEvent(new Event('online')));

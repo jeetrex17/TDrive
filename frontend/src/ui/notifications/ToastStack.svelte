@@ -1,4 +1,6 @@
 <script lang="ts">
+    import { cubicOut } from 'svelte/easing';
+    import { fly } from 'svelte/transition';
     import CheckIcon from '@lucide/svelte/icons/check';
     import CircleXIcon from '@lucide/svelte/icons/circle-x';
     import InfoIcon from '@lucide/svelte/icons/info';
@@ -7,6 +9,7 @@
     import XIcon from '@lucide/svelte/icons/x';
     import { toasts } from './toast-store';
     import { swipeDismiss } from './swipe-dismiss';
+    import { prefersReducedMotion } from '../mobile/motion';
 
     interface Props {
         onDismiss: (id: string) => void;
@@ -46,6 +49,18 @@
         focusInside = false;
         syncPause();
     }
+
+    function toastOut(node: HTMLElement) {
+        // Swipe already moves the card offscreen. Timer and close-button
+        // dismissals take the same short route upward instead of vanishing.
+        node.style.pointerEvents = 'none';
+        node.setAttribute('aria-hidden', 'true');
+        return fly(node, {
+            y: -8,
+            duration: prefersReducedMotion() || node.dataset.toastSwiped === 'true' || typeof node.animate !== 'function' ? 0 : 160,
+            easing: cubicOut,
+        });
+    }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -65,6 +80,7 @@
             onpointerenter={(event) => { if (hovering(event)) onPauseToast(toast.id); }}
             onpointerleave={(event) => { if (hovering(event)) onResumeToast(toast.id); }}
             use:swipeDismiss={{ revision: toast.revision, onDismiss: () => onDismiss(toast.id) }}
+            out:toastOut
         >
             <span class="toast-icon" aria-hidden="true">
                 {#if toast.spinner}
