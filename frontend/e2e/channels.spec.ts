@@ -21,6 +21,7 @@ async function expectToastActionOnRight(toast: Locator): Promise<void> {
 }
 
 test('desktop channels sit beside the drives and keep the app header', async ({ page }) => {
+    await page.clock.install();
     const mock = await bootTDrive(page, {
         ListConnectedChannelSources: resolves([source]),
         ListChannelSourceCandidates: resolves([source, candidate]),
@@ -60,13 +61,27 @@ test('desktop channels sit beside the drives and keep the app header', async ({ 
     await page.getByRole('menuitem', { name: 'Remove from TDrive' }).click();
     const toast = page.locator('.toast').filter({ hasText: 'Removed Field Recordings' });
     await expect(toast.getByRole('button', { name: 'Undo' })).toBeVisible();
+    await expect(channel).toHaveCount(0);
+    expect(await mock.calls('DisconnectChannelSource')).toHaveLength(0);
+    await toast.getByRole('button', { name: 'Undo' }).click();
+    await expect(channel).toBeVisible();
+    await expect(toast).toHaveCount(0);
+    expect(await mock.calls('DisconnectChannelSource')).toHaveLength(0);
+    expect(await mock.calls('ConnectChannelSource')).toHaveLength(1);
+
+    await channel.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Remove from TDrive' }).click();
+    await expect(toast.getByRole('button', { name: 'Undo' })).toBeVisible();
     await expectToastActionOnRight(toast);
     await toast.screenshot({ path: 'test-results/toast-action-desktop.png' });
+    await page.clock.fastForward(8_001);
+    await expect(toast).toHaveCount(0);
+    await expect.poll(async () => (await mock.calls('DisconnectChannelSource')).length).toBe(1);
 });
 
 test('mobile channels open inside Files with their own way back', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await bootTDrive(page, {
+    const mock = await bootTDrive(page, {
         ListConnectedChannelSources: resolves([source]),
         ListChannelMedia: resolves(mediaPage),
         DisconnectChannelSource: resolves(null),
@@ -95,6 +110,19 @@ test('mobile channels open inside Files with their own way back', async ({ page 
     await expectToastActionOnRight(toast);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await toast.screenshot({ path: 'test-results/toast-action-mobile-320.png' });
+    expect(await mock.calls('DisconnectChannelSource')).toHaveLength(0);
+    await toast.getByRole('button', { name: 'Undo' }).click();
+    await expect(toast).toHaveCount(0);
+    await expect(page.getByRole('heading', { name: 'Field Recordings' })).toBeVisible();
+    expect(await mock.calls('DisconnectChannelSource')).toHaveLength(0);
+
+    await mock.setPlan('DisconnectChannelSource', rejects('temporary failure'));
+    await page.getByRole('button', { name: 'Channel actions' }).click();
+    await page.getByRole('dialog', { name: 'Actions' }).getByRole('button', { name: 'Remove from TDrive' }).click();
+    await toast.getByRole('button', { name: 'Dismiss' }).click();
+    await expect(page.getByRole('button', { name: /Switch drive/ })).toBeVisible();
+    await page.getByRole('button', { name: /Switch drive/ }).click();
+    await expect(page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Field Recordings' })).toBeVisible();
 });
 
 test('the picker distinguishes joined chat types and verifies a public link before it connects', async ({ page }) => {

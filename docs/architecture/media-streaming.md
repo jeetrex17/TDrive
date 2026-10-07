@@ -76,6 +76,12 @@ disconnected legacy row from being copied again after restart. Listing uses
 local metadata offline; pages and opens recheck current account and peer access.
 Changing a profile photo invalidates its stored bytes. Disconnecting deletes
 only the local connection and revokes matching playback sessions.
+The UI hides a removed source immediately but keeps that connection during the
+Undo toast. Undo restores the same source without a Telegram reconnect. Toast
+expiry, dismissal or eviction commits the disconnect; a failed commit restores
+the source and reports the error. Leaving the dashboard also commits pending
+removals while the app is running. If the process exits before the call completes,
+the unchanged local connection appears again on the next launch.
 The earlier channel-only Go methods and table remain for existing Go callers;
 the app routes all source actions through the typed methods and table. This
 keeps the existing channel API compatible while the migration preserves its

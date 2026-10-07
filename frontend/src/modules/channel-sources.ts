@@ -30,12 +30,39 @@ import {
     sourceKey,
 } from '../ui/channels/channel-model';
 import { showContextMenu, type ContextMenuItem } from '../ui/menus/context-menu-store';
+import { pushHistoryEvent } from './notif-bell';
 import { splitNameAndExt } from '../utils';
 import { exitPhotos } from './gallery';
-import { notify, notifyAppError } from './notifications';
+import { dismissNotification, notify, notifyAppError } from './notifications';
 import { closeTrash } from './trash/controller';
 
 let loadVersion = 0;
+let activationVersion = 0;
+let sourcesActive = false;
+let allConnectedSources: readonly ChannelSource[] = [];
+interface PendingRemoval {
+    source: ChannelSource;
+    wasOpen: boolean;
+    toastId: string;
+    activation: number;
+}
+const pendingRemovals = new Map<string, PendingRemoval>();
+const committingRemovals = new Map<string, Promise<void>>();
+
+function peerKey(source: ChannelSource): string {
+    return `${source.accountId}:${source.peerKind}:${source.peerId}`;
+}
+
+function visibleSources(): readonly ChannelSource[] {
+    return allConnectedSources.filter((source) => {
+        const key = peerKey(source);
+        return !pendingRemovals.has(key) && !committingRemovals.has(key);
+    });
+}
+
+function publishSources(): void {
+    channelSources.update((current) => ({ ...current, sources: visibleSources() }));
+}
 // Profile photos are base64 data URLs, so their number must stay bounded even
 // when a picker exposes a large Telegram dialog list. A failure is forgotten,
 // letting a later visible avatar retry.
@@ -76,9 +103,10 @@ export async function loadChannelSources(): Promise<void> {
     try {
         const sources = (await listConnectedChannelSources()).filter((source) => source.connected);
         if (version !== loadVersion) return;
-        channelSources.set({ status: 'ready', sources });
+        allConnectedSources = sources;
+        channelSources.set({ status: 'ready', sources: visibleSources() });
         const open = get(openChannelKey);
-        if (open !== null && !sources.some((source) => sourceKey(source) === open)) closeChannel();
+        if (open !== null && !get(channelSources).sources.some((source) => sourceKey(source) === open)) closeChannel();
     } catch (error) {
         if (version !== loadVersion) return;
         channelSources.update((current) => ({ status: 'error', sources: current.sources, error }));
@@ -87,9 +115,18 @@ export async function loadChannelSources(): Promise<void> {
 
 /** Source state lives as long as the signed-in dashboard. */
 export function activateChannelSources(): () => void {
+    activationVersion += 1;
+    sourcesActive = true;
     void loadChannelSources();
     return () => {
+        for (const [key, pending] of pendingRemovals) {
+            dismissNotification(pending.toastId);
+            if (pendingRemovals.has(key)) finishRemoval(key);
+        }
+        activationVersion += 1;
+        sourcesActive = false;
         loadVersion += 1;
+        allConnectedSources = [];
         photos.clear();
         firstPages.clear();
         closeChannel();
@@ -138,42 +175,76 @@ export function closeChannelPicker(): void {
 
 /** Connect a selected source and open it. */
 export async function addChannel(candidate: ChannelSource): Promise<void> {
+    const key = peerKey(candidate);
+    const pending = pendingRemovals.get(key);
+    if (pending) {
+        undoRemoval(key);
+        showChannel(pending.source);
+        return;
+    }
+    await committingRemovals.get(key);
     const added = await connectChannelSource(candidate);
     await loadChannelSources();
     showChannel(added);
 }
 
-/**
- * Removal only forgets this source locally; no Telegram content is changed.
- * The notification offers Undo because reconnecting is safe.
- */
-export async function removeChannel(source: ChannelSource): Promise<void> {
+/** Hide a source now and forget it locally only after its Undo toast is gone. */
+export function removeChannel(source: ChannelSource): void {
+    const key = peerKey(source);
+    if (pendingRemovals.has(key) || committingRemovals.has(key)) return;
+    if (!get(channelSources).sources.some((current) => sourceKey(current) === sourceKey(source))) return;
     const wasOpen = get(openChannelKey) === sourceKey(source);
-    try {
-        await disconnectChannelSource(source);
-    } catch (error) {
-        notifyAppError(error, { title: `Could not remove ${source.title}` });
-        return;
-    }
+    const pending: PendingRemoval = { source, wasOpen, toastId: '', activation: activationVersion };
+    pendingRemovals.set(key, pending);
     if (wasOpen) closeChannel();
-    await loadChannelSources();
-    notify({
+    publishSources();
+    pending.toastId = notify({
         level: 'info',
         title: `Removed ${source.title}`,
         body: 'Nothing was removed from Telegram.',
+        history: false,
+        onRemoved: () => finishRemoval(key),
         action: {
             label: 'Undo',
-            run: async () => {
-                try {
-                    const restored = await connectChannelSource(source);
-                    await loadChannelSources();
-                    if (wasOpen) showChannel(restored);
-                } catch (error) {
-                    notifyAppError(error, { title: `Could not add ${source.title} back` });
-                }
-            },
+            run: () => undoRemoval(key),
         },
     });
+}
+
+function undoRemoval(key: string): void {
+    const pending = pendingRemovals.get(key);
+    if (!pending) return;
+    pendingRemovals.delete(key);
+    dismissNotification(pending.toastId);
+    publishSources();
+    if (pending.wasOpen) showChannel(pending.source);
+}
+
+function finishRemoval(key: string): void {
+    const pending = pendingRemovals.get(key);
+    if (!pending) return;
+    pendingRemovals.delete(key);
+    const { source, activation } = pending;
+    let failed = false;
+    const work = disconnectChannelSource(source).then(() => {
+        if (activation !== activationVersion) return;
+        allConnectedSources = allConnectedSources.filter((current) => peerKey(current) !== key);
+        pushHistoryEvent({ level: 'info', title: `Removed ${source.title}`, body: 'Nothing was removed from Telegram.', ts: Date.now() });
+    }).catch((error: unknown) => {
+        if (activation !== activationVersion) return;
+        failed = true;
+        notifyAppError(error, { title: `Could not remove ${source.title}` });
+    }).finally(() => {
+        committingRemovals.delete(key);
+        if (activation !== activationVersion) {
+            if (sourcesActive) void loadChannelSources();
+            return;
+        }
+        loadVersion += 1;
+        channelSources.set({ status: 'ready', sources: visibleSources() });
+        if (failed) void loadChannelSources();
+    });
+    committingRemovals.set(key, work);
 }
 
 export function openInTelegram(url: string): void {
