@@ -134,7 +134,7 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 	s.warmContainerIndex()
 	if opts.EnableVideoThumbnails {
 		thumbnailCache := cache
-		if file.Encrypted || file.SourceKind == "channel" {
+		if file.Encrypted || file.SourceKind != "" {
 			// Generated frames are plaintext. Keep encrypted and external
 			// channel thumbnails in the session temp directory only; their
 			// cached identities must not survive key loss or source revocation.
@@ -201,7 +201,7 @@ func (s *Session) Token() string {
 }
 
 func (s *Session) External() bool {
-	return s != nil && s.file.SourceKind == "channel"
+	return s != nil && s.file.SourceKind != ""
 }
 
 func (s *Session) URL() string {

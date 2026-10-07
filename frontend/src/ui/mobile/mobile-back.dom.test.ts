@@ -16,7 +16,7 @@ import { breadcrumbPath } from '../chrome/breadcrumb-store';
 import { closeTopSheet, pushSheet } from '../modals/sheet-stack';
 import { selectionBarState } from '../selection/selection-bar-store';
 import { sidebarState } from '../sidebar/sidebar-store';
-import { openChannelId } from '../channels/channel-store';
+import { openChannelKey } from '../channels/channel-store';
 import { activateMobileBack, BACK_BRIDGE, handleBackPress } from './mobile-back';
 import { activeTab, driveSwitcherOpen } from './mobile-shell-store';
 
@@ -27,7 +27,7 @@ beforeEach(() => {
     selectionBarState.set({ count: 0 });
     activeTab.set('files');
     breadcrumbPath.set([]);
-    openChannelId.set(null);
+    openChannelKey.set(null);
     exitPhotos.mockClear();
     navigateBack.mockClear();
     clearSelection.mockClear();
@@ -57,10 +57,10 @@ describe('android back', () => {
     // A channel covers the drive without being one of its views; before it was
     // named here BACK left the app, or walked the hidden drive's folders.
     it('leaves a channel before the folders of the drive under it', () => {
-        openChannelId.set(51);
+        openChannelKey.set('7:channel:51:g');
         breadcrumbPath.set([{ id: 'd:1', name: 'Reports' }]);
         expect(handleBackPress()).toBe(true);
-        expect(get(openChannelId)).toBeNull();
+        expect(get(openChannelKey)).toBeNull();
         expect(navigateBack).not.toHaveBeenCalled();
     });
 
@@ -74,13 +74,13 @@ describe('android back', () => {
         expect(closeTrash).not.toHaveBeenCalled();
     });
 
-    // A channel the Files tab was showing survives the round trip too.
-    it('returns to the files tab and keeps an open channel', () => {
-        openChannelId.set(42);
+    // A chat source the Files tab was showing survives the round trip too.
+    it('returns to the files tab and keeps an open chat source', () => {
+        openChannelKey.set('7:user:42:g');
         activeTab.set('transfers');
         expect(handleBackPress()).toBe(true);
         expect(get(activeTab)).toBe('files');
-        expect(get(openChannelId)).toBe(42);
+        expect(get(openChannelKey)).toBe('7:user:42:g');
     });
 
     it('closes an open sheet before anything underneath it', () => {

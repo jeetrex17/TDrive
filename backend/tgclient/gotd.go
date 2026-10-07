@@ -486,7 +486,7 @@ func (g *Gotd) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID i
 	var out []HistoryMessage
 	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
 		req := &tg.MessagesGetHistoryRequest{
-			Peer:     toPeer(peer),
+			Peer:     toMediaPeer(peer),
 			MinID:    int(minID),
 			OffsetID: int(offsetID),
 			Limit:    limit,
@@ -524,7 +524,7 @@ func (g *Gotd) SearchChannelMessages(ctx context.Context, peer InputPeer, query 
 	var out []HistoryMessage
 	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
 		result, err := api.MessagesSearch(ctx, &tg.MessagesSearchRequest{
-			Peer: toPeer(peer), Q: query, Filter: &tg.InputMessagesFilterEmpty{},
+			Peer: toMediaPeer(peer), Q: query, Filter: &tg.InputMessagesFilterEmpty{},
 			OffsetID: int(offsetID), Limit: limit,
 		})
 		if err != nil {
@@ -688,7 +688,7 @@ func (g *Gotd) DownloadChannelPhoto(ctx context.Context, peer InputPeer, photoID
 // wait out every one, however long, while holding the lane.
 func channelPhoto(ctx context.Context, api *tg.Client, peer InputPeer, photoID int64) ([]byte, error) {
 	result, err := api.UploadGetFile(ctx, &tg.UploadGetFileRequest{
-		Location: &tg.InputPeerPhotoFileLocation{Peer: toPeer(peer), PhotoID: photoID},
+		Location: &tg.InputPeerPhotoFileLocation{Peer: toMediaPeer(peer), PhotoID: photoID},
 		Limit:    1 << 20, // the most one request returns
 	})
 	if err != nil {
@@ -1029,6 +1029,19 @@ func toPeer(p InputPeer) *tg.InputPeerChannel {
 	return &tg.InputPeerChannel{ChannelID: p.ChannelID, AccessHash: p.AccessHash}
 }
 
+func toMediaPeer(p InputPeer) tg.InputPeerClass {
+	switch p.PeerKind() {
+	case PeerUser, PeerBot:
+		return &tg.InputPeerUser{UserID: p.ChannelID, AccessHash: p.AccessHash}
+	case PeerSelf:
+		return &tg.InputPeerSelf{}
+	case PeerGroup:
+		return &tg.InputPeerChat{ChatID: p.ChannelID}
+	default:
+		return toPeer(p)
+	}
+}
+
 func extractMsgID(updates tg.UpdatesClass, randomID int64) int64 {
 	switch u := updates.(type) {
 	case *tg.UpdateShortSentMessage:
@@ -1076,6 +1089,37 @@ const channelsGetMessagesLimit = 100
 // returns the messages it found in no particular order and substitutes an
 // empty placeholder for deleted ones, so the result is keyed by id.
 func channelMessages(ctx context.Context, api *tg.Client, peer InputPeer, msgIDs []int64) (map[int64]tg.MessageClass, error) {
+	if peer.PeerKind() == PeerUser || peer.PeerKind() == PeerBot || peer.PeerKind() == PeerGroup || peer.PeerKind() == PeerSelf {
+		found := make(map[int64]tg.MessageClass, len(msgIDs))
+		for _, id := range msgIDs {
+			// messages.getMessages has no peer argument. A scoped history read
+			// prevents equal message IDs in another dialog from resolving here.
+			if id <= 0 || id >= int64(^uint(0)>>1) {
+				return nil, ErrMessageNotFound
+			}
+			result, err := api.MessagesGetHistory(ctx, &tg.MessagesGetHistoryRequest{
+				Peer: toMediaPeer(peer), OffsetID: int(id + 1), Limit: 1,
+			})
+			if err != nil {
+				return nil, err
+			}
+			var messages []tg.MessageClass
+			switch value := result.(type) {
+			case *tg.MessagesMessages:
+				messages = value.Messages
+			case *tg.MessagesMessagesSlice:
+				messages = value.Messages
+			case *tg.MessagesChannelMessages:
+				messages = value.Messages
+			}
+			for _, msg := range messages {
+				if int64(msg.GetID()) == id && messageBelongsToPeer(msg, peer) {
+					found[id] = msg
+				}
+			}
+		}
+		return found, nil
+	}
 	ids := make([]tg.InputMessageClass, 0, len(msgIDs))
 	for _, id := range msgIDs {
 		ids = append(ids, &tg.InputMessageID{ID: int(id)})
@@ -1094,6 +1138,23 @@ func channelMessages(ctx context.Context, api *tg.Client, peer InputPeer, msgIDs
 		}
 	}
 	return found, nil
+}
+
+func messageBelongsToPeer(message tg.MessageClass, peer InputPeer) bool {
+	full, ok := message.(*tg.Message)
+	if !ok {
+		return false
+	}
+	switch id := full.PeerID.(type) {
+	case *tg.PeerUser:
+		return (peer.PeerKind() == PeerUser || peer.PeerKind() == PeerBot || peer.PeerKind() == PeerSelf) && id.UserID == peer.ChannelID
+	case *tg.PeerChat:
+		return peer.PeerKind() == PeerGroup && id.ChatID == peer.ChannelID
+	case *tg.PeerChannel:
+		return (peer.PeerKind() == PeerChannel || peer.PeerKind() == PeerSupergroup) && id.ChannelID == peer.ChannelID
+	default:
+		return false
+	}
 }
 
 // documentOf extracts the document a channel message carries, plus its file

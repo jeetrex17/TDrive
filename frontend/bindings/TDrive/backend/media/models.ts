@@ -21,6 +21,7 @@ export interface LogicalFile {
     "multipart": boolean;
     "segments": Segment[] | null;
     "source_kind"?: string;
+    "source_peer_kind"?: string;
     "source_account_id"?: number;
     "source_generation"?: string;
 }

@@ -5,7 +5,7 @@
     import type { DriveChannel, PendingJoin } from '../../types';
     import { contextMenuState } from '../menus/context-menu-store';
     import { sidebarState, type SidebarActionMenuRequest } from './sidebar-store';
-    import { openChannelId } from '../channels/channel-store';
+    import { openChannelKey } from '../channels/channel-store';
 
     type DriveKind = 'personal' | 'shared';
     type ActionMenuHandler<T> = (request: SidebarActionMenuRequest, value: T) => void;
@@ -70,7 +70,7 @@
     }
 
     function isActiveDrive(channel: DriveChannel): boolean {
-        return $openChannelId === null && $sidebarState.virtualView === null && $sidebarState.activeChannelId === channel.id;
+        return $openChannelKey === null && $sidebarState.virtualView === null && $sidebarState.activeChannelId === channel.id;
     }
 
     function requestBelow(trigger: HTMLElement): SidebarActionMenuRequest {

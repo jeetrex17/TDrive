@@ -1,5 +1,9 @@
 <script lang="ts">
-    import { channelInitial, type ChannelSource } from './channel-model';
+    import BotIcon from '@lucide/svelte/icons/bot';
+    import RadioTowerIcon from '@lucide/svelte/icons/radio-tower';
+    import UserRoundIcon from '@lucide/svelte/icons/user-round';
+    import UsersRoundIcon from '@lucide/svelte/icons/users-round';
+    import { channelInitial, sourcePeerLabel, type ChannelSource } from './channel-model';
 
     interface Props {
         source: ChannelSource;
@@ -9,6 +13,10 @@
 
     let { source, loadPhoto }: Props = $props();
     let photo = $state('');
+    const PeerIcon = $derived(source.peerKind === 'bot' ? BotIcon
+        : source.peerKind === 'channel' ? RadioTowerIcon
+            : source.peerKind === 'group' || source.peerKind === 'supergroup' ? UsersRoundIcon
+                : UserRoundIcon);
 
     // Asks for the picture once the avatar is on screen, so a long picker
     // list fetches only the ones someone can see. The initial shows until
@@ -30,8 +38,9 @@
 </script>
 
 <!-- Sized by its row through --avatar-size, which inherits. -->
-<span class="channel-avatar" use:whenVisible aria-hidden="true">
-    {channelInitial(source.title)}
+<span class="channel-avatar" use:whenVisible aria-label={sourcePeerLabel(source)} title={sourcePeerLabel(source)}>
+    <span class="channel-avatar-initial" aria-hidden="true">{channelInitial(source.title)}</span>
+    <span class="channel-avatar-peer" aria-hidden="true"><PeerIcon size={Math.max(11, Math.round(16 * 0.7))} strokeWidth={2} /></span>
     {#if photo}<img src={photo} alt="" decoding="async" />{/if}
 </span>
 
@@ -43,7 +52,6 @@
         height: var(--avatar-size, 24px);
         display: grid;
         place-items: center;
-        overflow: hidden;
         border-radius: var(--radius-pill);
         background: var(--overlay-neutral-3);
         color: var(--text-main);
@@ -58,7 +66,25 @@
         width: 100%;
         height: 100%;
         object-fit: cover;
+        border-radius: inherit;
         animation: channel-avatar-in var(--motion-med) var(--ease-standard);
+    }
+
+    .channel-avatar-peer {
+        position: absolute;
+        z-index: 1;
+        right: -1px;
+        bottom: -1px;
+        display: grid;
+        width: calc(var(--avatar-size, 24px) * 0.46);
+        height: calc(var(--avatar-size, 24px) * 0.46);
+        min-width: 11px;
+        min-height: 11px;
+        place-items: center;
+        border: 1px solid var(--color-surface-0);
+        border-radius: var(--radius-pill);
+        background: var(--color-surface-2);
+        color: var(--text-muted);
     }
 
     @keyframes channel-avatar-in {

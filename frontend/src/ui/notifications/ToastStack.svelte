@@ -41,7 +41,7 @@
 >
     {#each $toasts as toast (toast.id)}
         <div
-            class={`toast toast-${toast.level}`}
+            class={`toast toast-${toast.level}${toast.action ? ' toast-with-action' : ''}`}
             data-id={toast.id}
             role={toast.level === 'error' ? 'alert' : 'status'}
             aria-describedby={toast.body ? `toast-detail-${toast.id}` : undefined}
@@ -67,18 +67,18 @@
                 {#if toast.body}
                     <div id={`toast-detail-${toast.id}`} class="toast-body">{toast.body}</div>
                 {/if}
-                {#if toast.action}
-                    <button
-                        class="toast-action toast-interactive-control"
-                        type="button"
-                        data-toast-interactive
-                        onclick={(event) => {
-                            event.stopPropagation();
-                            toast.action?.run();
-                        }}
-                    >{toast.action.label}</button>
-                {/if}
             </div>
+            {#if toast.action}
+                <button
+                    class="toast-action toast-interactive-control"
+                    type="button"
+                    data-toast-interactive
+                    onclick={(event) => {
+                        event.stopPropagation();
+                        toast.action?.run();
+                    }}
+                >{toast.action.label}</button>
+            {/if}
             <button
                 class="toast-close toast-interactive-control"
                 type="button"

@@ -24,6 +24,7 @@
         mediaTitle,
         restrictionLabel,
         sortPosts,
+        sourceHandle,
         type ChannelMediaFetcher,
         type ChannelMediaItem,
         type ChannelMediaKind,
@@ -81,7 +82,7 @@
     const items = $derived('items' in view ? view.items : []);
     // What the list shows, and so what a video queues, in the chosen order.
     const shown = $derived(sortPosts(items, sort));
-    const handle = $derived(source.username ? `@${source.username}` : 'Private channel');
+    const handle = $derived(sourceHandle(source));
     const failure = $derived(view.status === 'error' ? toAppError(view.error, { source: 'backend' }) : null);
     const empty = $derived.by(() => {
         if (appliedQuery) {
@@ -187,7 +188,8 @@
 
     function rowLabel(item: ChannelMediaItem): string {
         const parts = [mediaTitle(item), mediaMeta(item).replace(/ · /g, ', '), badge(item)].filter(Boolean).join(', ');
-        return isPlayable(item) ? `Play ${parts}` : `Open in Telegram: ${parts}`;
+        if (isPlayable(item)) return `Play ${parts}`;
+        return item.telegramUrl ? `Open in Telegram: ${parts}` : `Unavailable in TDrive: ${parts}`;
     }
 
     function openPostActions(event: MouseEvent, item: ChannelMediaItem): void {
@@ -305,7 +307,7 @@
                 <ExternalLinkIcon size={16} strokeWidth={2} aria-hidden="true" />
             </button>
         {/if}
-        {#if mobile}
+        {#if mobile && (playable || item.telegramUrl)}
             <button
                 class="channel-row-actions"
                 type="button"
@@ -341,7 +343,7 @@
                         <SearchIcon size={22} strokeWidth={2} aria-hidden="true" />
                     </button>
                     <ChannelSortMenu iconOnly value={sort} onChange={chooseSort} />
-                    <button type="button" class="topbar-icon-btn" aria-haspopup="menu" aria-label="Channel actions" onclick={openActions}>
+                    <button type="button" class="topbar-icon-btn" aria-haspopup="menu" aria-label="Source actions" onclick={openActions}>
                         <EllipsisIcon size={22} strokeWidth={2} aria-hidden="true" />
                     </button>
                 </div>
@@ -371,7 +373,7 @@
                 <h1 id="channel-view-title" class="channel-bar-title" title={source.title}>{source.title}</h1>
                 <span class="channel-bar-handle">{handle}</span>
                 {#if source.protected}
-                    <span class="channel-bar-protected" title="Telegram keeps this channel's posts from being saved or played elsewhere. They open in Telegram.">
+                    <span class="channel-bar-protected" title="Telegram keeps this source's media from being saved or played elsewhere. They open in Telegram.">
                         <LockIcon size={12} strokeWidth={2.25} aria-hidden="true" />
                         Protected
                     </span>
@@ -887,8 +889,8 @@
         color: var(--color-text-muted);
     }
 
-    .is-mobile .channel-row-title { font-size: 15px; }
-    .is-mobile .channel-row-meta { font-size: 13px; }
+    .is-mobile .channel-row-title { font-size: var(--mobile-type-body); }
+    .is-mobile .channel-row-meta { font-size: var(--mobile-type-meta); }
 
     /* The row drops its own right padding so the "…" lands where the padding
        was, keeping a 44px target without widening the row. */

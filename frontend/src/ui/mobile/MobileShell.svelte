@@ -31,6 +31,7 @@
     import { breadcrumbPath } from '../chrome/breadcrumb-store';
     import { fileListView } from '../file-list/file-list-store';
     import ChannelView from '../channels/ChannelView.svelte';
+    import { sourceKey } from '../channels/channel-model';
     import { closeChannel, openChannel } from '../channels/channel-store';
     import { openChannelPost, openInTelegram, recentChannelPages, showChannelActions, showPostActions } from '../../modules/channel-sources';
     import { listChannelMedia } from '../../api';
@@ -248,7 +249,7 @@
 
         <div class="mobile-panel" data-tab="channel" hidden={!inChannel}>
             {#if dashboardVisible && $openChannel}
-                {#key `${$openChannel.channelId}:${$openChannel.generation}`}
+                {#key sourceKey($openChannel)}
                     <ChannelView
                         mobile
                         source={$openChannel}

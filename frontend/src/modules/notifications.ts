@@ -104,6 +104,8 @@ export interface NotifyOptions {
     durationMs?: number;
     spinner?: boolean;
     action?: ToastAction;
+    /** Runs when the toast expires, is dismissed, replaced, evicted or cleared. */
+    onRemoved?: () => void;
     /**
      * False for a toast that only repeats what a transfer row already says.
      * The row carries the reason as its note, so mirroring the toast into the
@@ -133,6 +135,7 @@ const entry: ToastItem = {
     paused,
     ...(paused && duration > 0 ? { remainingMs: duration } : {}),
     spinner: opts.spinner === true,
+    onRemoved: opts.onRemoved,
     ...(opts.action && opts.action.label && typeof opts.action.run === 'function'
         ? { action: { label: String(opts.action.label), run: opts.action.run } }
         : {}),
@@ -150,12 +153,14 @@ if (!entry.spinner && entry.title && opts.history !== false) {
     });
 }
 
-let evictedID = '';
+let removed: ToastItem | undefined;
+let evicted = false;
 toasts.update((list) => {
     const idx = list.findIndex((t) => t.id === id);
     if (idx >= 0) {
         // Replace in place; the keyed each block morphs the same node.
         const next = [...list];
+        removed = next[idx];
         next[idx] = entry;
         return next;
     }
@@ -166,13 +171,15 @@ toasts.update((list) => {
     const next = [...list];
     if (next.length >= visibleCap()) {
         const stalest = next.findIndex((t) => !t.sticky);
-        [evictedID] = next.splice(stalest >= 0 ? stalest : 0, 1).map((toast) => toast.id);
+        [removed] = next.splice(stalest >= 0 ? stalest : 0, 1);
+        evicted = true;
     }
     next.push(entry);
     return next;
 });
-if (evictedID) individuallyPaused.delete(evictedID);
+if (evicted && removed) individuallyPaused.delete(removed.id);
 rescheduleExpiry();
+removed?.onRemoved?.();
 return id; }
 export interface AppErrorNotificationOptions {
     id?: string;
@@ -204,22 +211,26 @@ export function notifyAppError(error: unknown, options: AppErrorNotificationOpti
 }
 
 export function dismissNotification(id: string) {
+    let removed: ToastItem | undefined;
     toasts.update((list) => {
         const idx = list.findIndex((t) => t.id === id);
         if (idx < 0) return list;
         const next = [...list];
-        next.splice(idx, 1);
+        [removed] = next.splice(idx, 1);
         return next;
     });
     individuallyPaused.delete(id);
     rescheduleExpiry();
+    removed?.onRemoved?.();
 }
 
 export function clearAllNotifications() {
+    const removed = get(toasts);
     toasts.set([]);
     individuallyPaused.clear();
     allPaused = false;
     clearExpiryTimer();
+    for (const toast of removed) toast.onRemoved?.();
 }
 
 // pauseToast freezes one toast's countdown while it is hovered. Stack and
@@ -290,18 +301,23 @@ function clearExpiryTimer() {
     expiryTimer = null;
 }
 
-function expireDueToasts(now: number) {
+function expireDueToasts(now: number): ToastItem[] {
+    const removed: ToastItem[] = [];
     const survives = (toast: ToastItem) => (
         toast.sticky || toast.paused || !toast.expiresAt || now < toast.expiresAt
     );
     if (!get(toasts).every(survives)) {
         toasts.update((list) => {
             for (const toast of list) {
-                if (!survives(toast)) individuallyPaused.delete(toast.id);
+                if (!survives(toast)) {
+                    individuallyPaused.delete(toast.id);
+                    removed.push(toast);
+                }
             }
             return list.filter(survives);
         });
     }
+    return removed;
 }
 
 function nearestDeadline(): number | null {
@@ -315,8 +331,9 @@ function nearestDeadline(): number | null {
 
 function rescheduleExpiry() {
     clearExpiryTimer();
-    expireDueToasts(Date.now());
+    const removed = expireDueToasts(Date.now());
     scheduleNearestDeadline();
+    for (const toast of removed) toast.onRemoved?.();
 }
 
 function scheduleNearestDeadline() {
@@ -328,6 +345,7 @@ function scheduleNearestDeadline() {
 
 function handleExpiryTimer() {
     expiryTimer = null;
-    expireDueToasts(Date.now());
+    const removed = expireDueToasts(Date.now());
     scheduleNearestDeadline();
+    for (const toast of removed) toast.onRemoved?.();
 }

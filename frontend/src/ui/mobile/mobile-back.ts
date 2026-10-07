@@ -16,7 +16,7 @@ import { navigateBack } from '../../modules/navigation';
 import { exitPhotos } from '../../modules/gallery';
 import { closeTrash } from '../../modules/trash/controller';
 import { clearSelection } from '../../modules/selection';
-import { closeChannel, openChannelId } from '../channels/channel-store';
+import { closeChannel, openChannelKey } from '../channels/channel-store';
 import { activeTab, closeDriveSwitcher, driveSwitcherOpen } from './mobile-shell-store';
 
 /** The name the native phone hosts call. Keep it in sync with MainActivity and main.m. */
@@ -69,7 +69,7 @@ export function handleBackPress(): boolean {
 /** Closes whichever virtual view is showing, reporting whether one was. */
 function leaveVirtualView(): boolean {
     // A channel covers the drive, so it is the view BACK leaves first.
-    if (get(openChannelId) !== null) {
+    if (get(openChannelKey) !== null) {
         closeChannel();
         return true;
     }

@@ -1,5 +1,5 @@
 import { derived, writable } from 'svelte/store';
-import type { ChannelSource } from './channel-model';
+import { sourceKey, type ChannelSource } from './channel-model';
 
 export type ChannelSourcesState =
     | { status: 'idle' | 'loading' | 'ready'; sources: readonly ChannelSource[] }
@@ -14,15 +14,16 @@ export const channelSources = writable<ChannelSourcesState>(EMPTY_CHANNEL_SOURCE
  * The channel the main area shows in place of the active drive. It never
  * changes the active drive, so leaving a channel lands back where you were.
  */
-export const openChannelId = writable<number | null>(null);
+/** Full peer identity so two peer kinds or accounts can never collide. */
+export const openChannelKey = writable<string | null>(null);
 
 export const openChannel = derived(
-    [channelSources, openChannelId],
-    ([$sources, $id]) => $sources.sources.find((source) => source.channelId === $id) ?? null,
+    [channelSources, openChannelKey],
+    ([$sources, $key]) => $sources.sources.find((source) => sourceKey(source) === $key) ?? null,
 );
 
 export const channelPickerOpen = writable(false);
 
 export function closeChannel(): void {
-    openChannelId.set(null);
+    openChannelKey.set(null);
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { listChannelSourceCandidates } from '../../api';
+    import { listChannelSourceCandidates, resolvePublicChannelSource } from '../../api';
     import { activateLiveSyncEvents } from '../../modules/channels';
     import { activateChannelSources, addChannel, channelPhoto, closeChannelPicker, showChannel } from '../../modules/channel-sources';
     import { activateContextMenu } from '../../modules/context-menu';
@@ -216,6 +216,7 @@
         <ChannelPickerModal
             open={$channelPickerOpen}
             loadCandidates={listChannelSourceCandidates}
+            resolvePublic={resolvePublicChannelSource}
             added={$channelSources.sources}
             loadPhoto={channelPhoto}
             onAdd={addChannel}

@@ -2,12 +2,12 @@
     import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
     import PlusIcon from '@lucide/svelte/icons/plus';
     import ChannelAvatar from './ChannelAvatar.svelte';
-    import type { ChannelSource } from './channel-model';
+    import { sourceKey, sourcePeerLabel, type ChannelSource } from './channel-model';
     import type { ChannelSourcesState } from './channel-store';
 
     interface Props {
         sources: ChannelSourcesState;
-        activeId: number | null;
+        activeKey: string | null;
         loadPhoto: (source: ChannelSource) => Promise<string>;
         onSelect: (source: ChannelSource) => void;
         onActions: (x: number, y: number, source: ChannelSource) => void;
@@ -15,7 +15,7 @@
         onRetry: () => void;
     }
 
-    let { sources, activeId, loadPhoto, onSelect, onActions, onAdd, onRetry }: Props = $props();
+    let { sources, activeKey, loadPhoto, onSelect, onActions, onAdd, onRetry }: Props = $props();
 
     function pointBelow(element: HTMLElement): { x: number; y: number } {
         const rect = element.getBoundingClientRect();
@@ -45,21 +45,21 @@
 </script>
 
 <div class="channel-nav-title">
-    <span>Channels</span>
-    <button class="channel-nav-add" type="button" title="Add a channel" aria-label="Add a channel" onclick={onAdd}>
+    <span>Sources</span>
+    <button class="channel-nav-add" type="button" title="Add a source" aria-label="Add a source" onclick={onAdd}>
         <PlusIcon size={14} strokeWidth={2.25} aria-hidden="true" />
     </button>
 </div>
 
 <div class="drives-list">
-    {#each sources.sources as source (source.channelId)}
-        {@const active = source.channelId === activeId}
+    {#each sources.sources as source (sourceKey(source))}
+        {@const active = sourceKey(source) === activeKey}
         <div class="channel-nav-row" role="group" aria-label={source.title}>
             <button
                 class="drive-item channel-nav-item"
                 class:active
                 type="button"
-                title={source.title}
+                title={`${source.title} (${sourcePeerLabel(source)})`}
                 aria-current={active ? 'page' : undefined}
                 onclick={() => onSelect(source)}
                 oncontextmenu={(event) => openActions(event, source)}
@@ -84,13 +84,13 @@
     {:else}
         {#if sources.status === 'error'}
             <div class="drive-empty channel-nav-error">
-                Channels did not load.
+                Sources did not load.
                 <button class="link-button" type="button" onclick={onRetry}>Retry</button>
             </div>
         {:else if sources.status === 'ready'}
             <button class="drive-item channel-nav-item" type="button" onclick={onAdd}>
                 <span class="channel-nav-add-icon" aria-hidden="true"><PlusIcon size={12} strokeWidth={2.5} /></span>
-                <span class="drive-item-title">Add a channel</span>
+                <span class="drive-item-title">Add a source</span>
             </button>
         {/if}
     {/each}

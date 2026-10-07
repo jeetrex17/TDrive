@@ -5,14 +5,45 @@ import { relativeTimeLabel } from '../file-list/row-meta';
 
 export type ChannelMediaKind = 'all' | 'video' | 'audio';
 
+/** Telegram peers TDrive can read media from. Secret chats are intentionally absent. */
+export type SourcePeerKind = 'self' | 'user' | 'bot' | 'group' | 'supergroup' | 'channel';
+
 export interface ChannelSource {
-    channelId: number;
+    peerKind: SourcePeerKind;
+    peerId: number;
     title: string;
     username: string;
     connected: boolean;
     protected: boolean;
+    /** Telegram can currently serve this peer to the signed-in account. */
+    available: boolean;
+    /** Telegram stopped scanning one dialog folder at its fixed safety limit. */
+    candidatesTruncated?: boolean;
+    /** Present only after this exact public handle was verified through Telegram. */
+    publicUsername?: string;
     accountId: string;
     generation: string;
+}
+
+/** Identity for every UI transition, cache and bridge request. */
+export function sourceKey(source: Pick<ChannelSource, 'accountId' | 'peerKind' | 'peerId' | 'generation'>): string {
+    return `${source.accountId}:${source.peerKind}:${source.peerId}:${source.generation}`;
+}
+
+export function sourcePeerLabel(source: Pick<ChannelSource, 'peerKind'>): string {
+    switch (source.peerKind) {
+        case 'self': return 'Saved Messages';
+        case 'user': return 'Direct message';
+        case 'bot': return 'Bot chat';
+        case 'group': return 'Group';
+        case 'supergroup': return 'Supergroup';
+        case 'channel': return 'Channel';
+    }
+}
+
+export function sourceHandle(source: Pick<ChannelSource, 'peerKind' | 'username'>): string {
+    if (source.username) return `@${source.username}`;
+    return sourcePeerLabel(source);
 }
 
 export interface ChannelMediaItem {
@@ -31,7 +62,8 @@ export interface ChannelMediaItem {
 }
 
 export interface ChannelMediaPage {
-    channelId: number;
+    peerKind: SourcePeerKind;
+    peerId: number;
     accountId: string;
     generation: string;
     items: readonly ChannelMediaItem[];
@@ -40,7 +72,8 @@ export interface ChannelMediaPage {
 }
 
 export interface ChannelMediaRequest {
-    channelId: number;
+    peerKind: SourcePeerKind;
+    peerId: number;
     offsetId: number;
     limit: number;
     search: string;
@@ -111,14 +144,15 @@ export function createChannelMediaPager(fetchPage: ChannelMediaFetcher) {
         view = { status: 'loading', items: previous };
         try {
             const page = await fetchPage({
-                channelId: target.channelId,
+                peerKind: target.peerKind,
+                peerId: target.peerId,
                 offsetId: append ? nextOffsetId : 0,
                 limit: PAGE_SIZE,
                 search,
                 kind,
             });
             if (current !== version) return view;
-            if (page.channelId !== target.channelId || page.accountId !== target.accountId
+            if (page.peerKind !== target.peerKind || page.peerId !== target.peerId || page.accountId !== target.accountId
                 || page.generation !== target.generation) {
                 throw new Error('This channel changed while it was loading. Try again.');
             }
@@ -273,7 +307,7 @@ export function channelVideoQueue(
 ): { target: VideoOpenTarget; playlist: VideoPlaylistLaunch } {
     const target = (post: ChannelMediaItem): VideoOpenTarget => ({
         id: post.msgId,
-        key: `channel:${source.channelId}:${post.msgId}`,
+        key: `source:${sourceKey(source)}:${post.msgId}`,
         name: post.name,
         title: mediaTitle(post),
         size: post.size,
@@ -290,9 +324,9 @@ export function channelVideoQueue(
     };
 }
 
-/** Public channels have a t.me page; private ones are reached through a post. */
+/** Public channels have a t.me page; private conversations are reached through a post. */
 export function channelTelegramUrl(source: ChannelSource): string {
-    return source.username ? `https://t.me/${encodeURIComponent(source.username)}` : '';
+    return source.peerKind === 'channel' && source.username ? `https://t.me/${encodeURIComponent(source.username)}` : '';
 }
 
 export function channelInitial(title: string): string {

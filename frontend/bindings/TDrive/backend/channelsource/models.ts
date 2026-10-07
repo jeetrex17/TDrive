@@ -20,6 +20,8 @@ export interface MediaItem {
 }
 
 export interface MediaPage {
+    "peer_kind": string;
+    "peer_id": number;
     "channel_id": number;
     "account_id": number;
     "generation": string;
@@ -29,6 +31,8 @@ export interface MediaPage {
 }
 
 export interface SourceInfo {
+    "peer_kind": string;
+    "peer_id": number;
     "channel_id": number;
     "title": string;
     "username"?: string;
@@ -37,4 +41,5 @@ export interface SourceInfo {
     "available": boolean;
     "account_id": number;
     "generation"?: string;
+    "candidates_truncated"?: boolean;
 }
