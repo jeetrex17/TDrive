@@ -1,5 +1,6 @@
 /* === DASHBOARD LAYOUT === */
 .dashboard-container { display: flex; height: 100vh; }
+.dashboard-container[hidden] { display: none; }
 
 /* A Telegram channel takes the drive's place below the header, the way Photos
    and the trash do. The drive's views stay mounted underneath because their

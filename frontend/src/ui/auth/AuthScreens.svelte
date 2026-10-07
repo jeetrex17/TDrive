@@ -1,4 +1,7 @@
 <script lang="ts">
+    import CountryCodePicker from './CountryCodePicker.svelte';
+    import { normalizePhoneNumber, countryForInternationalNumber, nationalNumberForCountryChange } from './phone-number';
+    import type { CountryCode } from 'libphonenumber-js/min';
     import tdriveLogo from '../../assets/images/tdrive-logo.png';
     import EyeIcon from '@lucide/svelte/icons/eye';
     import EyeOffIcon from '@lucide/svelte/icons/eye-off';
@@ -10,6 +13,7 @@
     import { isMobilePlatform, openExternalUrl } from '../../api';
     import { authScreen } from '../app/app-store';
     import {
+        failAuthSubmission,
         authHint,
         authPhone,
         authSubmission,
@@ -77,6 +81,27 @@
     let apiId = $state('');
     let apiHash = $state('');
     let phone = $state('');
+    let country = $state<CountryCode | undefined>();
+
+    function updatePhone(event: Event): void {
+        phone = (event.currentTarget as HTMLInputElement).value;
+        if (phone.trim().startsWith('+')) country = countryForInternationalNumber(phone);
+    }
+
+    function selectCountry(next: CountryCode): void {
+        phone = nationalNumberForCountryChange(phone);
+        country = next;
+    }
+
+    function sendPhone(): void | Promise<void> {
+        const result = normalizePhoneNumber(phone, country);
+        if ('error' in result) {
+            failAuthSubmission('phone', result.error);
+            phoneEl?.focus();
+            return;
+        }
+        return onPhone(result.number);
+    }
     let code = $state('');
     let password = $state('');
     let revealPassword = $state(false);
@@ -287,7 +312,7 @@
         aria-labelledby="auth-phone-title"
         aria-busy={$authSubmission.phone.busy}
         novalidate
-        onsubmit={(event) => submit(event, 'phone', () => onPhone(phone))}
+        onsubmit={(event) => submit(event, 'phone', sendPhone)}
     >
         <div class="auth-page-body">
             <div class="auth-icon-box">
@@ -295,26 +320,34 @@
             </div>
             <h2 id="auth-phone-title">Sign in to Telegram</h2>
             <p class="auth-intro">Telegram will send a login code to your account.</p>
-            <div class="auth-field">
-                <label for="telegram-phone">Phone number</label>
-                <input
-                    bind:this={phoneEl}
-                    bind:value={phone}
-                    id="telegram-phone"
-                    name="phone"
-                    type="tel"
-                    inputmode="tel"
-                    enterkeyhint={mobile ? 'send' : undefined}
-                    autocomplete="tel"
-                    autocapitalize="none"
-                    spellcheck="false"
-                    placeholder="+1 555 123 4567"
-                    required
-                    disabled={$authSubmission.phone.busy}
-                    aria-invalid={$authSubmission.phone.error ? 'true' : undefined}
-                    aria-describedby={$authSubmission.phone.error ? 'phone-session-note phone-error' : 'phone-session-note'}
-                />
+            <div class="phone-entry">
+                <div class="auth-field country-field">
+                    <label for="telegram-country">Country / code</label>
+                    <CountryCodePicker {country} disabled={$authSubmission.phone.busy} onSelect={selectCountry} />
+                </div>
+                <div class="auth-field phone-field">
+                    <label for="telegram-phone">Phone number</label>
+                    <input
+                        bind:this={phoneEl}
+                        value={phone}
+                        oninput={updatePhone}
+                        id="telegram-phone"
+                        name="phone"
+                        type="tel"
+                        inputmode="tel"
+                        enterkeyhint={mobile ? 'send' : undefined}
+                        autocomplete="tel"
+                        autocapitalize="none"
+                        spellcheck="false"
+                        placeholder={country ? "Your phone number" : "+1 202 555 0123"}
+                        required
+                        disabled={$authSubmission.phone.busy}
+                        aria-invalid={$authSubmission.phone.error ? 'true' : undefined}
+                        aria-describedby={$authSubmission.phone.error ? 'phone-session-note phone-error' : 'phone-session-note'}
+                    />
+                </div>
             </div>
+            <p class="auth-intro phone-hint">Use the number linked to your Telegram account.</p>
             <p id="phone-session-note" class="auth-privacy">
                 Your signed-in session is kept locally on this device and is not synced by TDrive.
             </p>
@@ -459,6 +492,21 @@
 {/if}
 
 <style>
+    .phone-entry {
+        display: grid;
+        grid-template-columns: minmax(115px, 0.8fr) minmax(0, 1.4fr);
+        gap: 12px;
+        margin-bottom: 0.75rem;
+    }
+
+    .phone-field {
+        min-width: 0;
+    }
+
+    .phone-hint {
+        margin-top: 0;
+    }
+
     .auth-form {
         display: flex;
         flex-direction: column;
@@ -617,6 +665,10 @@
 
     :global(html.mobile) .auth-field:not(.auth-fields .auth-field) {
         margin-bottom: 1.25rem;
+    }
+
+    :global(html.mobile) .phone-entry .auth-field {
+        margin-bottom: 0;
     }
 
     :global(html.mobile) .auth-error {

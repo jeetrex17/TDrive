@@ -47,9 +47,9 @@ test('auth advances through the public login surface and handles runtime errors'
     await phone.fill('+1 555 0100');
     await page.getByRole('button', { name: 'Send code' }).click();
     await expect(page.getByRole('heading', { name: 'Verify your account' })).toBeVisible();
-    await expect(page.getByText('+1 555 0100')).toBeVisible();
+    await expect(page.getByText('+15550100')).toBeVisible();
     expect(await mock.calls('LoginPhoneNumber')).toMatchObject([
-        { args: ['+1 555 0100'], state: 'fulfilled' },
+        { args: ['+15550100'], state: 'fulfilled' },
     ]);
 
     await mock.emit('login-code-invalid');
