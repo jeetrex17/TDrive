@@ -317,17 +317,17 @@
 /* === TOAST NOTIFICATIONS === */
 .toast-stack {
     position: fixed;
+    top: 68px;
     right: 20px;
-    bottom: 20px;
     /* Above the modal rung on purpose: a toast raised while a dialog is open
        is the app answering for the whole window, not for the dialog, and the
        modal's scrim covers the full viewport. */
     z-index: var(--z-toast);
     display: flex;
-    flex-direction: column-reverse;
+    flex-direction: column;
     gap: 10px;
     pointer-events: none;
-    max-width: min(420px, calc(100vw - 40px));
+    max-width: min(380px, calc(100vw - 40px));
     width: 100%;
 }
 /* The hover-to-pause handlers sit on this, so it has to be a box: as
@@ -336,6 +336,7 @@
    toasts in it, so an empty stack blocks nothing underneath. */
 .toast-stack-inner {
     display: flex;
+    /* New notices are appended in the store; show the newest nearest the top. */
     flex-direction: column-reverse;
     gap: 10px;
     pointer-events: auto;
@@ -344,21 +345,18 @@
     pointer-events: auto;
     display: grid;
     grid-template-columns: 22px 1fr 22px;
-    gap: 12px;
+    gap: 10px;
     align-items: start;
-    padding: 12px 14px;
+    padding: 10px 12px;
     border-radius: var(--radius-lg);
-    background: var(--glass-bg);
-    border: 1px solid var(--border);
-    box-shadow:
-        var(--shadow-sm),
-        0 1px 0 var(--glass-highlight) inset;
-    backdrop-filter: blur(12px);
+    background: var(--color-surface-1);
+    border: 1px solid var(--color-border-soft);
+    box-shadow: var(--shadow-sm);
     color: var(--text-main);
-    font-size: 0.88rem;
+    font-size: var(--type-base);
     line-height: 1.4;
-    transform-origin: bottom right;
-    --motion-enter-x: 8px;
+    transform-origin: top center;
+    --motion-enter-y: -8px;
     animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
     cursor: default;
 }
@@ -368,40 +366,35 @@
 .toast-icon {
     width: 22px; height: 22px;
     display: inline-flex; align-items: center; justify-content: center;
-    border-radius: var(--radius-pill);
     flex-shrink: 0;
 }
 .toast-icon svg { width: 16px; height: 16px; }
 
-.toast-info    .toast-icon { background: var(--overlay-accent-2); color: var(--accent); }
-.toast-success .toast-icon { background: var(--overlay-success-1); color: var(--success); }
-.toast-warning .toast-icon { background: var(--overlay-warning-1); color: var(--color-warning); }
-.toast-error   .toast-icon { background: var(--overlay-danger-1); color: var(--danger); }
-
-.toast-info    { border-color: var(--overlay-accent-3); }
-.toast-success { border-color: var(--overlay-success-2); }
-.toast-warning { border-color: var(--overlay-warning-2); }
-.toast-error   { border-color: var(--overlay-danger-2); }
+.toast-info    .toast-icon { color: var(--accent); }
+.toast-success .toast-icon { color: var(--success); }
+.toast-warning .toast-icon { color: var(--color-warning); }
+.toast-error   .toast-icon { color: var(--danger); }
 
 .toast-content {
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 3px;
-    padding-top: 1px;
+    gap: 2px;
+    padding-top: 2px;
 }
 .toast-title {
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     color: var(--text-main);
     word-break: break-word;
 }
 .toast-body {
-    color: var(--text-muted);
-    font-size: 0.82rem;
+    color: var(--color-text-soft);
+    font-size: var(--type-sm);
+    line-height: 1.4;
     word-break: break-word;
-    /* Cap to ~3 lines to keep the stack tidy. */
+    /* The full copy stays in notification history after this brief notice. */
     display: -webkit-box;
-    -webkit-line-clamp: 3;
+    -webkit-line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
 }

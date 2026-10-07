@@ -314,6 +314,12 @@ test('context menus retain vertical actions, render notifications, and restore f
     const toastStack = page.locator('#toast-stack.toast-stack');
     await expect(toastStack).toHaveCSS('position', 'fixed');
     await expect(toastStack.getByRole('alert')).toContainText('Could not get invite link');
+    const toastBox = await toastStack.boundingBox();
+    const viewport = page.viewportSize();
+    expect(toastBox).not.toBeNull();
+    expect(viewport).not.toBeNull();
+    expect(toastBox!.y).toBeGreaterThanOrEqual(68);
+    expect(viewport!.width - (toastBox!.x + toastBox!.width)).toBeGreaterThanOrEqual(19);
 
     const newDrive = page.getByRole('button', { name: 'New shared drive' });
     await newDrive.click();

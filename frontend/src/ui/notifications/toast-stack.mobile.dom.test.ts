@@ -28,15 +28,15 @@ function toast(overrides: Partial<ToastItem> = {}): ToastItem {
     };
 }
 
-function render(onDismiss = vi.fn()) {
+function render(onDismiss = vi.fn(), onPauseAll = vi.fn(), onResumeAll = vi.fn()) {
     app = mount(ToastStack, {
         target: host,
         props: {
             onDismiss,
             onPauseToast: vi.fn(),
             onResumeToast: vi.fn(),
-            onPauseAll: vi.fn(),
-            onResumeAll: vi.fn(),
+            onPauseAll,
+            onResumeAll,
         },
     });
     flushSync();
@@ -94,7 +94,7 @@ describe('mobile toasts', () => {
         expect(dismiss).not.toHaveBeenCalled();
     });
 
-    it('dismisses on a tap and on a swipe down, and holds on a short drag', () => {
+    it('dismisses on a tap and on a swipe up, and holds on a short drag', () => {
         toasts.set([toast()]);
         const dismiss = render();
         const card = host.querySelector<HTMLElement>('.toast')!;
@@ -106,18 +106,58 @@ describe('mobile toasts', () => {
         // Past the tap slop but short of the threshold: a drag that was not
         // going anywhere, so the toast springs back rather than leaving.
         dismiss.mockClear();
-        swipe(card, 20);
+        swipe(card, -20);
         expect(dismiss).not.toHaveBeenCalled();
 
-        // Far enough down is a dismissal, and the surface carries on off the
-        // bottom edge before handing over rather than blinking out under the
+        // Far enough up is a dismissal, and the surface carries on off the
+        // top edge before handing over rather than blinking out under the
         // finger that threw it.
         vi.useFakeTimers();
         try {
-            swipe(card, 400);
+            swipe(card, -400);
             expect(dismiss).not.toHaveBeenCalled();
             vi.advanceTimersByTime(DISMISS_EXIT_MS);
             expect(dismiss).toHaveBeenCalledOnce();
+        } finally {
+            vi.useRealTimers();
+        }
+    });
+
+    it('holds the countdown while keyboard focus remains inside the stack', () => {
+        toasts.set([toast({ action: { label: 'Retry', run: vi.fn() } })]);
+        const pause = vi.fn();
+        const resume = vi.fn();
+        render(vi.fn(), pause, resume);
+
+        const action = host.querySelector<HTMLButtonElement>('.toast-action')!;
+        const close = host.querySelector<HTMLButtonElement>('.toast-close')!;
+        action.focus();
+        expect(pause).toHaveBeenCalled();
+        expect(resume).not.toHaveBeenCalled();
+
+        close.focus();
+        expect(resume).not.toHaveBeenCalled();
+
+        close.blur();
+        expect(resume).toHaveBeenCalled();
+    });
+
+    it('keeps a same-id replacement when the old toast is already swiping away', () => {
+        toasts.set([toast({ revision: 1, title: "You're offline" })]);
+        const dismiss = render();
+        const card = host.querySelector<HTMLElement>('.toast')!;
+
+        vi.useFakeTimers();
+        try {
+            swipe(card, -400);
+            toasts.set([toast({ revision: 2, level: 'success', title: 'Back online' })]);
+            flushSync();
+
+            expect(card.textContent).toContain('Back online');
+            expect(card.style.transform).toBe('');
+            expect(card.style.opacity).toBe('');
+            vi.advanceTimersByTime(DISMISS_EXIT_MS);
+            expect(dismiss).not.toHaveBeenCalled();
         } finally {
             vi.useRealTimers();
         }

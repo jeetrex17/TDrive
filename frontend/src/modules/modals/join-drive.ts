@@ -16,7 +16,6 @@ export async function submitJoinDrive(link: string): Promise<void> {
         level: 'info',
         title: 'Joining drive…',
         body: 'If the drive has lots of history, this can take a few seconds.',
-        sticky: true,
         spinner: true,
     });
     joinDriveModal.setBusy(true);

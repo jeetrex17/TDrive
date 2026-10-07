@@ -22,7 +22,6 @@ export async function confirmLogout(mode: LogoutMode): Promise<void> {
         id: 'logout-progress',
         level: 'info',
         title: 'Logging out…',
-        sticky: true,
         spinner: true,
     });
     logoutModal.setBusy(true);

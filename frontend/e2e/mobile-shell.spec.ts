@@ -220,20 +220,18 @@ test('tapping the active drive in Account opens Files without re-switching', asy
     expect(await mock.calls('SetActiveChannel')).toEqual([]);
 });
 
-// Offline is a persistent strip in the shell, not a toast a tap would dismiss.
-test('a persistent strip reports going offline and clears when the link returns', async ({ page }) => {
+test('offline and recovery notices appear below the safe area and expire', async ({ page }) => {
     await bootMobile(page);
-    await expect(page.locator('.mobile-offline-strip')).toHaveCount(0);
+    await page.evaluate(() => document.documentElement.style.setProperty('--mobile-inset-top', '32px'));
 
     await page.evaluate(() => window.dispatchEvent(new Event('offline')));
-    const strip = page.locator('.mobile-offline-strip');
-    await expect(strip).toBeVisible();
-    await expect(strip).toHaveText("You're offline");
-    // The phone shows the strip instead of the dismissible toast.
-    await expect(page.locator('.toast-title', { hasText: "You're offline" })).toHaveCount(0);
+    const notice = page.locator('#toast-stack .toast', { hasText: "You're offline" });
+    await expect(notice).toBeVisible();
+    await expect.poll(async () => (await notice.boundingBox())?.y ?? 0).toBeGreaterThanOrEqual(108);
+    await expect(notice).toHaveCount(0, { timeout: 8000 });
 
     await page.evaluate(() => window.dispatchEvent(new Event('online')));
-    await expect(page.locator('.mobile-offline-strip')).toHaveCount(0);
+    await expect(page.locator('#toast-stack .toast', { hasText: 'Back online' })).toBeVisible();
 });
 
 test('the bars carry safe-area padding', async ({ page }) => {

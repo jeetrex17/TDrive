@@ -16,7 +16,6 @@ export async function submitNewDrive(title: string, requireApproval: boolean): P
         id: 'creating-drive',
         level: 'info',
         title: 'Creating drive…',
-        sticky: true,
         spinner: true,
     });
     newDriveModal.setBusy(true);

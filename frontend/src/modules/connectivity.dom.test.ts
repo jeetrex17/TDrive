@@ -42,7 +42,8 @@ describe('connectivity watch', () => {
 
         const toast = currentToast();
         expect(toast?.level).toBe('warning');
-        expect(toast?.sticky).toBe(true);
+        expect(toast?.sticky).toBe(false);
+        expect(toast?.durationMs).toBe(6_000);
     });
 
     it('replaces the offline toast in place when the link returns', () => {

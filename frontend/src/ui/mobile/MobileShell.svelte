@@ -24,7 +24,6 @@
     import { activateKeyboardInsets } from './keyboard-insets';
     import { activateBackgroundTransfers } from './background-transfers';
     import { activateNotificationActions } from '../../modules/notification-actions';
-    import { offline } from '../../modules/connectivity';
     import { scrollBehavior } from './motion';
     import { activeTab, keyboardOpen, markTransfersSeen, transferAttentionCount, type MobileTab } from './mobile-shell-store';
     import { sidebarState } from '../sidebar/sidebar-store';
@@ -66,21 +65,6 @@
         || ($activeTab === 'files' && !inChannel && !emptyFilesOwnsCreation && $sidebarState.virtualView !== 'trash'),
     );
     const contextualActionVisible = $derived(showContextAction && !selecting && !$keyboardOpen);
-
-    // Publish the upload button's footprint so anything else that floats over
-    // the content can stand off it. The toast stack is the one that matters:
-    // the notice a tap on Upload raises was landing on the button that raised
-    // it. A custom property rather than a class because the surfaces that read
-    // it are not all inside this shell -- FeatureLayer hosts the toasts as a
-    // sibling -- and :root is the one ancestor they share.
-    $effect(() => {
-        const root = document.documentElement.style;
-        root.setProperty(
-            '--mobile-fab-clearance',
-            contextualActionVisible ? 'var(--context-action-clearance)' : '0px',
-        );
-        return () => root.removeProperty('--mobile-fab-clearance');
-    });
 
     // The gallery owns whether Photos is showing; the tab is only how the user
     // asked for it. Hardware BACK and in-app navigation leave the gallery
@@ -206,14 +190,6 @@
     aria-hidden={dashboardVisible ? undefined : 'true'}
 >
     <TopBar active={$activeTab} />
-
-    <!-- A persistent strip, not a toast: losing the link is a state, and a toast
-         a tap dismisses leaves the one claim that has to stay on screen gone on
-         the first scroll. It rides between the bar and the content and is
-         announced once, politely, when it appears. -->
-    {#if $offline}
-        <div class="mobile-offline-strip" role="status" aria-live="polite">You're offline</div>
-    {/if}
 
     <div class="mobile-body">
         <!-- Files and Photos share this region; the gallery controller toggles

@@ -18,9 +18,6 @@ html.mobile {
        stop. Every such surface measures from this one value, so the bar's shape
        is stated once and they cannot drift apart. */
     --mobile-overlay-bottom: calc(var(--tabbar-height) + var(--tabbar-inset) * 2 + var(--inset-bottom));
-    /* Raised by the shell to --context-action-clearance while the upload button
-       is showing, so nothing else settles on top of it. */
-    --mobile-fab-clearance: 0px;
     --selection-bar-reserve: calc(76px + var(--inset-bottom));
     --context-action-clearance: calc(52px + var(--space-4));
     /* The widest a column of file rows or settings should run before it stops
@@ -94,27 +91,6 @@ html.mobile .mobile-body {
     display: flex;
     flex-direction: column;
     overflow: hidden;
-}
-
-/* The offline strip: a quiet, persistent band under the bar while the link is
-   down. Flat and unalarming -- being offline is a state to note, not an error
-   to sound -- and inset off the glass on a turned phone like the rest. */
-html.mobile .mobile-offline-strip {
-    flex: 0 0 auto;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-height: 28px;
-    padding:
-        var(--space-1)
-        calc(var(--space-4) + var(--inset-right))
-        var(--space-1)
-        calc(var(--space-4) + var(--inset-left));
-    background: var(--overlay-neutral-2);
-    color: var(--color-text-soft);
-    font-size: var(--mobile-type-meta);
-    font-weight: var(--weight-medium);
-    border-bottom: 1px solid var(--color-border-soft);
 }
 
 /* The selection bar overlays the shell so it can replace the tab bar without a
@@ -1162,18 +1138,14 @@ html.mobile .mobile-empty-title { font-size: 1.0625rem; font-weight: var(--weigh
 html.mobile .mobile-empty-body { font-size: 0.875rem; color: var(--color-text-muted); max-width: 36ch; }
 
 /* ============================ TOASTS ============================ */
-/* The stack clears the tab bar and, where one is showing, the upload button
-   too: the toast a tap on Upload raises used to land on the button that
-   raised it. --mobile-fab-clearance is published by the shell and is 0 on the
-   tabs that carry no action.
-
-   Gutters match the content cards rather than a viewport percentage, so a
-   toast lines up with the list underneath instead of floating at its own
-   width. */
+/* Keep notices below the top bar so they do not cover navigation controls.
+   They remain in the upper part of the screen and clear the system safe area. */
 html.mobile #toast-stack.toast-stack {
+    top: calc(var(--inset-top) + 76px);
     left: calc(var(--space-4) + var(--inset-left));
     right: calc(var(--space-4) + var(--inset-right));
-    bottom: calc(var(--mobile-overlay-bottom) + var(--mobile-fab-clearance));
+    bottom: auto;
+    transform: none;
     width: auto;
     max-width: none;
     align-items: stretch;
@@ -1184,9 +1156,9 @@ html.mobile #toast-stack.toast-stack {
    bars elsewhere in the shell are opaque and flat because they own their strip
    of the screen; this one is borrowing it. */
 html.mobile .toast {
-    background: var(--color-surface-2);
-    border-color: var(--color-border);
-    box-shadow: var(--shadow-md);
+    background: var(--color-surface-1);
+    border-color: var(--color-border-soft);
+    box-shadow: var(--shadow-sm);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
     /* The whole surface is a drag target (see swipe-dismiss.ts); without this
@@ -1198,11 +1170,21 @@ html.mobile .toast {
     animation: tdrive-toast-enter var(--motion-med) var(--ease-enter) backwards;
 }
 
-/* It arrives from the edge it lives on. The desktop toast scales out of the
-   bottom-right corner it is anchored to; this one is anchored to the bottom of
-   the screen, and rising from there is the same idea told honestly. */
+html.mobile .toast-with-action {
+    grid-template-columns: 22px minmax(0, 1fr) 32px;
+}
+html.mobile .toast-with-action .toast-content { grid-column: 2; grid-row: 1; }
+html.mobile .toast-with-action .toast-action {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: start;
+    margin-top: 0;
+}
+html.mobile .toast-with-action .toast-close { grid-column: 3; grid-row: 1; }
+
+/* It arrives from the edge it lives on, and a swipe up returns it there. */
 @keyframes tdrive-toast-enter {
-    from { opacity: 0; transform: translateY(12px); }
+    from { opacity: 0; transform: translateY(-12px); }
     to { opacity: 1; transform: translateY(0); }
 }
 

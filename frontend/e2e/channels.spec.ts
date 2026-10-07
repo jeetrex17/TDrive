@@ -20,6 +20,18 @@ async function expectToastActionOnRight(toast: Locator): Promise<void> {
     expect(close!.x).toBeGreaterThanOrEqual(action!.x + action!.width);
 }
 
+async function expectMobileToastActionBelowCopy(toast: Locator): Promise<void> {
+    const copy = await toast.locator('.toast-content').boundingBox();
+    const action = await toast.getByRole('button', { name: 'Undo' }).boundingBox();
+    const close = await toast.getByRole('button', { name: 'Dismiss' }).boundingBox();
+    expect(copy).not.toBeNull();
+    expect(action).not.toBeNull();
+    expect(close).not.toBeNull();
+    expect(action!.y).toBeGreaterThanOrEqual(copy!.y + copy!.height - 2);
+    expect(action!.x).toBeGreaterThanOrEqual(copy!.x);
+    expect(close!.x).toBeGreaterThan(copy!.x + copy!.width - 2);
+}
+
 test('desktop channels sit beside the drives and keep the app header', async ({ page }) => {
     await page.clock.install();
     const mock = await bootTDrive(page, {
@@ -111,10 +123,10 @@ test('mobile channels open inside Files with their own way back', async ({ page 
     await page.getByRole('dialog', { name: 'Actions' }).getByRole('button', { name: 'Remove from TDrive' }).click();
     const toast = page.locator('.toast').filter({ hasText: 'Removed Field Recordings' });
     await expect(toast.getByRole('button', { name: 'Undo' })).toBeVisible();
-    await expectToastActionOnRight(toast);
+    await expectMobileToastActionBelowCopy(toast);
     await toast.screenshot({ path: 'test-results/toast-action-mobile.png' });
     await page.setViewportSize({ width: 320, height: 640 });
-    await expectToastActionOnRight(toast);
+    await expectMobileToastActionBelowCopy(toast);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await toast.screenshot({ path: 'test-results/toast-action-mobile-320.png' });
     expect(await mock.calls('DisconnectChannelSource')).toHaveLength(0);
