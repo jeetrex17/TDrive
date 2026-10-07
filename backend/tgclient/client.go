@@ -21,9 +21,9 @@ var (
 	ErrMessageNotFound = errors.New("tgclient: message not found")
 	ErrNotFile         = errors.New("tgclient: message is not a file")
 	ErrEmptyDocument   = errors.New("tgclient: empty document")
-	// ErrChannelUnavailable means the account left the channel or can no
-	// longer see it, as opposed to a lookup that merely failed this time.
-	ErrChannelUnavailable = errors.New("tgclient: channel unavailable to this account")
+	// ErrChannelUnavailable means the account can no longer access a peer,
+	// as opposed to a lookup that merely failed this time.
+	ErrChannelUnavailable = errors.New("tgclient: peer unavailable to this account")
 	// ErrSendOutcomeUnknown means Telegram may have accepted an idempotent
 	// write even though the client did not receive a usable receipt. Callers
 	// must retry with the same random_id before abandoning remote artifacts.
@@ -65,12 +65,42 @@ func FloodWaitDuration(err error) (time.Duration, bool) {
 type InputPeer struct {
 	ChannelID  int64
 	AccessHash int64
+	// Kind is empty for the historical channel-only drive path.
+	Kind PeerKind
+}
+
+type PeerKind string
+
+const (
+	PeerChannel    PeerKind = "channel"
+	PeerSupergroup PeerKind = "supergroup"
+	PeerGroup      PeerKind = "group"
+	PeerUser       PeerKind = "user"
+	PeerBot        PeerKind = "bot"
+	PeerSelf       PeerKind = "self"
+)
+
+func (p InputPeer) PeerKind() PeerKind {
+	if p.Kind == "" {
+		return PeerChannel
+	}
+	return p.Kind
+}
+
+func (k PeerKind) Valid() bool {
+	switch k {
+	case PeerChannel, PeerSupergroup, PeerGroup, PeerUser, PeerBot, PeerSelf:
+		return true
+	default:
+		return false
+	}
 }
 
 // HistoryMessage is the subset of a tg.Message that sync/backfill/read paths care about.
 // We deliberately avoid leaking the gotd types so the fake stays cheap.
 type HistoryMessage struct {
-	ChannelID          int64 // optional in fakes; production history is scoped by the request peer
+	PeerKind           PeerKind // empty for channel-only drive history
+	ChannelID          int64    // optional in fakes; production history is scoped by the request peer
 	MsgID              int64
 	Date               int64
 	FromID             int64
@@ -173,6 +203,7 @@ type OwnedBroadcastChannel struct {
 // JoinedBroadcastChannel is a channel visible to this account, including
 // archived dialogs. AccessHash stays entirely behind the backend boundary.
 type JoinedBroadcastChannel struct {
+	Kind       PeerKind
 	ID         int64
 	AccessHash int64
 	Title      string
@@ -180,7 +211,12 @@ type JoinedBroadcastChannel struct {
 	Protected  bool
 	Restricted bool  // Telegram withholds the channel on this platform
 	PhotoID    int64 // the current profile photo; 0 when the channel has none
+	Truncated  bool  // dialog picker reached its bounded scan budget
 }
+
+// SourcePeer is metadata for a readable dialog or public broadcast channel.
+// AccessHash is never exposed through the Wails binding.
+type SourcePeer = JoinedBroadcastChannel
 
 // Client is the surface sync, backfill, and local-action paths use to talk
 // to Telegram. Both the real (gotd-backed) and fake test implementations
@@ -223,6 +259,9 @@ type Client interface {
 	// GetBroadcastChannel looks up one joined broadcast channel, returning
 	// ErrChannelUnavailable once the account cannot see it.
 	GetBroadcastChannel(ctx context.Context, peer InputPeer) (JoinedBroadcastChannel, error)
+	ListMediaSourcePeers(ctx context.Context) ([]SourcePeer, error)
+	GetMediaSourcePeer(ctx context.Context, peer InputPeer) (SourcePeer, error)
+	ResolvePublicChannel(ctx context.Context, username string) (SourcePeer, error)
 	// DownloadChannelPhoto returns the small (160px) JPEG of a channel's
 	// profile photo.
 	DownloadChannelPhoto(ctx context.Context, peer InputPeer, photoID int64) ([]byte, error)
