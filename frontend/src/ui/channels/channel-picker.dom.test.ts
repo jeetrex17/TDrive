@@ -4,8 +4,8 @@ import { fromStore, writable, type Writable } from 'svelte/store';
 import ChannelPickerModal from './ChannelPickerModal.svelte';
 import type { ChannelSource } from './channel-model';
 
-const source = (channelId: number, title: string, connected = false): ChannelSource => ({
-    channelId, title, username: title.toLowerCase().replace(/ /g, ''), connected, protected: false, accountId: '7', generation: connected ? 'g' : '',
+const source = (peerId: number, title: string, connected = false): ChannelSource => ({
+    peerKind: 'channel', peerId, title, username: title.toLowerCase().replace(/ /g, ''), connected, protected: false, available: true, accountId: '7', generation: connected ? 'g' : '',
 });
 const JOINED = [source(50, 'Field Recordings', true), source(60, 'Tech Talks'), source(61, 'Nature Docs')];
 
@@ -35,6 +35,7 @@ function render({ onAdd = vi.fn(async () => {}), open = writable(true), added = 
         get open() { return isOpen.current; },
         get added() { return inSidebar.current; },
         loadCandidates: vi.fn(async (): Promise<ChannelSource[]> => JOINED),
+        resolvePublic: vi.fn(async (): Promise<ChannelSource> => JOINED[0]),
         loadPhoto: vi.fn(async () => ''),
         onAdd,
         onOpen: vi.fn(),
@@ -70,7 +71,7 @@ describe('ChannelPickerModal', () => {
         const props = render();
         await settle();
         expect(rows().map((row) => row.getAttribute('aria-label'))).toEqual([
-            'Add Tech Talks', 'Add Nature Docs', 'Open Field Recordings, already added',
+            'Connect Tech Talks', 'Connect Nature Docs', 'Open Field Recordings, already connected',
         ]);
         rows()[2].click();
         await settle();
@@ -101,6 +102,20 @@ describe('ChannelPickerModal', () => {
         expect(rows().every((row) => !row.disabled)).toBe(true);
     });
 
+    it('checks a public channel link before connecting and states that it will not join Telegram', async () => {
+        const props = render();
+        await settle();
+        const input = host!.querySelector<HTMLInputElement>('#channel-public-link')!;
+        input.value = 'https://t.me/fieldrecordings';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        await settle();
+
+        expect(props.resolvePublic).toHaveBeenCalledWith('https://t.me/fieldrecordings');
+        expect(host?.textContent).toContain('never joins channels, sends messages, or starts bots');
+        expect(host?.querySelector('.channel-picker-public-result')?.textContent).toContain('Field Recordings');
+    });
+
     it('opens again on the last list while it refreshes, added as the sidebar has it now', async () => {
         const open = writable(true);
         const added = writable<readonly ChannelSource[]>([JOINED[0]]);
@@ -118,7 +133,7 @@ describe('ChannelPickerModal', () => {
         expect(props.loadCandidates).toHaveBeenCalledTimes(2);
         expect(host?.querySelector('.is-placeholder')).toBeNull();
         expect(rows().map((row) => row.getAttribute('aria-label'))).toEqual([
-            'Add Field Recordings', 'Add Tech Talks', 'Add Nature Docs',
+            'Connect Field Recordings', 'Connect Tech Talks', 'Connect Nature Docs',
         ]);
     });
 });

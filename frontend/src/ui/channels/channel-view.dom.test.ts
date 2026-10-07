@@ -3,7 +3,7 @@ import { flushSync, mount, tick, unmount } from 'svelte';
 import ChannelView from './ChannelView.svelte';
 import type { ChannelMediaFetcher, ChannelMediaItem, ChannelMediaPage, ChannelPageMemory, ChannelSource } from './channel-model';
 
-const SOURCE: ChannelSource = { channelId: 51, title: 'Field Recordings', username: 'fieldrec', connected: true, protected: false, accountId: '7', generation: 'g' };
+const SOURCE: ChannelSource = { peerKind: 'channel', peerId: 51, title: 'Field Recordings', username: 'fieldrec', connected: true, protected: false, available: true, accountId: '7', generation: 'g' };
 const VIDEO: ChannelMediaItem = {
     msgId: 71, date: 1_735_689_600, name: 'forest-dawn.mp4', size: 2_048, duration: 0, mimeType: 'video/mp4', kind: 'video',
     caption: 'Dawn in the forest', streamable: true, blockReason: '', telegramUrl: 'https://t.me/fieldrec/71',
@@ -32,7 +32,7 @@ function render(source: ChannelSource, fetchMedia: ChannelMediaFetcher, recentPa
 }
 
 function answering(...items: ChannelMediaItem[]): ChannelMediaFetcher {
-    return vi.fn(async (request) => ({ channelId: request.channelId, accountId: '7', generation: 'g', items, nextOffsetId: 0, hasMore: false }));
+    return vi.fn(async (request) => ({ peerKind: request.peerKind, peerId: request.peerId, accountId: '7', generation: 'g', items, nextOffsetId: 0, hasMore: false }));
 }
 
 function kindButton(label: string): HTMLButtonElement | undefined {
@@ -90,13 +90,13 @@ describe('ChannelView', () => {
         videos?.click();
         await settle();
         expect(videos?.getAttribute('aria-pressed')).toBe('true');
-        expect(fetchMedia).toHaveBeenLastCalledWith(expect.objectContaining({ channelId: 51, offsetId: 0, kind: 'video' }));
+        expect(fetchMedia).toHaveBeenLastCalledWith(expect.objectContaining({ peerKind: 'channel', peerId: 51, offsetId: 0, kind: 'video' }));
     });
 
     it('reorders the rows and queues videos in the order chosen', async () => {
         const second = { ...VIDEO, msgId: 72, caption: 'Episode 2', date: VIDEO.date + 60 };
         const tenth = { ...VIDEO, msgId: 73, caption: 'Episode 10', date: VIDEO.date + 120 };
-        const fetchMedia = vi.fn(async () => ({ channelId: 51, accountId: '7', generation: 'g', items: [tenth, second], nextOffsetId: 9, hasMore: true }));
+        const fetchMedia = vi.fn(async () => ({ peerKind: 'channel' as const, peerId: 51, accountId: '7', generation: 'g', items: [tenth, second], nextOffsetId: 9, hasMore: true }));
         const props = render(SOURCE, fetchMedia);
         await settle();
         const titles = () => Array.from(host?.querySelectorAll('.channel-row-title') ?? []).map((title) => title.textContent);
@@ -118,15 +118,15 @@ describe('ChannelView', () => {
         const fetchMedia = vi.fn<ChannelMediaFetcher>(() => new Promise((resolve) => { answer = resolve; }));
         const remembered = new Map<number, readonly ChannelMediaItem[]>([[51, [VIDEO]]]);
         render(SOURCE, fetchMedia, {
-            get: (source) => remembered.get(source.channelId),
-            set: (source, items) => { remembered.set(source.channelId, items); },
+            get: (source) => remembered.get(source.peerId),
+            set: (source, items) => { remembered.set(source.peerId, items); },
         });
         await settle();
         expect(host?.querySelector('.channel-skeleton')).toBeNull();
         expect(rowNamed(/^Play Dawn/)).toBeDefined();
 
         const dusk = { ...VIDEO, msgId: 75, caption: 'Dusk on the river' };
-        answer({ channelId: 51, accountId: '7', generation: 'g', items: [dusk, VIDEO], nextOffsetId: 0, hasMore: false });
+        answer({ peerKind: 'channel', peerId: 51, accountId: '7', generation: 'g', items: [dusk, VIDEO], nextOffsetId: 0, hasMore: false });
         await settle();
         expect(rowNamed(/^Play Dusk/)).toBeDefined();
         expect(remembered.get(51)).toEqual([dusk, VIDEO]);
@@ -134,7 +134,7 @@ describe('ChannelView', () => {
         // A filtered page is not what the next visit should open on.
         kindButton('Videos')?.click();
         await settle();
-        answer({ channelId: 51, accountId: '7', generation: 'g', items: [dusk], nextOffsetId: 0, hasMore: false });
+        answer({ peerKind: 'channel', peerId: 51, accountId: '7', generation: 'g', items: [dusk], nextOffsetId: 0, hasMore: false });
         await settle();
         expect(remembered.get(51)).toEqual([dusk, VIDEO]);
     });
@@ -149,7 +149,7 @@ describe('ChannelView', () => {
             disconnect(): void {}
         });
         const fetchMedia = vi.fn<ChannelMediaFetcher>(async (request) => ({
-            channelId: 51, accountId: '7', generation: 'g', items: request.offsetId === 0 ? [VIDEO] : [],
+            peerKind: 'channel', peerId: 51, accountId: '7', generation: 'g', items: request.offsetId === 0 ? [VIDEO] : [],
             nextOffsetId: request.offsetId === 0 ? 900 : request.offsetId - 100, hasMore: true,
         }));
         render(SOURCE, fetchMedia);
@@ -160,13 +160,13 @@ describe('ChannelView', () => {
         Array.from(host?.querySelectorAll<HTMLButtonElement>('button') ?? []).find((button) => button.textContent === 'Look further back')?.click();
         await settle();
         expect(fetchMedia).toHaveBeenCalledTimes(3);
-        expect(fetchMedia).toHaveBeenLastCalledWith(expect.objectContaining({ offsetId: 800 }));
+        expect(fetchMedia).toHaveBeenLastCalledWith(expect.objectContaining({ peerKind: 'channel', peerId: 51, offsetId: 800 }));
     });
 
     it('offers a retry when the first page fails', async () => {
         const fetchMedia = vi.fn<ChannelMediaFetcher>()
             .mockRejectedValueOnce(new Error('rpc error code 420: FLOOD_WAIT_30'))
-            .mockResolvedValue({ channelId: 51, accountId: '7', generation: 'g', items: [VIDEO], nextOffsetId: 0, hasMore: false });
+            .mockResolvedValue({ peerKind: 'channel' as const, peerId: 51, accountId: '7', generation: 'g', items: [VIDEO], nextOffsetId: 0, hasMore: false });
         render(SOURCE, fetchMedia);
         await settle();
         expect(host?.textContent).toContain('Posts did not load');

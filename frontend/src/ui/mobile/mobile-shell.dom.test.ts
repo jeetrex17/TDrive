@@ -7,7 +7,7 @@ import { sidebarState } from '../sidebar/sidebar-store';
 import { activeTab } from './mobile-shell-store';
 import { selectionBarState } from '../selection/selection-bar-store';
 import { fileListView } from '../file-list/file-list-store';
-import { channelSources, closeChannel, EMPTY_CHANNEL_SOURCES, openChannelId } from '../channels/channel-store';
+import { channelSources, closeChannel, EMPTY_CHANNEL_SOURCES, openChannelKey } from '../channels/channel-store';
 
 let target: HTMLElement;
 let component: Record<string, unknown> | null = null;
@@ -91,8 +91,8 @@ describe('scroll divider', () => {
 
 describe('mobile hierarchy', () => {
     it('shows a channel where Files draws, with its own bar and nothing to upload', () => {
-        channelSources.set({ status: 'ready', sources: [{ channelId: 51, title: 'Field Recordings', username: 'fieldrec', connected: true, protected: false, accountId: '7', generation: 'g' }] });
-        openChannelId.set(51);
+        channelSources.set({ status: 'ready', sources: [{ peerKind: 'channel', peerId: 51, title: 'Field Recordings', username: 'fieldrec', connected: true, protected: false, available: true, accountId: '7', generation: 'g' }] });
+        openChannelKey.set('7:channel:51:g');
         flushSync();
         const channel = target.querySelector('.mobile-panel[data-tab="channel"]') as HTMLElement;
         expect(channel.hidden).toBe(false);

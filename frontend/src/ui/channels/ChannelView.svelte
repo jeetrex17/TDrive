@@ -24,6 +24,7 @@
         mediaTitle,
         restrictionLabel,
         sortPosts,
+        sourceHandle,
         type ChannelMediaFetcher,
         type ChannelMediaItem,
         type ChannelMediaKind,
@@ -81,7 +82,7 @@
     const items = $derived('items' in view ? view.items : []);
     // What the list shows, and so what a video queues, in the chosen order.
     const shown = $derived(sortPosts(items, sort));
-    const handle = $derived(source.username ? `@${source.username}` : 'Private channel');
+    const handle = $derived(sourceHandle(source));
     const failure = $derived(view.status === 'error' ? toAppError(view.error, { source: 'backend' }) : null);
     const empty = $derived.by(() => {
         if (appliedQuery) {
@@ -187,7 +188,8 @@
 
     function rowLabel(item: ChannelMediaItem): string {
         const parts = [mediaTitle(item), mediaMeta(item).replace(/ · /g, ', '), badge(item)].filter(Boolean).join(', ');
-        return isPlayable(item) ? `Play ${parts}` : `Open in Telegram: ${parts}`;
+        if (isPlayable(item)) return `Play ${parts}`;
+        return item.telegramUrl ? `Open in Telegram: ${parts}` : `Unavailable in TDrive: ${parts}`;
     }
 
     function openPostActions(event: MouseEvent, item: ChannelMediaItem): void {

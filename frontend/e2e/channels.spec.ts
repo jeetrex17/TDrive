@@ -3,11 +3,11 @@ import { join } from 'node:path';
 import { expect, test } from '@playwright/test';
 import { bootTDrive, rejects, resolves } from './wails-mock';
 
-const source = { channel_id: 50, title: 'Field Recordings', username: 'fieldrec', connected: true, protected: false, available: true, account_id: 7, generation: 'source-a' };
-const candidate = { ...source, channel_id: 60, title: 'Tech Talks', username: 'techtalks', connected: false, generation: '' };
+const source = { peer_kind: 'channel', peer_id: 50, channel_id: 50, title: 'Field Recordings', username: 'fieldrec', connected: true, protected: false, available: true, account_id: 7, generation: 'source-a' };
+const candidate = { ...source, peer_id: 60, channel_id: 60, title: 'Tech Talks', username: 'techtalks', connected: false, generation: '' };
 const media = { msg_id: 71, date: 1_735_689_600, name: 'forest-dawn.mp4', size: 2048, duration: 754, mime_type: 'video/mp4', kind: 'video', caption: '', streamable: true, block_reason: '', telegram_url: 'https://t.me/fieldrec/71' };
 const paid = { ...media, msg_id: 70, name: 'members-cut.mp4', streamable: false, block_reason: 'paid' };
-const mediaPage = { channel_id: 50, account_id: 7, generation: 'source-a', items: [media, paid], next_offset_id: 0, has_more: false };
+const mediaPage = { peer_kind: 'channel', peer_id: 50, channel_id: 50, account_id: 7, generation: 'source-a', items: [media, paid], next_offset_id: 0, has_more: false };
 
 test('desktop channels sit beside the drives and keep the app header', async ({ page }) => {
     const mock = await bootTDrive(page, {
@@ -33,12 +33,12 @@ test('desktop channels sit beside the drives and keep the app header', async ({ 
     await expect(page.getByRole('menuitem', { name: 'Remove from TDrive' })).toBeVisible();
     await page.keyboard.press('Escape');
 
-    await page.getByRole('button', { name: 'Add a channel' }).click();
-    const dialog = page.getByRole('dialog', { name: 'Add a channel' });
-    await expect(dialog.getByRole('button', { name: 'Open Field Recordings, already added' })).toBeVisible();
-    await dialog.getByRole('button', { name: 'Add Tech Talks' }).click();
+    await page.locator('.channel-nav-add').click();
+    const dialog = page.getByRole('dialog', { name: 'Add a source' });
+    await expect(dialog.getByRole('button', { name: 'Open Field Recordings, already connected' })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Connect Tech Talks' }).click();
     await expect(dialog).toBeHidden();
-    expect((await mock.calls('ConnectChannelSource')).map((call) => call.args)).toEqual([[60, 7]]);
+    expect((await mock.calls('ConnectChannelSource')).map((call) => call.args)).toEqual([['channel', 60, '', 7]]);
 
     await page.getByRole('button', { name: 'Personal', exact: true }).click();
     await expect(page.locator('#file-list')).toBeVisible();
@@ -62,6 +62,45 @@ test('mobile channels open inside Files with their own way back', async ({ page 
     await page.getByRole('button', { name: 'Back' }).click();
     await expect(page.locator('.channel-view')).toHaveCount(0);
     await expect(page.locator('#file-list')).toBeVisible();
+});
+
+test('the picker distinguishes joined chat types and verifies a public link before it connects', async ({ page }) => {
+    const direct = { peer_kind: 'user', peer_id: 50, channel_id: 0, title: 'Mina', username: '', connected: false, protected: false, available: true, account_id: 7, generation: '' };
+    const publicChannel = { peer_kind: 'channel', peer_id: 89, channel_id: 89, title: 'Public Radio', username: 'publicradio', connected: false, protected: false, available: true, account_id: 7, generation: '' };
+    const mock = await bootTDrive(page, {
+        ListConnectedChannelSources: resolves([]),
+        ListChannelSourceCandidates: resolves([direct]),
+        ResolvePublicChannelSource: resolves(publicChannel),
+        ConnectChannelSource: resolves({ ...publicChannel, connected: true, generation: 'public-a' }),
+    });
+
+    await page.locator('.channel-nav-add').click();
+    const dialog = page.getByRole('dialog', { name: 'Add a source' });
+    await expect(dialog.getByRole('button', { name: 'Connect Mina' })).toBeVisible();
+    await expect(dialog.getByText('Direct message', { exact: true })).toBeVisible();
+    await dialog.getByLabel('Public channel link').fill('https://t.me/publicradio');
+    await dialog.getByRole('button', { name: 'Check link' }).click();
+    await expect(dialog.getByRole('button', { name: /Public Radio/ })).toBeVisible();
+    await dialog.getByRole('button', { name: /Public Radio/ }).click();
+    expect((await mock.calls('ConnectChannelSource')).map((call) => call.args)).toEqual([['channel', 89, 'publicradio', 7]]);
+});
+
+test('desktop source picker has no horizontal overflow', async ({ page }) => {
+    const direct = { peer_kind: 'user', peer_id: 50, channel_id: 0, title: 'Mina', username: '', connected: false, protected: false, available: true, account_id: 7, generation: '' };
+    await bootTDrive(page, { ListChannelSourceCandidates: resolves([direct]) });
+    await page.locator('.channel-nav-add').click();
+    await page.screenshot({ path: 'test-results/source-picker-desktop.png', fullPage: true });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
+test('390x844 mobile source picker has no sheet bleed', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const direct = { peer_kind: 'user', peer_id: 50, channel_id: 0, title: 'Mina', username: '', connected: false, protected: false, available: true, account_id: 7, generation: '' };
+    await bootTDrive(page, { ListChannelSourceCandidates: resolves([direct]) }, { url: '/?mobile=ios' });
+    await page.getByRole('button', { name: /Switch drive/ }).click();
+    await page.locator('.channel-nav-add').click();
+    await page.screenshot({ path: 'test-results/source-picker-mobile-390x844.png', fullPage: true });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
 test('picking a drive from the phone Account tab leaves the channel', async ({ page }) => {
@@ -120,8 +159,8 @@ test("a channel video queues the channel's other videos in the player's playlist
     // fixture is within the prefetch lead at once, so the player may already
     // be warming the next one.
     const opened = (await mock.calls('OpenChannelMedia')).map((call) => call.args);
-    expect(opened[0]).toEqual([50, 71, 7, 'source-a']);
-    for (const args of opened.slice(1)) expect(args).toEqual([50, 69, 7, 'source-a']);
+    expect(opened[0]).toEqual(['channel', 50, 71, 7, 'source-a']);
+    for (const args of opened.slice(1)) expect(args).toEqual(['channel', 50, 69, 7, 'source-a']);
     expect(await mock.calls('OpenMedia')).toEqual([]);
 });
 

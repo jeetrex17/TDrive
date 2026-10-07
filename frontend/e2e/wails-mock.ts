@@ -88,6 +88,8 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
     ]),
     // The sidebar lists added Telegram channels from local metadata at startup.
     ListConnectedChannelSources: resolves([]),
+    ListChannelSourceCandidates: resolves([]),
+    ResolvePublicChannelSource: rejects('Public channel link is required'),
     ChannelSourcePhoto: resolves(''),
     ListMedia: resolves([]),
     ListMediaFolders: resolves([]),

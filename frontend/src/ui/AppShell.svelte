@@ -49,6 +49,7 @@
     import ChannelNav from './channels/ChannelNav.svelte';
     import ChannelView from './channels/ChannelView.svelte';
     import { channelSources, openChannel } from './channels/channel-store';
+    import { sourceKey } from './channels/channel-model';
 
     interface Props {
         dashboardVisible: boolean;
@@ -163,7 +164,7 @@
                     <div class="drives-section">
                         <ChannelNav
                             sources={$channelSources}
-                            activeId={$openChannel?.channelId ?? null}
+                            activeKey={$openChannel ? sourceKey($openChannel) : null}
                             loadPhoto={channelPhoto}
                             onSelect={showChannel}
                             onActions={showChannelActions}
@@ -343,7 +344,7 @@
         <!-- Keyed by connection so re-adding a channel starts a fresh view
              instead of paging with the old connection. -->
         {#if dashboardVisible && $openChannel}
-            {#key `${$openChannel.channelId}:${$openChannel.generation}`}
+            {#key sourceKey($openChannel)}
                 <ChannelView
                     source={$openChannel}
                     fetchMedia={listChannelMedia}

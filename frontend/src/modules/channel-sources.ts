@@ -1,7 +1,5 @@
-// Telegram channels the user has added to TDrive: the sidebar list, which one
-// the main area shows, adding and removing them, and handing a post to the
-// player. A channel is read-only and separate from drives; showing one never
-// changes the active drive.
+// Telegram chats and channels added as read-only media sources. Browsing one
+// never changes the active TDrive drive or imports its messages.
 
 import { get } from 'svelte/store';
 import {
@@ -18,7 +16,7 @@ import {
     channelSources,
     closeChannel,
     EMPTY_CHANNEL_SOURCES,
-    openChannelId,
+    openChannelKey,
 } from '../ui/channels/channel-store';
 import {
     channelTelegramUrl,
@@ -29,6 +27,7 @@ import {
     type ChannelMediaItem,
     type ChannelPageMemory,
     type ChannelSource,
+    sourceKey,
 } from '../ui/channels/channel-model';
 import { showContextMenu, type ContextMenuItem } from '../ui/menus/context-menu-store';
 import { splitNameAndExt } from '../utils';
@@ -37,22 +36,40 @@ import { notify, notifyAppError } from './notifications';
 import { closeTrash } from './trash/controller';
 
 let loadVersion = 0;
-// One request per channel for the session. A failure is forgotten, so the
-// next time the avatar is shown it tries again.
-const photos = new Map<number, Promise<string>>();
+// Profile photos are base64 data URLs, so their number must stay bounded even
+// when a picker exposes a large Telegram dialog list. A failure is forgotten,
+// letting a later visible avatar retry.
+const photos = new Map<string, Promise<string>>();
+const MAX_PHOTO_CACHE_ENTRIES = 64;
+const MAX_RECENT_SOURCE_PAGES = 12;
 const firstPages = new Map<string, readonly ChannelMediaItem[]>();
 
-const pageKey = (source: ChannelSource) => `${source.accountId}:${source.channelId}:${source.generation}`;
+const pageKey = sourceKey;
 
-/** A channel opened before shows its last first page at once while the fresh one loads. */
+/** Show a source's recent first page while its fresh page loads. */
 export const recentChannelPages: ChannelPageMemory = {
-    get: (source) => firstPages.get(pageKey(source)),
+    get: (source) => {
+        const key = pageKey(source);
+        const items = firstPages.get(key);
+        if (items) {
+            firstPages.delete(key);
+            firstPages.set(key, items);
+        }
+        return items;
+    },
     set: (source, items) => {
-        firstPages.set(pageKey(source), items);
+        const key = pageKey(source);
+        firstPages.delete(key);
+        firstPages.set(key, items);
+        while (firstPages.size > MAX_RECENT_SOURCE_PAGES) {
+            const oldest = firstPages.keys().next().value;
+            if (oldest === undefined) break;
+            firstPages.delete(oldest);
+        }
     },
 };
 
-/** Reloads the added channels. Only the newest call may publish its answer. */
+/** Reload connected sources. Only the newest call may publish its answer. */
 export async function loadChannelSources(): Promise<void> {
     const version = ++loadVersion;
     channelSources.update((current) => ({ status: 'loading', sources: current.sources }));
@@ -60,15 +77,15 @@ export async function loadChannelSources(): Promise<void> {
         const sources = (await listConnectedChannelSources()).filter((source) => source.connected);
         if (version !== loadVersion) return;
         channelSources.set({ status: 'ready', sources });
-        const open = get(openChannelId);
-        if (open !== null && !sources.some((source) => source.channelId === open)) closeChannel();
+        const open = get(openChannelKey);
+        if (open !== null && !sources.some((source) => sourceKey(source) === open)) closeChannel();
     } catch (error) {
         if (version !== loadVersion) return;
         channelSources.update((current) => ({ status: 'error', sources: current.sources, error }));
     }
 }
 
-/** Lives as long as the dashboard: channels belong to the signed-in account. */
+/** Source state lives as long as the signed-in dashboard. */
 export function activateChannelSources(): () => void {
     void loadChannelSources();
     return () => {
@@ -81,22 +98,32 @@ export function activateChannelSources(): () => void {
     };
 }
 
-/** Shows a channel in the main area, leaving Photos or the trash first. */
+/** Show a media source in the main area, leaving Photos or trash first. */
 export function showChannel(source: ChannelSource): void {
     if (state.virtualView === 'photos') exitPhotos();
     else if (state.virtualView === 'trash') closeTrash();
-    openChannelId.set(source.channelId);
+    openChannelKey.set(sourceKey(source));
 }
 
-/** A channel's profile photo as a data URL, or '' to show its initial. */
+/** A source's profile photo as a data URL, or '' to show its initial. */
 export function channelPhoto(source: ChannelSource): Promise<string> {
-    let photo = photos.get(source.channelId);
+    const key = sourceKey(source);
+    let photo = photos.get(key);
+    if (photo) {
+        photos.delete(key);
+        photos.set(key, photo);
+    }
     if (!photo) {
-        photo = loadChannelSourcePhoto(source.channelId).catch(() => {
-            photos.delete(source.channelId);
+        photo = loadChannelSourcePhoto(source).catch(() => {
+            photos.delete(key);
             return '';
         });
-        photos.set(source.channelId, photo);
+        while (photos.size >= MAX_PHOTO_CACHE_ENTRIES) {
+            const oldest = photos.keys().next().value;
+            if (oldest === undefined) break;
+            photos.delete(oldest);
+        }
+        photos.set(key, photo);
     }
     return photo;
 }
@@ -109,21 +136,21 @@ export function closeChannelPicker(): void {
     channelPickerOpen.set(false);
 }
 
-/** Adds a joined channel and opens it, which is what the user picked it for. */
+/** Connect a selected source and open it. */
 export async function addChannel(candidate: ChannelSource): Promise<void> {
-    const added = await connectChannelSource(candidate.channelId, candidate.accountId);
+    const added = await connectChannelSource(candidate);
     await loadChannelSources();
     showChannel(added);
 }
 
 /**
- * Removing only forgets the channel locally: the account stays joined and
- * nothing is deleted, so it is undone rather than confirmed.
+ * Removal only forgets this source locally; no Telegram content is changed.
+ * The notification offers Undo because reconnecting is safe.
  */
 export async function removeChannel(source: ChannelSource): Promise<void> {
-    const wasOpen = get(openChannelId) === source.channelId;
+    const wasOpen = get(openChannelKey) === sourceKey(source);
     try {
-        await disconnectChannelSource(source.channelId, source.accountId, source.generation);
+        await disconnectChannelSource(source);
     } catch (error) {
         notifyAppError(error, { title: `Could not remove ${source.title}` });
         return;
@@ -133,12 +160,12 @@ export async function removeChannel(source: ChannelSource): Promise<void> {
     notify({
         level: 'info',
         title: `Removed ${source.title}`,
-        body: "You're still subscribed in Telegram.",
+        body: 'Nothing was removed from Telegram.',
         action: {
             label: 'Undo',
             run: async () => {
                 try {
-                    const restored = await connectChannelSource(source.channelId, source.accountId);
+                    const restored = await connectChannelSource(source);
                     await loadChannelSources();
                     if (wasOpen) showChannel(restored);
                 } catch (error) {
@@ -162,7 +189,7 @@ export function showChannelActions(x: number, y: number, source: ChannelSource):
     showContextMenu(x, y, items);
 }
 
-/** A post's own menu: right-click on desktop, a long press on a phone. */
+/** A media item's menu: right-click on desktop, long-press on a phone. */
 export function showPostActions(
     x: number,
     y: number,
@@ -195,7 +222,7 @@ export async function openChannelPost(
         openInTelegram(item.telegramUrl);
         return;
     }
-    const open = (post: ChannelMediaItem) => openChannelMedia(source.channelId, post.msgId, source.accountId, source.generation);
+    const open = (post: ChannelMediaItem) => openChannelMedia(source, post.msgId);
     if (item.kind === 'audio') {
         const { activateFileViewerModal, openFileViewer } = await import('./modals/file-viewer');
         activateFileViewerModal();
