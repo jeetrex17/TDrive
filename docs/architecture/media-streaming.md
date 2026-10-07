@@ -41,52 +41,75 @@ and [`media.Service`](../../backend/media/service.go). The
 [resolver](../../backend/media/resolver.go) validates projected content and
 multipart completeness before constructing an ordered logical file.
 
-## Joined Telegram channel sources
+## Telegram chat and channel media sources
 
-The Channels area connects broadcast channels already joined by the current
-Telegram account, including archived dialogs. Connection metadata is local and
-keyed by account ID and channel ID. It keeps the channel's access hash and its
-small profile photo, so the sidebar shows avatars without a network request;
-opening a channel notices a new photo and clears the stored one. Disconnecting
-removes that metadata and revokes its media sessions; it never leaves the
-Telegram channel. Channel messages are read directly from Telegram and never
-parsed as TDX control operations or inserted into the TDrive drive projection.
+The source picker lists already-open direct chats, bot chats, Saved Messages,
+basic groups, supergroups and joined broadcast channels from primary and
+archived dialogs. It scans at most 1,000 dialogs per folder and marks a
+truncated candidate list so the UI can explain that older dialogs were not
+listed. Sources are sorted by title and peer kind. TDrive drive channels are
+excluded. Secret chats use Telegram's separate encrypted protocol and are not
+available through MTProto history.
 
-[`channelsource.Service`](../../backend/channelsource/service.go) checks
-membership and content protection with one `channels.getChannels` lookup by
-the stored access hash; only a channel added before access hashes were kept
-needs a dialog walk, once. The first page and every individual open look the
-channel up again. Older pages reuse a lookup up to a minute old, because an
-open rechecks before anything plays. Pages are newest first, scan at most four
-batches of up to 100 Telegram messages, and continue from the oldest raw
-message ID. Only an empty batch ends a channel, because Telegram leaves deleted
-and withheld posts out of a batch.
-Search uses Telegram's channel message search; it is scoped to searchable post
-text/captions rather than a locally indexed filename library. The initial
-supported media are document-backed video and audio recognized by the player;
-recognized container names do not guarantee that a device can decode their
-codecs. Other media are unavailable in this first channel-source version.
+A public broadcast channel can also be resolved by `@username` or a `t.me`
+username or post link. [`contacts.resolveUsername`](https://core.telegram.org/method/contacts.resolveUsername)
+supplies the channel ID and access hash. Connection resolves the name again
+and checks the ID, so a stale or reassigned handle cannot connect a different
+channel. This only reads Telegram metadata; it does not join a channel, start a
+bot, send a message, or change membership. An unjoined public channel remains
+usable only while Telegram lets the account read its history and document
+bytes. The first media open probes a document byte before publishing a local
+URL and surfaces an access error if Telegram withholds it. A private channel
+that the account left becomes unavailable on the next page or open.
 
-An external open supplies explicit account, channel, message and connection
-generation IDs, independent of the active TDrive drive. It builds one
+Connected metadata is local and keyed by Telegram account, peer kind and peer
+ID. It stores a connection generation, access hash and small profile photo.
+The one-time migration copies the earlier `connected_channel_sources` rows as
+`channel` peers and preserves generation and cached photo. A marker prevents a
+disconnected legacy row from being copied again after restart. Listing uses
+local metadata offline; pages and opens recheck current account and peer access.
+Changing a profile photo invalidates its stored bytes. Disconnecting deletes
+only the local connection and revokes matching playback sessions.
+The earlier channel-only Go methods and table remain for existing Go callers;
+the app routes all source actions through the typed methods and table. This
+keeps the existing channel API compatible while the migration preserves its
+connections.
+
+[`channelsource.Service`](../../backend/channelsource/sources.go) pages newest
+first through at most four batches of 100 Telegram messages. Empty batches
+end history; short batches do not, because Telegram omits deleted and withheld
+posts. Search asks Telegram to search message text and captions in that peer;
+it is not a filename index. The first supported media are ordinary document
+video and audio recognized by the player. Captions are display text and never
+parsed as TDX control operations. Messages and documents are read directly
+from Telegram and never entered into the TDrive drive projection.
+
+An open supplies account, peer kind, peer ID, message ID and connection
+generation, independent of the active drive. The media service builds one
 [`LogicalFile`](../../backend/media/types.go) directly from the Telegram
-document reference, then uses the existing tokenized byte ranges, cache,
-HTML/native player handoff and optional HLS remux. It creates no fake projected
-file. A file-reference refresh re-reads the source post and accepts a new
-reference only when the document identity and size still match, preventing
-blocks from different document revisions from mixing in one session.
+document reference and uses the existing tokenized byte ranges, per-session
+cache, HTML/native handoff and optional HLS remux. The peer kind and account
+stay in session identity, so equal numeric user, group and channel IDs do not
+share sessions or cached bytes. A document-reference refresh checks the same
+account, generation, current peer protection and exact document identity and
+size before accepting new bytes. Direct and basic-group message retrieval is
+scoped to history for that peer and verifies the returned peer identity, since
+Telegram's generic `messages.getMessages` has no peer argument.
 
-Channel-level or post-level noforwards, paid media, expiring documents,
-posts Telegram restricts for every platform or the running one, and
-unsupported formats cannot be opened in-app; the UI offers a Telegram post
-link. A channel Telegram restricts that way is unavailable, as it is in
-official clients. External media responses use `no-store`, and generated video thumbnails
-remain in session temporary storage. Disconnect, logout and normal session
-close revoke the loopback URL. Native player processes attached to those
-tokens close at the same boundary. Protection or membership changes after a
-session has opened are rechecked when an expired reference is refreshed;
-existing cached blocks can remain playable until session close, so the first
-open's permission check and prompt revocation are the primary boundary.
+Peer-level or message-level `noforwards`, paid media, expiring documents,
+platform restrictions and unsupported formats cannot be opened in-app. The
+UI links to a Telegram post for channels and supergroups where a post link is
+available; a public user handle can open its chat. Telegram does not define a
+message-specific link for ordinary DMs, bots or basic groups. External HTTP
+responses use `no-store`, and generated thumbnails remain in session temporary
+storage. Disconnect, logout and normal close revoke loopback URLs and attached
+native players. Every uncached range fetch rechecks local account and
+connection generation. Peer and message protection are checked on file
+reference refresh and at most 30 seconds after the previous successful remote
+check; concurrent reads share that check rather than issuing an RPC per block.
+Telegram may still serve bytes during that interval, and already cached blocks
+can remain readable until session close. Checking before open and prompt
+revocation remain the main boundary.
 
 ## Format admission and platform routing
 
