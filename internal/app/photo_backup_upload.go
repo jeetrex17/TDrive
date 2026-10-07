@@ -10,10 +10,6 @@ import (
 	fileservice "TDrive/backend/services/file"
 )
 
-func (a *App) uploadPhotoBackup(ctx context.Context, request photobackup.UploadRequest) (photobackup.UploadResult, error) {
-	return a.uploadPhotoBackupWithRenditions(ctx, request, nil, newPhotoBackupBudget(), nil)
-}
-
 func (a *App) uploadPhotoBackupWithRenditions(ctx context.Context, request photobackup.UploadRequest, renditions *fileservice.BackupRenditionWorker, budget *photoBackupBudget, timings *photoBackupTimings) (result photobackup.UploadResult, resultErr error) {
 	sendAttempted := false
 	defer func() {
