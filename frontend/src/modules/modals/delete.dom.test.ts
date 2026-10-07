@@ -25,6 +25,7 @@ import { confirmDelete, openDeleteModal } from './delete';
 import { busyRowIds } from '../../ui/file-list/busy-rows';
 import { toasts } from '../../ui/notifications/toast-store';
 import { get } from 'svelte/store';
+import { state } from '../../state';
 
 let host: HTMLElement;
 let app: Record<string, unknown> | null = null;
@@ -37,6 +38,7 @@ function click(selector: string): void {
 }
 
 beforeEach(() => {
+    state.activeChannel = { id: 11, title: 'First drive', kind: 'personal' };
     host = document.createElement('div');
     host.id = 'delete-modal';
     document.body.appendChild(host);
@@ -54,6 +56,7 @@ afterEach(async () => {
     restoreMock.mockReset();
     appActionMocks.refreshFiles.mockReset();
     toasts.set([]);
+    state.activeChannel = null;
 });
 
 describe('openDeleteModal copy', () => {
@@ -124,8 +127,32 @@ describe('confirmDelete (single file)', () => {
         get(toasts)[0].action?.run();
 
         // The just-deleted file is addressed in the trash as `f:<msgId>`.
-        await vi.waitFor(() => expect(restoreMock).toHaveBeenCalledWith('f:43'));
+        await vi.waitFor(() => expect(restoreMock).toHaveBeenCalledWith(11, 'f:43'));
         await vi.waitFor(() => expect(appActionMocks.refreshFiles).toHaveBeenCalledTimes(2));
+    });
+
+    it('does not redirect the second bulk Undo restore after a drive switch', async () => {
+        deleteFileMock.mockResolvedValue({ ok: true });
+        let finishFirst: (result: unknown) => void = () => {};
+        restoreMock.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }));
+
+        openDeleteModal({ type: 'bulk', parentId: '', items: [
+            { type: 'file', id: 43, name: 'one.png' },
+            { type: 'file', id: 44, name: 'two.png' },
+        ] });
+        flushSync();
+        click('#delete-confirm');
+        await vi.waitFor(() => expect(deleteFileMock).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => expect(get(toasts)[0]?.action?.label).toBe('Undo'));
+
+        get(toasts)[0].action?.run();
+        await vi.waitFor(() => expect(restoreMock).toHaveBeenCalledTimes(1));
+        state.activeChannel = { id: 22, title: 'Second drive', kind: 'shared' };
+        finishFirst({ ok: true });
+
+        await vi.waitFor(() => expect(get(toasts).some((toast) => toast.title.includes('Switch back'))).toBe(true));
+        expect(restoreMock).toHaveBeenCalledTimes(1);
+        expect(appActionMocks.refreshFiles).toHaveBeenCalledTimes(1);
     });
 
     it('still says so when it fails, because nothing else on screen will', async () => {

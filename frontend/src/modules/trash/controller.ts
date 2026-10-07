@@ -80,11 +80,14 @@ export async function loadTrash(): Promise<void> {
 }
 
 export async function restoreEntry(objectId: string): Promise<void> {
-    if (await mutate(objectId, 'Could not restore from the Trash', () => restoreFromTrash(objectId))) {
-        dropEntry(objectId);
+    const channelId = Number(state.activeChannel?.id ?? 0);
+    if (await mutate(objectId, 'Could not restore from the Trash', () => restoreFromTrash(channelId, objectId))) {
         // The item is back in a folder the user may be looking at.
         invalidateFolderIndex();
-        refreshDrive();
+        if (state.activeChannel?.id === channelId) {
+            dropEntry(objectId);
+            refreshDrive();
+        }
     }
 }
 

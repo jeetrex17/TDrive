@@ -60,16 +60,22 @@ func (a *App) ListTrash() ([]TrashEntry, error) {
 	return view, nil
 }
 
-// RestoreFromTrash puts one object back. It lands under its original parent, or
-// under the drive root if that parent is gone, and takes a numbered name if the
-// original is occupied -- never refusing outright, because a refusal would
-// leave the user with no way to recover the object at all.
-func (a *App) RestoreFromTrash(objectID string) OperationResult {
+// RestoreFromTrash puts one object back in the specified drive. It lands under
+// its original parent, or under the drive root if that parent is gone, and takes
+// a numbered name if the original is occupied. A stale UI request cannot
+// redirect to a drive selected after the action began.
+func (a *App) RestoreFromTrash(channelID int64, objectID string) OperationResult {
+	if !validFrontendDownloadID(channelID) {
+		return operationFailure(errors.New("invalid channel id"))
+	}
+	if channelID != a.ActiveChannelID() {
+		return operationFailure(errors.New("active drive changed; switch back before restoring"))
+	}
 	svc, err := a.requireFileService()
 	if err != nil {
 		return operationFailure(err)
 	}
-	if err := svc.RestoreObject(a.ctx, a.ActiveChannelID(), objectID); err != nil {
+	if err := svc.RestoreObject(a.ctx, channelID, objectID); err != nil {
 		return operationFailure(err)
 	}
 	return operationSuccess()

@@ -116,9 +116,14 @@ async function undoDelete(objectIds: string[], channelId: number): Promise<void>
     }
     let restored = 0;
     const reasons: string[] = [];
+    let switchedDrive = false;
     for (const objectId of objectIds) {
+        if (activeChannelId() !== channelId) {
+            switchedDrive = true;
+            break;
+        }
         try {
-            const result = await restoreFromTrash(objectId);
+            const result = await restoreFromTrash(channelId, objectId);
             if (result.ok) restored += 1;
             else reasons.push(humanizeBackendError(result.error));
         } catch (error) {
@@ -127,7 +132,10 @@ async function undoDelete(objectIds: string[], channelId: number): Promise<void>
     }
     if (restored > 0) {
         invalidateFolderIndex();
-        appActions().refreshFiles();
+        if (activeChannelId() === channelId) appActions().refreshFiles();
+    }
+    if (switchedDrive) {
+        notify({ level: 'info', title: 'Switch back to that drive to restore from the Trash' });
     }
     if (reasons.length > 0) {
         notify({ level: 'error', title: 'Could not restore from the Trash', body: reasons[0] });

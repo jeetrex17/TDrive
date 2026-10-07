@@ -1220,7 +1220,7 @@ function handleListKeyDown(e: KeyboardEvent) {
 }
 
 function handleListDblClick(e: MouseEvent) {
-    // A double click anywhere on a row opens it, the same as Enter: a folder
+    // A double click on a row opens it, the same as Enter: a folder
     // navigates, a video plays, an image previews, a viewer file opens, anything
     // else downloads. Rename has moved to F2 and the menu. The phone already
     // opened on the first tap, and search and trash keep their own rules.
@@ -1229,6 +1229,7 @@ function handleListDblClick(e: MouseEvent) {
     const element = (e.target as HTMLElement).closest<HTMLElement>(".drive-row");
     const row = fileListRowForElement(element);
     if (!element || !row) return;
+    if ((e.target as HTMLElement).closest('button, a, input, select, textarea, [contenteditable="true"]')) return;
 
     // Opening is the whole point of the double click; the half-made text
     // selection the two quick clicks leave behind is not.

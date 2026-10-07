@@ -246,6 +246,15 @@ describe('desktop activation and lifecycle', () => {
         expect(state.selectedItems.size).toBe(0);
     });
 
+    it('does not open a folder when its Download action is double-clicked', () => {
+        const download = row('folder:design').querySelector<HTMLButtonElement>('button.download-folder')!;
+        download.click();
+        download.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+
+        expect(actions.enqueueFolderDownload).toHaveBeenCalledTimes(1);
+        expect(actions.navigateToFolder).not.toHaveBeenCalled();
+    });
+
     it.each([
         ['movie.mp4', 'play-video', 'playVideo'],
         ['notes.txt', 'open-file', 'openFile'],
@@ -266,6 +275,16 @@ describe('desktop activation and lifecycle', () => {
         row('file:41').querySelector('.row-meta')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
         expect(actions[action]).toHaveBeenCalledTimes(1);
         expect(modals.openRenameModal).not.toHaveBeenCalled();
+    });
+
+    it('does not play a video again when its Play action receives a double-click', () => {
+        renderFileListRows(list, [buildFileRow({ id: 41, name: 'movie.mp4' }, '')]);
+        flushSync();
+        const play = row('file:41').querySelector<HTMLButtonElement>('button.play-video')!;
+        play.click();
+        play.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+
+        expect(actions.playVideo).toHaveBeenCalledTimes(1);
     });
 
     it('previews an image on double click and from its row Open action', async () => {
