@@ -43,6 +43,13 @@ flowchart TD
 ```
 
 Part messages use hidden `OpFilePart` records; they are not independent user files.
+In a multi-file batch, a multipart file emits completion as soon as its manifest
+is projected. Single-document receipts are still sorted by Telegram message ID
+and projected after the batch finishes; projecting those on arrival could apply
+operations out of order. Debug-level upload timing reports bounded stage
+histograms for slot wait, source preparation, encryption, transfer, manifest
+commit, receipt wait and local projection. Stage durations can overlap across
+files and must not be summed as batch wall time.
 Ordinary multipart uploads stage encrypted data one part at a time. If a failure
 occurs before manifest send, cleanup deletes known part receipts and queues failed
 body deletions for later sweeping. After send is attempted, even cancellation can
