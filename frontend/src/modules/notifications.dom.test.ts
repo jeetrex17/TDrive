@@ -215,4 +215,26 @@ describe('notification expiry scheduling', () => {
 
         expect(toast('asleep')).toBeNull();
     });
+
+    it('finishes a toast once when it expires or is dismissed', () => {
+        const expired = vi.fn();
+        const dismissed = vi.fn();
+        const replaced = vi.fn();
+        const cleared = vi.fn();
+        notify({ id: 'expired', title: 'Expires', durationMs: 1_000, onRemoved: expired });
+        notify({ id: 'dismissed', title: 'Dismissed', onRemoved: dismissed });
+        notify({ id: 'replaced', title: 'Before', onRemoved: replaced });
+        notify({ id: 'replaced', title: 'After' });
+        notify({ id: 'cleared', title: 'Cleared', onRemoved: cleared });
+
+        dismissNotification('dismissed');
+        dismissNotification('dismissed');
+        expect(dismissed).toHaveBeenCalledOnce();
+        expect(replaced).toHaveBeenCalledOnce();
+
+        vi.advanceTimersByTime(1_000);
+        expect(expired).toHaveBeenCalledOnce();
+        clearAllNotifications();
+        expect(cleared).toHaveBeenCalledOnce();
+    });
 });
