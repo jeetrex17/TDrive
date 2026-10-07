@@ -93,12 +93,13 @@ describe('ChannelPickerModal', () => {
     });
 
     it('stays open and says why when adding fails', async () => {
-        const props = render({ onAdd: vi.fn(async () => { throw new Error('rpc error code 420: FLOOD_WAIT_12'); }) });
+        const props = render({ onAdd: vi.fn(async () => { throw new Error('media source: find dialog: tgclient: flood wait: 29s'); }) });
         await settle();
         rows()[0].click();
         await settle();
         expect(props.onClose).not.toHaveBeenCalled();
-        expect(host?.querySelector('[role="alert"]')?.textContent).toContain('Tech Talks could not be added.');
+        expect(host?.querySelector('[role="alert"]')?.textContent)
+            .toBe('Tech Talks could not be added. Telegram is temporarily limiting requests. Wait a moment and try again.');
         expect(rows().every((row) => !row.disabled)).toBe(true);
     });
 
@@ -114,6 +115,15 @@ describe('ChannelPickerModal', () => {
         expect(props.resolvePublic).toHaveBeenCalledWith('https://t.me/fieldrecordings');
         expect(host?.textContent).toContain("won't join the channel or send messages");
         expect(host?.querySelector('.channel-picker-public-result')?.textContent).toContain('Field Recordings');
+
+        props.resolvePublic.mockRejectedValueOnce(new Error('This link is not a public channel you can access. Check the link or choose a chat from the list'));
+        input.value = '@sk_movies1_bot';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        await settle();
+        expect(host?.querySelector('#channel-public-link-error')?.textContent)
+            .toBe('This link is not a public channel you can access. Check the link or choose a chat from the list');
+        expect(host?.querySelector('.channel-picker-public-result')).toBeNull();
     });
 
     it('ignores Enter in the public link while another source is connecting', async () => {
