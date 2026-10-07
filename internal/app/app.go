@@ -94,6 +94,7 @@ type App struct {
 	photoBackupCancel      context.CancelFunc
 	photoBackupDone        chan struct{}
 	photoBackupRunID       uint64
+	photoBackupRerun       bool
 	photoBackupProgress    photoBackupProgressState
 	photoBackupWaiters     map[string]chan photoBackupMaterialization
 	photoBackupPolicy      PhotoBackupPolicy

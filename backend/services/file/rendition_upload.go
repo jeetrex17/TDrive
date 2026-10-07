@@ -24,6 +24,10 @@ import (
 // Failure never invalidates the successfully stored original. Queued ciphertext
 // survives process death and can be resumed without the source or unlocked key.
 func (s *Service) PrepareRenditions(ctx context.Context, source projection.File, reader io.ReadSeeker) error {
+	return s.prepareRenditions(ctx, source, reader, true)
+}
+
+func (s *Service) prepareRenditions(ctx context.Context, source projection.File, reader io.ReadSeeker, publish bool) error {
 	if ctx == nil || reader == nil || source.ChannelID == 0 || source.MsgID <= 0 {
 		return fmt.Errorf("invalid rendition source")
 	}
@@ -109,6 +113,9 @@ func (s *Service) PrepareRenditions(ctx context.Context, source projection.File,
 	}
 	// Stage both kinds before sending. A network interruption must not strand
 	// the preview when the local original disappears after upload completion.
+	if !publish {
+		return nil
+	}
 	for _, jobID := range jobIDs {
 		if err := s.sendPendingRendition(ctx, source.ChannelID, jobID); err != nil {
 			return err

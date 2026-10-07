@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"math"
 	"time"
 
@@ -9,21 +10,43 @@ import (
 	fileservice "TDrive/backend/services/file"
 )
 
-// One snapshot per app bounds memory independently of library size. The scope
-// and generation prevent a cancelled worker from updating another drive/file.
+// Fixed slots bound progress independently of library size. Per-item generations
+// reject callbacks after completion without suppressing another active upload.
 type photoBackupProgressState struct {
 	scope      photobackup.Scope
+	generation uint64
+	items      [photoBackupConcurrency]photoBackupProgressItem
+	lastEvent  time.Time
+}
+
+type photoBackupProgressItem struct {
 	generation uint64
 	name       string
 	total      int64
 	percent    float64
-	lastEvent  time.Time
 }
 
 func (a *App) beginPhotoBackupProgress(ctx context.Context, scope photobackup.Scope, name string, size int64) (func(fileservice.BackupUploadProgress), func()) {
 	a.photoBackupMu.Lock()
-	generation := a.photoBackupProgress.generation + 1
-	a.photoBackupProgress = photoBackupProgressState{scope: scope, generation: generation, name: name, total: max(0, size), lastEvent: a.photoBackupProgress.lastEvent}
+	p := &a.photoBackupProgress
+	if p.scope != scope {
+		p.items = [photoBackupConcurrency]photoBackupProgressItem{}
+		p.scope = scope
+	}
+	slot := -1
+	for i, item := range p.items {
+		if item.generation == 0 {
+			slot = i
+			break
+		}
+	}
+	if slot < 0 {
+		a.photoBackupMu.Unlock()
+		return func(fileservice.BackupUploadProgress) {}, func() {}
+	}
+	p.generation++
+	generation := p.generation
+	p.items[slot] = photoBackupProgressItem{generation: generation, name: name, total: max(0, size)}
 	a.photoBackupMu.Unlock()
 	a.emitPhotoBackupProgress()
 	update := func(p fileservice.BackupUploadProgress) {
@@ -31,21 +54,21 @@ func (a *App) beginPhotoBackupProgress(ctx context.Context, scope photobackup.Sc
 			return
 		}
 		a.photoBackupMu.Lock()
-		current := a.photoBackupProgress
+		current := a.photoBackupProgress.items[slot]
 		if current.generation != generation {
 			a.photoBackupMu.Unlock()
 			return
 		}
 		current.total = max(0, p.BytesTotal)
 		current.percent = max(current.percent, min(100, max(0, p.Percent)))
-		a.photoBackupProgress = current
+		a.photoBackupProgress.items[slot] = current
 		a.photoBackupMu.Unlock()
 		a.emitPhotoBackupProgress()
 	}
 	finish := func() {
 		a.photoBackupMu.Lock()
-		if a.photoBackupProgress.generation == generation {
-			a.photoBackupProgress = photoBackupProgressState{generation: generation + 1, lastEvent: a.photoBackupProgress.lastEvent}
+		if a.photoBackupProgress.items[slot].generation == generation {
+			a.photoBackupProgress.items[slot] = photoBackupProgressItem{}
 		}
 		a.photoBackupMu.Unlock()
 		a.emit("photo-backup:state")
@@ -74,9 +97,24 @@ func (a *App) withPhotoBackupProgress(state PhotoBackupState, scope photobackup.
 	if current.scope != scope {
 		return state
 	}
-	state.Status.CurrentFile = current.name
-	state.Status.CurrentFileBytesTotal = current.total
-	state.Status.CurrentFilePercent = current.percent
-	state.Status.CurrentFileBytesDone = int64(float64(current.total) * current.percent / 100)
+	count := 0
+	var total, done int64
+	for _, item := range current.items {
+		if item.generation == 0 {
+			continue
+		}
+		count++
+		state.Status.CurrentFile = item.name
+		total += item.total
+		done += int64(float64(item.total) * item.percent / 100)
+	}
+	if count > 1 {
+		state.Status.CurrentFile = fmt.Sprintf("%d files", count)
+	}
+	state.Status.CurrentFileBytesTotal = total
+	state.Status.CurrentFileBytesDone = done
+	if total > 0 {
+		state.Status.CurrentFilePercent = float64(done) / float64(total) * 100
+	}
 	return state
 }

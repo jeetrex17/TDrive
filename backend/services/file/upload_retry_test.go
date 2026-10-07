@@ -30,7 +30,7 @@ func instantRetryPolicy() tgclient.FloodWaitRetryPolicy {
 	}
 }
 
-func configureEncryptedUpload(t *testing.T, svc *Service, masterKey []byte) {
+func configureEncryptedUpload(t testing.TB, svc *Service, masterKey []byte) {
 	t.Helper()
 	svc.MasterKeyForUpload = func(channelID int64, wantEncrypted bool) ([]byte, error) {
 		if !wantEncrypted {

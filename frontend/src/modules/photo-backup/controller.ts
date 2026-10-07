@@ -49,15 +49,21 @@ let manuallyPaused = false;
 let documentVisible = typeof document === 'undefined' || document.visibilityState === 'visible';
 let observedDriveID: number | null = null;
 let policySampling = false;
+let policyTimer: ReturnType<typeof setTimeout> | null = null;
 const completedScans = new Set<string>();
 interface NativeStage {
     controller: AbortController;
     released: Promise<void>;
     requestRelease: () => void;
+    bytes: number;
+    cleaned: Promise<void>;
+    markCleaned: () => void;
 }
 
 const materializations = new Map<string, NativeStage>();
 let nativeStageTail: Promise<void> = Promise.resolve();
+const nativeStageLeases = new Set<NativeStage>();
+const NATIVE_STAGE_MAX_BYTES = 4 * 1024 ** 3;
 
 // The backend cannot see the page walking the library, so the scanning phase
 // is layered on here: the last backend snapshot plus one flag. Everything that
@@ -111,13 +117,41 @@ function retryDiscoveryAfter(delay: number, epoch: number): void {
 
 const yieldToForeground = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
-async function refreshNativePolicy(force = false): Promise<void> {
-    if (policySampling || !active || !documentVisible || (manuallyPaused && !force)) return;
+async function refreshNativePolicy(force = false): Promise<boolean> {
+    if (policySampling || !active || !documentVisible || (manuallyPaused && !force)) return false;
+    const epoch = scopeEpoch;
     policySampling = true;
     try {
         const wifi = await nativePhotoBackupPolicy();
-        if (wifi !== null && active && documentVisible) await setPhotoBackupPolicy(wifi);
+        if (wifi === null || epoch !== scopeEpoch || !active || !documentVisible || (manuallyPaused && !force)) return false;
+        await setPhotoBackupPolicy(wifi);
+        return wifi && epoch === scopeEpoch && active && documentVisible;
     } finally { policySampling = false; }
+}
+
+// The backend expires connectivity observations after two minutes. Discovery
+// can finish long before an upload, so it cannot own report freshness.
+function schedulePolicyRefresh(): void {
+    if (policyTimer || !active || !documentVisible) return;
+    const epoch = scopeEpoch;
+    policyTimer = setTimeout(async () => {
+        policyTimer = null;
+        try {
+            const state = backendState;
+            if (active && documentVisible && state?.platform === 'android' && state.settings.enabled && state.settings.wifiOnly && !manuallyPaused) {
+                const permitted = await refreshNativePolicy();
+                if (permitted && epoch === scopeEpoch && !manuallyPaused && !state.encryptionRequired && state.status.uploading === 0 && (state.status.pending > 0 || state.status.failed > 0)) void runDiscoveryScheduler();
+            }
+        } catch {
+            if (epoch === scopeEpoch && active && documentVisible) photoBackupError.set('Could not check Wi-Fi. Backup will retry the connectivity check.');
+        }
+        finally { if (epoch === scopeEpoch) schedulePolicyRefresh(); }
+    }, POLICY_RECHECK_MS);
+}
+
+function stopPolicyRefresh(): void {
+    if (policyTimer) clearTimeout(policyTimer);
+    policyTimer = null;
 }
 
 /** Shown when the backend declines to run: its own words, or the unlock hint for a locked vault. */
@@ -324,6 +358,12 @@ async function runMaterialization(token: string, asset: PhotoBackupAsset, stage:
     let releaseID = '';
     try {
         if (stage.controller.signal.aborted) return;
+        if (stage.bytes > NATIVE_STAGE_MAX_BYTES) throw new Error('The media exceeds the 4 GiB staging limit.');
+        while (nativeStageLeases.size >= 2 || [...nativeStageLeases].reduce((total, lease) => total + lease.bytes, 0) + stage.bytes > NATIVE_STAGE_MAX_BYTES) {
+            await Promise.race([stage.released, ...[...nativeStageLeases].map((lease) => lease.cleaned)]);
+            if (stage.controller.signal.aborted) return;
+        }
+        nativeStageLeases.add(stage);
         const resource = await materializeNativePhotoBackupAsset(asset, stage.controller.signal);
         releaseID = resource.releaseID;
         if (stage.controller.signal.aborted) return;
@@ -337,22 +377,36 @@ async function runMaterialization(token: string, asset: PhotoBackupAsset, stage:
         }
     }
     finally {
+        // Only acquisition is serialized. A completed snapshot can upload
+        // while the next copy is prepared, with count/byte leases retained
+        // until native cleanup actually finishes.
+        void cleanupMaterialization(token, stage, releaseID);
+    }
+}
+
+async function cleanupMaterialization(token: string, stage: NativeStage, releaseID: string): Promise<void> {
+    try {
         await stage.released;
         if (releaseID) {
             try { await releaseNativePhotoBackupAsset(releaseID); }
             catch { photoBackupError.set('Temporary media cleanup failed. Reopen TDrive to retry cleanup.'); }
         }
+    } finally {
+        nativeStageLeases.delete(stage);
+        stage.markCleaned();
         materializations.delete(token);
     }
 }
 
 function materialize(payload: unknown): void {
     const raw = asRecord(payload); const token = boundedText(raw.token, 512); const asset = normalizeAsset(raw.asset);
-    if (!token || !asset) return;
+    if (!token || !asset || materializations.has(token)) return;
     const controller = new AbortController();
     let requestRelease = () => {};
     const released = new Promise<void>((resolve) => { requestRelease = resolve; });
-    const stage = { controller, released, requestRelease };
+    let markCleaned = () => {};
+    const cleaned = new Promise<void>((resolve) => { markCleaned = resolve; });
+    const stage = { controller, released, requestRelease, bytes: asset.size, cleaned, markCleaned };
     materializations.set(token, stage);
     const work = nativeStageTail.then(() => runMaterialization(token, asset, stage));
     nativeStageTail = work.catch(() => undefined);
@@ -374,6 +428,7 @@ async function continueForegroundDiscovery(): Promise<void> {
 export function activatePhotoBackup(): () => void {
     if (active) return () => {};
     active = true; documentVisible = document.visibilityState === 'visible'; void refreshPhotoBackup().then(runDiscoveryScheduler);
+    schedulePolicyRefresh();
     const stopBackground = activatePhotoBackupBackground(photoBackupState, (message) => photoBackupError.set(message));
     const stops: RuntimeUnsubscribe[] = [];
     if (runtimeEventsAvailable()) {
@@ -385,12 +440,14 @@ export function activatePhotoBackup(): () => void {
     }
     const iosResume = () => { cancelDiscovery(); void continueForegroundDiscovery(); };
     window.addEventListener('ios:PhotoBackupMediaChanged', iosResume);
-    const visibility = () => { documentVisible = document.visibilityState === 'visible'; if (!documentVisible) { cancelDiscovery(); return; } void runDiscoveryScheduler(); };
+    const visibility = () => { documentVisible = document.visibilityState === 'visible'; if (!documentVisible) { stopPolicyRefresh(); cancelDiscovery(); return; } schedulePolicyRefresh(); void runDiscoveryScheduler(); };
     document.addEventListener('visibilitychange', visibility);
     const stopDriveWatch = activeDrive.subscribe((drive) => {
         const id = drive?.id ?? null;
         if (id === observedDriveID) return;
         scopeEpoch += 1;
+        stopPolicyRefresh();
+        schedulePolicyRefresh();
         clearPhotoBackupActivity();
         publish(null);
         photoBackupError.set('');
@@ -401,5 +458,5 @@ export function activatePhotoBackup(): () => void {
         const epoch = scopeEpoch;
         void refreshPhotoBackup().then(() => { if (epoch === scopeEpoch) void runDiscoveryScheduler(); });
     });
-    return () => { scopeEpoch += 1; stopBackground(); active = false; observedDriveID = null; stopDriveWatch(); clearPhotoBackupActivity(); cancelDiscovery(); scanNeedsReconcile = false; for (const token of materializations.keys()) release({ token }); document.removeEventListener('visibilitychange', visibility); window.removeEventListener('ios:PhotoBackupMediaChanged', iosResume); if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; } for (const stop of stops) stop(); };
+    return () => { scopeEpoch += 1; stopBackground(); active = false; stopPolicyRefresh(); observedDriveID = null; stopDriveWatch(); clearPhotoBackupActivity(); cancelDiscovery(); scanNeedsReconcile = false; for (const token of materializations.keys()) release({ token }); document.removeEventListener('visibilitychange', visibility); window.removeEventListener('ios:PhotoBackupMediaChanged', iosResume); if (refreshTimer) { clearTimeout(refreshTimer); refreshTimer = null; } for (const stop of stops) stop(); };
 }

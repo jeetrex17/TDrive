@@ -60,3 +60,39 @@ func TestBackupProgressClampsTransportValues(t *testing.T) {
 		t.Fatal("finished callback became active")
 	}
 }
+
+func TestBackupProgressAggregatesBothActiveFiles(t *testing.T) {
+	a := &App{}
+	scope := photobackup.Scope{AccountID: "one", DriveID: 1}
+	first, finishFirst := a.beginPhotoBackupProgress(t.Context(), scope, "first.jpg", 100)
+	second, finishSecond := a.beginPhotoBackupProgress(t.Context(), scope, "second.jpg", 300)
+	first(fileservice.BackupUploadProgress{BytesTotal: 100, Percent: 100})
+	second(fileservice.BackupUploadProgress{BytesTotal: 300, Percent: 0})
+	got := a.withPhotoBackupProgress(PhotoBackupState{}, scope)
+	if got.Status.CurrentFile != "2 files" || got.Status.CurrentFileBytesTotal != 400 || got.Status.CurrentFileBytesDone != 100 || got.Status.CurrentFilePercent != 25 {
+		t.Fatalf("aggregate progress = %+v", got.Status)
+	}
+	finishFirst()
+	first(fileservice.BackupUploadProgress{BytesTotal: 900, Percent: 100})
+	second(fileservice.BackupUploadProgress{BytesTotal: 300, Percent: 50})
+	got = a.withPhotoBackupProgress(PhotoBackupState{}, scope)
+	if got.Status.CurrentFile != "second.jpg" || got.Status.CurrentFileBytesDone != 150 {
+		t.Fatalf("remaining progress = %+v", got.Status)
+	}
+	finishSecond()
+}
+
+func TestBackupProgressOldScopeCannotClearNewScope(t *testing.T) {
+	a := &App{}
+	oldScope := photobackup.Scope{AccountID: "old", DriveID: 1}
+	newScope := photobackup.Scope{AccountID: "new", DriveID: 2}
+	oldUpdate, oldFinish := a.beginPhotoBackupProgress(t.Context(), oldScope, "old.jpg", 100)
+	update, finish := a.beginPhotoBackupProgress(t.Context(), newScope, "new.jpg", 200)
+	defer finish()
+	oldUpdate(fileservice.BackupUploadProgress{BytesTotal: 100, Percent: 100})
+	oldFinish()
+	update(fileservice.BackupUploadProgress{BytesTotal: 200, Percent: 50})
+	if got := a.withPhotoBackupProgress(PhotoBackupState{}, newScope); got.Status.CurrentFile != "new.jpg" || got.Status.CurrentFileBytesDone != 100 {
+		t.Fatalf("old scope corrupted progress = %+v", got.Status)
+	}
+}

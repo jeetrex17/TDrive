@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"testing"
+	"time"
 
 	"TDrive/backend/projection"
+	"TDrive/backend/tgclient"
 )
 
 func TestBackupUploadProjectsWithoutManualTransferEvents(t *testing.T) {
@@ -25,6 +28,158 @@ func TestBackupUploadProjectsWithoutManualTransferEvents(t *testing.T) {
 	}
 	if events.Has("upload_start") || events.Has("upload_complete") || events.Has("upload_error") {
 		t.Fatal("backup must not reuse manual-upload row IDs/events")
+	}
+}
+
+func TestBackupUnknownReceiptSurvivesRetryCancellation(t *testing.T) {
+	for _, multipart := range []bool{false, true} {
+		t.Run(map[bool]string{false: "single", true: "multipart"}[multipart], func(t *testing.T) {
+			svc, _, fake, _ := newTestService(t)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			client := &visibleAcceptThenLoseReceiptClient{Fake: fake, fileFailAt: 1}
+			body := []byte("original")
+			if multipart {
+				svc.MaxUploadBytes = 1000
+				body = bigBody(2500)
+				client.fileFailAt = 0
+				client.controlFailAll = true
+			}
+			svc.TG = client
+			policy := instantRetryPolicy()
+			policy.Sleep = func(context.Context, time.Duration) error {
+				cancel()
+				return context.Canceled
+			}
+			svc.FloodWaitRetry = policy
+			meta, err := svc.UploadBackup(ctx, personalChannelID, writeTempNamedFile(t, "original.bin", body), "", false)
+			if meta.MsgID != 0 || !errors.Is(err, tgclient.ErrSendOutcomeUnknown) || !errors.Is(err, context.Canceled) {
+				t.Fatalf("lost receipt = %+v, %v; want unknown outcome and cancellation", meta, err)
+			}
+			if errors.Is(err, ErrBackupUploadNotStarted) {
+				t.Fatal("an attempted send was classified as unsent")
+			}
+		})
+	}
+}
+
+func TestBackupCancellationBeforeSendIsExplicitlySafeToRetry(t *testing.T) {
+	for _, stage := range []string{"slot", "encryption"} {
+		t.Run(stage, func(t *testing.T) {
+			svc, _, fake, _ := newTestService(t)
+			configureEncryptedUpload(t, svc, bytes.Repeat([]byte{7}, 32))
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			if stage == "slot" {
+				svc.MaxConcurrentUploads = 1
+				release, err := svc.acquireUploadSlot(t.Context())
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer release()
+				svc.ActorID = func(context.Context) (int64, error) { cancel(); return 7, nil }
+			} else {
+				write := svc.WriteCiphertextTemp
+				svc.WriteCiphertextTemp = func(plain io.Reader, size int64, key []byte) (*os.File, error) {
+					cancel()
+					file, err := write(plain, size, key)
+					if !errors.Is(err, context.Canceled) {
+						t.Errorf("ciphertext preparation ignored cancellation: %v", err)
+					}
+					return file, err
+				}
+			}
+			meta, err := svc.UploadBackup(ctx, personalChannelID, writeTempNamedFile(t, "photo.bin", []byte("original")), "", true)
+			if meta.MsgID != 0 || !errors.Is(err, context.Canceled) || !errors.Is(err, ErrBackupUploadNotStarted) {
+				t.Fatalf("cancel before send = %+v, %v", meta, err)
+			}
+			if len(fake.SentFiles()) != 0 {
+				t.Fatal("sent a body after pre-send cancellation")
+			}
+		})
+	}
+}
+
+func TestBackupPreviewAdmissionCancellationPreservesReceipt(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	configureEncryptedUpload(t, svc, bytes.Repeat([]byte{7}, 32))
+	w := newBackupRenditionWorker(t.Context(), personalChannelID, func(ctx context.Context, _ projection.File, _ []byte) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}, func(context.Context) error { return nil })
+	t.Cleanup(w.Close)
+	if !w.enqueue(projection.File{ChannelID: personalChannelID, MsgID: 1}, []byte{7}) {
+		t.Fatal("could not reserve preparation budget")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	meta, err := svc.UploadBackupWithRenditions(ctx, personalChannelID, writeTempNamedFile(t, "photo.jpg", tinyRenditionJPEG(t)), "", true, w, func(p BackupUploadProgress) {
+		if p.Percent == 100 {
+			w.mu.Lock()
+			count := w.count
+			w.mu.Unlock()
+			if count != 2 {
+				t.Errorf("original sent without its preview reservation: count=%d", count)
+			}
+			cancel()
+		}
+	})
+	if meta.MsgID <= 0 || err != nil {
+		t.Fatalf("receipt lost while preview admission canceled: %+v, %v", meta, err)
+	}
+}
+
+func TestBackupFullPreviewBudgetCancelsBeforeAnyOriginalSend(t *testing.T) {
+	svc, _, fake, _ := newTestService(t)
+	configureEncryptedUpload(t, svc, bytes.Repeat([]byte{7}, 32))
+	w := newBackupRenditionWorker(t.Context(), personalChannelID, func(ctx context.Context, _ projection.File, _ []byte) error {
+		<-ctx.Done()
+		return ctx.Err()
+	}, func(context.Context) error { return nil })
+	t.Cleanup(w.Close)
+	for id := int64(1); id <= 2; id++ {
+		if !w.enqueue(projection.File{ChannelID: personalChannelID, MsgID: id}, []byte{7}) {
+			t.Fatal("could not fill preparation budget")
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	path := writeTempNamedFile(t, "photo.jpg", tinyRenditionJPEG(t))
+	result := make(chan error, 1)
+	go func() {
+		_, err := svc.UploadBackupWithRenditions(ctx, personalChannelID, path, "", true, w)
+		result <- err
+	}()
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, ErrBackupUploadNotStarted) || !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled reservation = %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("full preview budget ignored cancellation")
+	}
+	if len(fake.SentFiles()) != 0 {
+		t.Fatal("original was sent before preview budget was reserved")
+	}
+}
+
+func TestBackupUploadTimingReportsBoundedStages(t *testing.T) {
+	svc, _, _, _ := newTestService(t)
+	configureEncryptedUpload(t, svc, bytes.Repeat([]byte{7}, 32))
+	stages := make(map[string]time.Duration)
+	ctx := WithBackupUploadTiming(t.Context(), func(stage string, duration time.Duration) { stages[stage] += duration })
+	_, err := svc.UploadBackup(ctx, personalChannelID, writeTempNamedFile(t, "not-logged.bin", []byte("private source")), "", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stage := range []string{"encrypt", "transfer", "projection"} {
+		if elapsed, ok := stages[stage]; !ok || elapsed < 0 {
+			t.Fatalf("stage %q = %v, present=%v", stage, elapsed, ok)
+		}
+	}
+	if len(stages) != 3 {
+		t.Fatalf("unexpected stages: %v", stages)
 	}
 }
 

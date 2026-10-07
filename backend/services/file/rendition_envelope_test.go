@@ -9,7 +9,7 @@ import (
 	"testing"
 )
 
-func tinyRenditionJPEG(t *testing.T) []byte {
+func tinyRenditionJPEG(t testing.TB) []byte {
 	t.Helper()
 	var b bytes.Buffer
 	if err := jpeg.Encode(&b, image.NewRGBA(image.Rect(0, 0, 4, 3)), nil); err != nil {

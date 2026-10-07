@@ -9,7 +9,7 @@ const mocks = vi.hoisted(() => ({
     state: null as PhotoBackupState | null,
     getState: vi.fn(), save: vi.fn(),
     commit: vi.fn(), resetScan: vi.fn(), run: vi.fn(), pause: vi.fn(), resume: vi.fn(), retry: vi.fn(), policy: vi.fn(), unlock: vi.fn(),
-    list: vi.fn(), materialize: vi.fn(), release: vi.fn(),
+    list: vi.fn(), materialize: vi.fn(), release: vi.fn(), nativePolicy: vi.fn(),
     upsert: vi.fn(), pickFolder: vi.fn(), addFolder: vi.fn(), requestAccess: vi.fn(),
 }));
 
@@ -21,7 +21,7 @@ vi.mock('../../api/photo-backup', () => ({
     defaultSettings: { enabled: false, photos: true, videos: true, wifiOnly: false, encrypt: false },
     normalizeAsset: (value: unknown): PhotoBackupAsset | null => {
         const raw = value as Record<string, unknown>;
-        return raw?.id ? { id: String(raw.id), version: String(raw.version), name: String(raw.name ?? ''), mediaType: raw.media_type === 'video' ? 'video' : 'photo', modifiedAt: 0, createdAt: Number(raw.created_at) || 0, size: 0 } : null;
+        return raw?.id ? { id: String(raw.id), version: String(raw.version), name: String(raw.name ?? ''), mediaType: raw.media_type === 'video' ? 'video' : 'photo', modifiedAt: 0, createdAt: Number(raw.created_at) || 0, size: Number(raw.size) || 0 } : null;
     },
     getPhotoBackupState: mocks.getState,
     commitPhotoBackupScanPage: mocks.commit, resetPhotoBackupScan: mocks.resetScan,
@@ -34,7 +34,7 @@ vi.mock('../../api/photo-backup', () => ({
 vi.mock('../../api/runtime', () => ({ runtimeEventsAvailable: () => true, onRuntimeEvent: (name: string, cb: (payload: unknown) => void) => { mocks.events.set(name, cb); return () => mocks.events.delete(name); } }));
 vi.mock('./native-adapter', () => ({
     nativePhotoBackupAvailable: () => true,
-    nativePhotoBackupPolicy: () => Promise.resolve(true),
+    nativePhotoBackupPolicy: mocks.nativePolicy,
     requestNativePhotoBackupAccess: mocks.requestAccess,
     nativePhotoBackupFolderPicking: () => true, pickNativePhotoBackupFolder: mocks.pickFolder,
     listNativePhotoBackupAssets: mocks.list, materializeNativePhotoBackupAsset: mocks.materialize, releaseNativePhotoBackupAsset: mocks.release,
@@ -48,6 +48,7 @@ import { sidebarState } from '../../ui/sidebar/sidebar-store';
 
 const flush = async () => { for (let i = 0; i < 8; i += 1) await new Promise((resolve) => setTimeout(resolve, 0)); };
 const state = (): PhotoBackupState => ({ settings: { enabled: true, photos: true, videos: true, wifiOnly: false, encrypt: true }, sources: [{ id: 'tree:external_primary:DCIM/', kind: 'device-folder', root: 'external_primary:DCIM/', name: 'DCIM', enabled: true, addedAt: 0 }], status: { phase: 'idle', pending: 0, uploading: 0, complete: 0, failed: 0, paused: 0, bytesDone: 0, bytesTotal: 0, currentFile: '', currentFileBytesDone: 0, currentFileBytesTotal: 0, currentFilePercent: 0, message: '' }, capabilities: { wifiOnly: { supported: true, label: '', detail: '' }, access: { status: 'granted', detail: '' }, }, platform: 'android', destination: { id: '1', title: 'Personal', kind: 'personal' }, manualPaused: false, encryptionRequired: false });
+const nativeStageEvent = (id: string, asset?: unknown): Record<string, unknown> => Object.fromEntries(asset === undefined ? [['token', id]] : [['token', id], ['asset', asset]]);
 
 describe('photo backup controller scheduler', () => {
     let stop = () => {};
@@ -58,13 +59,14 @@ describe('photo backup controller scheduler', () => {
         // The host answers every access request with the grant it gave.
         mocks.requestAccess.mockReset().mockResolvedValue({ status: 'granted', detail: '' });
         mocks.unlock.mockResolvedValue(true);
+        mocks.nativePolicy.mockReset().mockResolvedValue(true);
         mocks.state = state(); mocks.getState.mockImplementation(() => Promise.resolve(mocks.state));
         mocks.save.mockImplementation(async (settings) => ({ ...state(), settings }));
         sidebarState.set({ personal: [], shared: [], pending: [], activeChannelId: null, virtualView: null });
         Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'visible' });
         stop = activatePhotoBackup();
     });
-    afterEach(() => { stop(); });
+    afterEach(() => { stop(); vi.useRealTimers(); });
 
     it('automatically drains multiple bounded pages once', async () => {
         mocks.list.mockResolvedValueOnce({ assets: [{ id: '1', version: '1', name: 'a', mediaType: 'photo', modifiedAt: 1, createdAt: 0, size: 1 }], nextCursor: 'next' }).mockResolvedValueOnce({ assets: [{ id: '2', version: '1', name: 'b', mediaType: 'photo', modifiedAt: 2, createdAt: 0, size: 1 }], nextCursor: '' });
@@ -318,30 +320,108 @@ describe('photo backup controller scheduler', () => {
     it('releases a late native stage when Go already released its token', async () => {
         let finish!: (value: { path: string; releaseID: string }) => void;
         mocks.materialize.mockReturnValue(new Promise((resolve) => { finish = resolve; }));
-        mocks.events.get('photo-backup:materialize')?.({ token: 't', asset: { id: 'a', version: '1', name: 'a', media_type: 'photo' } });
+        mocks.events.get('photo-backup:materialize')?.(nativeStageEvent('t', { id: 'a', version: '1', name: 'a', media_type: 'photo' }));
         await Promise.resolve();
-        mocks.events.get('photo-backup:release')?.({ token: 't', asset: { id: 'a', version: '1', media_type: 'photo' } });
+        mocks.events.get('photo-backup:release')?.(nativeStageEvent('t', { id: 'a', version: '1', media_type: 'photo' }));
         finish({ path: '/tmp/a', releaseID: 'native-t' }); await flush();
         expect(mocks.release).toHaveBeenCalledWith('native-t');
     });
 
-    it('waits for native cleanup before staging the next asset', async () => {
+    it('stages two assets before either upload releases its source, but waits for cleanup before a third', async () => {
         let finishRelease!: () => void;
         mocks.materialize
             .mockResolvedValueOnce({ path: '/tmp/a', releaseID: 'native-a' })
-            .mockResolvedValueOnce({ path: '/tmp/b', releaseID: 'native-b' });
+            .mockResolvedValueOnce({ path: '/tmp/b', releaseID: 'native-b' })
+            .mockResolvedValueOnce({ path: '/tmp/c', releaseID: 'native-c' });
         mocks.release.mockReturnValueOnce(new Promise<void>((resolve) => { finishRelease = resolve; }));
 
-        mocks.events.get('photo-backup:materialize')?.({ token: 'first', asset: { id: 'a', version: '1', name: 'a', media_type: 'photo' } });
+        mocks.events.get('photo-backup:materialize')?.(nativeStageEvent('first', { id: 'a', version: '1', name: 'a', media_type: 'photo' }));
         await flush();
-        mocks.events.get('photo-backup:release')?.({ token: 'first' });
-        mocks.events.get('photo-backup:materialize')?.({ token: 'second', asset: { id: 'b', version: '1', name: 'b', media_type: 'photo' } });
-        await flush();
-
-        expect(mocks.materialize).toHaveBeenCalledTimes(1);
-        finishRelease();
+        mocks.events.get('photo-backup:materialize')?.(nativeStageEvent('second', { id: 'b', version: '1', name: 'b', media_type: 'photo' }));
         await flush();
         expect(mocks.materialize).toHaveBeenCalledTimes(2);
+        mocks.events.get('photo-backup:release')?.(nativeStageEvent('first'));
+        mocks.events.get('photo-backup:materialize')?.(nativeStageEvent('third', { id: 'c', version: '1', name: 'c', media_type: 'photo' }));
+        await flush();
+        expect(mocks.materialize).toHaveBeenCalledTimes(2);
+        finishRelease();
+        await flush();
+        expect(mocks.materialize).toHaveBeenCalledTimes(3);
+    });
+
+    it('bounds overlapping native stages by bytes, not just file count', async () => {
+        mocks.materialize.mockResolvedValue({ path: '/tmp/video', releaseID: 'video' });
+        const asset = { id: 'a', version: '1', name: 'video', media_type: 'video', size: 3 * 1024 ** 3 };
+        mocks.events.get('photo-backup:materialize')?.(nativeStageEvent('large-first', asset));
+        mocks.events.get('photo-backup:materialize')?.(nativeStageEvent('large-second', { ...asset, id: 'b' }));
+        await flush();
+        expect(mocks.materialize).toHaveBeenCalledTimes(1);
+        mocks.events.get('photo-backup:release')?.(nativeStageEvent('large-first'));
+        await flush();
+        expect(mocks.materialize).toHaveBeenCalledTimes(2);
+    });
+
+    it('ignores duplicate tokens and cancels queued stages without materializing them', async () => {
+        mocks.materialize.mockResolvedValue({ path: '/tmp/video', releaseID: 'video' });
+        const asset = { id: 'a', version: '1', name: 'video', media_type: 'video', size: 3 * 1024 ** 3 };
+        mocks.events.get('photo-backup:materialize')?.(nativeStageEvent('held', asset));
+        mocks.events.get('photo-backup:materialize')?.(nativeStageEvent('held', asset));
+        mocks.events.get('photo-backup:materialize')?.(nativeStageEvent('canceled', { ...asset, id: 'b' }));
+        await flush();
+        mocks.events.get('photo-backup:release')?.(nativeStageEvent('canceled'));
+        mocks.events.get('photo-backup:release')?.(nativeStageEvent('held'));
+        await flush();
+        expect(mocks.materialize).toHaveBeenCalledTimes(1);
+        expect(mocks.release).toHaveBeenCalledTimes(1);
+    });
+
+    it('refreshes Wi-Fi during long uploads and stops polling when hidden or disposed', async () => {
+        stop(); await flush(); vi.useFakeTimers();
+        mocks.list.mockResolvedValue({ assets: [], nextCursor: '' });
+        mocks.state = { ...state(), settings: { ...state().settings, wifiOnly: true }, status: { ...state().status, phase: 'uploading', uploading: 1 } };
+        stop = activatePhotoBackup();
+        await vi.advanceTimersByTimeAsync(0);
+        mocks.policy.mockClear(); mocks.run.mockClear();
+        await vi.advanceTimersByTimeAsync(150_000);
+        expect(mocks.policy).toHaveBeenCalledTimes(5);
+        expect(mocks.run).not.toHaveBeenCalled();
+        Object.defineProperty(document, 'visibilityState', { configurable: true, value: 'hidden' });
+        document.dispatchEvent(new Event('visibilitychange'));
+        await vi.advanceTimersByTimeAsync(90_000);
+        expect(mocks.policy).toHaveBeenCalledTimes(5);
+        stop();
+        await vi.advanceTimersByTimeAsync(90_000);
+        expect(mocks.policy).toHaveBeenCalledTimes(5);
+    });
+
+    it('periodically restarts policy-waiting work without overriding manual pause', async () => {
+        stop(); await flush(); vi.useFakeTimers();
+        mocks.list.mockResolvedValue({ assets: [], nextCursor: '' });
+        mocks.state = { ...state(), settings: { ...state().settings, wifiOnly: true }, status: { ...state().status, phase: 'paused', pending: 1 } };
+        stop = activatePhotoBackup(); await vi.advanceTimersByTimeAsync(0);
+        mocks.run.mockClear();
+        await vi.advanceTimersByTimeAsync(30_000);
+        expect(mocks.run).toHaveBeenCalled();
+        mocks.state = { ...mocks.state, manualPaused: true };
+        await refreshPhotoBackup(); mocks.run.mockClear(); mocks.policy.mockClear();
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(mocks.run).not.toHaveBeenCalled();
+        expect(mocks.policy).not.toHaveBeenCalled();
+        expect(mocks.resume).not.toHaveBeenCalled();
+    });
+
+    it('does not publish a policy sample that finishes after disposal', async () => {
+        stop(); await flush(); vi.useFakeTimers();
+        mocks.list.mockResolvedValue({ assets: [], nextCursor: '' });
+        mocks.state = { ...state(), settings: { ...state().settings, wifiOnly: true } };
+        stop = activatePhotoBackup(); await vi.advanceTimersByTimeAsync(0);
+        let finish!: (wifi: boolean) => void;
+        mocks.nativePolicy.mockReturnValueOnce(new Promise<boolean>((resolve) => { finish = resolve; }));
+        mocks.policy.mockClear();
+        await vi.advanceTimersByTimeAsync(30_000);
+        stop(); finish(true);
+        await vi.advanceTimersByTimeAsync(60_000);
+        expect(mocks.policy).not.toHaveBeenCalled();
     });
 
     it('continues staging after native cleanup reports an error', async () => {
@@ -350,10 +430,10 @@ describe('photo backup controller scheduler', () => {
             .mockResolvedValueOnce({ path: '/tmp/b', releaseID: 'native-b' });
         mocks.release.mockRejectedValueOnce(new Error('cleanup failed'));
 
-        mocks.events.get('photo-backup:materialize')?.({ token: 'first', asset: { id: 'a', version: '1', name: 'a', media_type: 'photo' } });
+        mocks.events.get('photo-backup:materialize')?.(nativeStageEvent('first', { id: 'a', version: '1', name: 'a', media_type: 'photo' }));
         await flush();
-        mocks.events.get('photo-backup:release')?.({ token: 'first' });
-        mocks.events.get('photo-backup:materialize')?.({ token: 'second', asset: { id: 'b', version: '1', name: 'b', media_type: 'photo' } });
+        mocks.events.get('photo-backup:release')?.(nativeStageEvent('first'));
+        mocks.events.get('photo-backup:materialize')?.(nativeStageEvent('second', { id: 'b', version: '1', name: 'b', media_type: 'photo' }));
         await flush();
 
         expect(mocks.materialize).toHaveBeenCalledTimes(2);
