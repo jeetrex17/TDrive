@@ -47,6 +47,7 @@
     const addedIds = $derived(new Set(added.map(sourceKey)));
     const isAdded = (source: ChannelSource) => addedIds.has(sourceKey(source));
     const candidatesTruncated = $derived(candidates.status === 'ready' && candidates.sources.some((source) => source.candidatesTruncated));
+    const canResolvePublic = $derived(publicInput.trim() !== '' && !resolvingPublic && adding === null);
 
     // Channels still to add lead; the ones already in TDrive sit at the end.
     const visible = $derived.by(() => {
@@ -132,8 +133,8 @@
     }
 
     async function resolveLink(): Promise<void> {
+        if (!canResolvePublic) return;
         const input = publicInput.trim();
-        if (!input || resolvingPublic) return;
         const version = ++publicVersion;
         resolvingPublic = true;
         publicError = '';
@@ -190,25 +191,28 @@
 
     <div class="channel-picker-public">
         <label for="channel-public-link">Public channel link</label>
-        <div class="channel-picker-public-field">
-            <LinkIcon size={16} strokeWidth={2} aria-hidden="true" />
-            <input
-                id="channel-public-link"
-                bind:value={publicInput}
-                oninput={onPublicInput}
-                onkeydown={onPublicKeydown}
-                type="text"
-                inputmode="url"
-                autocomplete="off"
-                spellcheck="false"
-                placeholder="@username or t.me/..."
-                aria-describedby={publicError ? 'channel-public-link-error' : undefined}
-            />
-            <button class="secondary-btn channel-picker-check" type="button" disabled={!publicInput.trim() || resolvingPublic || adding !== null} onclick={() => void resolveLink()}>
+        <div class="channel-picker-public-row">
+            <div class="channel-picker-public-field" class:has-error={publicError !== ''}>
+                <LinkIcon size={16} strokeWidth={2} aria-hidden="true" />
+                <input
+                    id="channel-public-link"
+                    bind:value={publicInput}
+                    oninput={onPublicInput}
+                    onkeydown={onPublicKeydown}
+                    type="text"
+                    inputmode="url"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="@username or t.me/channel"
+                    aria-invalid={publicError ? 'true' : undefined}
+                    aria-describedby={publicError ? 'channel-public-link-help channel-public-link-error' : 'channel-public-link-help'}
+                />
+            </div>
+            <button class="secondary-btn channel-picker-check" type="button" disabled={!canResolvePublic} aria-busy={resolvingPublic} onclick={() => void resolveLink()}>
                 {resolvingPublic ? 'Checking' : 'Check link'}
             </button>
         </div>
-        <p class="channel-picker-public-help">Checking only verifies access. TDrive never joins channels, sends messages, or starts bots.</p>
+        <p id="channel-public-link-help" class="channel-picker-public-help">Checking won't join the channel or send messages.</p>
         {#if publicError}<p id="channel-public-link-error" class="channel-picker-error" role="alert">{publicError}</p>{/if}
         {#if publicSource}
             {@const publicAdded = isAdded(publicSource)}
@@ -323,12 +327,19 @@
         font-weight: var(--weight-semibold);
     }
 
+    .channel-picker-public-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: var(--space-2);
+    }
+
     .channel-picker-public-field {
         display: flex;
         align-items: center;
         gap: var(--space-2);
         min-width: 0;
-        padding: 0 var(--space-2) 0 var(--space-3);
+        height: 44px;
+        padding: 0 var(--space-3);
         border: 1px solid var(--border);
         border-radius: var(--radius-md);
         background: var(--bg-dark);
@@ -336,9 +347,15 @@
     }
 
     .channel-picker-public-field:focus-within { border-color: var(--accent); box-shadow: var(--focus-ring); }
-    .channel-picker-public-field input { min-width: 0; flex: 1; height: 40px; border: 0; outline: 0; background: transparent; color: var(--text-main); font: inherit; }
-    .channel-picker-check { flex: 0 0 auto; min-height: 32px; padding: 0 var(--space-2); font-size: var(--type-xs); }
-    .channel-picker-public-help { margin: var(--space-1) 0 0; color: var(--text-muted); font-size: var(--type-xs); line-height: 1.4; }
+    .channel-picker-public-field.has-error { border-color: var(--danger); }
+    .channel-picker-public-field input { min-width: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; border-radius: 0; outline: 0; box-shadow: none; background: transparent; color: var(--text-main); font: inherit; font-size: var(--type-base); }
+    .channel-picker-public-field input::placeholder { color: var(--text-muted); }
+    .channel-picker-check { min-height: 44px; padding: 0 var(--space-3); white-space: nowrap; font-size: var(--type-sm); }
+    .channel-picker-check:disabled { color: var(--text-muted); cursor: default; opacity: 0.8; }
+    .channel-picker-check:hover:disabled { background: transparent; }
+    .channel-picker-check:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    .channel-picker-check:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    .channel-picker-public-help { margin: var(--space-2) 0 0; color: var(--text-muted); font-size: var(--type-xs); line-height: 1.4; }
 
     .channel-picker-public-result {
         display: flex;
@@ -499,6 +516,8 @@
     }
 
     :global(html.mobile) .channel-picker-search input { font-size: 16px; }
+    :global(html.mobile) .channel-picker-public-row { grid-template-columns: minmax(0, 1fr); }
+    :global(html.mobile) .channel-picker-check { width: 100%; }
     :global(html.mobile) .channel-picker-row { min-height: 60px; }
 
     @media (prefers-reduced-motion: reduce) {

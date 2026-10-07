@@ -112,8 +112,28 @@ describe('ChannelPickerModal', () => {
         await settle();
 
         expect(props.resolvePublic).toHaveBeenCalledWith('https://t.me/fieldrecordings');
-        expect(host?.textContent).toContain('never joins channels, sends messages, or starts bots');
+        expect(host?.textContent).toContain("won't join the channel or send messages");
         expect(host?.querySelector('.channel-picker-public-result')?.textContent).toContain('Field Recordings');
+    });
+
+    it('ignores Enter in the public link while another source is connecting', async () => {
+        let finishAdd!: () => void;
+        const props = render({ onAdd: vi.fn(() => new Promise<void>((resolve) => { finishAdd = resolve; })) });
+        await settle();
+        rows()[0].click();
+        await settle();
+
+        const input = host!.querySelector<HTMLInputElement>('#channel-public-link')!;
+        input.value = '@fieldrecordings';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        await settle();
+        expect(host?.querySelector<HTMLButtonElement>('.channel-picker-check')?.disabled).toBe(true);
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        await settle();
+        expect(props.resolvePublic).not.toHaveBeenCalled();
+
+        finishAdd();
+        await settle();
     });
 
     it('opens again on the last list while it refreshes, added as the sidebar has it now', async () => {
