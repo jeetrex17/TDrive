@@ -3,15 +3,18 @@
     import CheckIcon from '@lucide/svelte/icons/check';
     import PlusIcon from '@lucide/svelte/icons/plus';
     import SearchIcon from '@lucide/svelte/icons/search';
+    import LinkIcon from '@lucide/svelte/icons/link';
     import ModalShell from '../modals/ModalShell.svelte';
     import { toAppError } from '../../modules/errors';
     import ChannelAvatar from './ChannelAvatar.svelte';
-    import type { ChannelSource } from './channel-model';
+    import { sourceHandle, sourceKey, sourcePeerLabel, type ChannelSource } from './channel-model';
 
     interface Props {
         open: boolean;
-        /** Every broadcast channel the account has joined, added or not. */
+        /** Joined direct messages, bots, groups and channels, including archived peers. */
         loadCandidates: () => Promise<ChannelSource[]>;
+        /** Checks a public @username or t.me link without joining Telegram. */
+        resolvePublic: (input: string) => Promise<ChannelSource>;
         /**
          * The channels in TDrive now, as the sidebar lists them. They decide
          * what reads as added, since a list kept from an earlier open may not.
@@ -23,7 +26,7 @@
         onClose: () => void;
     }
 
-    let { open, loadCandidates, added, loadPhoto, onAdd, onOpen, onClose }: Props = $props();
+    let { open, loadCandidates, resolvePublic, added, loadPhoto, onAdd, onOpen, onClose }: Props = $props();
 
     type Candidates =
         | { status: 'loading' }
@@ -32,12 +35,19 @@
 
     let candidates = $state<Candidates>({ status: 'loading' });
     let query = $state('');
-    let adding = $state<number | null>(null);
+    let adding = $state<string | null>(null);
     let addError = $state('');
+    let publicInput = $state('');
+    let publicSource = $state<ChannelSource | null>(null);
+    let publicError = $state('');
+    let resolvingPublic = $state(false);
     let loadVersion = 0;
+    let publicVersion = 0;
 
-    const addedIds = $derived(new Set(added.map((source) => source.channelId)));
-    const isAdded = (source: ChannelSource) => addedIds.has(source.channelId);
+    const addedIds = $derived(new Set(added.map(sourceKey)));
+    const isAdded = (source: ChannelSource) => addedIds.has(sourceKey(source));
+    const candidatesTruncated = $derived(candidates.status === 'ready' && candidates.sources.some((source) => source.candidatesTruncated));
+    const canResolvePublic = $derived(publicInput.trim() !== '' && !resolvingPublic && adding === null);
 
     // Channels still to add lead; the ones already in TDrive sit at the end.
     const visible = $derived.by(() => {
@@ -45,7 +55,8 @@
         const needle = query.trim().toLocaleLowerCase();
         const matches = needle
             ? candidates.sources.filter((source) => source.title.toLocaleLowerCase().includes(needle)
-                || source.username.toLocaleLowerCase().includes(needle))
+                || source.username.toLocaleLowerCase().includes(needle)
+                || sourcePeerLabel(source).toLocaleLowerCase().includes(needle))
             : candidates.sources;
         return [...matches.filter((source) => !isAdded(source)), ...matches.filter(isAdded)];
     });
@@ -69,6 +80,10 @@
         query = '';
         adding = null;
         addError = '';
+        publicInput = '';
+        publicSource = null;
+        publicError = '';
+        publicVersion += 1;
         // Only opening reloads. load() reads the list it replaces, which
         // would otherwise make every answer reload again.
         untrack(() => void load());
@@ -88,7 +103,11 @@
             onClose();
             return;
         }
-        adding = source.channelId;
+        if (!source.available) {
+            addError = `${source.title} is unavailable to this account.`;
+            return;
+        }
+        adding = sourceKey(source);
         addError = '';
         try {
             await onAdd(source);
@@ -107,17 +126,50 @@
     }
 
     function handle(source: ChannelSource): string {
-        const name = source.username ? `@${source.username}` : 'Private channel';
-        return source.protected ? `${name} · Protected` : name;
+        const details = [sourceHandle(source), sourcePeerLabel(source)];
+        if (source.protected) details.push('Protected');
+        if (!source.available) details.push('Unavailable');
+        return details.filter((value, index, values) => values.indexOf(value) === index).join(' · ');
+    }
+
+    async function resolveLink(): Promise<void> {
+        if (!canResolvePublic) return;
+        const input = publicInput.trim();
+        const version = ++publicVersion;
+        resolvingPublic = true;
+        publicError = '';
+        publicSource = null;
+        try {
+            const resolved = await resolvePublic(input);
+            if (resolved.peerKind !== 'channel') throw new Error('That link does not identify a public channel.');
+            if (version === publicVersion) publicSource = { ...resolved, publicUsername: resolved.username };
+        } catch (error) {
+            if (version === publicVersion) publicError = toAppError(error, { source: 'backend' }).message;
+        } finally {
+            if (version === publicVersion) resolvingPublic = false;
+        }
+    }
+
+    function onPublicInput(): void {
+        publicVersion += 1;
+        publicSource = null;
+        publicError = '';
+        resolvingPublic = false;
+    }
+
+    function onPublicKeydown(event: KeyboardEvent): void {
+        if (event.key !== 'Enter') return;
+        event.preventDefault();
+        void resolveLink();
     }
 </script>
 
 <ModalShell
     hostId="channel-picker-modal"
     {open}
-    title="Add a channel"
+    title="Add a source"
     titleId="channel-picker-title"
-    subtitle="Choose from the channels you've joined on Telegram."
+    subtitle="Choose a chat you can already access, or connect a public channel."
     cardClass="channel-picker-card"
     initialFocus="#channel-picker-search"
     onClose={close}
@@ -125,17 +177,55 @@
     <label class="search-field channel-picker-search">
         <SearchIcon size={16} strokeWidth={2} aria-hidden="true" />
         <input
-            id="channel-picker-search"
+                id="channel-picker-search"
             bind:value={query}
             onkeydown={onSearchKeydown}
             type="text"
-            placeholder="Search channels"
+        placeholder="Search chats and channels"
             autocomplete="off"
             spellcheck="false"
-            aria-label="Search channels"
-            aria-controls="channel-picker-list"
+        aria-label="Search sources"
+                aria-controls="channel-picker-list"
         />
     </label>
+
+    <div class="channel-picker-public">
+        <label for="channel-public-link">Public channel link</label>
+        <div class="channel-picker-public-row">
+            <div class="channel-picker-public-field" class:has-error={publicError !== ''}>
+                <LinkIcon size={16} strokeWidth={2} aria-hidden="true" />
+                <input
+                    id="channel-public-link"
+                    bind:value={publicInput}
+                    oninput={onPublicInput}
+                    onkeydown={onPublicKeydown}
+                    type="text"
+                    inputmode="url"
+                    autocomplete="off"
+                    spellcheck="false"
+                    placeholder="@username or t.me/channel"
+                    aria-invalid={publicError ? 'true' : undefined}
+                    aria-describedby={publicError ? 'channel-public-link-help channel-public-link-error' : 'channel-public-link-help'}
+                />
+            </div>
+            <button class="secondary-btn channel-picker-check" type="button" disabled={!canResolvePublic} aria-busy={resolvingPublic} onclick={() => void resolveLink()}>
+                {resolvingPublic ? 'Checking' : 'Check link'}
+            </button>
+        </div>
+        <p id="channel-public-link-help" class="channel-picker-public-help">Checking won't join the channel or send messages.</p>
+        {#if publicError}<p id="channel-public-link-error" class="channel-picker-error" role="alert">{publicError}</p>{/if}
+        {#if publicSource}
+            {@const publicAdded = isAdded(publicSource)}
+            <button class="channel-picker-public-result" type="button" disabled={!publicSource.available || (adding !== null && adding !== sourceKey(publicSource))} onclick={() => { if (publicSource) void choose(publicSource); }}>
+                <ChannelAvatar source={publicSource} {loadPhoto} />
+                <span class="channel-picker-text">
+                    <span class="channel-picker-name">{publicSource.title}</span>
+                    <span class="channel-picker-handle">{handle(publicSource)}</span>
+                </span>
+                <span class="channel-picker-trail">{publicAdded ? 'Open' : publicSource.available ? 'Connect' : 'Unavailable'}</span>
+            </button>
+        {/if}
+    </div>
 
     {#if addError}
         <p class="channel-picker-error" role="alert">{addError}</p>
@@ -158,20 +248,20 @@
                 <button class="link-button" type="button" onclick={() => void load()}>Try again</button>
             </div>
         {:else if candidates.sources.length === 0}
-            <div class="channel-picker-empty">You haven't joined any channels yet. Join one in Telegram, then add it here.</div>
+            <div class="channel-picker-empty">No joined sources yet. Your direct messages, bot chats, groups, and channels appear here when Telegram can access them.</div>
         {:else if visible.length === 0}
-            <div class="channel-picker-empty">No channels match “{query.trim()}”.</div>
+            <div class="channel-picker-empty">No sources match “{query.trim()}”.</div>
         {:else}
-            {#each visible as source (source.channelId)}
-                {@const busy = adding === source.channelId}
+            {#each visible as source (sourceKey(source))}
+                {@const busy = adding === sourceKey(source)}
                 {@const inTDrive = isAdded(source)}
                 <button
                     class="channel-picker-row"
                     class:is-added={inTDrive}
                     type="button"
-                    disabled={adding !== null && !busy}
+                    disabled={!source.available || (adding !== null && !busy)}
                     aria-busy={busy}
-                    aria-label={inTDrive ? `Open ${source.title}, already added` : `Add ${source.title}`}
+                    aria-label={inTDrive ? `Open ${source.title}, already connected` : source.available ? `Connect ${source.title}` : `${source.title} is unavailable`}
                     onclick={() => void choose(source)}
                 >
                     <ChannelAvatar {source} {loadPhoto} />
@@ -183,7 +273,9 @@
                         {#if busy}
                             <span class="channel-picker-spinner"></span>
                         {:else if inTDrive}
-                            <CheckIcon size={14} strokeWidth={2.5} />Added
+                            <CheckIcon size={14} strokeWidth={2.5} />Connected
+                        {:else if !source.available}
+                            Unavailable
                         {:else}
                             <span class="channel-picker-plus"><PlusIcon size={14} strokeWidth={2.5} /></span>
                         {/if}
@@ -192,6 +284,10 @@
             {/each}
         {/if}
     </div>
+
+    {#if candidatesTruncated}
+        <p class="channel-picker-list-note">Telegram returned the first 1,000 chats from a folder. This search filters those results. The public channel field can check a public @username separately.</p>
+    {/if}
 
     {#snippet actions()}
         <button class="secondary-btn" type="button" disabled={adding !== null} onclick={close}>Cancel</button>
@@ -218,6 +314,67 @@
         font-size: var(--type-sm);
         line-height: 1.4;
     }
+
+    .channel-picker-public {
+        margin-top: var(--space-3);
+    }
+
+    .channel-picker-public > label {
+        display: block;
+        margin-bottom: var(--space-1);
+        color: var(--text-main);
+        font-size: var(--type-sm);
+        font-weight: var(--weight-semibold);
+    }
+
+    .channel-picker-public-row {
+        display: grid;
+        grid-template-columns: minmax(0, 1fr) auto;
+        gap: var(--space-2);
+    }
+
+    .channel-picker-public-field {
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
+        min-width: 0;
+        height: 44px;
+        padding: 0 var(--space-3);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: var(--bg-dark);
+        color: var(--text-muted);
+    }
+
+    .channel-picker-public-field:focus-within { border-color: var(--accent); box-shadow: var(--focus-ring); }
+    .channel-picker-public-field.has-error { border-color: var(--danger); }
+    .channel-picker-public-field input { min-width: 0; width: 100%; height: 100%; margin: 0; padding: 0; border: 0; border-radius: 0; outline: 0; box-shadow: none; background: transparent; color: var(--text-main); font: inherit; font-size: var(--type-base); }
+    .channel-picker-public-field input::placeholder { color: var(--text-muted); }
+    .channel-picker-check { min-height: 44px; padding: 0 var(--space-3); white-space: nowrap; font-size: var(--type-sm); }
+    .channel-picker-check:disabled { color: var(--text-muted); cursor: default; opacity: 0.8; }
+    .channel-picker-check:hover:disabled { background: transparent; }
+    .channel-picker-check:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+    .channel-picker-check:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    .channel-picker-public-help { margin: var(--space-2) 0 0; color: var(--text-muted); font-size: var(--type-xs); line-height: 1.4; }
+
+    .channel-picker-public-result {
+        display: flex;
+        width: 100%;
+        min-height: 52px;
+        align-items: center;
+        gap: var(--space-3);
+        margin-top: var(--space-2);
+        padding: var(--space-2);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-md);
+        background: transparent;
+        color: var(--text-main);
+        font: inherit;
+        text-align: left;
+        cursor: pointer;
+    }
+    .channel-picker-public-result:hover:not(:disabled) { background: var(--bg-panel); }
+    .channel-picker-public-result:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
     .channel-picker-list {
         display: flex;
@@ -339,6 +496,13 @@
         text-wrap: pretty;
     }
 
+    .channel-picker-list-note {
+        margin: calc(-1 * var(--space-2)) var(--space-2) var(--space-3);
+        color: var(--text-muted);
+        font-size: var(--type-xs);
+        line-height: 1.4;
+    }
+
     @keyframes channel-picker-spin {
         to { transform: rotate(360deg); }
     }
@@ -352,6 +516,8 @@
     }
 
     :global(html.mobile) .channel-picker-search input { font-size: 16px; }
+    :global(html.mobile) .channel-picker-public-row { grid-template-columns: minmax(0, 1fr); }
+    :global(html.mobile) .channel-picker-check { width: 100%; }
     :global(html.mobile) .channel-picker-row { min-height: 60px; }
 
     @media (prefers-reduced-motion: reduce) {

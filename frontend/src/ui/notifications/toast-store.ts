@@ -27,6 +27,8 @@ export interface ToastItem {
     paused: boolean;
     remainingMs?: number;
     action?: ToastAction;
+    /** Called once when this entry leaves the visible stack for any reason. */
+    onRemoved?: () => void;
 }
 
 export const toasts = writable<ToastItem[]>([]);

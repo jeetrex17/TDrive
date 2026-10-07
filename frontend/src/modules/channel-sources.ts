@@ -1,7 +1,5 @@
-// Telegram channels the user has added to TDrive: the sidebar list, which one
-// the main area shows, adding and removing them, and handing a post to the
-// player. A channel is read-only and separate from drives; showing one never
-// changes the active drive.
+// Telegram chats and channels added as read-only media sources. Browsing one
+// never changes the active TDrive drive or imports its messages.
 
 import { get } from 'svelte/store';
 import {
@@ -18,7 +16,7 @@ import {
     channelSources,
     closeChannel,
     EMPTY_CHANNEL_SOURCES,
-    openChannelId,
+    openChannelKey,
 } from '../ui/channels/channel-store';
 import {
     channelTelegramUrl,
@@ -29,50 +27,106 @@ import {
     type ChannelMediaItem,
     type ChannelPageMemory,
     type ChannelSource,
+    sourceKey,
 } from '../ui/channels/channel-model';
 import { showContextMenu, type ContextMenuItem } from '../ui/menus/context-menu-store';
+import { pushHistoryEvent } from './notif-bell';
 import { splitNameAndExt } from '../utils';
 import { exitPhotos } from './gallery';
-import { notify, notifyAppError } from './notifications';
+import { dismissNotification, notify, notifyAppError } from './notifications';
 import { closeTrash } from './trash/controller';
 
 let loadVersion = 0;
-// One request per channel for the session. A failure is forgotten, so the
-// next time the avatar is shown it tries again.
-const photos = new Map<number, Promise<string>>();
+let activationVersion = 0;
+let sourcesActive = false;
+let allConnectedSources: readonly ChannelSource[] = [];
+interface PendingRemoval {
+    source: ChannelSource;
+    wasOpen: boolean;
+    toastId: string;
+    activation: number;
+}
+const pendingRemovals = new Map<string, PendingRemoval>();
+const committingRemovals = new Map<string, Promise<void>>();
+
+function peerKey(source: ChannelSource): string {
+    return `${source.accountId}:${source.peerKind}:${source.peerId}`;
+}
+
+function visibleSources(): readonly ChannelSource[] {
+    return allConnectedSources.filter((source) => {
+        const key = peerKey(source);
+        return !pendingRemovals.has(key) && !committingRemovals.has(key);
+    });
+}
+
+function publishSources(): void {
+    channelSources.update((current) => ({ ...current, sources: visibleSources() }));
+}
+// Profile photos are base64 data URLs, so their number must stay bounded even
+// when a picker exposes a large Telegram dialog list. A failure is forgotten,
+// letting a later visible avatar retry.
+const photos = new Map<string, Promise<string>>();
+const MAX_PHOTO_CACHE_ENTRIES = 64;
+const MAX_RECENT_SOURCE_PAGES = 12;
 const firstPages = new Map<string, readonly ChannelMediaItem[]>();
 
-const pageKey = (source: ChannelSource) => `${source.accountId}:${source.channelId}:${source.generation}`;
+const pageKey = sourceKey;
 
-/** A channel opened before shows its last first page at once while the fresh one loads. */
+/** Show a source's recent first page while its fresh page loads. */
 export const recentChannelPages: ChannelPageMemory = {
-    get: (source) => firstPages.get(pageKey(source)),
+    get: (source) => {
+        const key = pageKey(source);
+        const items = firstPages.get(key);
+        if (items) {
+            firstPages.delete(key);
+            firstPages.set(key, items);
+        }
+        return items;
+    },
     set: (source, items) => {
-        firstPages.set(pageKey(source), items);
+        const key = pageKey(source);
+        firstPages.delete(key);
+        firstPages.set(key, items);
+        while (firstPages.size > MAX_RECENT_SOURCE_PAGES) {
+            const oldest = firstPages.keys().next().value;
+            if (oldest === undefined) break;
+            firstPages.delete(oldest);
+        }
     },
 };
 
-/** Reloads the added channels. Only the newest call may publish its answer. */
+/** Reload connected sources. Only the newest call may publish its answer. */
 export async function loadChannelSources(): Promise<void> {
     const version = ++loadVersion;
     channelSources.update((current) => ({ status: 'loading', sources: current.sources }));
     try {
         const sources = (await listConnectedChannelSources()).filter((source) => source.connected);
         if (version !== loadVersion) return;
-        channelSources.set({ status: 'ready', sources });
-        const open = get(openChannelId);
-        if (open !== null && !sources.some((source) => source.channelId === open)) closeChannel();
+        allConnectedSources = sources;
+        channelSources.set({ status: 'ready', sources: visibleSources() });
+        const open = get(openChannelKey);
+        if (open !== null && !get(channelSources).sources.some((source) => sourceKey(source) === open)) closeChannel();
     } catch (error) {
         if (version !== loadVersion) return;
         channelSources.update((current) => ({ status: 'error', sources: current.sources, error }));
     }
 }
 
-/** Lives as long as the dashboard: channels belong to the signed-in account. */
+/** Source state lives as long as the signed-in dashboard. */
 export function activateChannelSources(): () => void {
+    activationVersion += 1;
+    sourcesActive = true;
     void loadChannelSources();
     return () => {
+        for (const [key, pending] of pendingRemovals) {
+            dismissNotification(pending.toastId);
+            if (pendingRemovals.has(key)) finishRemoval(key);
+        }
+        activationVersion += 1;
+        sourcesActive = false;
         loadVersion += 1;
+        allConnectedSources = [];
         photos.clear();
         firstPages.clear();
         closeChannel();
@@ -81,22 +135,32 @@ export function activateChannelSources(): () => void {
     };
 }
 
-/** Shows a channel in the main area, leaving Photos or the trash first. */
+/** Show a media source in the main area, leaving Photos or trash first. */
 export function showChannel(source: ChannelSource): void {
     if (state.virtualView === 'photos') exitPhotos();
     else if (state.virtualView === 'trash') closeTrash();
-    openChannelId.set(source.channelId);
+    openChannelKey.set(sourceKey(source));
 }
 
-/** A channel's profile photo as a data URL, or '' to show its initial. */
+/** A source's profile photo as a data URL, or '' to show its initial. */
 export function channelPhoto(source: ChannelSource): Promise<string> {
-    let photo = photos.get(source.channelId);
+    const key = sourceKey(source);
+    let photo = photos.get(key);
+    if (photo) {
+        photos.delete(key);
+        photos.set(key, photo);
+    }
     if (!photo) {
-        photo = loadChannelSourcePhoto(source.channelId).catch(() => {
-            photos.delete(source.channelId);
+        photo = loadChannelSourcePhoto(source).catch(() => {
+            photos.delete(key);
             return '';
         });
-        photos.set(source.channelId, photo);
+        while (photos.size >= MAX_PHOTO_CACHE_ENTRIES) {
+            const oldest = photos.keys().next().value;
+            if (oldest === undefined) break;
+            photos.delete(oldest);
+        }
+        photos.set(key, photo);
     }
     return photo;
 }
@@ -109,44 +173,78 @@ export function closeChannelPicker(): void {
     channelPickerOpen.set(false);
 }
 
-/** Adds a joined channel and opens it, which is what the user picked it for. */
+/** Connect a selected source and open it. */
 export async function addChannel(candidate: ChannelSource): Promise<void> {
-    const added = await connectChannelSource(candidate.channelId, candidate.accountId);
+    const key = peerKey(candidate);
+    const pending = pendingRemovals.get(key);
+    if (pending) {
+        undoRemoval(key);
+        showChannel(pending.source);
+        return;
+    }
+    await committingRemovals.get(key);
+    const added = await connectChannelSource(candidate);
     await loadChannelSources();
     showChannel(added);
 }
 
-/**
- * Removing only forgets the channel locally: the account stays joined and
- * nothing is deleted, so it is undone rather than confirmed.
- */
-export async function removeChannel(source: ChannelSource): Promise<void> {
-    const wasOpen = get(openChannelId) === source.channelId;
-    try {
-        await disconnectChannelSource(source.channelId, source.accountId, source.generation);
-    } catch (error) {
-        notifyAppError(error, { title: `Could not remove ${source.title}` });
-        return;
-    }
+/** Hide a source now and forget it locally only after its Undo toast is gone. */
+export function removeChannel(source: ChannelSource): void {
+    const key = peerKey(source);
+    if (pendingRemovals.has(key) || committingRemovals.has(key)) return;
+    if (!get(channelSources).sources.some((current) => sourceKey(current) === sourceKey(source))) return;
+    const wasOpen = get(openChannelKey) === sourceKey(source);
+    const pending: PendingRemoval = { source, wasOpen, toastId: '', activation: activationVersion };
+    pendingRemovals.set(key, pending);
     if (wasOpen) closeChannel();
-    await loadChannelSources();
-    notify({
+    publishSources();
+    pending.toastId = notify({
         level: 'info',
         title: `Removed ${source.title}`,
-        body: "You're still subscribed in Telegram.",
+        body: 'Nothing was removed from Telegram.',
+        history: false,
+        onRemoved: () => finishRemoval(key),
         action: {
             label: 'Undo',
-            run: async () => {
-                try {
-                    const restored = await connectChannelSource(source.channelId, source.accountId);
-                    await loadChannelSources();
-                    if (wasOpen) showChannel(restored);
-                } catch (error) {
-                    notifyAppError(error, { title: `Could not add ${source.title} back` });
-                }
-            },
+            run: () => undoRemoval(key),
         },
     });
+}
+
+function undoRemoval(key: string): void {
+    const pending = pendingRemovals.get(key);
+    if (!pending) return;
+    pendingRemovals.delete(key);
+    dismissNotification(pending.toastId);
+    publishSources();
+    if (pending.wasOpen) showChannel(pending.source);
+}
+
+function finishRemoval(key: string): void {
+    const pending = pendingRemovals.get(key);
+    if (!pending) return;
+    pendingRemovals.delete(key);
+    const { source, activation } = pending;
+    let failed = false;
+    const work = disconnectChannelSource(source).then(() => {
+        if (activation !== activationVersion) return;
+        allConnectedSources = allConnectedSources.filter((current) => peerKey(current) !== key);
+        pushHistoryEvent({ level: 'info', title: `Removed ${source.title}`, body: 'Nothing was removed from Telegram.', ts: Date.now() });
+    }).catch((error: unknown) => {
+        if (activation !== activationVersion) return;
+        failed = true;
+        notifyAppError(error, { title: `Could not remove ${source.title}` });
+    }).finally(() => {
+        committingRemovals.delete(key);
+        if (activation !== activationVersion) {
+            if (sourcesActive) void loadChannelSources();
+            return;
+        }
+        loadVersion += 1;
+        channelSources.set({ status: 'ready', sources: visibleSources() });
+        if (failed) void loadChannelSources();
+    });
+    committingRemovals.set(key, work);
 }
 
 export function openInTelegram(url: string): void {
@@ -162,7 +260,7 @@ export function showChannelActions(x: number, y: number, source: ChannelSource):
     showContextMenu(x, y, items);
 }
 
-/** A post's own menu: right-click on desktop, a long press on a phone. */
+/** A media item's menu: right-click on desktop, long-press on a phone. */
 export function showPostActions(
     x: number,
     y: number,
@@ -195,7 +293,7 @@ export async function openChannelPost(
         openInTelegram(item.telegramUrl);
         return;
     }
-    const open = (post: ChannelMediaItem) => openChannelMedia(source.channelId, post.msgId, source.accountId, source.generation);
+    const open = (post: ChannelMediaItem) => openChannelMedia(source, post.msgId);
     if (item.kind === 'audio') {
         const { activateFileViewerModal, openFileViewer } = await import('./modals/file-viewer');
         activateFileViewerModal();

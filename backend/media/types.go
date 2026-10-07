@@ -85,6 +85,7 @@ type LogicalFile struct {
 	Multipart         bool      `json:"multipart"`
 	Segments          []Segment `json:"segments"`
 	SourceKind        string    `json:"source_kind,omitempty"`
+	SourcePeerKind    string    `json:"source_peer_kind,omitempty"`
 	SourceAccountID   int64     `json:"source_account_id,omitempty"`
 	SourceGeneration  string    `json:"source_generation,omitempty"`
 }

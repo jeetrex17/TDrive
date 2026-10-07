@@ -3,8 +3,8 @@ import { flushSync, mount, tick, unmount } from 'svelte';
 import ChannelNav from './ChannelNav.svelte';
 import type { ChannelSource } from './channel-model';
 
-const source = (channelId: number, title: string): ChannelSource => ({
-    channelId, title, username: '', connected: true, protected: false, accountId: '7', generation: 'g',
+const source = (peerId: number, title: string): ChannelSource => ({
+    peerKind: 'channel', peerId, title, username: '', connected: true, protected: false, available: true, accountId: '7', generation: 'g',
 });
 const PHOTO = 'data:image/jpeg;base64,/9j/4AAQ';
 
@@ -36,14 +36,14 @@ describe('ChannelNav', () => {
             observe(): void { this.callback([{ isIntersecting: true } as IntersectionObserverEntry], this as unknown as IntersectionObserver); }
             disconnect(): void {}
         });
-        const loadPhoto = vi.fn(async (channel: ChannelSource) => (channel.channelId === 50 ? PHOTO : ''));
+        const loadPhoto = vi.fn(async (channel: ChannelSource) => (channel.peerId === 50 ? PHOTO : ''));
         host = document.createElement('div');
         document.body.append(host);
         app = mount(ChannelNav, {
             target: host,
             props: {
                 sources: { status: 'ready', sources: [source(50, 'Field Recordings'), source(51, 'Cinema Club')] },
-                activeId: 50, loadPhoto, onSelect: vi.fn(), onActions: vi.fn(), onAdd: vi.fn(), onRetry: vi.fn(),
+                activeKey: '7:channel:50:g', loadPhoto, onSelect: vi.fn(), onActions: vi.fn(), onAdd: vi.fn(), onRetry: vi.fn(),
             },
         });
         await settle();

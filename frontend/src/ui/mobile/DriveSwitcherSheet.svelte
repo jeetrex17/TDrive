@@ -14,7 +14,7 @@
     import DriveList from '../sidebar/DriveList.svelte';
     import { activeTab, driveSwitcherOpen, closeDriveSwitcher } from './mobile-shell-store';
     import ChannelNav from '../channels/ChannelNav.svelte';
-    import type { ChannelSource } from '../channels/channel-model';
+    import { sourceKey, type ChannelSource } from '../channels/channel-model';
     import { channelSources, openChannel } from '../channels/channel-store';
     import {
         channelPhoto,
@@ -239,7 +239,7 @@
         <div class="switcher-group">
             <ChannelNav
                 sources={$channelSources}
-                activeId={$openChannel?.channelId ?? null}
+                activeKey={$openChannel ? sourceKey($openChannel) : null}
                 loadPhoto={channelPhoto}
                 onSelect={openSourceChannel}
                 onActions={showChannelActions}

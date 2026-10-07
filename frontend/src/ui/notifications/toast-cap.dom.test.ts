@@ -23,12 +23,14 @@ afterEach(() => {
 
 describe('toast stack cap on mobile', () => {
     it('keeps at most two toasts, evicting the oldest', () => {
-        notify({ title: 'one' });
+        const onRemoved = vi.fn();
+        notify({ title: 'one', onRemoved });
         notify({ title: 'two' });
         notify({ title: 'three' });
 
         const list = get(toasts);
         expect(list).toHaveLength(2);
         expect(list.map((toast) => toast.title)).toEqual(['two', 'three']);
+        expect(onRemoved).toHaveBeenCalledOnce();
     });
 });

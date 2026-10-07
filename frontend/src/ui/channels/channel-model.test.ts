@@ -8,6 +8,8 @@ import {
     mediaMeta,
     mediaTitle,
     restrictionLabel,
+    sourceKey,
+    sourcePeerLabel,
     sortPosts,
     type ChannelMediaItem,
     type ChannelMediaPage,
@@ -15,7 +17,7 @@ import {
     type ChannelSource,
 } from './channel-model';
 
-const SOURCE: ChannelSource = { channelId: 44, title: 'Cinema', username: 'cinema', connected: true, protected: false, accountId: '7', generation: 'one' };
+const SOURCE: ChannelSource = { peerKind: 'channel', peerId: 44, title: 'Cinema', username: 'cinema', connected: true, protected: false, available: true, accountId: '7', generation: 'one' };
 
 function post(msgId: number, extra: Partial<ChannelMediaItem> = {}): ChannelMediaItem {
     return {
@@ -25,16 +27,23 @@ function post(msgId: number, extra: Partial<ChannelMediaItem> = {}): ChannelMedi
 }
 
 function page(items: ChannelMediaItem[], nextOffsetId = 0, extra: Partial<ChannelMediaPage> = {}): ChannelMediaPage {
-    return { channelId: 44, accountId: '7', generation: 'one', items, nextOffsetId, hasMore: nextOffsetId > 0, ...extra };
+    return { peerKind: 'channel', peerId: 44, accountId: '7', generation: 'one', items, nextOffsetId, hasMore: nextOffsetId > 0, ...extra };
 }
 
 describe('channel media pager', () => {
+    it('keeps sources distinct when peer ids overlap across types or accounts', () => {
+        expect(sourceKey(SOURCE)).toBe('7:channel:44:one');
+        expect(sourceKey({ ...SOURCE, peerKind: 'user' })).toBe('7:user:44:one');
+        expect(sourceKey({ ...SOURCE, accountId: '8' })).toBe('8:channel:44:one');
+        expect(sourcePeerLabel({ peerKind: 'self' })).toBe('Saved Messages');
+    });
+
     it('drops an answer for a channel that is no longer selected', async () => {
         let answer!: (value: ChannelMediaPage) => void;
         const pager = createChannelMediaPager(() => new Promise((resolve) => { answer = resolve; }));
         pager.select(SOURCE);
         const pending = pager.load();
-        pager.select({ ...SOURCE, channelId: 45, generation: 'two' });
+        pager.select({ ...SOURCE, peerId: 45, generation: 'two' });
         answer(page([post(1)]));
         await pending;
         expect(pager.snapshot()).toEqual({ status: 'idle' });
@@ -94,8 +103,8 @@ describe('channel video queue', () => {
         });
         expect(playlist.title).toBe('Videos in Cinema');
         expect(playlist.items.map((item) => [item.key, item.title])).toEqual([
-            ['channel:44:9', 'Dawn chorus'],
-            ['channel:44:6', 'Coastline'],
+            ['source:7:channel:44:one:9', 'Dawn chorus'],
+            ['source:7:channel:44:one:6', 'Coastline'],
         ]);
         expect(playlist.currentIndex).toBe(1);
         expect(target).toMatchObject({ id: 6, name: 'Telegram media 6.mp4', title: 'Coastline' });

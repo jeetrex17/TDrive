@@ -369,11 +369,11 @@ function classifyMessage(raw: string, source: AppErrorSource): ErrorPresentation
             retryable: false,
         };
     }
-    if (lower.includes('flood_wait') || lower.includes('too many requests')) {
+    if (lower.includes('flood_wait') || lower.includes('flood wait') || lower.includes('too many requests')) {
         return {
             kind: 'network',
             title: 'Try again shortly',
-            message: 'Telegram is temporarily limiting attempts. Wait a moment and try again.',
+            message: 'Telegram is temporarily limiting requests. Wait a moment and try again.',
             retryable: true,
         };
     }

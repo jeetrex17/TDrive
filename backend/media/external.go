@@ -6,6 +6,9 @@ import (
 	"fmt"
 	"path"
 	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
 
 	"TDrive/backend/tgclient"
 )
@@ -15,15 +18,22 @@ var (
 	ErrExternalReplaced   = errors.New("media: Telegram media changed during playback")
 )
 
+// Rechecking each 1 MiB block would multiply Telegram RPCs during playback.
+// A valid file reference can outlive a permission change, so cap how long
+// uncached reads may rely on the open check.
+const externalAccessCheckInterval = 30 * time.Second
+
 // ExternalMedia is a read-only Telegram document. It never enters the TDrive
 // projection or inherits the active drive's encryption and mutation paths.
 type ExternalMedia struct {
-	Peer       tgclient.InputPeer
-	Client     tgclient.Client
-	Message    tgclient.HistoryMessage
-	AccountID  int64
-	Generation string
-	Protected  bool
+	Peer        tgclient.InputPeer
+	Client      tgclient.Client
+	Message     tgclient.HistoryMessage
+	AccountID   int64
+	Generation  string
+	Protected   bool
+	ProbeAccess bool
+	Validate    func(context.Context) error
 }
 
 // ExternalName normalizes a Telegram document name for the existing player.
@@ -82,13 +92,27 @@ func (s *Service) OpenExternal(ctx context.Context, source ExternalMedia, publis
 	if ref.DocumentID != message.DocumentID || ref.Size != message.MediaSize || ref.AccessHash != message.DocumentAccessHash {
 		return OpenResult{}, ErrExternalReplaced
 	}
+	if source.ProbeAccess {
+		// A resolved public handle can identify a channel whose history or
+		// document bytes Telegram withholds from nonmembers. Fail at open.
+		var first [1]byte
+		if _, err := s.ranges.ReadDocumentRange(ctx, ref, 0, first[:]); err != nil {
+			return OpenResult{}, fmt.Errorf("media: public channel bytes unavailable: %w", err)
+		}
+	}
+	sourceKind := "channel"
+	if source.Peer.Kind != "" {
+		sourceKind = "telegram"
+	}
 	file := LogicalFile{
 		ChannelID: source.Peer.ChannelID, FileID: message.MsgID, Revision: 1,
 		Name: name, StoredSize: ref.Size, PlaintextSize: ref.Size,
 		Segments:   []Segment{{MsgID: message.MsgID, Size: ref.Size}},
-		SourceKind: "channel", SourceAccountID: source.AccountID, SourceGeneration: source.Generation,
+		SourceKind: sourceKind, SourcePeerKind: string(source.Peer.PeerKind()),
+		SourceAccountID: source.AccountID, SourceGeneration: source.Generation,
 	}
-	checked := &externalRangeClient{base: s.ranges, client: source.Client, peer: source.Peer, original: ref}
+	checked := &externalRangeClient{base: s.ranges, client: source.Client, peer: source.Peer, original: ref, validate: source.Validate}
+	checked.lastRemoteCheck.Store(time.Now().UnixNano())
 	session, err := newSession(file, []resolvedSegment{{size: ref.Size, ref: ref}}, checked, s.thumbs, s.thumbGen, SessionOptions{
 		Context: ctx, EnableVideoThumbnails: kind == StreamKindVideo,
 	})
@@ -107,38 +131,27 @@ func (s *Service) OpenExternal(ctx context.Context, source ExternalMedia, publis
 }
 
 type externalRangeClient struct {
-	base     tgclient.RangeClient
-	client   tgclient.Client
-	peer     tgclient.InputPeer
-	original tgclient.DocumentRef
+	base            tgclient.RangeClient
+	client          tgclient.Client
+	peer            tgclient.InputPeer
+	original        tgclient.DocumentRef
+	validate        func(context.Context) error
+	lastRemoteCheck atomic.Int64
+	remoteCheckOnce sync.Once
+	remoteCheckSlot chan struct{}
 }
 
 func (c *externalRangeClient) ResolveDocument(ctx context.Context, _ tgclient.InputPeer, msgID int64) (tgclient.DocumentRef, error) {
 	if msgID != c.original.MsgID {
 		return tgclient.DocumentRef{}, ErrExternalReplaced
 	}
-	// A failed lookup is returned as it is: a flood wait or a dropped
-	// connection is the reader's to retry, and calling it a restriction
-	// ended playback on a hiccup.
-	channel, err := c.client.GetBroadcastChannel(ctx, c.peer)
-	if errors.Is(err, tgclient.ErrChannelUnavailable) {
-		return tgclient.DocumentRef{}, ErrExternalRestricted
+	if c.validate != nil {
+		if err := c.validate(ctx); err != nil {
+			return tgclient.DocumentRef{}, err
+		}
 	}
-	if err != nil {
+	if err := c.checkRemote(ctx); err != nil {
 		return tgclient.DocumentRef{}, err
-	}
-	if channel.Protected || channel.Restricted {
-		return tgclient.DocumentRef{}, ErrExternalRestricted
-	}
-	message, err := c.client.GetChannelMessage(ctx, c.peer, msgID)
-	if err != nil {
-		return tgclient.DocumentRef{}, err
-	}
-	if message.NoForwards || message.TTLSeconds > 0 || message.Paid || message.Restricted {
-		return tgclient.DocumentRef{}, ErrExternalRestricted
-	}
-	if message.DocumentID != c.original.DocumentID || message.MediaSize != c.original.Size || message.DocumentAccessHash != c.original.AccessHash {
-		return tgclient.DocumentRef{}, ErrExternalReplaced
 	}
 	ref, err := c.base.ResolveDocument(ctx, c.peer, msgID)
 	if err != nil {
@@ -150,7 +163,67 @@ func (c *externalRangeClient) ResolveDocument(ctx context.Context, _ tgclient.In
 	return ref, nil
 }
 
+// checkRemote is also called on a still-valid file reference after the
+// interval, so permission changes do not wait for FILE_REFERENCE_EXPIRED.
+func (c *externalRangeClient) checkRemote(ctx context.Context) error {
+	// A failed lookup is returned as it is: a flood wait or a dropped
+	// connection is the reader's to retry, not a false restriction.
+	channel, err := c.client.GetMediaSourcePeer(ctx, c.peer)
+	if errors.Is(err, tgclient.ErrChannelUnavailable) {
+		return ErrExternalRestricted
+	}
+	if err != nil {
+		return err
+	}
+	if channel.Protected || channel.Restricted {
+		return ErrExternalRestricted
+	}
+	message, err := c.client.GetChannelMessage(ctx, c.peer, c.original.MsgID)
+	if err != nil {
+		return err
+	}
+	if message.NoForwards || message.TTLSeconds > 0 || message.Paid || message.Restricted {
+		return ErrExternalRestricted
+	}
+	if message.DocumentID != c.original.DocumentID || message.MediaSize != c.original.Size || message.DocumentAccessHash != c.original.AccessHash {
+		return ErrExternalReplaced
+	}
+	c.lastRemoteCheck.Store(time.Now().UnixNano())
+	return nil
+}
+
 func (c *externalRangeClient) ReadDocumentRange(ctx context.Context, ref tgclient.DocumentRef, offset int64, dst []byte) (int, error) {
+	if c.validate != nil {
+		if err := c.validate(ctx); err != nil {
+			return 0, err
+		}
+	}
+	if time.Since(time.Unix(0, c.lastRemoteCheck.Load())) >= externalAccessCheckInterval {
+		// A canceled seek must not share its cancellation with a foreground
+		// read. Waiters retry the check with their own context if it fails.
+		c.remoteCheckOnce.Do(func() {
+			c.remoteCheckSlot = make(chan struct{}, 1)
+			c.remoteCheckSlot <- struct{}{}
+		})
+		select {
+		case <-ctx.Done():
+			return 0, ctx.Err()
+		case <-c.remoteCheckSlot:
+		}
+		err := func() error {
+			defer func() { c.remoteCheckSlot <- struct{}{} }()
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			if time.Since(time.Unix(0, c.lastRemoteCheck.Load())) >= externalAccessCheckInterval {
+				return c.checkRemote(ctx)
+			}
+			return nil
+		}()
+		if err != nil {
+			return 0, err
+		}
+	}
 	return c.base.ReadDocumentRange(ctx, ref, offset, dst)
 }
 
@@ -162,8 +235,16 @@ func (s *Service) CloseExternalSessions(accountID, channelID int64) []string {
 	})
 }
 
+func (s *Service) CloseSourceSessions(accountID int64, kind string, peerID int64) []string {
+	return s.closeExternalSessions(func(file LogicalFile) bool {
+		return file.SourceKind != "" && file.SourceAccountID == accountID &&
+			(file.SourcePeerKind == kind || (kind == string(tgclient.PeerChannel) && file.SourcePeerKind == "")) &&
+			file.ChannelID == peerID
+	})
+}
+
 func (s *Service) CloseAllExternalSessions() []string {
-	return s.closeExternalSessions(func(file LogicalFile) bool { return file.SourceKind == "channel" })
+	return s.closeExternalSessions(func(file LogicalFile) bool { return file.SourceKind != "" })
 }
 
 func (s *Service) closeExternalSessions(match func(LogicalFile) bool) []string {

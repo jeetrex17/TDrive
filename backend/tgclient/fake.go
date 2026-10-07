@@ -26,6 +26,7 @@ type Fake struct {
 	nextChannelID  int64
 	history        []HistoryMessage // ordered by msg_id ascending
 	fileBodies     map[int64][]byte
+	sourceBodies   map[sourceBodyKey][]byte
 	sentControls   []SentControl
 	sentFiles      []SentFile
 	deletedBatch   [][]int64
@@ -39,6 +40,8 @@ type Fake struct {
 	channels        map[int64]fakeChannel
 	ownedBroadcast  []OwnedBroadcastChannel
 	joinedBroadcast []JoinedBroadcastChannel
+	sourcePeers     []SourcePeer
+	publicChannels  map[string]SourcePeer
 	channelPhotos   map[int64][]byte // keyed by photo ID
 	photoDownloads  int
 	dialogWalks     int
@@ -66,6 +69,11 @@ type fakeEvent struct {
 	pts     int64
 	msg     *HistoryMessage
 	deleted []int64
+}
+
+type sourceBodyKey struct {
+	kind          PeerKind
+	peerID, msgID int64
 }
 
 type SentControl struct {
@@ -112,17 +120,19 @@ var (
 
 func NewFake(selfID int64) *Fake {
 	return &Fake{
-		self:          selfID,
-		nextMsgID:     100,
-		nextChannelID: 10000,
-		pts:           1,
-		fileBodies:    make(map[int64][]byte),
-		controlSends:  make(map[sendDedupeKey]int64),
-		fileSends:     make(map[sendDedupeKey]SendFileResult),
-		channels:      make(map[int64]fakeChannel),
-		invites:       make(map[string]InviteInfo),
-		joinRequests:  make(map[int64][]JoinRequest),
-		users:         make(map[int64]UserProfile),
+		self:           selfID,
+		nextMsgID:      100,
+		nextChannelID:  10000,
+		pts:            1,
+		fileBodies:     make(map[int64][]byte),
+		sourceBodies:   make(map[sourceBodyKey][]byte),
+		publicChannels: make(map[string]SourcePeer),
+		controlSends:   make(map[sendDedupeKey]int64),
+		fileSends:      make(map[sendDedupeKey]SendFileResult),
+		channels:       make(map[int64]fakeChannel),
+		invites:        make(map[string]InviteInfo),
+		joinRequests:   make(map[int64][]JoinRequest),
+		users:          make(map[int64]UserProfile),
 	}
 }
 
@@ -175,6 +185,12 @@ func (f *Fake) SeedDocumentBody(msgID int64, body []byte) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.fileBodies[msgID] = bytes.Clone(body)
+}
+
+func (f *Fake) SeedSourceDocumentBody(kind PeerKind, peerID, msgID int64, body []byte) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sourceBodies[sourceBodyKey{kind, peerID, msgID}] = bytes.Clone(body)
 }
 
 // InjectFloodWaits causes the next n sends (control or file) to fail with
@@ -312,6 +328,20 @@ func (f *Fake) SeedJoinedBroadcastChannels(channels ...JoinedBroadcastChannel) {
 	for _, channel := range channels {
 		f.channels[channel.ID] = fakeChannel{Peer: InputPeer{ChannelID: channel.ID, AccessHash: channel.AccessHash}, Title: channel.Title}
 	}
+}
+
+func (f *Fake) SeedMediaSourcePeers(peers ...SourcePeer) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sourcePeers = append([]SourcePeer(nil), peers...)
+}
+
+func (f *Fake) SeedPublicChannel(username string, peer SourcePeer) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	peer.Kind = PeerChannel
+	peer.Username = username
+	f.publicChannels[strings.ToLower(username)] = peer
 }
 
 func (f *Fake) SeedInvite(hash string, info InviteInfo) {
@@ -565,6 +595,9 @@ func (f *Fake) GetHistory(ctx context.Context, peer InputPeer, minID, offsetID i
 	// offsetID pages older than a prior page.
 	for i := len(f.history) - 1; i >= 0; i-- {
 		m := f.history[i]
+		if peer.Kind != "" && m.PeerKind != peer.PeerKind() {
+			continue
+		}
 		if m.ChannelID != 0 && m.ChannelID != peer.ChannelID {
 			continue
 		}
@@ -654,6 +687,9 @@ func (f *Fake) ReadDocumentRange(ctx context.Context, ref DocumentRef, offset in
 
 	f.mu.Lock()
 	body, ok := f.fileBodies[ref.MsgID]
+	if ref.Peer.Kind != "" {
+		body, ok = f.sourceBodies[sourceBodyKey{ref.Peer.PeerKind(), ref.Peer.ChannelID, ref.MsgID}]
+	}
 	f.mu.Unlock()
 	if !ok {
 		return 0, ErrMessageNotFound
@@ -894,6 +930,47 @@ func (f *Fake) GetBroadcastChannel(_ context.Context, peer InputPeer) (JoinedBro
 	return JoinedBroadcastChannel{}, ErrChannelUnavailable
 }
 
+func (f *Fake) ListMediaSourcePeers(context.Context) ([]SourcePeer, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.dialogWalks++
+	return append([]SourcePeer(nil), f.sourcePeers...), nil
+}
+
+func (f *Fake) GetMediaSourcePeer(_ context.Context, peer InputPeer) (SourcePeer, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.channelLookups++
+	for _, source := range f.sourcePeers {
+		if source.ID == peer.ChannelID && source.Kind == peer.PeerKind() &&
+			(source.AccessHash == peer.AccessHash || source.Kind == PeerGroup) {
+			return source, nil
+		}
+	}
+	for _, source := range f.joinedBroadcast {
+		if source.ID == peer.ChannelID && peer.PeerKind() == PeerChannel && source.AccessHash == peer.AccessHash {
+			source.Kind = PeerChannel
+			return source, nil
+		}
+	}
+	for _, source := range f.publicChannels {
+		if source.ID == peer.ChannelID && source.Kind == peer.PeerKind() && source.AccessHash == peer.AccessHash {
+			return source, nil
+		}
+	}
+	return SourcePeer{}, ErrChannelUnavailable
+}
+
+func (f *Fake) ResolvePublicChannel(_ context.Context, username string) (SourcePeer, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	peer, ok := f.publicChannels[strings.ToLower(username)]
+	if !ok {
+		return SourcePeer{}, ErrChannelUnavailable
+	}
+	return peer, nil
+}
+
 // TelegramReads counts dialog walks and single-channel lookups, so tests can
 // hold paging to its budget.
 func (f *Fake) TelegramReads() (dialogWalks, channelLookups int) {
@@ -917,7 +994,8 @@ func (f *Fake) GetChannelMessage(_ context.Context, peer InputPeer, msgID int64)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, message := range f.history {
-		if message.MsgID == msgID && (message.ChannelID == 0 || message.ChannelID == peer.ChannelID) {
+		if message.MsgID == msgID && (message.ChannelID == 0 || message.ChannelID == peer.ChannelID) &&
+			(peer.Kind == "" || message.PeerKind == peer.PeerKind()) {
 			return message, nil
 		}
 	}
