@@ -93,8 +93,8 @@ export function NativeMediaCommand(token: string, command: string[] | null): $Ca
  * OpenChannelMedia publishes an account- and source-scoped capability. The
  * lifecycle gate serializes its final publication with terminal logout.
  */
-export function OpenChannelMedia(channelID: number, msgID: number, expectedAccountID: number, expectedGeneration: string): $CancellablePromise<media$0.OpenResult> {
-    return $Call.ByID(1588526659, channelID, msgID, expectedAccountID, expectedGeneration);
+export function OpenChannelMedia(peerKind: string, peerID: number, msgID: number, expectedAccountID: number, expectedGeneration: string): $CancellablePromise<media$0.OpenResult> {
+    return $Call.ByID(1588526659, peerKind, peerID, msgID, expectedAccountID, expectedGeneration);
 }
 
 /**
