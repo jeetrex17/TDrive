@@ -35,11 +35,11 @@ export function ApproveJoinRequest(channelID: number, userID: number): $Cancella
 }
 
 /**
- * ChannelSourcePhoto returns a channel's small profile photo as base64, or ""
- * when the channel has none.
+ * ChannelSourcePhoto returns a Telegram source's small profile photo as base64,
+ * or "" when the peer has none.
  */
-export function ChannelSourcePhoto(channelID: number): $CancellablePromise<string> {
-    return $Call.ByID(4072411592, channelID);
+export function ChannelSourcePhoto(peerKind: string, peerID: number, expectedAccountID: number, expectedGeneration: string): $CancellablePromise<string> {
+    return $Call.ByID(4072411592, peerKind, peerID, expectedAccountID, expectedGeneration);
 }
 
 /**
@@ -51,8 +51,8 @@ export function CheckPendingJoin(inviteHash: string): $CancellablePromise<$model
     return $Call.ByID(1157529205, inviteHash);
 }
 
-export function ConnectChannelSource(channelID: number, expectedAccountID: number): $CancellablePromise<channelsource$0.SourceInfo> {
-    return $Call.ByID(1204296522, channelID, expectedAccountID);
+export function ConnectChannelSource(peerKind: string, peerID: number, username: string, expectedAccountID: number): $CancellablePromise<channelsource$0.SourceInfo> {
+    return $Call.ByID(1204296522, peerKind, peerID, username, expectedAccountID);
 }
 
 export function CreatePersonalDrive(): $CancellablePromise<void> {
@@ -69,8 +69,8 @@ export function CreateSharedDrive(title: string, requireApproval: boolean): $Can
     return $Call.ByID(1236363253, title, requireApproval);
 }
 
-export function DisconnectChannelSource(channelID: number, expectedAccountID: number, expectedGeneration: string): $CancellablePromise<void> {
-    return $Call.ByID(4108487598, channelID, expectedAccountID, expectedGeneration);
+export function DisconnectChannelSource(peerKind: string, peerID: number, expectedAccountID: number, expectedGeneration: string): $CancellablePromise<void> {
+    return $Call.ByID(4108487598, peerKind, peerID, expectedAccountID, expectedGeneration);
 }
 
 /**
@@ -117,13 +117,12 @@ export function LeaveSharedDrive(channelID: number): $CancellablePromise<void> {
     return $Call.ByID(1505555140, channelID);
 }
 
-export function ListChannelMedia(channelID: number, offsetID: number, limit: number, search: string, kind: string): $CancellablePromise<channelsource$0.MediaPage> {
-    return $Call.ByID(3045371403, channelID, offsetID, limit, search, kind);
+export function ListChannelMedia(peerKind: string, peerID: number, offsetID: number, limit: number, search: string, kind: string): $CancellablePromise<channelsource$0.MediaPage> {
+    return $Call.ByID(3045371403, peerKind, peerID, offsetID, limit, search, kind);
 }
 
 /**
- * ListChannelSourceCandidates includes joined broadcast channels in primary
- * and archived Telegram dialogs. This does not create TDrive drives.
+ * ListChannelSourceCandidates includes readable primary and archived dialogs.
  */
 export function ListChannelSourceCandidates(): $CancellablePromise<channelsource$0.SourceInfo[] | null> {
     return $Call.ByID(1986335738);
@@ -173,6 +172,10 @@ export function RejectJoinRequest(channelID: number, userID: number): $Cancellab
  */
 export function RemovePendingJoin(inviteHash: string): $CancellablePromise<void> {
     return $Call.ByID(4211177777, inviteHash);
+}
+
+export function ResolvePublicChannelSource(input: string): $CancellablePromise<channelsource$0.SourceInfo> {
+    return $Call.ByID(1743397531, input);
 }
 
 export function SelectPersonalDrive(channelID: string): $CancellablePromise<void> {

@@ -56,10 +56,11 @@ func TestChannelMediaLogoutRevokesAndRejectsInFlightOpen(t *testing.T) {
 	}
 	fake := tgclient.NewFake(8080)
 	fake.SeedJoinedBroadcastChannels(tgclient.JoinedBroadcastChannel{ID: 7331, AccessHash: 77, Title: "Film club"})
-	fake.SeedHistory(tgclient.HistoryMessage{ChannelID: 7331, MsgID: 42, HasMedia: true,
+	fake.SeedMediaSourcePeers(tgclient.SourcePeer{Kind: tgclient.PeerChannel, ID: 7331, AccessHash: 77, Title: "Film club"})
+	fake.SeedHistory(tgclient.HistoryMessage{PeerKind: tgclient.PeerChannel, ChannelID: 7331, MsgID: 42, HasMedia: true,
 		DocumentID: 4343, DocumentAccessHash: 98, DocumentName: "clip.mp4",
 		MimeType: "video/mp4", MediaSize: 128})
-	fake.SeedDocumentBody(42, make([]byte, 128))
+	fake.SeedSourceDocumentBody(tgclient.PeerChannel, 7331, 42, make([]byte, 128))
 	client := &stalledChannelResolve{Fake: fake, entered: make(chan struct{}, 1), release: make(chan struct{})}
 	engine, err := core.New(t.Context(), core.Config{TG: client, SkipDBInit: true,
 		Connect: func() (*telegram.Client, error) { return nil, nil }})
@@ -69,18 +70,18 @@ func TestChannelMediaLogoutRevokesAndRejectsInFlightOpen(t *testing.T) {
 	t.Cleanup(engine.Close)
 	app := &App{ctx: t.Context(), engine: engine}
 	app.initServices("dev")
-	connected, err := app.drives.ConnectChannelSource(7331, 8080)
+	connected, err := app.drives.ConnectChannelSource("channel", 7331, "", 8080)
 	if err != nil {
 		t.Fatal(err)
 	}
-	opened, err := app.media.OpenChannelMedia(7331, 42, connected.AccountID, connected.Generation)
+	opened, err := app.media.OpenChannelMedia("channel", 7331, 42, connected.AccountID, connected.Generation)
 	if err != nil {
 		t.Fatal(err)
 	}
 	client.stall.Store(true)
 	openDone := make(chan error, 1)
 	go func() {
-		_, err := app.media.OpenChannelMedia(7331, 42, connected.AccountID, connected.Generation)
+		_, err := app.media.OpenChannelMedia("channel", 7331, 42, connected.AccountID, connected.Generation)
 		openDone <- err
 	}()
 	select {

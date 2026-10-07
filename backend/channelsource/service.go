@@ -1,5 +1,5 @@
-// Package channelsource lists and streams media in joined Telegram broadcast
-// channels without ingesting their messages into TDrive's drive projection.
+// Package channelsource lists and streams readable Telegram chat and channel
+// media without ingesting messages into TDrive's drive projection.
 package channelsource
 
 import (
@@ -21,20 +21,23 @@ import (
 )
 
 var (
-	ErrNotConnected = errors.New("channel source is not connected")
-	ErrUnavailable  = errors.New("channel is no longer available to this Telegram account")
-	ErrInvalidPage  = errors.New("invalid channel media page request")
+	ErrNotConnected = errors.New("Telegram source is not connected")
+	ErrUnavailable  = errors.New("Telegram source is no longer available to this account")
+	ErrInvalidPage  = errors.New("invalid Telegram media page request")
 )
 
 type SourceInfo struct {
-	ChannelID  int64  `json:"channel_id"`
-	Title      string `json:"title"`
-	Username   string `json:"username,omitempty"`
-	Connected  bool   `json:"connected"`
-	Protected  bool   `json:"protected"`
-	Available  bool   `json:"available"`
-	AccountID  int64  `json:"account_id"`
-	Generation string `json:"generation,omitempty"`
+	PeerKind            string `json:"peer_kind"`
+	PeerID              int64  `json:"peer_id"`
+	ChannelID           int64  `json:"channel_id"`
+	Title               string `json:"title"`
+	Username            string `json:"username,omitempty"`
+	Connected           bool   `json:"connected"`
+	Protected           bool   `json:"protected"`
+	Available           bool   `json:"available"`
+	AccountID           int64  `json:"account_id"`
+	Generation          string `json:"generation,omitempty"`
+	CandidatesTruncated bool   `json:"candidates_truncated,omitempty"`
 
 	accessHash int64 // the stored peer hash, for lookups; never leaves the backend
 }
@@ -54,6 +57,8 @@ type MediaItem struct {
 }
 
 type MediaPage struct {
+	PeerKind     string      `json:"peer_kind"`
+	PeerID       int64       `json:"peer_id"`
 	ChannelID    int64       `json:"channel_id"`
 	AccountID    int64       `json:"account_id"`
 	Generation   string      `json:"generation"`
@@ -115,6 +120,9 @@ func NewService(db *sql.DB, tg tgclient.Client, mediaService *media.Service, sel
 		return nil, fmt.Errorf("channel source: create local metadata: %w", err)
 	}
 	if err := addPhotoColumns(db); err != nil {
+		return nil, err
+	}
+	if err := migrateMediaSources(db); err != nil {
 		return nil, err
 	}
 	return &Service{db: db, tg: tg, media: mediaService, self: self, retry: tgclient.FloodWaitRetryPolicy{
@@ -432,6 +440,15 @@ func (s *Service) lookup(ctx context.Context, accountID int64, peer tgclient.Inp
 }
 
 func telegramURL(channel tgclient.JoinedBroadcastChannel, msgID int64) string {
+	if channel.Kind == tgclient.PeerUser || channel.Kind == tgclient.PeerBot {
+		if username := strings.TrimPrefix(channel.Username, "@"); username != "" {
+			return "https://t.me/" + url.PathEscape(username)
+		}
+		return ""
+	}
+	if channel.Kind != "" && channel.Kind != tgclient.PeerChannel && channel.Kind != tgclient.PeerSupergroup {
+		return ""
+	}
 	if username := strings.TrimPrefix(channel.Username, "@"); username != "" {
 		return "https://t.me/" + url.PathEscape(username) + "/" + fmt.Sprint(msgID)
 	}
