@@ -362,6 +362,7 @@
     animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
     cursor: default;
 }
+.toast-with-action { grid-template-columns: 22px minmax(0, 1fr) auto 22px; }
 .toast:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .toast-icon {
@@ -405,12 +406,13 @@
     overflow: hidden;
 }
 
-/* Sits under the copy as a text button: a filled control here would compete
-   with whatever the toast is reporting. */
+/* The action sits beside the copy in every toast. Its compact text treatment
+   keeps the message first while the hit area remains usable on phones. */
 .toast-action {
-    align-self: flex-start;
-    margin-top: 3px;
-    padding: 0;
+    align-self: center;
+    justify-self: end;
+    min-width: 48px;
+    padding: 0 4px;
     background: none;
     border: none;
     font: inherit;
@@ -418,6 +420,7 @@
     font-weight: 600;
     color: var(--accent);
     cursor: pointer;
+    white-space: nowrap;
 }
 .toast-interactive-control {
     /* Keep the compact visual language while making the button box meet the
@@ -435,7 +438,7 @@
 
 .toast-close {
     width: 48px; height: 48px;
-    margin-inline: -13px;
+    margin-inline: -11px -15px;
     display: inline-flex; align-items: center; justify-content: center;
     background: transparent;
     border: none;
