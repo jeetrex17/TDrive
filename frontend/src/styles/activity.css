@@ -438,7 +438,7 @@
 
 .toast-close {
     width: 48px; height: 48px;
-    margin-inline: -11px -15px;
+    margin-inline: -7px -15px;
     display: inline-flex; align-items: center; justify-content: center;
     background: transparent;
     border: none;
