@@ -1,7 +1,7 @@
 import { bootTDrive, expect, resolves, test } from './wails-mock';
 
 for (const platform of ['desktop', 'android', 'ios']) {
-    test(`country picker submits an international number on ${platform}`, async ({ page }) => {
+    test(`country picker submits an international number in the ${platform} browser preview`, async ({ page }) => {
         if (platform !== 'desktop') {
             await page.setViewportSize({ width: 390, height: 844 });
             await page.addInitScript((mode) => history.replaceState(null, '', `/?mobile=${mode}`), platform);
@@ -22,7 +22,7 @@ for (const platform of ['desktop', 'android', 'ios']) {
     });
 }
 
-test('country search handles keyboard selection, international paste, and mobile Back', async ({ page }) => {
+test('mobile browser preview handles keyboard selection, international paste, and the Back bridge', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 700 });
     await page.addInitScript(() => history.replaceState(null, '', '/?mobile=android'));
     const mock = await bootTDrive(page, { CheckLoginStatus: resolves(false), LoginPhoneNumber: resolves(null) });

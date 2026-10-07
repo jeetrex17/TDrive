@@ -5,11 +5,7 @@ import { closeTopSheet } from '../modals/sheet-stack';
 
 vi.mock('../../api', () => ({ isMobilePlatform: () => true }));
 
-Object.defineProperty(HTMLElement.prototype, 'offsetParent', {
-    configurable: true,
-    get() { return this.parentElement; },
-});
-
+let offsetParentDescriptor: PropertyDescriptor | undefined;
 let host: HTMLFormElement;
 let app: Record<string, unknown>;
 const onSelect = vi.fn();
@@ -43,6 +39,12 @@ function choices(): HTMLButtonElement[] {
 }
 
 beforeEach(() => {
+    // happy-dom has no layout; make the focus helper's visibility check usable.
+    offsetParentDescriptor = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetParent');
+    Object.defineProperty(HTMLElement.prototype, 'offsetParent', {
+        configurable: true,
+        get() { return this.parentElement; },
+    });
     onSelect.mockReset();
     host = document.createElement('form');
     document.body.appendChild(host);
@@ -51,8 +53,16 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-    await unmount(app);
-    host.remove();
+    try {
+        await unmount(app);
+    } finally {
+        host.remove();
+        if (offsetParentDescriptor) {
+            Object.defineProperty(HTMLElement.prototype, 'offsetParent', offsetParentDescriptor);
+        } else {
+            Reflect.deleteProperty(HTMLElement.prototype, 'offsetParent');
+        }
+    }
 });
 
 describe('country code picker', () => {
@@ -100,7 +110,7 @@ describe('country code picker', () => {
         expect(submit).not.toHaveBeenCalled();
     });
 
-    it('dismisses on Android Back without changing the selection and resets search on reopen', async () => {
+    it('dismisses through the Back-handler stack without changing selection and resets search', async () => {
         await open();
         await search('Canada');
         expect(closeTopSheet()).toBe(true);
