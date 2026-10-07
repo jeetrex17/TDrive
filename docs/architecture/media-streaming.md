@@ -51,6 +51,12 @@ listed. Sources are sorted by title and peer kind. TDrive drive channels are
 excluded. Secret chats use Telegram's separate encrypted protocol and are not
 available through MTProto history.
 
+The picker keeps its latest peer metadata in a bounded, account-scoped cache.
+Connecting a listed chat checks that single peer's current access before saving
+it, avoiding another full dialog scan. Unconnected avatars use the same cached
+metadata; when it is unavailable, the UI shows an initial instead of scanning
+all dialogs for a picture.
+
 A public broadcast channel can also be resolved by `@username` or a `t.me`
 username or post link. [`contacts.resolveUsername`](https://core.telegram.org/method/contacts.resolveUsername)
 supplies the channel ID and access hash. Connection resolves the name again

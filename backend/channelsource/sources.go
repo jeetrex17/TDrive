@@ -16,6 +16,10 @@ import (
 )
 
 var ErrInvalidPublicLink = errors.New("enter a public channel @username or t.me link")
+var ErrPublicChannelUnavailable = errors.New("This link is not a public channel you can access. Check the link or choose a chat from the list")
+
+// Telegram lists at most 2,000 dialogs, then may append Saved Messages.
+const maxCachedCandidates = 2001
 
 // migrateMediaSources preserves the channel connections created before peers
 // had a kind. The marker prevents a later disconnect from reviving a legacy row.
@@ -127,7 +131,55 @@ func (s *Service) ListSourceCandidates(ctx context.Context) ([]SourceInfo, error
 	if current, err := s.account(ctx); err != nil || current != accountID {
 		return nil, ErrUnavailable
 	}
+	s.rememberCandidates(accountID, peers, out)
 	return out, nil
+}
+
+// Only peers actually shown by the picker can be used for a fast connection.
+// The bounded snapshot lasts for this service's account session. Connection
+// still verifies current access with Telegram before persisting a source.
+func (s *Service) rememberCandidates(accountID int64, peers []tgclient.SourcePeer, shown []SourceInfo) {
+	candidates := make(map[sourceKey]tgclient.SourcePeer, min(len(shown), maxCachedCandidates))
+	allowed := make(map[sourceKey]struct{}, min(len(shown), maxCachedCandidates))
+	for _, info := range shown {
+		if len(allowed) == maxCachedCandidates {
+			break
+		}
+		allowed[sourceKey{kind: info.PeerKind, id: info.PeerID}] = struct{}{}
+	}
+	for _, peer := range peers {
+		key := sourceKey{kind: string(peer.Kind), id: peer.ID}
+		if _, ok := allowed[key]; ok && len(candidates) < maxCachedCandidates {
+			candidates[key] = peer
+		}
+	}
+	s.candidatesMu.Lock()
+	s.candidates, s.candidatesFor = candidates, accountID
+	s.candidatesMu.Unlock()
+}
+
+func (s *Service) rememberResolvedCandidate(accountID int64, peer tgclient.SourcePeer) {
+	s.candidatesMu.Lock()
+	defer s.candidatesMu.Unlock()
+	if s.candidatesFor != accountID {
+		s.candidates = make(map[sourceKey]tgclient.SourcePeer)
+		s.candidatesFor = accountID
+	}
+	key := sourceKey{kind: string(peer.Kind), id: peer.ID}
+	if _, ok := s.candidates[key]; ok || len(s.candidates) < maxCachedCandidates {
+		s.candidates[key] = peer
+	}
+}
+
+func (s *Service) recentCandidate(accountID int64, kind string, id int64) (tgclient.SourcePeer, bool) {
+	s.candidatesMu.Lock()
+	defer s.candidatesMu.Unlock()
+	if s.candidatesFor != accountID {
+		clear(s.candidates)
+		return tgclient.SourcePeer{}, false
+	}
+	peer, ok := s.candidates[sourceKey{kind: kind, id: id}]
+	return peer, ok
 }
 
 type sourceKey struct {
@@ -260,10 +312,13 @@ func (s *Service) ResolvePublicSource(ctx context.Context, input string) (Source
 		peer, callErr = s.tg.ResolvePublicChannel(ctx, username)
 		return callErr
 	}); err != nil {
+		if errors.Is(err, tgclient.ErrChannelUnavailable) {
+			return SourceInfo{}, ErrPublicChannelUnavailable
+		}
 		return SourceInfo{}, fmt.Errorf("media source: resolve public channel: %w", err)
 	}
 	if peer.ID <= 0 || peer.AccessHash == 0 || peer.Kind != tgclient.PeerChannel || peer.Restricted {
-		return SourceInfo{}, ErrUnavailable
+		return SourceInfo{}, ErrPublicChannelUnavailable
 	}
 	drive, err := projection.ChannelExists(s.db, peer.ID)
 	if err != nil {
@@ -282,6 +337,7 @@ func (s *Service) ResolvePublicSource(ctx context.Context, input string) (Source
 	if current, err := s.account(ctx); err != nil || current != accountID {
 		return SourceInfo{}, ErrUnavailable
 	}
+	s.rememberResolvedCandidate(accountID, peer)
 	return info, nil
 }
 
@@ -319,23 +375,46 @@ func (s *Service) ConnectSourceWithGate(ctx context.Context, kind string, id int
 			return callErr
 		})
 		if err != nil {
+			if errors.Is(err, tgclient.ErrChannelUnavailable) {
+				return SourceInfo{}, ErrPublicChannelUnavailable
+			}
 			return SourceInfo{}, fmt.Errorf("media source: resolve public channel: %w", err)
 		}
 	} else {
-		var peers []tgclient.SourcePeer
-		err = s.telegram(ctx, func() error { var callErr error; peers, callErr = s.tg.ListMediaSourcePeers(ctx); return callErr })
-		if err != nil {
-			return SourceInfo{}, fmt.Errorf("media source: find dialog: %w", err)
-		}
-		for _, candidate := range peers {
-			if string(candidate.Kind) == kind && candidate.ID == id {
-				peer = candidate
-				break
+		if candidate, ok := s.recentCandidate(accountID, kind, id); ok {
+			// A single read verifies current access and peer kind. The picker
+			// snapshot is only a source for the access hash, never authority.
+			err = s.telegram(ctx, func() error {
+				var callErr error
+				peer, callErr = s.tg.GetMediaSourcePeer(ctx, tgclient.InputPeer{
+					Kind: candidate.Kind, ChannelID: id, AccessHash: candidate.AccessHash})
+				return callErr
+			})
+			if errors.Is(err, tgclient.ErrChannelUnavailable) {
+				return SourceInfo{}, ErrUnavailable
+			}
+			if err != nil {
+				return SourceInfo{}, fmt.Errorf("media source: check dialog access: %w", err)
+			}
+		} else {
+			var peers []tgclient.SourcePeer
+			err = s.telegram(ctx, func() error { var callErr error; peers, callErr = s.tg.ListMediaSourcePeers(ctx); return callErr })
+			if err != nil {
+				return SourceInfo{}, fmt.Errorf("media source: find dialog: %w", err)
+			}
+			for _, candidate := range peers {
+				if string(candidate.Kind) == kind && candidate.ID == id {
+					peer = candidate
+					break
+				}
 			}
 		}
 	}
 	if peer.ID != id || string(peer.Kind) != kind || peer.Restricted ||
 		(kind != string(tgclient.PeerGroup) && kind != string(tgclient.PeerSelf) && peer.AccessHash == 0) {
+		if public && peer.ID == id {
+			return SourceInfo{}, ErrPublicChannelUnavailable
+		}
 		return SourceInfo{}, ErrUnavailable
 	}
 	if now, err := s.account(ctx); err != nil || now != accountID {
@@ -349,6 +428,9 @@ func (s *Service) ConnectSourceWithGate(ctx context.Context, kind string, id int
 	err = gate(func() error {
 		s.mu.Lock()
 		defer s.mu.Unlock()
+		if current, err := s.account(ctx); err != nil || current != accountID {
+			return ErrUnavailable
+		}
 		if existing, _, err := s.storedSource(ctx, accountID, kind, id); err == nil {
 			info = existing
 			info.Available = true
@@ -604,13 +686,13 @@ func (s *Service) SourcePhoto(ctx context.Context, kind string, id, expectedAcco
 	if stored {
 		_, _, source, err = s.currentSource(ctx, kind, id)
 	} else {
-		var peers []tgclient.SourcePeer
-		err = s.telegram(ctx, func() error { var callErr error; peers, callErr = s.tg.ListMediaSourcePeers(ctx); return callErr })
-		for _, candidate := range peers {
-			if string(candidate.Kind) == kind && candidate.ID == id {
-				source = candidate
-				break
-			}
+		if candidate, ok := s.recentCandidate(accountID, kind, id); ok {
+			source = candidate
+			err = nil
+		} else {
+			// An avatar is optional. Rewalking thousands of dialogs for a
+			// missing picker result can itself trigger flood wait.
+			return nil, s.checkPhotoScope(ctx, accountID, kind, id, expectedGeneration)
 		}
 	}
 	if err != nil {

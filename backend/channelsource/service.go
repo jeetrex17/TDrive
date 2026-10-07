@@ -86,6 +86,12 @@ type Service struct {
 	peers    map[int64]tgclient.JoinedBroadcastChannel
 	peersFor int64 // the account the walk was for
 	walkedAt time.Time
+
+	// The latest picker result supplies access hashes for a single-peer check
+	// during connection, avoiding another full dialog walk while it is open.
+	candidatesMu  sync.Mutex
+	candidates    map[sourceKey]tgclient.SourcePeer
+	candidatesFor int64
 }
 
 type lookedUp struct {

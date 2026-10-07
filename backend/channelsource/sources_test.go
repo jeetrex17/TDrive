@@ -165,11 +165,108 @@ func TestCandidatePickerExcludesDrivesWithoutHidingSameIDGroup(t *testing.T) {
 		t.Fatalf("drive connect = %v", err)
 	}
 	connectTyped(t, sources, tgclient.PeerGroup, 42, "")
+	if walks, lookups := fake.TelegramReads(); walks != 1 || lookups != 1 {
+		t.Fatalf("picker followed by connect made %d dialog walks and %d peer checks, want 1 each", walks, lookups)
+	}
+}
+
+func TestCandidatePickerReusesPeerForPhotoAndRejectsRevokedAccess(t *testing.T) {
+	fake := tgclient.NewFake(testAccountID)
+	fake.SeedMediaSourcePeers(
+		tgclient.SourcePeer{Kind: tgclient.PeerBot, ID: 52, AccessHash: 92, Title: "Search bot", PhotoID: 500},
+		tgclient.SourcePeer{Kind: tgclient.PeerUser, ID: 53, AccessHash: 93, Title: "Alice"},
+	)
+	fake.SeedChannelPhoto(500, []byte("bot picture"))
+	sources, _, _ := sourceFixture(t, fake, fake)
+	if _, err := sources.ListSourceCandidates(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	photo, err := sources.SourcePhoto(t.Context(), "bot", 52, testAccountID, "")
+	if err != nil || !bytes.Equal(photo, []byte("bot picture")) {
+		t.Fatalf("picker photo = %q, %v", photo, err)
+	}
+	// Telegram can revoke a peer after it was shown. A cached hash must
+	// still require a fresh single-peer check before connection.
+	fake.SeedMediaSourcePeers(tgclient.SourcePeer{Kind: tgclient.PeerUser, ID: 53, AccessHash: 93, Title: "Alice"})
+	_, err = sources.ConnectSourceWithGate(t.Context(), "bot", 52, "", testAccountID,
+		func(save func() error) error { return save() })
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("revoked candidate connect = %v, want ErrUnavailable", err)
+	}
+	if walks, lookups := fake.TelegramReads(); walks != 1 || lookups != 1 {
+		t.Fatalf("picker, photo and revoked connect made %d dialog walks and %d peer checks, want 1 each", walks, lookups)
+	}
+	if all, err := sources.ListAllConnected(t.Context()); err != nil || len(all) != 0 {
+		t.Fatalf("revoked candidate connected: %#v, %v", all, err)
+	}
+}
+
+func TestCandidatePickerCacheStaysBoundedWithSavedMessages(t *testing.T) {
+	fake := tgclient.NewFake(testAccountID)
+	peers := make([]tgclient.SourcePeer, 0, maxCachedCandidates)
+	for id := int64(1); id < maxCachedCandidates; id++ {
+		peers = append(peers, tgclient.SourcePeer{Kind: tgclient.PeerBot, ID: id, AccessHash: id + 1, Title: "Bot"})
+	}
+	peers = append(peers, tgclient.SourcePeer{Kind: tgclient.PeerSelf, ID: testAccountID, Title: "Saved Messages"})
+	fake.SeedMediaSourcePeers(peers...)
+	sources, _, _ := sourceFixture(t, fake, fake)
+	if candidates, err := sources.ListSourceCandidates(t.Context()); err != nil || len(candidates) != maxCachedCandidates {
+		t.Fatalf("large picker = %d candidates, %v", len(candidates), err)
+	}
+	fake.SeedPublicChannel("publicfilms", tgclient.SourcePeer{ID: 9000, AccessHash: 9001, Title: "Public Films"})
+	if _, err := sources.ResolvePublicSource(t.Context(), "@publicfilms"); err != nil {
+		t.Fatal(err)
+	}
+	connectTyped(t, sources, tgclient.PeerBot, 1, "")
+	connectTyped(t, sources, tgclient.PeerSelf, testAccountID, "")
+	if walks, lookups := fake.TelegramReads(); walks != 1 || lookups != 2 {
+		t.Fatalf("large picker connects made %d walks and %d peer checks, want 1 walk and 2 checks", walks, lookups)
+	}
+	if got := len(sources.candidates); got > maxCachedCandidates {
+		t.Fatalf("candidate cache has %d entries, want at most %d", got, maxCachedCandidates)
+	}
+}
+
+func TestCandidatePickerDoesNotCrossAccountOrLogoutGate(t *testing.T) {
+	fake := tgclient.NewFake(testAccountID)
+	fake.SeedMediaSourcePeers(tgclient.SourcePeer{Kind: tgclient.PeerBot, ID: 52, AccessHash: 92, Title: "Search bot"})
+	sources, _, db := sourceFixture(t, fake, fake)
+	if _, err := sources.ListSourceCandidates(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	fake.SetSelfID(testAccountID + 1)
+	fake.SeedMediaSourcePeers(tgclient.SourcePeer{Kind: tgclient.PeerBot, ID: 52, AccessHash: 193, Title: "Other account bot"})
+	connected, err := sources.ConnectSourceWithGate(t.Context(), "bot", 52, "", testAccountID+1,
+		func(save func() error) error { return save() })
+	if err != nil || !connected.Connected {
+		t.Fatalf("other account connect = %#v, %v", connected, err)
+	}
+	var hash int64
+	if err := db.QueryRow(`SELECT access_hash FROM connected_media_sources WHERE account_id=? AND peer_kind='bot' AND peer_id=52`, testAccountID+1).Scan(&hash); err != nil || hash != 193 {
+		t.Fatalf("other account stored hash = %d, %v", hash, err)
+	}
+	if walks, _ := fake.TelegramReads(); walks != 2 {
+		t.Fatalf("account switch made %d dialog walks, want separate walk for each account", walks)
+	}
+	fake.SetSelfID(testAccountID)
+	fake.SeedMediaSourcePeers(tgclient.SourcePeer{Kind: tgclient.PeerBot, ID: 53, AccessHash: 94, Title: "Logout bot"})
+	_, err = sources.ConnectSourceWithGate(t.Context(), "bot", 53, "", testAccountID,
+		func(save func() error) error {
+			fake.SetSelfID(testAccountID + 2)
+			return save()
+		})
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("account switch inside connect gate = %v, want ErrUnavailable", err)
+	}
+	if all, err := sources.ListAllConnected(t.Context()); err != nil || len(all) != 0 {
+		t.Fatalf("new account has connections after logout race: %#v, %v", all, err)
+	}
 }
 
 func TestPublicChannelResolveConnectAndReadWithoutJoining(t *testing.T) {
 	fake := tgclient.NewFake(testAccountID)
-	fake.SeedPublicChannel("publicfilms", tgclient.SourcePeer{ID: 8811, AccessHash: 898, Title: "Public Films"})
+	fake.SeedPublicChannel("publicfilms", tgclient.SourcePeer{ID: 8811, AccessHash: 898, Title: "Public Films", PhotoID: 510})
+	fake.SeedChannelPhoto(510, []byte("public picture"))
 	seedTypedVideo(fake, tgclient.PeerChannel, 8811, 7, 707, bytes.Repeat([]byte("film"), 128))
 	sources, _, _ := sourceFixture(t, fake, fake)
 	for _, input := range []string{"@publicfilms", "t.me/publicfilms", "https://t.me/publicfilms/7"} {
@@ -178,10 +275,20 @@ func TestPublicChannelResolveConnectAndReadWithoutJoining(t *testing.T) {
 			t.Fatalf("%q = %#v, %v", input, candidate, err)
 		}
 	}
+	photo, err := sources.SourcePhoto(t.Context(), "channel", 8811, testAccountID, "")
+	if err != nil || !bytes.Equal(photo, []byte("public picture")) {
+		t.Fatalf("unconnected public photo = %q, %v", photo, err)
+	}
+	if walks, _ := fake.TelegramReads(); walks != 0 {
+		t.Fatalf("public avatar required %d dialog walks, want none", walks)
+	}
 	for _, input := range []string{"https://t.me/c/8811/7", "https://t.me/+invite", "https://evil.test/publicfilms", "@a", "https://t.me/publicfilms?start=1"} {
 		if _, err := sources.ResolvePublicSource(t.Context(), input); !errors.Is(err, ErrInvalidPublicLink) {
 			t.Errorf("%q: %v", input, err)
 		}
+	}
+	if _, err := sources.ResolvePublicSource(t.Context(), "@notapublicchannel"); !errors.Is(err, ErrPublicChannelUnavailable) {
+		t.Fatalf("unavailable public handle = %v, want user-facing error", err)
 	}
 	connected := connectTyped(t, sources, tgclient.PeerChannel, 8811, "publicfilms")
 	page, err := sources.PageSource(t.Context(), "channel", 8811, 0, 10, "", "video")
