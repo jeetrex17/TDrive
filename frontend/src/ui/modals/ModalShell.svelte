@@ -1,7 +1,7 @@
 <script lang="ts">
     import { onDestroy, tick, type Snippet } from 'svelte';
     import { installModalA11y } from './modal-a11y';
-    import { createSheetDrag, sheetOffset, shouldDismiss, FLICK_SPEED } from './sheet-gesture';
+    import { createSheetDragController, FLICK_SPEED } from './sheet-gesture';
     import { isMobilePlatform } from '../../api';
 
     interface Props {
@@ -66,10 +66,6 @@
     let swipeExiting = false;
     let closeTimer: ReturnType<typeof setTimeout> | null = null;
 
-    let dragStartY = 0;
-    const drag = createSheetDrag();
-    let dragDelta = 0;
-
     function prefersReducedMotion(): boolean {
         return typeof window !== 'undefined'
             && typeof window.matchMedia === 'function'
@@ -118,7 +114,6 @@
         swipeExiting = false;
         closing = false;
         dragging = false;
-        dragDelta = 0;
         rendered = true;
         if (host) {
             host.style.display = 'flex';
@@ -187,13 +182,6 @@
 
     // --- swipe to dismiss (sheet only) ---------------------------------------
 
-    function applyDrag(): void {
-        if (!card) return;
-        card.style.transform = `translateY(${dragDelta}px)`;
-        const height = card.offsetHeight || 1;
-        setScrimProgress(Math.max(0, 1 - dragDelta / height));
-    }
-
     function springBack(velocity = 0): void {
         if (!card) return;
         // A finger that was still moving gets a shorter return, so the settle
@@ -222,35 +210,25 @@
         closeTimer = setTimeout(() => onClose(), EXIT_MS);
     }
 
-    function onHandlePointerDown(event: PointerEvent): void {
-        if (!asSheet || !card) return;
-        dragging = true;
-        dragStartY = event.clientY;
-        dragDelta = 0;
-        drag.start(event);
-        card.style.transition = '';
-        (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
-    }
-
-    function onHandlePointerMove(event: PointerEvent): void {
-        if (!dragging) return;
-        // Follows the finger down, resists upward where the sheet is already open.
-        dragDelta = sheetOffset(event.clientY - dragStartY, card?.offsetHeight ?? 0);
-        drag.track(event);
-        applyDrag();
-    }
-
-    function onHandlePointerUp(): void {
-        if (!dragging) return;
-        dragging = false;
-        const height = card?.offsetHeight ?? 0;
-        const threshold = Math.max(88, height * 0.28);
-        // Judge the gesture by where it was going, not where it stopped.
-        if (shouldDismiss(dragDelta, drag.velocity(), threshold)) swipeDismiss();
-        else springBack(drag.velocity());
-        dragDelta = 0;
-        drag.reset();
-    }
+    // The pointer wiring is the shared one; this host only says how to follow
+    // the finger (scrim), settle and dismiss. The grab area is the header, so a
+    // press on a header button falls through to the button.
+    const sheetDrag = createSheetDragController({
+        sheet: () => card,
+        grab: (el) => {
+            dragging = true;
+            el.style.transition = '';
+        },
+        track: (offset, height) => setScrimProgress(Math.max(0, 1 - offset / height)),
+        settle: (velocity) => {
+            dragging = false;
+            springBack(velocity);
+        },
+        dismiss: () => {
+            dragging = false;
+            swipeDismiss();
+        },
+    });
 
     onDestroy(() => {
         clearCloseTimer();
@@ -274,26 +252,33 @@
         aria-modal="true"
         aria-labelledby={titleId}
     >
-        {#if asSheet}
-            <div
-                class="sheet-handle"
-                aria-hidden="true"
-                onpointerdown={onHandlePointerDown}
-                onpointermove={onHandlePointerMove}
-                onpointerup={onHandlePointerUp}
-                onpointercancel={onHandlePointerUp}
-            >
-                <span></span>
-            </div>
-        {/if}
-
-        {#if header}
-            {@render header()}
-        {:else}
-            <h3 id={titleId} class="modal-title">{title}</h3>
-            {#if subtitle}
-                <p class="modal-subtitle">{subtitle}</p>
+        {#snippet titleBlock()}
+            {#if header}
+                {@render header()}
+            {:else}
+                <h3 id={titleId} class="modal-title">{title}</h3>
+                {#if subtitle}
+                    <p class="modal-subtitle">{subtitle}</p>
+                {/if}
             {/if}
+        {/snippet}
+
+        {#if asSheet}
+            <!-- The grab area is the grip plus the title row, so the whole top of
+                 the sheet drags. A press on a header control falls through to it. -->
+            <div
+                class="sheet-grab"
+                role="presentation"
+                onpointerdown={sheetDrag.onPointerDown}
+                onpointermove={sheetDrag.onPointerMove}
+                onpointerup={sheetDrag.onPointerUp}
+                onpointercancel={sheetDrag.onPointerUp}
+            >
+                <div class="sheet-handle" aria-hidden="true"><span></span></div>
+                {@render titleBlock()}
+            </div>
+        {:else}
+            {@render titleBlock()}
         {/if}
 
         {#if asSheet}

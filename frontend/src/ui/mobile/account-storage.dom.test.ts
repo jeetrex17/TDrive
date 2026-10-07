@@ -22,7 +22,7 @@ vi.mock('../chrome/Avatar.svelte', () => ({ default: function noop() {} }));
 
 import AccountTab from './AccountTab.svelte';
 import { handleBackPress } from './mobile-back';
-import { activeTab } from './mobile-shell-store';
+import { accountDetail, activeTab, closeAccountDetail } from './mobile-shell-store';
 import { sidebarState } from '../sidebar/sidebar-store';
 
 let host: HTMLElement;
@@ -50,6 +50,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (value: T) => void } {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    accountDetail.set(null);
     activeTab.set('account');
     setDrive(1, 'Personal files');
     host = document.createElement('div');
@@ -60,21 +61,27 @@ afterEach(async () => {
     if (app) await unmount(app);
     app = null;
     host.remove();
+    accountDetail.set(null);
     activeTab.set('files');
     sidebarState.set({ personal: [], shared: [], pending: [], activeChannelId: null, virtualView: null });
 });
 
 describe('Account storage row', () => {
-    it('restores the Appearance row after its visible back control closes the drill-in', async () => {
+    it('restores the Appearance row and its focus when the top-bar back closes the detail', async () => {
         mocks.getStorageUsed.mockResolvedValue(10);
         app = mount(AccountTab, { target: host });
         flushSync();
 
         const opener = [...host.querySelectorAll<HTMLButtonElement>('.account-row')]
             .find((button) => button.textContent?.includes('Appearance'));
+        opener?.focus();
         opener?.click();
         flushSync();
-        (host.querySelector<HTMLButtonElement>('.account-detail-back'))?.click();
+        expect(host.querySelector('.account-detail')).not.toBeNull();
+
+        // The visible back control lives in the top bar now; it flips the shared
+        // store, which this stands in for.
+        closeAccountDetail();
         flushSync();
 
         await vi.waitFor(() => {

@@ -12,6 +12,10 @@
 
     const view = logoutModal.state;
 
+    // Only the reset choice wipes local data, so only it wears the danger style
+    // and the fuller label. A quick logout is an ordinary primary action.
+    const destructive = $derived(mode === 'full');
+
     function close(): void {
         if ($view.busy) return;
         logoutModal.close();
@@ -59,8 +63,14 @@
         <button id="logout-cancel" class="secondary-btn" type="button" disabled={$view.busy} onclick={close}>
             Cancel
         </button>
-        <button id="logout-confirm" class="primary-btn danger" type="button" disabled={$view.busy} onclick={confirm}>
-            Log out
+        <button
+            id="logout-confirm"
+            class={destructive ? 'primary-btn danger-btn' : 'primary-btn'}
+            type="button"
+            disabled={$view.busy}
+            onclick={confirm}
+        >
+            {destructive ? 'Log out and reset' : 'Log out'}
         </button>
     {/snippet}
 </ModalShell>

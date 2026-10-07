@@ -9,16 +9,22 @@
     import { fileSortState, setFileSortKey } from '../file-list/file-sort-store';
     import type { FileSortKey } from '../file-list/file-sort';
     import { navigateBack } from '../../modules/navigation';
+    import { showPhotos } from '../../modules/gallery';
+    import { appActions } from '../../modules/app-actions';
     import { clearSearch } from '../../modules/search';
-    import { clearSelection, startSelectionMode } from '../../modules/selection';
-    import { pushSheet, type SheetHandle } from '../modals/sheet-stack';
+    import { clearSelection, selectAllRows, startSelectionMode } from '../../modules/selection';
+    import { albumsView, photosMode } from '../gallery/gallery-store';
+    import { pushSheet } from '../modals/sheet-stack';
     import { selectionBarState } from '../selection/selection-bar-store';
     import { sidebarState } from '../sidebar/sidebar-store';
-    import { askEmptyTrash, closeTrash, trashEntries } from '../../modules/trash/controller';
+    import { askEmptyTrash, closeTrash, openTrash, trashEntries } from '../../modules/trash/controller';
     import SyncRing from './SyncRing.svelte';
     import {
+        ACCOUNT_DETAIL_TITLES,
+        accountDetail,
         activeDrive,
         activeTab,
+        closeAccountDetail,
         ringState,
         fileListCount,
         openDriveSwitcher,
@@ -54,9 +60,17 @@
         : $fileListCount === 1 ? '1 file'
         : `${$fileListCount} files`,
     );
+    // A drive titled the same as its kind ("Personal") would read "Personal ·
+    // Personal · 16 files" with the name above it, so where the two are the same
+    // word the kind is dropped and only the count remains.
+    const kindRepeatsName = $derived(driveName.trim().toLowerCase() === driveKind.toLowerCase());
     // While the search field is open the rows are results, not the drive, so
     // the header says only what kind of drive this is rather than "No files".
-    const driveMeta = $derived(searchOpen ? driveKind : `${driveKind} · ${countLabel}`);
+    const driveMeta = $derived(
+        searchOpen ? (kindRepeatsName ? '' : driveKind)
+        : kindRepeatsName ? countLabel
+        : `${driveKind} · ${countLabel}`,
+    );
     // Inside a folder the row set mixes folders and files, so "items" is the
     // honest noun where the drive header can say "files".
     const itemsLabel = $derived(
@@ -73,6 +87,23 @@
     const selectionLabel = $derived(
         $selectionBarState.count === 1 ? '1 selected' : `${$selectionBarState.count} selected`,
     );
+
+    // Photos: the grid, the timeline, or one album. An album is a drill-in, so
+    // its name and a back button take the bar the way a folder's do; Select is
+    // offered wherever there are photos to pick (the timeline or an album) and
+    // withheld on the Albums grid, whose tiles are folders, not photos.
+    const photosView = $derived($photosMode);
+    const inAlbum = $derived(photosView.kind === 'album');
+    const albumName = $derived(photosView.kind === 'album' ? photosView.tile.name : '');
+    const albumTiles = $derived($albumsView.status === 'ready' ? $albumsView.tiles : []);
+    // The grid's live figure for this folder, not the one the tile carried when
+    // it was tapped, so a refresh that adds photos while it is open moves it.
+    const albumCount = $derived(
+        photosView.kind === 'album'
+            ? (albumTiles.find((tile) => tile.folderId === photosView.tile.folderId)?.countLabel ?? photosView.tile.countLabel)
+            : '',
+    );
+    const canSelectPhotos = $derived(photosView.kind !== 'albums');
 
     let sortOpen = $state(false);
     let sortMenuEl = $state<HTMLElement | null>(null);
@@ -112,8 +143,17 @@
         sortOptions.find((option) => option.key === $fileSortState.key)?.label ?? 'Name',
     );
 
-    function sortMenuItems(): HTMLButtonElement[] {
-        return Array.from(sortMenuEl?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]') ?? []);
+    // The overflow menu carries the sort radios and, under them, the actions a
+    // phone has nowhere else to reach: Select (multi-select starts on a long
+    // press otherwise), Refresh (a pull otherwise) and the drive's Trash.
+    const menuActions: Array<{ label: string; run: () => void }> = [
+        { label: 'Select', run: () => { startSelectionMode(); closeSort(); } },
+        { label: 'Refresh', run: () => { void appActions().triggerRefresh(); closeSort(); } },
+        { label: 'Trash', run: () => { openTrash(); closeSort(); } },
+    ];
+
+    function menuItems(): HTMLButtonElement[] {
+        return Array.from(sortMenuEl?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"], [role="menuitem"]') ?? []);
     }
 
     function restoreSortFocus(): void {
@@ -133,7 +173,7 @@
         }
         sortOpen = !sortOpen;
         await tick();
-        const items = sortMenuItems();
+        const items = menuItems();
         const checkedIndex = sortOptions.findIndex((option) => option.key === $fileSortState.key);
         items[Math.max(checkedIndex, 0)]?.focus({ preventScroll: true });
     }
@@ -151,7 +191,7 @@
     }
 
     function onSortMenuKeydown(event: KeyboardEvent): void {
-        const items = sortMenuItems();
+        const items = menuItems();
         if (items.length === 0) return;
         const activeIndex = Math.max(items.indexOf(document.activeElement as HTMLButtonElement), 0);
         let targetIndex: number | null = null;
@@ -165,12 +205,12 @@
                 closeSort({ restoreFocus: true });
                 return;
             case 'Enter':
-            case ' ': {
+            case ' ':
+                // Each item owns what it does, radios and actions alike, so the
+                // key just takes the item's own click path.
                 event.preventDefault();
-                const key = (document.activeElement as HTMLElement | null)?.dataset.sortKey as FileSortKey | undefined;
-                if (key) chooseSort(key);
+                (document.activeElement as HTMLElement | null)?.click();
                 return;
-            }
             default: return;
         }
         event.preventDefault();
@@ -185,25 +225,18 @@
     }
 
     // Android BACK unwinds the bar the way it was built up: the menu first,
-    // then the search field, before the press reaches the page underneath.
-    let sortBack: SheetHandle | null = null;
+    // then the search field, before the press reaches the page underneath. Each
+    // claim releases in its effect's cleanup, so an unmount cannot strand it.
     $effect(() => {
-        if (sortOpen) {
-            sortBack ??= pushSheet(() => closeSort({ restoreFocus: true }));
-            return;
-        }
-        sortBack?.release();
-        sortBack = null;
+        if (!sortOpen) return;
+        const back = pushSheet(() => closeSort({ restoreFocus: true }));
+        return () => back.release();
     });
 
-    let searchBack: SheetHandle | null = null;
     $effect(() => {
-        if (searchOpen) {
-            searchBack ??= pushSheet(() => closeSearch());
-            return;
-        }
-        searchBack?.release();
-        searchBack = null;
+        if (!searchOpen) return;
+        const back = pushSheet(() => closeSearch());
+        return () => back.release();
     });
 </script>
 
@@ -218,6 +251,9 @@
         <div class="topbar-row">
             <h1 class="topbar-title topbar-selection-count" aria-live="polite">{selectionLabel}</h1>
             <div class="topbar-actions">
+                {#if active === 'files' && !inTrash}
+                    <button type="button" class="topbar-selectall" onclick={() => selectAllRows()}>Select all</button>
+                {/if}
                 <button type="button" class="topbar-done" onclick={() => clearSelection()}>Done</button>
             </div>
         </div>
@@ -305,7 +341,7 @@
                             bind:this={sortMenuEl}
                             class="topbar-menu"
                             role="menu"
-                            aria-label="Sort by"
+                            aria-label="File options"
                             aria-orientation="vertical"
                             tabindex="-1"
                             onkeydown={onSortMenuKeydown}
@@ -326,6 +362,17 @@
                                     {/if}
                                 </button>
                             {/each}
+                            <div class="topbar-menu-sep" role="separator"></div>
+                            {#each menuActions as action (action.label)}
+                                <button
+                                    type="button"
+                                    class="topbar-menu-item"
+                                    role="menuitem"
+                                    onclick={action.run}
+                                >
+                                    <span>{action.label}</span>
+                                </button>
+                            {/each}
                         </div>
                     {/if}
                 </div>
@@ -342,7 +389,8 @@
             <input
                 bind:this={searchInputEl}
                 id="search-input"
-                type="text"
+                type="search"
+                enterkeyhint="search"
                 placeholder="Search this drive"
                 autocomplete="off"
                 autocapitalize="off"
@@ -353,21 +401,34 @@
         </div>
     </div>
 
-    <!-- Photos: the same drive, gallery view. -->
-    <div class="topbar-context topbar-plain" hidden={selecting || active !== 'photos'}>
+    <!-- Photos: the same drive, gallery view. Inside an album the bar carries
+         the album's name and a way back to the grid, like a folder does. -->
+    <div class="topbar-context topbar-plain topbar-photos" hidden={selecting || active !== 'photos'}>
         <div class="topbar-row">
-            <div class="topbar-plain-titles">
-                <h1 class="topbar-title">Photos</h1>
-                <span class="topbar-subtitle">{driveName}</span>
-            </div>
-            <div class="topbar-actions">
-                <button
-                    type="button"
-                    class="topbar-done"
-                    aria-label="Select photos"
-                    onclick={startSelectionMode}
-                >Select</button>
-            </div>
+            {#if inAlbum}
+                <button type="button" class="topbar-back" aria-label="Back to albums" onclick={() => void showPhotos({ kind: 'albums' })}>
+                    <ChevronLeftIcon size={24} strokeWidth={2} aria-hidden="true" />
+                </button>
+                <div class="topbar-plain-titles">
+                    <h1 class="topbar-title" title={albumName}>{albumName}</h1>
+                    {#if albumCount}<span class="topbar-subtitle">{albumCount}</span>{/if}
+                </div>
+            {:else}
+                <div class="topbar-plain-titles">
+                    <h1 class="topbar-title">Photos</h1>
+                    <span class="topbar-subtitle">{driveName}</span>
+                </div>
+            {/if}
+            {#if canSelectPhotos}
+                <div class="topbar-actions">
+                    <button
+                        type="button"
+                        class="topbar-done"
+                        aria-label="Select photos"
+                        onclick={startSelectionMode}
+                    >Select</button>
+                </div>
+            {/if}
         </div>
     </div>
 
@@ -377,9 +438,20 @@
         </div>
     </div>
 
+    <!-- Account: a settings page opened from the list carries its own title and
+         a way back here, the way a folder and the trash do. -->
     <div class="topbar-context topbar-plain" hidden={selecting || active !== 'account'}>
         <div class="topbar-row">
-            <h1 class="topbar-title">Account</h1>
+            {#if $accountDetail}
+                <button type="button" class="topbar-back" aria-label="Back" onclick={() => closeAccountDetail()}>
+                    <ChevronLeftIcon size={24} strokeWidth={2} aria-hidden="true" />
+                </button>
+                <div class="topbar-plain-titles">
+                    <h1 class="topbar-title">{ACCOUNT_DETAIL_TITLES[$accountDetail]}</h1>
+                </div>
+            {:else}
+                <h1 class="topbar-title">Account</h1>
+            {/if}
         </div>
     </div>
 </header>

@@ -73,10 +73,10 @@
     restoreFocus="#file-list"
     onClose={close}
 >
+    <label class="field-label" for="rename-input">{isFolder ? 'Folder name' : 'File name'}</label>
     <input
         id="rename-input"
         type="text"
-        aria-label={isFolder ? 'Folder name' : 'File name'}
         aria-describedby={$renameModalState.error ? 'rename-error' : undefined}
         placeholder="Name"
         autocomplete="off"

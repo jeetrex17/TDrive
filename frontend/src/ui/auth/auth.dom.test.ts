@@ -13,6 +13,7 @@ import {
 
 let host: HTMLElement;
 let app: Record<string, unknown>;
+let onPhone: ReturnType<typeof vi.fn<(phone: string) => void>>;
 let onCode: ReturnType<typeof vi.fn<(code: string) => void>>;
 
 function codeInput(): HTMLInputElement {
@@ -25,6 +26,7 @@ beforeEach(() => {
     showStartupView();
     authPhone.set('');
     resetAuthSubmissions();
+    onPhone = vi.fn();
     onCode = vi.fn(() => { void beginAuthSubmission('code'); });
     host = document.createElement('div');
     document.body.appendChild(host);
@@ -32,7 +34,7 @@ beforeEach(() => {
         target: host,
         props: {
             onSetup: vi.fn(),
-            onPhone: vi.fn(),
+            onPhone,
             onCode,
             onPassword: vi.fn(),
             onBackToPhone: vi.fn(),
@@ -96,5 +98,40 @@ describe('AuthScreens interactions', () => {
         expect(host.querySelector<HTMLButtonElement>('button[type="submit"]')?.disabled).toBe(true);
         expect(host.querySelector<HTMLButtonElement>('button[type="submit"]')?.textContent).toContain('Verifying');
         expect(form.getAttribute('aria-busy')).toBe('true');
+    });
+});
+
+
+describe('phone entry', () => {
+    function enterPhone(value: string): void {
+        const input = host.querySelector<HTMLInputElement>('#telegram-phone')!;
+        input.value = value;
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        flushSync();
+    }
+    function send(): void {
+        host.querySelector('form')!.dispatchEvent(new SubmitEvent('submit', { bubbles: true, cancelable: true }));
+        flushSync();
+    }
+    it('normalizes a full pasted number and retains it when returning from code', () => {
+        showAuthView('phone');
+        flushSync();
+        enterPhone('+91 98765 43210');
+        send();
+        expect(onPhone).toHaveBeenCalledWith('+919876543210');
+        showAuthView('code');
+        flushSync();
+        showAuthView('phone');
+        flushSync();
+        expect(host.querySelector<HTMLInputElement>('#telegram-phone')!.value).toBe('+91 98765 43210');
+        expect(host.querySelector('#telegram-country')?.textContent).toContain('+91');
+    });
+    it('does not send an ambiguous national number without a country', () => {
+        showAuthView('phone');
+        flushSync();
+        enterPhone('9876543210');
+        send();
+        expect(onPhone).not.toHaveBeenCalled();
+        expect(host.querySelector('#phone-error')?.textContent).toContain('Choose a country');
     });
 });

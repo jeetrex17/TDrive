@@ -1,4 +1,4 @@
-import { expect, resolves, test, bootTDrive } from './wails-mock';
+import { expect, resolves, byFirstArg, test, bootTDrive } from './wails-mock';
 
 test.use({ viewport: { width: 390, height: 640 } });
 
@@ -32,4 +32,45 @@ test('phone channel picker scrolls to and selects a channel below the fold', asy
     await expect.poll(() => mock.calls('SelectPersonalDrive')).toMatchObject([
         { args: ['12'], state: 'fulfilled' },
     ]);
+});
+
+test.describe('scroll position memory', () => {
+    test.use({ viewport: { width: 1280, height: 720 } });
+
+    test('restores a folder scroll position when stepping back up to it', async ({ page }) => {
+        // A folder-heavy root so a folder sits mid-viewport after scrolling: the
+        // step forward must come from a row already on screen, or the test
+        // runner would scroll the list to reach it and erase the offset first.
+        const rootFolders = Array.from({ length: 60 }, (_, index) => ({
+            id: `f${index}`, name: `Folder ${String(index).padStart(2, '0')}`, parent_id: '',
+        }));
+        await bootTDrive(page, {
+            GetFolderContents: byFirstArg({
+                '': resolves({ folders: rootFolders, files: [] }),
+                f18: resolves({ folders: [], files: [
+                    { name: 'inner.txt', size: 1, msg_id: 900, parent_id: 'f18', upload_time: 1, uploader_id: 7, encrypted: false, plaintext_size: 0 },
+                ] }),
+            }),
+            GetFolderStats: resolves(rootFolders.map((folder) => ({ id: folder.id, bytes: 0, latestUpload: 0 }))),
+        });
+
+        const list = page.locator('#file-list');
+        const folder = page.getByRole('row', { name: 'Folder: Folder 18' });
+        await expect(page.getByRole('row', { name: 'Folder: Folder 00' })).toBeVisible();
+
+        // Scroll until Folder 18 is on screen, then walk into it: the step
+        // forward starts at the top.
+        await list.evaluate((element) => { element.scrollTop = 500; });
+        await expect(folder).toBeInViewport();
+        const saved = await list.evaluate((element) => element.scrollTop);
+        expect(saved).toBeGreaterThan(0);
+        await folder.dblclick();
+        await expect(page.getByRole('row', { name: 'File: inner.txt' })).toBeVisible();
+        await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBe(0);
+
+        // Stepping back up restores where the folder was left.
+        await page.locator('#breadcrumb-back').click();
+        await expect(folder).toBeVisible();
+        await expect.poll(() => list.evaluate((element) => element.scrollTop)).toBe(saved);
+    });
 });

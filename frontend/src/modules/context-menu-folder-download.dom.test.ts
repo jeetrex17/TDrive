@@ -42,19 +42,17 @@ describe('folder context menu download', () => {
             .map((item) => item.label);
 
         expect(labels).toEqual([
-            'Open "Screenshots"',
-            'Download "Screenshots"',
+            'Open',
+            'Download',
             'Upload files to this folder',
             'Upload folder to this folder',
             'Rename…',
             'Move to…',
-            'Delete "Screenshots"',
-            'New folder',
-            'Refresh',
+            'Delete',
         ]);
 
         const download = items.find((item): item is Extract<ContextMenuItem, { label: string }> =>
-            item.type !== 'divider' && item.label === 'Download "Screenshots"');
+            item.type !== 'divider' && item.label === 'Download');
         if (!download) throw new Error('download menu item missing');
         download.action();
         expect(transferMocks.enqueueFolderDownload).toHaveBeenCalledWith('d:screenshots', 'Screenshots', 0, undefined);

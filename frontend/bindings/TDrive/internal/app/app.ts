@@ -440,13 +440,13 @@ export function ResolveUsernames(userIDs: number[] | null): $CancellablePromise<
 }
 
 /**
- * RestoreFromTrash puts one object back. It lands under its original parent, or
- * under the drive root if that parent is gone, and takes a numbered name if the
- * original is occupied -- never refusing outright, because a refusal would
- * leave the user with no way to recover the object at all.
+ * RestoreFromTrash puts one object back in the specified drive. It lands under
+ * its original parent, or under the drive root if that parent is gone, and takes
+ * a numbered name if the original is occupied. A stale UI request cannot
+ * redirect to a drive selected after the action began.
  */
-export function RestoreFromTrash(objectID: string): $CancellablePromise<$models.OperationResult> {
-    return $Call.ByID(2289341816, objectID);
+export function RestoreFromTrash(channelID: number, objectID: string): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(2289341816, channelID, objectID);
 }
 
 /**

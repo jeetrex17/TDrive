@@ -146,6 +146,34 @@ describe('ChannelPickerModal', () => {
         await settle();
     });
 
+    it('shows the public source connecting and prevents duplicate connections', async () => {
+        let finishAdd!: () => void;
+        const props = render({
+            added: writable([]),
+            onAdd: vi.fn(() => new Promise<void>((resolve) => { finishAdd = resolve; })),
+        });
+        await settle();
+        const input = host!.querySelector<HTMLInputElement>('#channel-public-link')!;
+        input.value = '@fieldrecordings';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+        await settle();
+
+        const result = host!.querySelector<HTMLButtonElement>('.channel-picker-public-result')!;
+        result.click();
+        await settle();
+        expect(result.getAttribute('aria-busy')).toBe('true');
+        expect(result.getAttribute('aria-label')).toBe('Connecting Field Recordings');
+        expect(result.querySelector('.channel-picker-spinner')).not.toBeNull();
+        result.click();
+        expect(props.onAdd).toHaveBeenCalledTimes(1);
+
+        finishAdd();
+        await settle();
+        expect(result.getAttribute('aria-busy')).toBe('false');
+        expect(props.onClose).toHaveBeenCalledOnce();
+    });
+
     it('opens again on the last list while it refreshes, added as the sidebar has it now', async () => {
         const open = writable(true);
         const added = writable<readonly ChannelSource[]>([JOINED[0]]);

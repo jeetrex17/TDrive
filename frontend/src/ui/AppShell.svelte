@@ -27,6 +27,7 @@
     } from '../modules/channel-sources';
     import { clearSelection, openSelectedItemsDelete, openSelectedItemsDownload, openSelectedItemsMove } from '../modules/selection';
     import { chooseFilesForCurrentFolder, chooseFolderForCurrentFolder } from '../modules/transfers';
+    import { openNewFolderModal } from '../modules/modals/folder';
     import {
         handleDriveClick,
         handlePendingClick,
@@ -219,6 +220,7 @@
                         <UploadMenu
                             onFiles={chooseFilesForCurrentFolder}
                             onFolder={chooseFolderForCurrentFolder}
+                            onNewFolder={openNewFolderModal}
                         />
                     {/if}
                 </div>
@@ -326,7 +328,7 @@
             </div>
         </div>
 
-        <div id="file-list" class="file-list-box" data-file-drop-target role="grid" aria-label="Files" aria-multiselectable="true" aria-colcount="4"></div>
+        <div id="file-list" class="file-list-box" data-file-drop-target role="grid" aria-label="Files" aria-multiselectable="true" aria-colcount="4" tabindex="-1"></div>
 
         <!-- #gallery-view is the gallery's scroll container, not a seam: the
              component measures it, the thumbnail controller uses it as its

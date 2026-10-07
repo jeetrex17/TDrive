@@ -20,6 +20,18 @@ async function expectToastActionOnRight(toast: Locator): Promise<void> {
     expect(close!.x).toBeGreaterThanOrEqual(action!.x + action!.width);
 }
 
+async function expectMobileToastActionBelowCopy(toast: Locator): Promise<void> {
+    const copy = await toast.locator('.toast-content').boundingBox();
+    const action = await toast.getByRole('button', { name: 'Undo' }).boundingBox();
+    const close = await toast.getByRole('button', { name: 'Dismiss' }).boundingBox();
+    expect(copy).not.toBeNull();
+    expect(action).not.toBeNull();
+    expect(close).not.toBeNull();
+    expect(action!.y).toBeGreaterThanOrEqual(copy!.y + copy!.height - 2);
+    expect(action!.x).toBeGreaterThanOrEqual(copy!.x);
+    expect(close!.x).toBeGreaterThan(copy!.x + copy!.width - 2);
+}
+
 test('desktop channels sit beside the drives and keep the app header', async ({ page }) => {
     await page.clock.install();
     const mock = await bootTDrive(page, {
@@ -29,7 +41,7 @@ test('desktop channels sit beside the drives and keep the app header', async ({ 
         ConnectChannelSource: resolves({ ...candidate, connected: true, generation: 'source-b' }),
         DisconnectChannelSource: resolves(null),
     });
-    const channel = page.locator('.sidebar').getByRole('button', { name: 'Field Recordings' });
+    const channel = page.locator('.sidebar').getByRole('button', { name: 'Channel Field Recordings', exact: true });
     await channel.click();
     await expect(page.getByRole('heading', { name: 'Field Recordings' })).toBeVisible();
     await expect(channel).toHaveAttribute('aria-current', 'page');
@@ -87,27 +99,34 @@ test('mobile channels open inside Files with their own way back', async ({ page 
         DisconnectChannelSource: resolves(null),
     }, { url: '/?mobile=ios' });
     await page.getByRole('button', { name: /Switch drive/ }).click();
-    await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Field Recordings' }).click();
+    await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Field Recordings' })).toBeVisible();
     await expect(page.getByRole('button', { name: /^Play forest-dawn/ })).toBeVisible();
     await expect(page.locator('.tab-bar')).toBeVisible();
     await expect(page.locator('.drive-switcher-sheet')).toHaveAttribute('inert', '');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
+    // A post's actions have a visible "…" with a 44px target, not only a long press.
+    const rowActions = page.getByRole('button', { name: /^Actions for forest-dawn/ });
+    await expect(rowActions).toBeVisible();
+    const rowActionsBox = await rowActions.boundingBox();
+    expect(rowActionsBox!.width).toBeGreaterThanOrEqual(44);
+    expect(rowActionsBox!.height).toBeGreaterThanOrEqual(44);
+
     await page.getByRole('button', { name: 'Back' }).click();
     await expect(page.locator('.channel-view')).toHaveCount(0);
     await expect(page.locator('#file-list')).toBeVisible();
 
     await page.getByRole('button', { name: /Switch drive/ }).click();
-    await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Field Recordings' }).click();
-    await page.getByRole('button', { name: 'Channel actions' }).click();
+    await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
+    await page.getByRole('button', { name: 'Source actions' }).click();
     await page.getByRole('dialog', { name: 'Actions' }).getByRole('button', { name: 'Remove from TDrive' }).click();
     const toast = page.locator('.toast').filter({ hasText: 'Removed Field Recordings' });
     await expect(toast.getByRole('button', { name: 'Undo' })).toBeVisible();
-    await expectToastActionOnRight(toast);
+    await expectMobileToastActionBelowCopy(toast);
     await toast.screenshot({ path: 'test-results/toast-action-mobile.png' });
     await page.setViewportSize({ width: 320, height: 640 });
-    await expectToastActionOnRight(toast);
+    await expectMobileToastActionBelowCopy(toast);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     await toast.screenshot({ path: 'test-results/toast-action-mobile-320.png' });
     expect(await mock.calls('DisconnectChannelSource')).toHaveLength(0);
@@ -117,12 +136,12 @@ test('mobile channels open inside Files with their own way back', async ({ page 
     expect(await mock.calls('DisconnectChannelSource')).toHaveLength(0);
 
     await mock.setPlan('DisconnectChannelSource', rejects('temporary failure'));
-    await page.getByRole('button', { name: 'Channel actions' }).click();
+    await page.getByRole('button', { name: 'Source actions' }).click();
     await page.getByRole('dialog', { name: 'Actions' }).getByRole('button', { name: 'Remove from TDrive' }).click();
     await toast.getByRole('button', { name: 'Dismiss' }).click();
     await expect(page.getByRole('button', { name: /Switch drive/ })).toBeVisible();
     await page.getByRole('button', { name: /Switch drive/ }).click();
-    await expect(page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Field Recordings' })).toBeVisible();
+    await expect(page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Channel Field Recordings', exact: true })).toBeVisible();
 });
 
 test('the picker distinguishes joined chat types and verifies a public link before it connects', async ({ page }) => {
@@ -150,18 +169,45 @@ test('desktop source picker has no horizontal overflow', async ({ page }) => {
     const direct = { peer_kind: 'user', peer_id: 50, channel_id: 0, title: 'Mina', username: '', connected: false, protected: false, available: true, account_id: 7, generation: '' };
     await bootTDrive(page, { ListChannelSourceCandidates: resolves([direct]) });
     await page.locator('.channel-nav-add').click();
-    await page.screenshot({ path: 'test-results/source-picker-desktop.png', fullPage: true });
+    await page.screenshot({ path: 'test-results/source-picker-desktop.png', fullPage: true, animations: 'disabled' });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
 
 test('390x844 mobile source picker has no sheet bleed', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     const direct = { peer_kind: 'user', peer_id: 50, channel_id: 0, title: 'Mina', username: '', connected: false, protected: false, available: true, account_id: 7, generation: '' };
-    await bootTDrive(page, { ListChannelSourceCandidates: resolves([direct]) }, { url: '/?mobile=ios' });
+    await bootTDrive(page, {
+        ListChannelSourceCandidates: resolves([direct]),
+        ResolvePublicChannelSource: resolves(candidate),
+    }, { url: '/?mobile=ios' });
     await page.getByRole('button', { name: /Switch drive/ }).click();
     await page.locator('.channel-nav-add').click();
-    await page.screenshot({ path: 'test-results/source-picker-mobile-390x844.png', fullPage: true });
+    const dialog = page.getByRole('dialog', { name: 'Add a source' });
+    const link = dialog.getByLabel('Public channel link');
+    expect(await link.evaluate((input) => parseFloat(getComputedStyle(input).fontSize))).toBeGreaterThanOrEqual(16);
+    await link.fill('@techtalks');
+    await dialog.getByRole('button', { name: 'Check link' }).click();
+    const result = dialog.getByRole('button', { name: 'Connect Tech Talks' });
+    await expect(result).toBeVisible();
+    expect((await result.boundingBox())!.height).toBeGreaterThanOrEqual(60);
+    await page.screenshot({ path: 'test-results/source-picker-mobile-390x844.png', fullPage: true, animations: 'disabled' });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});
+
+test('the phone drive sheet gives channel rows a visible actions button', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await bootTDrive(page, {
+        ListConnectedChannelSources: resolves([source]),
+        ListChannelMedia: resolves(mediaPage),
+    }, { url: '/?mobile=ios' });
+    await page.getByRole('button', { name: /Switch drive/ }).click();
+
+    const row = page.locator('.drive-switcher-sheet .channel-nav-row');
+    const actions = row.getByRole('button', { name: 'Actions for Field Recordings' });
+    await expect(actions).toBeVisible();
+    const box = await actions.boundingBox();
+    expect(box!.width).toBeGreaterThanOrEqual(44);
+    expect(box!.height).toBeGreaterThanOrEqual(44);
 });
 
 test('picking a drive from the phone Account tab leaves the channel', async ({ page }) => {
@@ -172,7 +218,7 @@ test('picking a drive from the phone Account tab leaves the channel', async ({ p
         SetActiveChannel: resolves(null),
     }, { url: '/?mobile=ios' });
     await page.getByRole('button', { name: /Switch drive/ }).click();
-    await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Field Recordings' }).click();
+    await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Field Recordings' })).toBeVisible();
 
     await page.locator('.tab-bar').getByRole('button', { name: /^Account/ }).click();
@@ -207,7 +253,7 @@ test("a channel video queues the channel's other videos in the player's playlist
         CloseMedia: resolves(null),
         UpdateMediaPlayback: resolves(null),
     });
-    await page.locator('.sidebar').getByRole('button', { name: 'Field Recordings' }).click();
+    await page.locator('.sidebar').getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
     await page.getByRole('button', { name: /^Play Dawn chorus/ }).click();
 
     await expect(page.locator('#video-shell')).toBeVisible();
@@ -233,10 +279,43 @@ test('a channel video bound for the native player reports a failed open', async 
         OpenChannelMedia: rejects('rpc error code 420: FLOOD_WAIT_30'),
         CloseMedia: resolves(null),
     });
-    await page.locator('.sidebar').getByRole('button', { name: 'Field Recordings' }).click();
+    await page.locator('.sidebar').getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
     await page.getByRole('button', { name: /^Play Feature film/ }).click();
 
     await expect(page.locator('#video-error')).toBeVisible();
     await expect(page.locator('#video-error-retry')).toBeVisible();
     expect(await mock.calls('OpenNativeMedia')).toEqual([]);
 });
+
+
+for (const platform of ['ios', 'android']) {
+    test(`${platform} chat sources keep mobile actions and their place across tabs`, async ({ page }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        const chat = { ...source, peer_kind: 'user', channel_id: 0, title: 'Mina', username: '' };
+        const mock = await bootTDrive(page, {
+            ListConnectedChannelSources: resolves([chat, source]),
+            ListChannelMedia: resolves({ ...mediaPage, peer_kind: 'user', items: [media, { ...media, msg_id: 72, name: 'expired.mp4', streamable: false, block_reason: 'expired', telegram_url: '' }] }),
+            DisconnectChannelSource: resolves(null),
+        }, { url: `/?mobile=${platform}` });
+        await page.getByRole('button', { name: /Switch drive/ }).click();
+        const sheet = page.locator('.drive-switcher-sheet');
+        const actions = sheet.getByRole('button', { name: 'Actions for Mina', exact: true });
+        await expect(actions).toBeVisible();
+        const box = await actions.boundingBox();
+        expect(box!.width).toBeGreaterThanOrEqual(44);
+        expect(box!.height).toBeGreaterThanOrEqual(44);
+        await sheet.getByRole('button', { name: 'Direct message Mina', exact: true }).click();
+        await expect(page.getByRole('heading', { name: 'Mina', exact: true })).toBeVisible();
+        await page.locator('.tab-bar').getByRole('button', { name: /^Transfers/ }).click();
+        await page.locator('.tab-bar').getByRole('button', { name: /^Files/ }).click();
+        await expect(page.getByRole('heading', { name: 'Mina', exact: true })).toBeVisible();
+        await expect(page.getByRole('button', { name: /^Actions for forest-dawn/ })).toBeVisible();
+        await expect(page.getByRole('button', { name: /^Actions for expired/ })).toHaveCount(0);
+        await page.getByRole('button', { name: 'Source actions' }).click();
+        await page.getByRole('dialog', { name: 'Actions' }).getByRole('button', { name: 'Remove from TDrive' }).click();
+        const toast = page.locator('.toast').filter({ hasText: 'Removed Mina' });
+        await toast.getByRole('button', { name: 'Undo' }).click();
+        await expect(page.getByRole('heading', { name: 'Mina', exact: true })).toBeVisible();
+        expect(await mock.calls('DisconnectChannelSource')).toHaveLength(0);
+    });
+}

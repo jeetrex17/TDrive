@@ -76,7 +76,7 @@ for (const platform of ['desktop', 'android'] as const) {
         });
         const list = await openTrash(page, platform);
         const rows = list.locator('.drive-row');
-        await rows.nth(1).getByRole('button', { name: 'Delete IMG_0042.jpg forever' }).click();
+        await rows.nth(1).getByRole('button', { name: 'Delete IMG_0042.jpg permanently' }).click();
 
         const confirm = page.getByRole('dialog', { name: 'Delete permanently?' });
         await expect(confirm).toContainText("can't be undone");
@@ -87,7 +87,7 @@ for (const platform of ['desktop', 'android'] as const) {
         expect(await mock.calls('DeleteFromTrashPermanently')).toHaveLength(0);
         await expect(rows).toHaveCount(3);
 
-        await rows.nth(1).getByRole('button', { name: 'Delete IMG_0042.jpg forever' }).click();
+        await rows.nth(1).getByRole('button', { name: 'Delete IMG_0042.jpg permanently' }).click();
         await confirm.getByRole('button', { name: 'Delete permanently', exact: true }).click();
         await expect.poll(async () => (await mock.calls('DeleteFromTrashPermanently')).length).toBe(1);
         expect((await mock.calls('DeleteFromTrashPermanently'))[0].args).toEqual(['f:2615']);
@@ -127,7 +127,10 @@ test('a refused restore says so without throwing away a list that is still right
     });
     const list = await openTrash(page, 'desktop');
     await list.locator('.drive-row').nth(1).getByRole('button', { name: 'Restore IMG_0042.jpg' }).click();
-    await expect(page.locator('.toast').filter({ hasText: 'The original folder is gone.' })).toBeVisible();
+    const refusal = page.locator('.toast').filter({ hasText: 'The original folder is gone.' });
+    await expect(refusal).toBeVisible();
+    // The toast names what failed, not just the surface it happened on.
+    await expect(refusal).toContainText('Could not restore from the Trash');
     // A refusal keeps the row: it is still in the trash.
     await expect(list.locator('.drive-row')).toHaveCount(3);
 });
@@ -165,7 +168,7 @@ test('a trashed row offers only the two things a deleted item can do', async ({ 
     const row = list.locator('.drive-row').nth(1);
 
     await expect(row.getByRole('button', { name: 'Restore IMG_0042.jpg' })).toBeVisible();
-    await expect(row.getByRole('button', { name: 'Delete IMG_0042.jpg forever' })).toBeVisible();
+    await expect(row.getByRole('button', { name: 'Delete IMG_0042.jpg permanently' })).toBeVisible();
     // Nothing that acts on a live file.
     await expect(row.locator('button.download')).toHaveCount(0);
     await expect(row.locator('button.open-file')).toHaveCount(0);

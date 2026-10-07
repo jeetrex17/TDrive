@@ -129,6 +129,22 @@ describe('ContextMenu action sheet (mobile)', () => {
         expect(document.querySelector('.action-sheet')).toBeNull();
     });
 
+    it('offers a labelled Close control an assistive user can reach', async () => {
+        const action = vi.fn();
+        showContextMenu(0, 0, [{ label: 'Open', action }], { header: { title: 'a.txt', kind: 'file' } });
+        await settle();
+
+        const close = document.querySelector<HTMLButtonElement>('.action-sheet-close');
+        expect(close).not.toBeNull();
+        expect(close?.getAttribute('aria-label')).toBe('Close');
+
+        close?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        flushSync();
+
+        expect(action).not.toHaveBeenCalled();
+        expect(document.querySelector('.action-sheet')).toBeNull();
+    });
+
     it('closes on the scrim without running an action', async () => {
         // The dimmed screen behind is what a Cancel row used to duplicate, and
         // it is the target a thumb reaches for first.

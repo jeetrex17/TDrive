@@ -53,7 +53,7 @@
         </button>
         <button
             id="leave-drive-confirm"
-            class="primary-btn danger"
+            class="primary-btn danger-btn"
             type="button"
             disabled={$leaveDriveModalState.inFlight}
             onclick={confirm}

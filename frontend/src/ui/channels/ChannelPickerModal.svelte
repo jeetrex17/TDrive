@@ -177,15 +177,15 @@
     <label class="search-field channel-picker-search">
         <SearchIcon size={16} strokeWidth={2} aria-hidden="true" />
         <input
-                id="channel-picker-search"
+            id="channel-picker-search"
             bind:value={query}
             onkeydown={onSearchKeydown}
             type="text"
-        placeholder="Search chats and channels"
+            placeholder="Search chats and channels"
             autocomplete="off"
             spellcheck="false"
-        aria-label="Search sources"
-                aria-controls="channel-picker-list"
+            aria-label="Search sources"
+            aria-controls="channel-picker-list"
         />
     </label>
 
@@ -216,13 +216,27 @@
         {#if publicError}<p id="channel-public-link-error" class="channel-picker-error" role="alert">{publicError}</p>{/if}
         {#if publicSource}
             {@const publicAdded = isAdded(publicSource)}
-            <button class="channel-picker-public-result" type="button" disabled={!publicSource.available || (adding !== null && adding !== sourceKey(publicSource))} onclick={() => { if (publicSource) void choose(publicSource); }}>
+            {@const publicBusy = adding === sourceKey(publicSource)}
+            <button
+                class="channel-picker-public-result"
+                type="button"
+                disabled={!publicSource.available || (adding !== null && !publicBusy)}
+                aria-busy={publicBusy}
+                aria-label={publicBusy ? `Connecting ${publicSource.title}` : publicAdded ? `Open ${publicSource.title}, already connected` : publicSource.available ? `Connect ${publicSource.title}` : `${publicSource.title} is unavailable`}
+                onclick={() => { if (publicSource) void choose(publicSource); }}
+            >
                 <ChannelAvatar source={publicSource} {loadPhoto} />
                 <span class="channel-picker-text">
                     <span class="channel-picker-name">{publicSource.title}</span>
                     <span class="channel-picker-handle">{handle(publicSource)}</span>
                 </span>
-                <span class="channel-picker-trail">{publicAdded ? 'Open' : publicSource.available ? 'Connect' : 'Unavailable'}</span>
+                <span class="channel-picker-trail" aria-hidden="true">
+                    {#if publicBusy}
+                        <span class="channel-picker-spinner"></span>
+                    {:else}
+                        {publicAdded ? 'Open' : publicSource.available ? 'Connect' : 'Unavailable'}
+                    {/if}
+                </span>
             </button>
         {/if}
     </div>
@@ -358,6 +372,7 @@
     .channel-picker-public-help { margin: var(--space-2) 0 0; color: var(--text-muted); font-size: var(--type-xs); line-height: 1.4; }
 
     .channel-picker-public-result {
+        --avatar-size: 36px;
         display: flex;
         width: 100%;
         min-height: 52px;
@@ -375,6 +390,8 @@
     }
     .channel-picker-public-result:hover:not(:disabled) { background: var(--bg-panel); }
     .channel-picker-public-result:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    .channel-picker-public-result:disabled { cursor: default; opacity: 0.5; }
+    .channel-picker-public-result[aria-busy='true'] { opacity: 1; }
 
     .channel-picker-list {
         display: flex;
@@ -515,10 +532,12 @@
         overflow: visible;
     }
 
-    :global(html.mobile) .channel-picker-search input { font-size: 16px; }
+    :global(html.mobile) .channel-picker-search input,
+    :global(html.mobile) .channel-picker-public-field input { font-size: max(16px, var(--type-base)); }
     :global(html.mobile) .channel-picker-public-row { grid-template-columns: minmax(0, 1fr); }
     :global(html.mobile) .channel-picker-check { width: 100%; }
-    :global(html.mobile) .channel-picker-row { min-height: 60px; }
+    :global(html.mobile) .channel-picker-row,
+    :global(html.mobile) .channel-picker-public-result { min-height: 60px; }
 
     @media (prefers-reduced-motion: reduce) {
         .channel-picker-row,

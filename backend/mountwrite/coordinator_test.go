@@ -863,14 +863,28 @@ func TestCoordinatorPersistsCleanupWhenHiddenDiscardFails(t *testing.T) {
 
 func TestCoordinatorRejectsNewWorkAfterDrainAndWaitsForActiveOperation(t *testing.T) {
 	t.Parallel()
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
+	// Draining is a lifecycle contract; disk durability is covered separately.
+	// Keep real journal transitions without depending on filesystem latency.
+	db := openJournalDB(t, ":memory:")
+	if err := EnsureJournalSchema(t.Context(), db); err != nil {
+		t.Fatalf("ensure schema: %v", err)
+	}
+	journal, err := NewSQLiteJournal(db)
+	if err != nil {
+		t.Fatalf("new journal: %v", err)
+	}
 	remote := &fakeRemote{commitStarted: make(chan struct{}), commitRelease: make(chan struct{})}
 	releaseCommit := sync.OnceFunc(func() { close(remote.commitRelease) })
-	defer releaseCommit()
-	coordinator, _, _ := newTestCoordinator(t, remote, &fakeInvalidator{})
+	coordinator := buildCoordinator(t, journal, &stubStaging{}, remote, &fakeInvalidator{})
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	var workers sync.WaitGroup
+	t.Cleanup(func() {
+		cancel()
+		releaseCommit()
+		workers.Wait()
+	})
 	moveDone := make(chan error, 1)
-	go func() {
+	workers.Go(func() {
 		_, err := coordinator.Move(ctx, MoveRequest{
 			OperationID:         "active-move",
 			DriveID:             42,
@@ -880,7 +894,7 @@ func TestCoordinatorRejectsNewWorkAfterDrainAndWaitsForActiveOperation(t *testin
 			DestinationName:     "file.txt",
 		})
 		moveDone <- err
-	}()
+	})
 
 	select {
 	case <-remote.commitStarted:
@@ -889,7 +903,7 @@ func TestCoordinatorRejectsNewWorkAfterDrainAndWaitsForActiveOperation(t *testin
 	}
 
 	drainDone := make(chan error, 1)
-	go func() { drainDone <- coordinator.Drain(ctx) }()
+	workers.Go(func() { drainDone <- coordinator.Drain(ctx) })
 	waitForStatus(ctx, t, coordinator, Status{Accepting: false, Active: 1})
 
 	if _, err := coordinator.Mkdir(ctx, MkdirRequest{DriveID: 42, ParentID: "", Name: "new"}); !errors.Is(err, ErrDraining) {

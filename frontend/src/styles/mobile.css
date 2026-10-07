@@ -18,11 +18,12 @@ html.mobile {
        stop. Every such surface measures from this one value, so the bar's shape
        is stated once and they cannot drift apart. */
     --mobile-overlay-bottom: calc(var(--tabbar-height) + var(--tabbar-inset) * 2 + var(--inset-bottom));
-    /* Raised by the shell to --context-action-clearance while the upload button
-       is showing, so nothing else settles on top of it. */
-    --mobile-fab-clearance: 0px;
     --selection-bar-reserve: calc(76px + var(--inset-bottom));
     --context-action-clearance: calc(52px + var(--space-4));
+    /* The widest a column of file rows or settings should run before it stops
+       being a line the eye can track; iPads and landscape phones centre within
+       it rather than stretching the phone layout to the glass. */
+    --mobile-reading-width: 720px;
     --mobile-type-caption: 0.75rem;
     --mobile-type-meta: 0.8125rem;
     --mobile-type-body: 0.9375rem;
@@ -54,7 +55,34 @@ html.mobile #success-screen.mobile-shell {
     min-height: 0;
     background: var(--color-canvas);
     overflow: hidden;
+    /* No double-tap zoom on the app chrome. The viewers set their own
+       touch-action for pinch and live in the overlay layer outside this root,
+       so their gestures are untouched. */
+    touch-action: manipulation;
 }
+
+/* Said once for the shell's controls rather than repeated on every surface: no
+   grey flash on tap, and no callout menu on a long press (which the long-press
+   selection and the row menus own instead). */
+html.mobile button,
+html.mobile a,
+html.mobile input,
+html.mobile label,
+html.mobile [role="button"],
+html.mobile [role="menuitem"],
+html.mobile [role="menuitemradio"],
+html.mobile .gallery-cell,
+html.mobile .album-tile {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+}
+
+/* The desktop 8px scrollbar (styles/base.css) has no place on a phone; the file
+   list already hid its own, and every other phone scroller -- Transfers,
+   Account, the photo grid, the drive sheet, the sheet bodies -- hides it here. */
+html.mobile *,
+html.mobile *::-webkit-scrollbar { scrollbar-width: none; }
+html.mobile *::-webkit-scrollbar { width: 0; height: 0; }
 
 html.mobile .mobile-body {
     position: relative;
@@ -198,7 +226,15 @@ html.mobile .topbar-done:active { background: var(--overlay-accent-1); }
 /* Empty trash is the bar's one destructive action, and reads as one. */
 html.mobile .topbar-done.topbar-danger { color: var(--color-danger); }
 html.mobile .topbar-done.topbar-danger:active { background: var(--overlay-danger-1); }
-html.mobile .topbar-trash .topbar-plain-titles { flex: 1 1 auto; min-width: 0; }
+html.mobile .topbar-trash .topbar-plain-titles,
+html.mobile .topbar-photos .topbar-plain-titles { flex: 1 1 auto; min-width: 0; }
+/* An album name can be long, so it clips the way a folder's does rather than
+   shoving Select off the trailing edge. */
+html.mobile .topbar-photos .topbar-title {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 
 /* Drive header: the one bold element (spec 2.2). Name, live sync ring, then the
    kind and item count on a quiet second line. The name opens the switcher; the
@@ -346,6 +382,30 @@ html.mobile .topbar-menu-item {
 }
 html.mobile .topbar-menu-item[aria-checked='true'] { color: var(--color-accent); }
 html.mobile .topbar-menu-item:active { background: var(--overlay-neutral-2); }
+/* Splits the sort radios from the actions beneath them. */
+html.mobile .topbar-menu-sep {
+    height: 1px;
+    margin: var(--space-1) 0;
+    background: var(--color-border-soft);
+}
+
+/* Secondary to Done: it sets the selection rather than leaving it, so it stays
+   quiet while Done keeps the accent. */
+html.mobile .topbar-selectall {
+    display: inline-grid;
+    place-items: center;
+    min-width: 44px;
+    height: 44px;
+    padding: 0 var(--space-2);
+    border: 0;
+    background: transparent;
+    color: var(--color-text-soft);
+    font-size: 1rem;
+    font-weight: var(--weight-medium);
+    border-radius: var(--radius-md);
+    cursor: pointer;
+}
+html.mobile .topbar-selectall:active { background: var(--overlay-neutral-2); }
 
 /* The search band collapses to nothing and grows back. Height is animated to a
    known value rather than to `auto`, which no engine interpolates, and the
@@ -392,6 +452,15 @@ html.mobile .topbar-search input {
     border-radius: var(--radius-md);
 }
 html.mobile .topbar-search input::placeholder { color: var(--color-text-muted); }
+/* type=search gives the phone keyboard a search key; drop WebKit's own clear
+   button, since the field has its own close control and a reset decoration here
+   would sit under the one the design already draws. */
+html.mobile .topbar-search input::-webkit-search-cancel-button,
+html.mobile .topbar-search input::-webkit-search-decoration {
+    -webkit-appearance: none;
+    appearance: none;
+    display: none;
+}
 html.mobile .topbar-search input:focus-visible {
     outline: none;
     border-color: var(--color-accent);
@@ -682,7 +751,13 @@ html.mobile .mobile-selection-bar {
     z-index: var(--z-selection);
     flex-wrap: wrap;
     gap: var(--space-2);
-    padding: var(--space-3) var(--space-4) calc(var(--space-3) + var(--inset-bottom));
+    /* Side insets so the actions clear the notch and the home bar when the
+       phone is turned; in portrait the insets are zero and nothing moves. */
+    padding:
+        var(--space-3)
+        calc(var(--space-4) + var(--inset-right))
+        calc(var(--space-3) + var(--inset-bottom))
+        calc(var(--space-4) + var(--inset-left));
     background: var(--color-surface-0);
     border-top: 1px solid var(--color-border-soft);
 }
@@ -1063,18 +1138,14 @@ html.mobile .mobile-empty-title { font-size: 1.0625rem; font-weight: var(--weigh
 html.mobile .mobile-empty-body { font-size: 0.875rem; color: var(--color-text-muted); max-width: 36ch; }
 
 /* ============================ TOASTS ============================ */
-/* The stack clears the tab bar and, where one is showing, the upload button
-   too: the toast a tap on Upload raises used to land on the button that
-   raised it. --mobile-fab-clearance is published by the shell and is 0 on the
-   tabs that carry no action.
-
-   Gutters match the content cards rather than a viewport percentage, so a
-   toast lines up with the list underneath instead of floating at its own
-   width. */
+/* Keep notices below the top bar so they do not cover navigation controls.
+   They remain in the upper part of the screen and clear the system safe area. */
 html.mobile #toast-stack.toast-stack {
+    top: calc(var(--inset-top) + 76px);
     left: calc(var(--space-4) + var(--inset-left));
     right: calc(var(--space-4) + var(--inset-right));
-    bottom: calc(var(--mobile-overlay-bottom) + var(--mobile-fab-clearance));
+    bottom: auto;
+    transform: none;
     width: auto;
     max-width: none;
     align-items: stretch;
@@ -1085,9 +1156,9 @@ html.mobile #toast-stack.toast-stack {
    bars elsewhere in the shell are opaque and flat because they own their strip
    of the screen; this one is borrowing it. */
 html.mobile .toast {
-    background: var(--color-surface-2);
-    border-color: var(--color-border);
-    box-shadow: var(--shadow-md);
+    background: var(--color-surface-1);
+    border-color: var(--color-border-soft);
+    box-shadow: var(--shadow-sm);
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
     /* The whole surface is a drag target (see swipe-dismiss.ts); without this
@@ -1099,11 +1170,21 @@ html.mobile .toast {
     animation: tdrive-toast-enter var(--motion-med) var(--ease-enter) backwards;
 }
 
-/* It arrives from the edge it lives on. The desktop toast scales out of the
-   bottom-right corner it is anchored to; this one is anchored to the bottom of
-   the screen, and rising from there is the same idea told honestly. */
+html.mobile .toast-with-action {
+    grid-template-columns: 22px minmax(0, 1fr) 32px;
+}
+html.mobile .toast-with-action .toast-content { grid-column: 2; grid-row: 1; }
+html.mobile .toast-with-action .toast-action {
+    grid-column: 2;
+    grid-row: 2;
+    justify-self: start;
+    margin-top: 0;
+}
+html.mobile .toast-with-action .toast-close { grid-column: 3; grid-row: 1; }
+
+/* It arrives from the edge it lives on, and a swipe up returns it there. */
 @keyframes tdrive-toast-enter {
-    from { opacity: 0; transform: translateY(12px); }
+    from { opacity: 0; transform: translateY(-12px); }
     to { opacity: 1; transform: translateY(0); }
 }
 
@@ -1259,6 +1340,21 @@ html.mobile .file-row { background-clip: padding-box; }
     /* The settle is travel, so it goes; the row still arrives where the
        gesture asked, just without the glide. */
     html.mobile .file-row { transition: none !important; }
+}
+
+/* ============================ WIDE AND LANDSCAPE ============================ */
+/* On an iPad or a landscape phone the phone layout would otherwise run file
+   names and settings the full width of the glass. Cap the reading column and
+   centre it; the photo grid stays edge to edge and the floating tab bar keeps
+   its own width and reach. */
+@media (min-width: 700px) {
+    html.mobile #file-list,
+    html.mobile .account-tab,
+    html.mobile .transfers-tab {
+        width: 100%;
+        max-width: var(--mobile-reading-width);
+        margin-inline: auto;
+    }
 }
 
 /* ============================ REDUCED MOTION ============================ */

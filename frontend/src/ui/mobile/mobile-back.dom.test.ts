@@ -64,12 +64,23 @@ describe('android back', () => {
         expect(navigateBack).not.toHaveBeenCalled();
     });
 
-    it('returns to the files tab from another tab and closes the trash with it', () => {
+    // Back from a background tab returns to Files as it was left: the trash the
+    // user opened is still showing, not closed out from under them.
+    it('returns to the files tab and keeps the trash it was showing', () => {
         sidebarState.update((current) => ({ ...current, virtualView: 'trash' }));
         activeTab.set('account');
         expect(handleBackPress()).toBe(true);
         expect(get(activeTab)).toBe('files');
-        expect(closeTrash).toHaveBeenCalledTimes(1);
+        expect(closeTrash).not.toHaveBeenCalled();
+    });
+
+    // A chat source the Files tab was showing survives the round trip too.
+    it('returns to the files tab and keeps an open chat source', () => {
+        openChannelKey.set('7:user:42:g');
+        activeTab.set('transfers');
+        expect(handleBackPress()).toBe(true);
+        expect(get(activeTab)).toBe('files');
+        expect(get(openChannelKey)).toBe('7:user:42:g');
     });
 
     it('closes an open sheet before anything underneath it', () => {

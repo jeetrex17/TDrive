@@ -178,7 +178,6 @@ export function createMountController(
             id: 'mount-drive',
             level: 'info',
             title: `Mounting ${get(state).label}...`,
-            sticky: true,
             spinner: true,
         });
         return trackMutation(async () => {
@@ -202,7 +201,6 @@ export function createMountController(
                             id: 'mount-drive',
                             level: 'info',
                             title: 'Mount cancelled',
-                            sticky: false,
                             spinner: false,
                         });
                         return;
@@ -279,7 +277,6 @@ export function createMountController(
             id: 'mount-drive',
             level: 'info',
             title: 'Ejecting Tdrive...',
-            sticky: true,
             spinner: true,
         });
         return trackMutation(async () => {

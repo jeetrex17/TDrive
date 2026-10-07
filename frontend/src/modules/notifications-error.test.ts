@@ -9,7 +9,7 @@ import { toasts } from '../ui/notifications/toast-store';
 beforeEach(() => clearAllNotifications());
 
 describe('notifyAppError', () => {
-    it('publishes only redacted user copy as a sticky error', () => {
+    it('publishes only redacted user copy as a timed error', () => {
         const notificationId = notifyAppError(
             new Error('token=super-secret failed at /Users/alice/TDrive/cache.db'),
             { id: 'safe-error', title: 'Could not open file', source: 'backend' },
@@ -22,7 +22,8 @@ describe('notifyAppError', () => {
                 level: 'error',
                 title: 'Could not open file',
                 body: 'token=[redacted] failed at [local path]',
-                sticky: true,
+                sticky: false,
+                durationMs: 8_000,
             }),
         ]);
         expect(JSON.stringify(get(toasts))).not.toContain('super-secret');

@@ -36,6 +36,7 @@ vi.mock('./context-menu', () => ({ showRowContextMenu: vi.fn() }));
 import FileList from '../ui/file-list/FileList.svelte';
 import { fileListView } from '../ui/file-list/file-list-store';
 import { state } from '../state';
+import { openNewFolderModal } from './modals/folder';
 import { canOwnerActOnFile, buildFileRow, refreshFiles, resetFileListScrollRestore } from './file-list';
 
 let list: HTMLDivElement;
@@ -190,11 +191,22 @@ it.each([true, false])('shows an actionable navigation failure (offline=%s)', as
     expect(deps.refresh).toHaveBeenCalledTimes(1);
 });
 
-it('offers the upload picker in an empty desktop folder', async () => {
+it('offers the upload picker and New folder in an empty desktop folder', async () => {
     api.getFolderContents.mockResolvedValue({ folders: [], files: [] });
     refreshFiles(); await expectText('This folder is empty');
-    list.querySelector<HTMLButtonElement>('.file-state-actions button')?.click();
+    const buttons = Array.from(list.querySelectorAll<HTMLButtonElement>('.file-state-actions button'));
+    expect(buttons.map((button) => button.textContent?.trim())).toEqual(['Upload files', 'New folder']);
+    buttons[0].click();
     expect(deps.upload).toHaveBeenCalledTimes(1);
+    buttons[1].click();
+    expect(vi.mocked(openNewFolderModal)).toHaveBeenCalledTimes(1);
+});
+
+it('leaves a folder size blank until a real size is known', async () => {
+    api.getFolderContents.mockResolvedValue({ folders: [{ id: 'empty', name: 'Empty', parentId: '' }], files: [] });
+    deps.stats.mockResolvedValue(new Map());
+    refreshFiles(); await expectText('Empty');
+    expect(list.querySelector('.folder-row .folder-size')?.textContent).toBe('');
 });
 
 it('refreshes uploader labels only while the shared-drive request is current', async () => {

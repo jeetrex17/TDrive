@@ -7,12 +7,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import DeleteModal from '../../ui/modals/DeleteModal.svelte';
-import { closeDeleteModalView } from '../../ui/modals/delete-modal-store';
+import { closeDeleteModalView, deleteModalState } from '../../ui/modals/delete-modal-store';
 
 const deleteFileMock = vi.fn();
+const restoreMock = vi.fn();
 const appActionMocks = vi.hoisted(() => ({ refreshFiles: vi.fn() }));
 vi.mock('../../../bindings/TDrive/internal/app/app', () => ({
     DeleteFile: (...args: unknown[]) => deleteFileMock(...args),
+    RestoreFromTrash: (...args: unknown[]) => restoreMock(...args),
 }));
 vi.mock('../drive-data', () => ({
     deleteFolder: vi.fn(),
@@ -23,6 +25,7 @@ import { confirmDelete, openDeleteModal } from './delete';
 import { busyRowIds } from '../../ui/file-list/busy-rows';
 import { toasts } from '../../ui/notifications/toast-store';
 import { get } from 'svelte/store';
+import { state } from '../../state';
 
 let host: HTMLElement;
 let app: Record<string, unknown> | null = null;
@@ -35,6 +38,7 @@ function click(selector: string): void {
 }
 
 beforeEach(() => {
+    state.activeChannel = { id: 11, title: 'First drive', kind: 'personal' };
     host = document.createElement('div');
     host.id = 'delete-modal';
     document.body.appendChild(host);
@@ -49,8 +53,30 @@ afterEach(async () => {
     app = null;
     host.remove();
     deleteFileMock.mockReset();
+    restoreMock.mockReset();
     appActionMocks.refreshFiles.mockReset();
     toasts.set([]);
+    state.activeChannel = null;
+});
+
+describe('openDeleteModal copy', () => {
+    it('describes moving a file to the Trash, not deleting from Telegram', () => {
+        openDeleteModal({ type: 'file', id: 1, name: 'a.png' });
+        const view = get(deleteModalState);
+        expect(view.title).toBe('Move file to Trash?');
+        expect(view.confirmLabel).toBe('Move to Trash');
+        expect(view.subtitle).toContain('Trash');
+        expect(view.subtitle).not.toContain('Telegram');
+        expect(view.subtitle.toLowerCase()).not.toContain("can't be undone");
+    });
+
+    it('describes moving a folder and its contents to the Trash', () => {
+        openDeleteModal({ type: 'folder', id: 'd:1', name: 'Docs' });
+        const view = get(deleteModalState);
+        expect(view.title).toBe('Move folder to Trash?');
+        expect(view.subtitle).toContain('everything inside it');
+        expect(view.subtitle).toContain('Trash');
+    });
 });
 
 describe('confirmDelete (single file)', () => {
@@ -75,15 +101,58 @@ describe('confirmDelete (single file)', () => {
         await vi.waitFor(() => expect(appActionMocks.refreshFiles).toHaveBeenCalledTimes(1));
     });
 
-    it('says nothing on success: the row the user was looking at is gone', async () => {
+    it('confirms the move to Trash on success', async () => {
         deleteFileMock.mockResolvedValue({ ok: true });
 
         openDeleteModal({ type: 'file', id: 43, name: 'real.png' });
         flushSync();
         click('#delete-confirm');
 
-        await vi.waitFor(() => expect(appActionMocks.refreshFiles).toHaveBeenCalledTimes(1));
-        expect(get(toasts)).toEqual([]);
+        await vi.waitFor(() => expect(get(toasts)).toHaveLength(1));
+        const [toast] = get(toasts);
+        expect(toast.level).toBe('success');
+        expect(toast.title).toBe('Moved to Trash');
+        expect(toast.action?.label).toBe('Undo');
+    });
+
+    it('restores the file from the Trash when Undo is pressed', async () => {
+        deleteFileMock.mockResolvedValue({ ok: true });
+        restoreMock.mockResolvedValue({ ok: true });
+
+        openDeleteModal({ type: 'file', id: 43, name: 'real.png' });
+        flushSync();
+        click('#delete-confirm');
+
+        await vi.waitFor(() => expect(get(toasts)).toHaveLength(1));
+        get(toasts)[0].action?.run();
+
+        // The just-deleted file is addressed in the trash as `f:<msgId>`.
+        await vi.waitFor(() => expect(restoreMock).toHaveBeenCalledWith(11, 'f:43'));
+        await vi.waitFor(() => expect(appActionMocks.refreshFiles).toHaveBeenCalledTimes(2));
+    });
+
+    it('does not redirect the second bulk Undo restore after a drive switch', async () => {
+        deleteFileMock.mockResolvedValue({ ok: true });
+        let finishFirst: (result: unknown) => void = () => {};
+        restoreMock.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }));
+
+        openDeleteModal({ type: 'bulk', parentId: '', items: [
+            { type: 'file', id: 43, name: 'one.png' },
+            { type: 'file', id: 44, name: 'two.png' },
+        ] });
+        flushSync();
+        click('#delete-confirm');
+        await vi.waitFor(() => expect(deleteFileMock).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => expect(get(toasts)[0]?.action?.label).toBe('Undo'));
+
+        get(toasts)[0].action?.run();
+        await vi.waitFor(() => expect(restoreMock).toHaveBeenCalledTimes(1));
+        state.activeChannel = { id: 22, title: 'Second drive', kind: 'shared' };
+        finishFirst({ ok: true });
+
+        await vi.waitFor(() => expect(get(toasts).some((toast) => toast.title.includes('Switch back'))).toBe(true));
+        expect(restoreMock).toHaveBeenCalledTimes(1);
+        expect(appActionMocks.refreshFiles).toHaveBeenCalledTimes(1);
     });
 
     it('still says so when it fails, because nothing else on screen will', async () => {

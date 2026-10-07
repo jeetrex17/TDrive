@@ -58,6 +58,9 @@
     const queue = $derived($backupState ? queueProgress($backupState.status) : null);
     const startable = $derived($backupState ? canStart($backupState) : false);
     const phone = $derived($backupState?.platform === 'android' || $backupState?.platform === 'ios');
+    // iOS has no background execution, so backup only runs while TDrive is open.
+    // The switch subtitle says so; Android's foreground service keeps the plain copy.
+    const whileOpen = $derived($backupState?.platform === 'ios');
     // Only a restriction is worth a line; full access is the expected case.
     const accessNote = $derived(($backupState && !['', 'available', 'granted'].includes($backupState.capabilities.access.status)) ? $backupState.capabilities.access.detail : '');
     // Watched folders are walked all the way down and arrive in the drive with
@@ -91,7 +94,7 @@
         <div class="pb-master pb-card">
             <SwitchRow
                 title="Back up photos & videos"
-                description={state.settings.enabled ? destinationLabel(state.destination.title) || 'In this drive' : 'Keep a copy of new photos and videos in this drive.'}
+                description={state.settings.enabled ? destinationLabel(state.destination.title) || 'In this drive' : whileOpen ? 'Keep a copy of new photos and videos in this drive while TDrive is open.' : 'Keep a copy of new photos and videos in this drive.'}
                 checked={state.settings.enabled}
                 disabled={$busy}
                 onchange={(enabled) => save({ enabled })}

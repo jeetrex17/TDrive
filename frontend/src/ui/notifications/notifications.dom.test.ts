@@ -186,7 +186,7 @@ describe('notification interaction controls', () => {
         expect(queued.querySelector('.notif-row-meta')?.textContent?.trim()).toBe('Waiting its turn');
 
         const paused = mountComponent(TransferRow, { transfer: makeTransfer({ status: 'paused' }) });
-        expect(paused.querySelector('.notif-row-meta')?.textContent?.trim()).toBe('Paused');
+        expect(paused.querySelector('.notif-row-meta')?.textContent?.trim()).toBe('Paused while TDrive was in the background');
 
         // A folder still being walked has no fraction to be, so its bar reports
         // no value at all rather than a zero it would be read as stalled at.

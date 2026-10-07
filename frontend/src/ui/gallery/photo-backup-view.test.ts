@@ -46,6 +46,16 @@ describe('describeBackup', () => {
         expect(describeBackup(state({}, { phase: 'failed', failed: 1, message: 'Telegram is unavailable.' }))).toMatchObject({ tone: 'danger', title: '1 item could not be backed up', detail: 'Telegram is unavailable.', primary: 'retry' });
     });
 
+    it('tells iOS that backup only runs while TDrive is open, and leaves Android be', () => {
+        const off = (platform: PhotoBackupState['platform']) => describeBackup(state({ platform, settings: { ...state().settings, enabled: false } })).body;
+        const done = (platform: PhotoBackupState['platform']) => describeBackup(state({ platform }, { phase: 'complete', complete: 1 })).body;
+        expect(off('ios')).toContain('while TDrive is open');
+        expect(done('ios')).toContain('while TDrive is open');
+        // Android's foreground service keeps running, so its copy stays plain.
+        expect(off('android')).not.toContain('while TDrive is open');
+        expect(done('android')).toBe('');
+    });
+
     it('does not call a mobile backup complete while folder discovery has more pages', () => {
         const mobile = state({
             platform: 'android',

@@ -17,7 +17,11 @@
     justify-content: center;
     gap: var(--space-2);
 }
-.primary-btn:hover { background: var(--accent-hover); transform: translateY(-1px); }
+/* Hover effects only where a pointer can hover: on touch the lift sticks after
+   a tap until the next interaction clears it. */
+@media (hover: hover) {
+    .primary-btn:hover { background: var(--accent-hover); transform: translateY(-1px); }
+}
 .primary-btn:active { transform: translateY(0); }
 
 .secondary-btn {
@@ -38,11 +42,15 @@
     justify-content: center;
     gap: var(--space-2);
 }
-.secondary-btn:hover { background: var(--bg-panel); }
+@media (hover: hover) {
+    .secondary-btn:hover { background: var(--bg-panel); }
+}
 .secondary-btn:active { transform: translateY(0.5px); }
 
 .danger-btn { background: var(--danger); color: var(--color-on-danger); }
-.danger-btn:hover { filter: brightness(0.95); }
+@media (hover: hover) {
+    .danger-btn:hover { filter: brightness(0.95); }
+}
 
 .icon-btn {
     background: transparent; border: 1px solid var(--border); color: var(--text-muted);
@@ -123,16 +131,29 @@
 
 /* An inline action inside a sentence: "Older posts did not load. Try again" */
 .link-button {
+    position: relative;
     padding: 0;
     border: 0;
     border-radius: var(--radius-xs);
     background: none;
-    color: var(--accent);
+    color: var(--color-accent-text);
     font: inherit;
     font-weight: var(--weight-semibold);
     cursor: pointer;
 }
 .link-button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+/* On a phone the inline link gets a full touch target through an invisible hit
+   area, the way IconButton does, without changing where the text sits. */
+html.mobile .link-button::after {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 100%;
+    min-width: var(--touch-target);
+    height: var(--touch-target);
+    transform: translate(-50%, -50%);
+    content: '';
+}
 
 @media (prefers-reduced-motion: reduce) {
     .search-field { transition: none; }

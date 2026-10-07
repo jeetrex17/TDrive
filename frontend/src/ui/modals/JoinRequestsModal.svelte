@@ -8,9 +8,10 @@
 
     interface Props {
         onAction: (userId: number, approved: boolean) => void | Promise<void>;
+        onRetry: () => void;
     }
 
-    let { onAction }: Props = $props();
+    let { onAction, onRetry }: Props = $props();
 
     const view = joinRequestsModal.state;
     const list = joinRequestsList;
@@ -40,9 +41,12 @@
 >
     <div id="join-requests-list" class="join-requests-list">
         {#if $list.status === 'loading'}
-            <div class="modal-empty">Loading requests...</div>
+            <div class="modal-empty">Loading requests…</div>
         {:else if $list.status === 'error'}
-            <div class="modal-error" role="alert">Failed to load requests: {$list.message}</div>
+            <div class="modal-error join-requests-error" role="alert">
+                <span>We couldn't load the requests. {$list.message}</span>
+                <button type="button" class="link-button" onclick={onRetry}>Try again</button>
+            </div>
         {:else if $list.rows.length === 0}
             <div class="modal-empty">No pending requests.</div>
         {:else}
@@ -79,3 +83,14 @@
         <button id="join-requests-close" class="secondary-btn" type="button" onclick={close}>Close</button>
     {/snippet}
 </ModalShell>
+
+<style>
+    /* The humanised reason sits above its own Try again, so the retry is not
+       buried at the end of a sentence. */
+    .join-requests-error {
+        display: flex;
+        flex-direction: column;
+        align-items: flex-start;
+        gap: var(--space-2);
+    }
+</style>

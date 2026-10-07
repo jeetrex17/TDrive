@@ -4,6 +4,7 @@ import DeleteModal from './DeleteModal.svelte';
 import EncryptionPasswordModal from './EncryptionPasswordModal.svelte';
 import ImportOptionsModal from './ImportOptionsModal.svelte';
 import JoinRequestsModal from './JoinRequestsModal.svelte';
+import LeaveDriveModal from './LeaveDriveModal.svelte';
 import LogoutModal from './LogoutModal.svelte';
 import MoveModal from './MoveModal.svelte';
 import RenameModal from './RenameModal.svelte';
@@ -19,7 +20,9 @@ import { encryptionPasswordModal } from './encryption-password-modal-store';
 import { importOptionsModal, type ImportOptionsPlan } from './import-options-modal-store';
 import { joinRequestsList, joinRequestsModal } from './join-requests-modal-store';
 import { logoutModal } from './logout-modal-store';
+import { closeLeaveDriveModalView, openLeaveDriveModalView } from './leave-drive-modal-store';
 import { moveBrowse, moveModal, resetMoveBrowse } from './move-modal-store';
+import { sidebarState } from '../sidebar/sidebar-store';
 import { uploadOptionsModal } from './upload-options-modal-store';
 
 const noop = () => {};
@@ -48,6 +51,7 @@ afterEach(() => {
     joinRequestsModal.close();
     joinRequestsList.set({ status: 'loading' });
     logoutModal.close();
+    closeLeaveDriveModalView();
     moveModal.close();
     resetMoveBrowse('');
     uploadOptionsModal.close();
@@ -118,6 +122,14 @@ describe('RenameModal', () => {
         expect(body).toContain('id="rename-input"');
     });
 
+    it('gives the field a visible label tied to the input', () => {
+        openRenameModalView({ type: 'file', id: 42, name: 'a.txt' });
+
+        const { body } = render(RenameModal, { props: { onSubmit: () => {} } });
+
+        expect(body).toContain('<label class="field-label" for="rename-input">File name</label>');
+    });
+
     it('renders the store error inline', () => {
         openRenameModalView({ type: 'file', id: 42, name: 'a.txt' });
         setRenameModalError("Name can't include / or \\.");
@@ -140,14 +152,30 @@ describe('RenameModal', () => {
 });
 
 describe('LogoutModal', () => {
-    it('renders both modes with a danger confirm', () => {
+    it('defaults to a non-destructive quick logout', () => {
         logoutModal.open(null);
 
         const { body } = render(LogoutModal, { props: { onConfirm: noop } });
+        const confirm = body.match(/<button[^>]*id="logout-confirm"[^>]*>[^<]*/)?.[0] ?? '';
 
         expect(body).toContain('Quick logout');
-        expect(body).toContain('Log out and reset');
-        expect(body).toContain('class="primary-btn danger"');
+        // The reset choice is still offered as a radio option.
+        expect(body).toContain('>Log out and reset</strong>');
+        // The confirm follows the selected (soft) option: plain primary, not danger.
+        expect(confirm).toContain('primary-btn');
+        expect(confirm).not.toContain('danger');
+        expect(confirm).toContain('>Log out');
+    });
+});
+
+describe('LeaveDriveModal', () => {
+    it('uses the real danger button style', () => {
+        openLeaveDriveModalView({ id: 7, title: 'Team Drive' });
+
+        const { body } = render(LeaveDriveModal, { props: { onConfirm: noop } });
+
+        expect(body).toContain('primary-btn danger-btn');
+        expect(body).toContain('Leave "Team Drive"');
     });
 });
 
@@ -287,11 +315,11 @@ describe('JoinRequestsModal', () => {
         joinRequestsModal.open({ driveId: 7, title: 'Team Drive' });
 
         joinRequestsList.set({ status: 'loading' });
-        expect(render(JoinRequestsModal, { props: { onAction: noop } }).body)
-            .toContain('Loading requests...');
+        expect(render(JoinRequestsModal, { props: { onAction: noop, onRetry: noop } }).body)
+            .toContain('Loading requests…');
 
         joinRequestsList.set({ status: 'ready', rows: [], actingUserId: 0 });
-        expect(render(JoinRequestsModal, { props: { onAction: noop } }).body)
+        expect(render(JoinRequestsModal, { props: { onAction: noop, onRetry: noop } }).body)
             .toContain('No pending requests.');
 
         joinRequestsList.set({
@@ -299,11 +327,21 @@ describe('JoinRequestsModal', () => {
             rows: [{ userId: 42, displayName: 'Ada L.', username: 'ada', requestedAt: 0 }],
             actingUserId: 0,
         });
-        const { body } = render(JoinRequestsModal, { props: { onAction: noop } });
+        const { body } = render(JoinRequestsModal, { props: { onAction: noop, onRetry: noop } });
         expect(body).toContain('Pending requests for Team Drive.');
         expect(body).toContain('Ada L.');
         expect(body).toContain('>Approve</button>');
         expect(body).toContain('>Reject</button>');
+    });
+
+    it('shows the reason and a Try again control on failure', () => {
+        joinRequestsModal.open({ driveId: 7, title: 'Team Drive' });
+        joinRequestsList.set({ status: 'error', message: 'The network is unreachable.' });
+
+        const { body } = render(JoinRequestsModal, { props: { onAction: noop, onRetry: noop } });
+
+        expect(body).toContain('The network is unreachable.');
+        expect(body).toContain('>Try again</button>');
     });
 });
 
@@ -335,6 +373,8 @@ describe('MoveModal', () => {
         expect(body).toContain('Move to "');
         expect(body).toContain('Open me');
         expect(body).toContain('is-disabled');
+        // A blocked folder says why rather than offering a dead drill-in.
+        expect(body).toContain("Can't move here");
     });
 
     it('renders the loading state at the root', () => {
@@ -346,7 +386,41 @@ describe('MoveModal', () => {
         });
 
         expect(body).toContain('Move 2 items');
-        expect(body).toContain('Loading folders...');
-        expect(body).toContain('My Drive');
+        expect(body).toContain('Loading folders…');
+    });
+
+    it('names the active drive as the root rather than always "My Drive"', () => {
+        sidebarState.set({
+            personal: [],
+            shared: [{ id: 9, title: 'Team Drive', kind: 'shared', isActive: true, inviteLink: '' }],
+            pending: [],
+            activeChannelId: 9,
+            virtualView: null,
+        });
+        resetMoveBrowse('');
+        moveModal.open({ title: 'Move 1 item' });
+
+        const { body } = render(MoveModal, {
+            props: { onOpenFolder: noop, onCrumb: noop, onBack: noop, onConfirm: noop },
+        });
+
+        expect(body).toContain('Team Drive');
+        expect(body).not.toContain('My Drive');
+        sidebarState.set({ personal: [], shared: [], pending: [], activeChannelId: null, virtualView: null });
+    });
+
+    it('explains why a destination is disabled and ties it to the confirm', () => {
+        resetMoveBrowse(''); // the items already live at the root
+        moveModal.open({ title: 'Move "a.txt"' });
+
+        const { body } = render(MoveModal, {
+            props: { onOpenFolder: noop, onCrumb: noop, onBack: noop, onConfirm: noop },
+        });
+
+        expect(body).toContain('id="move-disabled-reason"');
+        expect(body).toContain('already in this folder');
+        const confirm = body.match(/<button[^>]*id="move-confirm"[^>]*>/)?.[0] ?? '';
+        expect(confirm).toContain('aria-describedby="move-disabled-reason"');
+        expect(confirm).toContain('disabled');
     });
 });

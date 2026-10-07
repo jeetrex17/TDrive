@@ -19,6 +19,7 @@ import { beginRender, cachedThumb, rearmLocked, setActive, setRoot, teardown as 
 import { albumsView, galleryView, photosMode, type PhotosMode } from '../ui/gallery/gallery-store';
 import { albumsWorthShowing, buildAlbumTiles, type AlbumTile } from '../ui/gallery/album-view';
 import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
+import { pushSheet, type SheetHandle } from '../ui/modals/sheet-stack';
 import { clearSidebarVirtualView, setSidebarVirtualView } from '../ui/sidebar/sidebar-store';
 import { closeChannel } from '../ui/channels/channel-store';
 import type { PreviewNavigationItem } from './modals/preview';
@@ -65,6 +66,7 @@ export function activateGallery(): () => void {
 export function teardownGallery(): void {
     renderToken += 1;
     backgroundRenderToken += 1;
+    releaseAlbumBack();
     galleryEl?.removeEventListener('click', onGalleryClick);
     window.removeEventListener('tdrive:unlocked', rearmLocked);
     for (const cleanup of touchCleanups.splice(0)) cleanup();
@@ -178,11 +180,29 @@ function sameMode(left: PhotosMode, right: PhotosMode): boolean {
 /** Where the album grid was scrolled to when an album was opened from it. */
 let albumsScrollTop = 0;
 
+// Being inside an album is a step back from the grid, not out of Photos. It
+// claims the shared back stack so Android BACK and the iOS edge swipe return to
+// the Albums grid rather than falling through to leaveVirtualView and quitting
+// the gallery. The claim is released the moment the view is anything but an
+// album, and on teardown, so nothing it registered outlives the album.
+let albumBack: SheetHandle | null = null;
+
+function syncAlbumBack(mode: PhotosMode): void {
+    if (mode.kind === 'album') albumBack ??= pushSheet(() => { void showPhotos({ kind: 'albums' }); });
+    else releaseAlbumBack();
+}
+
+function releaseAlbumBack(): void {
+    albumBack?.release();
+    albumBack = null;
+}
+
 export async function showPhotos(mode: PhotosMode): Promise<void> {
     const previous = get(photosMode);
     if (sameMode(previous, mode)) return;
     if (previous.kind === 'albums' && galleryEl) albumsScrollTop = galleryEl.scrollTop;
     photosMode.set(mode);
+    syncAlbumBack(mode);
     if (galleryEl) galleryEl.scrollTop = 0;
     // Asking for the grid is an entry: its counts are recomputed, and the
     // explicit choice then survives the render below.
@@ -217,6 +237,9 @@ export async function renderGallery({ background = false, staleRetry = false }: 
         // asked for, or the old timeline sits on screen until they arrive.
         if (currentChannelId !== channelId) dropGallerySource();
         photosMode.set(defaultPhotosMode(await loadAlbums(channelId)));
+        // Arriving in Photos or in another drive lands on the grid or the
+        // timeline, never inside an album, so any album back claim is spent.
+        releaseAlbumBack();
         if (token !== renderToken || !galleryEl) return;
     }
     const mode = get(photosMode);
@@ -402,6 +425,7 @@ export function enterPhotos(): void {
 
 export function exitPhotos(): void {
     if (state.virtualView !== 'photos') return;
+    releaseAlbumBack();
     state.virtualView = null;
     appActions().refreshFiles({ background: true });
 }

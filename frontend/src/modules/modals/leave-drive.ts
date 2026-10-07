@@ -21,7 +21,6 @@ export async function confirmLeaveDrive(target: LeaveDriveTarget): Promise<void>
         id: 'leaving-drive',
         level: 'info',
         title: 'Leaving drive…',
-        sticky: true,
         spinner: true,
     });
 

@@ -4,11 +4,13 @@
     import FolderIcon from '@lucide/svelte/icons/folder';
     import ModalShell from './ModalShell.svelte';
     import { isMobilePlatform } from '../../api';
+    import { sidebarState } from '../sidebar/sidebar-store';
+    import { pushSheet } from './sheet-stack';
     import { moveBrowse, moveModal, type MoveFolderEntry } from './move-modal-store';
 
     interface Props {
         onOpenFolder: (entry: MoveFolderEntry) => void;
-        // crumbIndex -1 targets the root ("My Drive"), otherwise a path index.
+        // crumbIndex -1 targets the drive root, otherwise a path index.
         onCrumb: (crumbIndex: number) => void;
         onBack: () => void;
         onConfirm: () => void | Promise<void>;
@@ -19,11 +21,26 @@
     const view = moveModal.state;
     const browse = moveBrowse;
 
+    // The root is the active drive, named: a shared drive is not "My Drive".
+    const rootName = $derived.by(() => {
+        const { personal, shared, activeChannelId } = $sidebarState;
+        const active = [...personal, ...shared].find((drive) => drive.id === activeChannelId);
+        return active?.title?.trim() || 'My Drive';
+    });
+
     const currentId = $derived($browse.path[$browse.path.length - 1]?.id ?? '');
     // The phone sheet shows the destination in its breadcrumb, so its button
     // is the short verb; the desktop dialog keeps naming the target folder.
-    const currentName = $derived($browse.path[$browse.path.length - 1]?.name ?? 'My Drive');
+    const currentName = $derived($browse.path[$browse.path.length - 1]?.name ?? rootName);
     const confirmLabel = $derived(isMobilePlatform() ? 'Move here' : `Move to "${currentName}"`);
+    // Why the move is blocked, for helper text the button points at. Busy needs
+    // no reason: the spinner is the reason.
+    const disabledReason = $derived.by(() => {
+        if ($view.busy) return '';
+        if (currentId === $browse.sourceParent) return 'The items are already in this folder.';
+        if ($browse.blocked.has(currentId)) return "You can't move a folder into itself.";
+        return '';
+    });
     const confirmDisabled = $derived(
         $view.busy || $browse.blocked.has(currentId) || currentId === $browse.sourceParent,
     );
@@ -37,6 +54,16 @@
         if (confirmDisabled) return;
         void onConfirm();
     }
+
+    // On a phone, hardware Back walks up one folder before it leaves the sheet,
+    // the way Back works inside any drill-down. The entry sits above the dialog's
+    // own Back claim, so it is consumed first; at the root there is none and Back
+    // closes the sheet. The scrim, swipe and Cancel still dismiss outright.
+    $effect(() => {
+        if (!isMobilePlatform() || !$view.open || $browse.path.length === 0) return;
+        const handle = pushSheet(() => onBack());
+        return () => handle.release();
+    });
 </script>
 
 <ModalShell
@@ -74,7 +101,7 @@
                 disabled={$browse.path.length === 0}
                 onclick={() => onCrumb(-1)}
             >
-                My Drive
+                {rootName}
             </button>
             {#each $browse.path as segment, idx (segment.id)}
                 <span class="move-crumb-sep">/</span>
@@ -92,7 +119,7 @@
 
     <div id="move-list" class="move-list">
         {#if $browse.listing.status === 'loading'}
-            <div class="move-list-empty">Loading folders...</div>
+            <div class="move-list-empty">Loading folders…</div>
         {:else if $browse.listing.folders.length === 0}
             <div class="move-list-empty">No folders here.</div>
         {:else}
@@ -107,7 +134,11 @@
                         <FolderIcon size={16} strokeWidth={2} aria-hidden="true" />
                     </span>
                     <span class="move-item-name">{folder.name}</span>
-                    <ChevronRightIcon class="move-item-arrow" size={16} strokeWidth={2} aria-hidden="true" />
+                    {#if $browse.blocked.has(folder.id)}
+                        <span class="move-item-reason">Can't move here</span>
+                    {:else}
+                        <ChevronRightIcon class="move-item-arrow" size={16} strokeWidth={2} aria-hidden="true" />
+                    {/if}
                 </button>
             {/each}
         {/if}
@@ -115,13 +146,22 @@
 
     {#if $view.error}
         <div id="move-error" class="modal-error" role="alert">{$view.error}</div>
+    {:else if disabledReason}
+        <p id="move-disabled-reason" class="move-disabled-reason">{disabledReason}</p>
     {/if}
 
     {#snippet actions()}
         <button id="move-cancel" class="secondary-btn" type="button" disabled={$view.busy} onclick={close}>
             Cancel
         </button>
-        <button id="move-confirm" class="primary-btn" type="button" disabled={confirmDisabled} onclick={confirm}>
+        <button
+            id="move-confirm"
+            class="primary-btn"
+            type="button"
+            disabled={confirmDisabled}
+            aria-describedby={disabledReason ? 'move-disabled-reason' : undefined}
+            onclick={confirm}
+        >
             {confirmLabel}
         </button>
     {/snippet}

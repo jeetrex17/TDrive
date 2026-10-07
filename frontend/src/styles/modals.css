@@ -29,32 +29,42 @@
     font-size: 0.95rem;
     line-height: 1.35;
 }
+/* The name of the thing being deleted, as plain emphasised text. It used to sit
+   in a bordered, filled box that read as an input waiting to be typed into. */
 .delete-target-name {
     max-height: 5.5rem;
-    margin: 10px 0 14px;
-    padding: 10px 12px;
+    margin: var(--space-1) 0 var(--space-4);
     overflow: auto;
     overflow-wrap: anywhere;
     word-break: break-word;
     color: var(--color-text);
-    font-size: var(--type-sm);
-    line-height: 1.35;
-    border: 1px solid var(--border);
-    border-radius: var(--radius-md);
-    background: var(--overlay-white-1);
+    font-size: var(--type-base);
+    font-weight: var(--weight-semibold);
+    line-height: var(--leading-snug);
 }
+/* A visible label above a dialog field. The input keeps its accessible name
+   from the `for`/id link, so the placeholder no longer has to stand in for it. */
+.field-label {
+    display: block;
+    margin-bottom: var(--space-1-5);
+    color: var(--text-main);
+    font-size: var(--type-sm);
+    font-weight: var(--weight-medium);
+}
+/* Help text is already the muted role; the extra opacity put it under the
+   contrast floor in more than half the themes, so it is gone. */
 .field-help {
     color: var(--text-muted);
-    font-size: 0.78rem;
+    font-size: var(--type-sm);
     line-height: 1.35;
     margin: -8px 0 16px;
-    opacity: 0.78;
 }
 .modal-actions { display: flex; gap: 12px; justify-content: flex-end; align-items: center; }
-/* One size for both: the filled button is the heavier of the two by colour,
-   and it should not be the taller one as well. */
+/* Desktop dialog buttons are the 36px control size; the filled button is the
+   heavier of the two by colour and should not be the taller one as well. The
+   phone sheet overrides these to the 44px touch floor below. */
 .modal-actions .primary-btn,
-.modal-actions .secondary-btn { width: auto; min-height: 44px; padding: 12px 16px; }
+.modal-actions .secondary-btn { width: auto; min-height: var(--control-lg); padding: 0 var(--space-4); }
 .modal-empty {
     padding: 14px;
     color: var(--text-muted);
@@ -149,6 +159,15 @@ html.mobile .modal-sheet.is-closing {
    first row, which in an action sheet is a menu item -- a taller grab area
    would take its target from one of them. The drag is a shortcut anyway: the
    scrim, Escape and hardware BACK all close the same sheet. */
+/* The whole top of the sheet is the grab area: the grip plus the title row.
+   touch-action:none so a vertical drag here moves the sheet rather than
+   scrolling the body; the scrolling body keeps its own pan-y. */
+html.mobile .sheet-grab {
+    flex: 0 0 auto;
+    touch-action: none;
+    cursor: grab;
+}
+html.mobile .sheet-grab:active { cursor: grabbing; }
 html.mobile .sheet-handle {
     flex: 0 0 auto;
     align-self: stretch;
@@ -157,10 +176,7 @@ html.mobile .sheet-handle {
     justify-content: center;
     height: 22px;
     margin: 0 calc(-1 * var(--space-4));
-    cursor: grab;
-    touch-action: none;
 }
-html.mobile .sheet-handle:active { cursor: grabbing; }
 html.mobile .sheet-handle span {
     width: 36px;
     height: 5px;

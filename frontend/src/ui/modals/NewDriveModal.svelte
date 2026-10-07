@@ -50,11 +50,11 @@
     restoreFocus="#drives-nav"
     onClose={close}
 >
+    <label class="field-label" for="new-drive-name">Drive name</label>
     <input
         id="new-drive-name"
         type="text"
-        aria-label="Drive name"
-        placeholder="Drive name (e.g. Goa Trip)"
+        placeholder="e.g. Goa Trip"
         autocomplete="off"
         bind:value={title}
         disabled={$view.busy}

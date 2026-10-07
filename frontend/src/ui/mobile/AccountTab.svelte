@@ -1,7 +1,7 @@
 <script lang="ts">
     import { tick } from 'svelte';
+    import { get } from 'svelte/store';
     import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
-    import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
     import FolderIcon from '@lucide/svelte/icons/folder';
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
     import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
@@ -20,15 +20,22 @@
     import PhotoBackupPanel from '../gallery/PhotoBackupPanel.svelte';
     import { getThemeDefinition } from '../theme/theme-model';
     import { themeState } from '../theme/theme-controller';
-    import { switchActiveChannel } from '../../modules/channels';
+    import { handleDriveClick } from '../../modules/sidebar';
     import { openEncryptionSettingsModal } from '../../modules/modals/encryption-settings';
     import { openJoinDriveModal } from '../../modules/modals/join-drive';
     import { openNewDriveModal } from '../../modules/modals/new-drive';
     import { openLogoutModal } from '../../modules/modals/logout';
     import { openTrash } from '../../modules/trash/controller';
-    import { activeTab as mobileActiveTab } from './mobile-shell-store';
     import type { DriveChannel } from '../../types';
-    import { activeDrive, activeTab } from './mobile-shell-store';
+    import {
+        ACCOUNT_DETAIL_TITLES,
+        accountDetail,
+        activeDrive,
+        activeTab,
+        closeAccountDetail,
+        openAccountDetail,
+        type AccountDetail,
+    } from './mobile-shell-store';
     import { pushSheet } from '../modals/sheet-stack';
     import { photoBackupState } from '../../modules/photo-backup/controller';
     import { describeBackup } from '../gallery/photo-backup-view';
@@ -38,22 +45,15 @@
     );
     const handle = $derived(($profileUser?.username || '').trim());
     const drives = $derived([...$sidebarState.personal, ...$sidebarState.shared]);
-    /**
-     * The settings that are a screen rather than a row: each opens in place,
-     * over the account list, with its own title and a way back. Backup earned
-     * one the way Appearance did -- it is a switch with a page behind it, and
-     * unfolding that page at the bottom of a list of unrelated rows left the
-     * thing being configured off screen.
-     */
-    type AccountDetail = 'appearance' | 'backup';
-    const DETAIL_TITLES: Record<AccountDetail, string> = {
-        appearance: 'Appearance',
-        backup: 'Photo & video backup',
-    };
-
-    let detail = $state<AccountDetail | null>(null);
+    // The settings that are a screen rather than a row: each opens at the top of
+    // the tab with its title and a back button in the top bar (TopBar owns both),
+    // because a switch with a page behind it unfolded at the bottom of a list of
+    // unrelated rows left the thing being configured off screen. The open detail
+    // lives in the shell store so the top bar and this tab agree on it.
     let appearanceOpener = $state<HTMLButtonElement | null>(null);
     let backupOpener = $state<HTMLButtonElement | null>(null);
+    let scrollerEl = $state<HTMLElement | null>(null);
+    let listScrollTop = 0;
     const currentThemeName = $derived(getThemeDefinition($themeState.resolvedThemeId).name);
     // What the row says without opening it: off, or whatever the backup is
     // doing right now, in the same words the page itself uses.
@@ -64,42 +64,53 @@
     );
 
     function openDetail(next: AccountDetail): void {
-        detail = next;
+        // Remember where the list was so closing the detail returns to it.
+        listScrollTop = scrollerEl?.scrollTop ?? 0;
+        openAccountDetail(next);
     }
 
-    /**
-     * A detail is an in-tab drill-in rather than a modal, but it is still the
-     * page's current topmost destination. Claiming the shared sheet stack makes
-     * hardware BACK and iOS edge-back leave it before changing tabs, and puts
-     * focus back on the row that opened it.
-     */
-    function closeDetail({ restoreFocus = true }: { restoreFocus?: boolean } = {}): void {
-        const previous = detail;
-        if (!previous) return;
-        detail = null;
-        if (!restoreFocus) return;
-        // The opener is unmounted with the account list and recreated on the
-        // next render, so resolve the bound element after that render instead
-        // of trying to focus the now-disconnected old button.
-        void tick().then(() => (previous === 'appearance' ? appearanceOpener : backupOpener)?.focus({ preventScroll: true }));
-    }
-
+    // A detail is an in-tab drill-in, but it is still the page's topmost
+    // destination, so it claims the shared sheet stack: hardware BACK and the
+    // iOS edge swipe leave it before changing tabs. The back button in the top
+    // bar flips the same store.
     $effect(() => {
-        if (!detail) return;
-        const backEntry = pushSheet(() => closeDetail());
+        if (!$accountDetail) return;
+        const backEntry = pushSheet(() => closeAccountDetail());
         return () => backEntry.release();
+    });
+
+    // Open a detail at the top; closing restores the list where it was and, when
+    // the account tab is still the one on screen, returns focus to the row that
+    // opened it. A tab switch that closes the detail leaves focus to the new tab.
+    let shownDetail: AccountDetail | null = null;
+    $effect(() => {
+        const current = $accountDetail;
+        const leaving = shownDetail;
+        shownDetail = current;
+        if (current) {
+            if (scrollerEl) scrollerEl.scrollTop = 0;
+            return;
+        }
+        if (!leaving) return;
+        const top = listScrollTop;
+        const onAccount = get(activeTab) === 'account';
+        void tick().then(() => {
+            if (scrollerEl) scrollerEl.scrollTop = top;
+            if (onAccount) (leaving === 'appearance' ? appearanceOpener : backupOpener)?.focus({ preventScroll: true });
+        });
     });
 
     // Account stays mounted behind the tab switcher. A detail screen must not
     // keep a hidden BACK-stack entry after the user chooses another tab.
     $effect(() => {
-        if ($activeTab !== 'account' && detail) {
-            closeDetail({ restoreFocus: false });
-        }
+        if ($activeTab !== 'account' && $accountDetail) closeAccountDetail();
     });
 
     function openDrive(channel: DriveChannel): void {
-        void switchActiveChannel(channel.id);
+        // The same entry the sidebar uses: tapping the already-active drive just
+        // returns to its files instead of running a full switch that would stop
+        // the backup run and reset the list to root.
+        handleDriveClick(channel.id);
         activeTab.set('files');
     }
 
@@ -164,18 +175,14 @@
      */
     function showTrash(): void {
         openTrash();
-        mobileActiveTab.set('files');
+        activeTab.set('files');
     }
 </script>
 
-<div class="mobile-scroll account-tab">
-    {#if detail}
-        <section class="account-detail" aria-label={DETAIL_TITLES[detail]}>
-            <button type="button" class="account-detail-back" onclick={() => closeDetail()}>
-                <ChevronLeftIcon size={20} strokeWidth={2.2} aria-hidden="true" />
-                {DETAIL_TITLES[detail]}
-            </button>
-            {#if detail === 'appearance'}
+<div bind:this={scrollerEl} class="mobile-scroll account-tab">
+    {#if $accountDetail}
+        <section class="account-detail" aria-label={ACCOUNT_DETAIL_TITLES[$accountDetail]}>
+            {#if $accountDetail === 'appearance'}
                 <AppearancePanel autofocus />
             {:else}
                 <PhotoBackupPanel page />

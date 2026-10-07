@@ -1,4 +1,6 @@
 <script lang="ts">
+    import { cubicOut } from 'svelte/easing';
+    import { fly } from 'svelte/transition';
     import CheckIcon from '@lucide/svelte/icons/check';
     import CircleXIcon from '@lucide/svelte/icons/circle-x';
     import InfoIcon from '@lucide/svelte/icons/info';
@@ -7,6 +9,7 @@
     import XIcon from '@lucide/svelte/icons/x';
     import { toasts } from './toast-store';
     import { swipeDismiss } from './swipe-dismiss';
+    import { prefersReducedMotion } from '../mobile/motion';
 
     interface Props {
         onDismiss: (id: string) => void;
@@ -23,7 +26,7 @@
      * a touch host says so badly: tapping fires mouseenter with no matching
      * mouseleave until the next tap somewhere else, which on a phone leaves the
      * countdown frozen and the toast on screen for good. The stack sits right
-     * above the tab bar, so that tap happens constantly.
+     * near the top of the screen, so that tap happens constantly.
      *
      * Pointer events carry the answer with them, so the pause is taken only
      * from something that can really hover and really leave.
@@ -31,13 +34,42 @@
     function hovering(event: PointerEvent): boolean {
         return event.pointerType !== 'touch';
     }
+
+    let pointerInside = false;
+    let focusInside = false;
+
+    function syncPause(): void {
+        if (pointerInside || focusInside) onPauseAll();
+        else onResumeAll();
+    }
+
+    function onFocusOut(event: FocusEvent): void {
+        const stack = event.currentTarget as HTMLElement;
+        if (event.relatedTarget instanceof Node && stack.contains(event.relatedTarget)) return;
+        focusInside = false;
+        syncPause();
+    }
+
+    function toastOut(node: HTMLElement) {
+        // Swipe already moves the card offscreen. Timer and close-button
+        // dismissals take the same short route upward instead of vanishing.
+        node.style.pointerEvents = 'none';
+        node.setAttribute('aria-hidden', 'true');
+        return fly(node, {
+            y: -8,
+            duration: prefersReducedMotion() || node.dataset.toastSwiped === 'true' || typeof node.animate !== 'function' ? 0 : 160,
+            easing: cubicOut,
+        });
+    }
 </script>
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <div
     class="toast-stack-inner"
-    onpointerenter={(event) => { if (hovering(event)) onPauseAll(); }}
-    onpointerleave={(event) => { if (hovering(event)) onResumeAll(); }}
+    onpointerenter={(event) => { if (hovering(event)) { pointerInside = true; syncPause(); } }}
+    onpointerleave={(event) => { if (hovering(event)) { pointerInside = false; syncPause(); } }}
+    onfocusin={() => { focusInside = true; syncPause(); }}
+    onfocusout={onFocusOut}
 >
     {#each $toasts as toast (toast.id)}
         <div
@@ -47,7 +79,8 @@
             aria-describedby={toast.body ? `toast-detail-${toast.id}` : undefined}
             onpointerenter={(event) => { if (hovering(event)) onPauseToast(toast.id); }}
             onpointerleave={(event) => { if (hovering(event)) onResumeToast(toast.id); }}
-            use:swipeDismiss={{ onDismiss: () => onDismiss(toast.id) }}
+            use:swipeDismiss={{ revision: toast.revision, onDismiss: () => onDismiss(toast.id) }}
+            out:toastOut
         >
             <span class="toast-icon" aria-hidden="true">
                 {#if toast.spinner}

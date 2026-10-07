@@ -1,9 +1,8 @@
 /**
- * Putting a bottom-edge surface away with a thumb.
+ * Putting a top-edge surface away with a thumb.
  *
- * A toast arrives from the bottom of the screen, so the gesture that dismisses
- * it is the one that pushes it back down -- the same direction, and the same
- * physics, a bottom sheet uses. The maths lives in ui/modals/sheet-gesture and
+ * A toast arrives from the top of the screen, so an upward gesture pushes it
+ * back toward that edge. The maths lives in ui/modals/sheet-gesture and
  * is imported rather than restated: a second set of constants would drift from
  * the first the moment either was tuned, and then two surfaces would answer the
  * same thumb differently.
@@ -35,6 +34,8 @@ const THRESHOLD_RATIO = 0.4;
 const FADE_DEPTH = 0.65;
 
 export interface SwipeDismissOptions {
+    /** New notify() entry for this same id; timer-only store updates keep it. */
+    revision?: number;
     /** Called once the surface has left, by tap or by flick. */
     onDismiss: () => void;
 }
@@ -53,12 +54,19 @@ export function swipeDismiss(node: HTMLElement, options: SwipeDismissOptions) {
     let dragging = false;
     let startY = 0;
     let offset = 0;
+    let motionTimer: number | null = null;
+
+    function clearMotionTimer(): void {
+        if (motionTimer === null) return;
+        clearTimeout(motionTimer);
+        motionTimer = null;
+    }
 
     /** Follows the finger, fading as it goes so the travel reads as departure. */
     function paint(): void {
         const height = node.offsetHeight || 1;
         const progress = Math.min(1, Math.max(0, offset / height));
-        node.style.transform = `translateY(${offset}px)`;
+        node.style.transform = `translateY(${-offset}px)`;
         node.style.opacity = String(1 - progress * FADE_DEPTH);
     }
 
@@ -69,26 +77,35 @@ export function swipeDismiss(node: HTMLElement, options: SwipeDismissOptions) {
     }
 
     function springBack(): void {
+        clearMotionTimer();
         node.style.transition = `transform ${DISMISS_EXIT_MS}ms var(--ease-enter), opacity ${DISMISS_EXIT_MS}ms linear`;
         node.style.transform = 'translateY(0)';
         node.style.opacity = '1';
-        window.setTimeout(clearInlineMotion, DISMISS_EXIT_MS);
+        motionTimer = window.setTimeout(() => {
+            motionTimer = null;
+            clearInlineMotion();
+        }, DISMISS_EXIT_MS);
     }
 
     /**
-     * Carries the surface off the bottom edge and hands over once it is gone.
+     * Carries the surface off the top edge and hands over once it is gone.
      * Under Reduce Motion it simply goes, which is what "reduce" asks for.
      */
     function leave(): void {
+        clearMotionTimer();
+        node.dataset.toastSwiped = 'true';
         if (prefersReducedMotion()) {
             current.onDismiss();
             return;
         }
         const remaining = (node.offsetHeight || 0) + 24 - offset;
         node.style.transition = `transform ${DISMISS_EXIT_MS}ms var(--ease-standard), opacity ${DISMISS_EXIT_MS}ms linear`;
-        node.style.transform = `translateY(${offset + Math.max(0, remaining)}px)`;
+        node.style.transform = `translateY(${-offset - Math.max(0, remaining)}px)`;
         node.style.opacity = '0';
-        window.setTimeout(() => current.onDismiss(), DISMISS_EXIT_MS);
+        motionTimer = window.setTimeout(() => {
+            motionTimer = null;
+            current.onDismiss();
+        }, DISMISS_EXIT_MS);
     }
 
     function onPointerDown(event: PointerEvent): void {
@@ -109,8 +126,8 @@ export function swipeDismiss(node: HTMLElement, options: SwipeDismissOptions) {
 
     function onPointerMove(event: PointerEvent): void {
         if (!dragging) return;
-        // Follows the finger down; resists upward, where there is nowhere to go.
-        offset = sheetOffset(event.clientY - startY, node.offsetHeight || 0);
+        // Follows the finger up; resists downward, toward the content.
+        offset = sheetOffset(startY - event.clientY, node.offsetHeight || 0);
         drag.track(event);
         paint();
     }
@@ -119,12 +136,12 @@ export function swipeDismiss(node: HTMLElement, options: SwipeDismissOptions) {
         if (!dragging) return;
         dragging = false;
         const travelled = Math.abs(event.clientY - startY);
-        const velocity = drag.velocity();
+        const velocity = -drag.velocity();
         drag.reset();
 
         // A press that never moved is a tap, and a notice that has been read is
         // in the way: it goes, without asking the thumb to find a small close
-        // button sitting above the tab bar.
+        // button near the top of the screen.
         if (travelled < TAP_SLOP_PX) {
             offset = 0;
             clearInlineMotion();
@@ -154,9 +171,18 @@ export function swipeDismiss(node: HTMLElement, options: SwipeDismissOptions) {
 
     return {
         update(next: SwipeDismissOptions) {
+            if (next.revision !== current.revision) {
+                clearMotionTimer();
+                delete node.dataset.toastSwiped;
+                dragging = false;
+                drag.reset();
+                offset = 0;
+                clearInlineMotion();
+            }
             current = next;
         },
         destroy() {
+            clearMotionTimer();
             node.removeEventListener('pointerdown', onPointerDown);
             node.removeEventListener('pointermove', onPointerMove);
             node.removeEventListener('pointerup', onPointerUp);

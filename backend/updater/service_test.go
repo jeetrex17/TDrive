@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -112,12 +113,16 @@ func newFixture(t *testing.T, current, latest string) *fixture {
 				return
 			}
 			if block != nil {
-				w.Header().Set("Content-Length", "1000000")
+				w.Header().Set("Content-Length", strconv.Itoa(len(f.payload)))
 				_, _ = w.Write(f.payload[:1])
 				if fl, ok := w.(http.Flusher); ok {
 					fl.Flush()
 				}
-				<-block
+				select {
+				case <-block:
+					_, _ = w.Write(f.payload[1:])
+				case <-r.Context().Done():
+				}
 				return
 			}
 			_, _ = w.Write(f.payload)
@@ -517,14 +522,34 @@ func TestDownloadCancelReturnsToAvailableWithoutError(t *testing.T) {
 	f.mu.Lock()
 	f.blockBody = make(chan struct{})
 	f.mu.Unlock()
-	defer close(f.blockBody)
+	releaseBody := sync.OnceFunc(func() { close(f.blockBody) })
+	t.Cleanup(releaseBody)
 
-	f.service.Check(context.Background())
+	f.service.Check(t.Context())
 	if err := f.service.StartDownload(); err != nil {
 		t.Fatal(err)
 	}
-	f.waitPhase(PhaseDownloading)
-	if got := f.service.Check(context.Background()); got.Phase != PhaseDownloading {
+	// Wait until bytes reach the client so cancellation exercises a blocked body
+	// read, rather than racing with response validation or request startup.
+	timeout := time.NewTimer(5 * time.Second)
+	defer timeout.Stop()
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		got := f.service.State()
+		if got.Phase != PhaseDownloading {
+			t.Fatalf("download ended before receiving the partial body: %+v", got)
+		}
+		if got.DownloadedBytes == 1 {
+			break
+		}
+		select {
+		case <-tick.C:
+		case <-timeout.C:
+			t.Fatalf("partial body was not received: %+v", f.service.State())
+		}
+	}
+	if got := f.service.Check(t.Context()); got.Phase != PhaseDownloading {
 		t.Fatalf("Check during download must be a no-op, got %+v", got)
 	}
 	f.service.CancelDownload()
@@ -537,6 +562,10 @@ func TestDownloadCancelReturnsToAvailableWithoutError(t *testing.T) {
 	}
 	if err := f.service.StartDownload(); err != nil {
 		t.Fatalf("download must be restartable after cancel: %v", err)
+	}
+	releaseBody()
+	if got := f.waitPhase(PhaseReady); got.Error != "" || got.DownloadedBytes != int64(len(f.payload)) {
+		t.Fatalf("state after retry = %+v", got)
 	}
 }
 

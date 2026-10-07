@@ -32,7 +32,7 @@
         setFileThumbnailRoot,
         teardownFileThumbnails,
     } from './file-thumbnail-controller';
-    import type { FileListAction, FileListFileRow, FileListRow, FolderListRow } from './types';
+    import type { FileListAction, FileListFileRow, FileListRow, FileListView, FolderListRow } from './types';
 
     type InteractiveRow = FolderListRow | FileListFileRow;
 
@@ -164,6 +164,24 @@
         viewportHeight = list.clientHeight;
     }
 
+    // Keep the keyboard in the list when its focused row scrolls out of the
+    // virtual window and unmounts. Without this, focus falls to <body>, keydown
+    // stops reaching the list's delegated handler, and the arrows go dead. The
+    // container (tabindex="-1") catches it; the delegated handler resolves the
+    // active row from its stored key, so the arrows pick up where they left off.
+    function retainKeyboardFocus(): void {
+        if (!list) return;
+        const active = document.activeElement;
+        if (!(active instanceof HTMLElement) || !active.classList.contains('drive-row') || !list.contains(active)) return;
+        const key = active.dataset.rowKey ?? '';
+        const index = key ? visibleRows.findIndex((row) => row.kind !== 'pending-folder' && row.selectionKey === key) : -1;
+        if (index < 0) return;
+        const slack = rowHeight * WINDOW_OVERSCAN;
+        if (rowOffset(index + 1, rowMetrics) < scrollTop - slack || rowOffset(index, rowMetrics) > scrollTop + viewportHeight + slack) {
+            list.focus({ preventScroll: true });
+        }
+    }
+
     function measureRow(element: HTMLElement): { destroy: () => void } {
         const update = () => {
             const style = getComputedStyle(element);
@@ -194,27 +212,47 @@
         updateViewport();
     }
 
-    function applyMobileListSemantics(): void {
-        if (!mobile || !list) return;
-        // The shell starts as a desktop grid so it can render before the mobile
-        // portal mounts. A phone row is one two-line item, not four cells, and
-        // leaving these attributes in place makes a screen reader invent a
-        // header and announce a table that is not on screen.
-        list.setAttribute('role', 'list');
-        list.removeAttribute('aria-colcount');
-        list.removeAttribute('aria-rowcount');
-        list.removeAttribute('aria-multiselectable');
+    function applyListSemantics(view: FileListView): void {
+        if (!list) return;
+        // A grid or a list may contain only rows or items. The loading, empty
+        // and error messages are neither, and their own role=status/alert is
+        // invalid as a direct child of one, so while a message shows the
+        // container drops to a plain labelled group.
+        if (view.kind === 'state') {
+            list.setAttribute('role', 'group');
+            list.removeAttribute('aria-colcount');
+            list.removeAttribute('aria-rowcount');
+            list.removeAttribute('aria-multiselectable');
+            return;
+        }
+        if (mobile) {
+            // The shell starts as a desktop grid so it can render before the
+            // mobile portal mounts. A phone row is one two-line item, not four
+            // cells, and leaving these attributes in place makes a screen reader
+            // invent a header and announce a table that is not on screen.
+            list.setAttribute('role', 'list');
+            list.removeAttribute('aria-colcount');
+            list.removeAttribute('aria-rowcount');
+            list.removeAttribute('aria-multiselectable');
+            return;
+        }
+        // aria-rowcount is written by renderFileListRows alongside the rows.
+        list.setAttribute('role', 'grid');
+        list.setAttribute('aria-colcount', '4');
+        list.setAttribute('aria-multiselectable', 'true');
     }
 
     onMount(() => {
         list = document.getElementById('file-list');
         if (!list) return;
         setFileThumbnailRoot(list);
-        applyMobileListSemantics();
-        const unsubscribeListSemantics = mobile
-            ? fileListView.subscribe(applyMobileListSemantics)
-            : () => {};
-        const onScroll = () => updateViewport();
+        // subscribe fires immediately with the current view, which also seeds the
+        // initial semantics.
+        const unsubscribeListSemantics = fileListView.subscribe(applyListSemantics);
+        const onScroll = () => {
+            updateViewport();
+            retainKeyboardFocus();
+        };
         const resizeObserver = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(updateViewport);
         list.addEventListener('scroll', onScroll, { passive: true });
         resizeObserver?.observe(list);
@@ -278,6 +316,7 @@
         <button
             class={`action-icon ${action.className}`}
             type="button"
+            tabindex="-1"
             title={action.title}
             aria-label={action.label}
             onclick={(event) => onActionClick(event, row, action)}
@@ -388,7 +427,7 @@
                         <ItemStatus state={state} onOpenQueue={() => activeTab.set('transfers')} />
                     </div>
                 {/if}
-                <div class="row-actions">
+                <div class={`row-actions${row.actionsInline ? ' is-inline' : ''}`}>
                     {#if row.actionsInline}
                         <!-- Few, important, and with no menu behind them, so the
                              phone shows them the way the desktop does rather
@@ -490,8 +529,23 @@
                 </div>
                 <div class="row-meta" role="gridcell" aria-colindex="2">{row.metaLabel}</div>
                 <div class={`row-meta ${row.kind === 'folder' ? 'folder-size' : ''}`} role="gridcell" aria-colindex="3">{row.sizeLabel}</div>
-                <div class="row-actions" role="gridcell" aria-colindex="4">
+                <div class={`row-actions${row.actionsInline ? ' is-inline' : ''}`} role="gridcell" aria-colindex="4">
                     {@render inlineActions(row, 16)}
+                    {#if !row.actionsInline}
+                        <!-- Opens the same menu as a right click, under the button,
+                             so the row's full set of actions is discoverable
+                             without one. The trash's inline rows have no such
+                             menu, so they omit it. -->
+                        <button
+                            class="action-icon row-more"
+                            type="button"
+                            tabindex="-1"
+                            aria-label={`More actions for ${row.name}`}
+                            aria-haspopup="menu"
+                        >
+                            <EllipsisIcon size={16} strokeWidth={2} aria-hidden="true" />
+                        </button>
+                    {/if}
                 </div>
             </div>
         {/if}

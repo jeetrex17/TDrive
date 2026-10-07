@@ -1,18 +1,19 @@
 // File list rendering for TDrive frontend
 
 import { state, resetFolderCaches } from '../state';
-import { splitNameAndExt, formatDate, formatBytes } from '../utils';
+import { splitNameAndExt, formatDate, formatBytes, isApplePlatform } from '../utils';
 import { isOffline } from './connectivity';
 import { humanizeBackendError } from './errors';
 import { tick } from 'svelte';
 import { get } from 'svelte/store';
 import { breadcrumbPath } from '../ui/chrome/breadcrumb-store';
 import type { ContextMenuDetail } from '../ui/menus/context-menu-store';
-import { clearSelection, deselectRow, handleRowSelection, isRowSelected, reconcileSelection, selectRow, getRowKey } from './selection';
+import { clearSelection, deselectRow, extendSelectionToIndex, handleRowSelection, isRowSelected, reconcileSelection, selectAllRows, selectRow, getRowKey } from './selection';
 import { openRenameModal } from './modals/rename';
 import { openDeleteModal } from './modals/delete';
 import { openNewFolderModal } from './modals/folder';
-import { navigateToFolder } from './navigation';
+import { notify } from './notifications';
+import { navigateBack, navigateToFolder } from './navigation';
 import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop';
 import {
     getAllFsMsgIds,
@@ -29,11 +30,14 @@ import { ensureUserNames, uploaderChipLabel } from './uploaders';
 import { renderGallery, setPhotosMode } from './gallery';
 import { renderTrashRows, setTrashMode } from './trash/view';
 import { canOpenFileViewer, isImageFile, isVideoFile } from './media-types';
+import { openImagePreview } from './image-preview';
 import { appActions, type RefreshFilesOptions } from './app-actions';
 import { getInteractiveFileListRows, showFileListRows, showFileListState, updateFileListRows, type InteractiveFileListRow } from '../ui/file-list/file-list-store';
 import type { FileListStateAction } from '../ui/file-list/types';
 import { fileListRowForElement } from '../ui/file-list/row-lookup';
-import { setActiveFileRowKey } from '../ui/file-list/row-state-store';
+import { activeFileRowKey, setActiveFileRowKey } from '../ui/file-list/row-state-store';
+import { pageJumpIndex, typeAheadIndex } from '../ui/file-list/keyboard';
+import { ScrollMemory } from '../ui/file-list/scroll-memory';
 import { rowMetaLine } from '../ui/file-list/row-meta';
 import { bindLongPress, bindPullToRefresh } from '../ui/file-list/touch';
 import { bindSwipeActions } from '../ui/file-list/swipe-actions';
@@ -70,6 +74,9 @@ type FileRefreshRequest = {
     view: FileViewIdentity;
     presentation: FileRefreshPresentation;
     folderEpoch: number;
+    // The scroll offset to land on once the view's rows are published: a saved
+    // offset when returning up to a view, otherwise 0 (the top).
+    restoreScrollTop: number;
 };
 
 type LoadedFileData = {
@@ -152,7 +159,18 @@ export function canOwnerActOnFile(file: Pick<FileRowInput, 'uploaderID' | 'uploa
 // a refresh keeps the current grid visible. It intentionally includes the drive
 // so two root folders from different drives never share scroll or selection.
 let lastRenderedFileView: FileViewIdentity | null = null;
+// The folder depth of that view, so a refresh can tell a step up (shallower)
+// from a step down and restore scroll only when returning to a view.
+let lastRenderedDepth = 0;
 let fileRefreshToken = 0;
+
+// Where each view was left scrolled, so going back up lands where the reader
+// was. Capped well above a realistic open-folder trail; the oldest is evicted.
+const scrollMemory = new ScrollMemory(32);
+
+function viewKey(view: FileViewIdentity): string {
+    return `${view.channelId}:${view.folderId}`;
+}
 
 function sameFileView(left: FileViewIdentity | null, right: FileViewIdentity): boolean {
     return left?.channelId === right.channelId && left.folderId === right.folderId;
@@ -160,6 +178,8 @@ function sameFileView(left: FileViewIdentity | null, right: FileViewIdentity): b
 
 export function resetFileListScrollRestore(): void {
     lastRenderedFileView = null;
+    lastRenderedDepth = 0;
+    scrollMemory.clear();
 }
 
 
@@ -253,6 +273,15 @@ function fileActions(name: string): FileListAction[] {
             title: "Play",
             label: "Play video",
         });
+    } else if (isImageFile(name || "")) {
+        // An image opens its preview, not the file viewer, so it carries its own
+        // class for the delegated layer to route.
+        actions.push({
+            kind: "open",
+            className: "open-image",
+            title: "Open",
+            label: "Open image",
+        });
     } else if (canOpenFileViewer(name || "")) {
         actions.push({
             kind: "open",
@@ -270,9 +299,19 @@ function fileActions(name: string): FileListAction[] {
     return actions;
 }
 
+// The accessible name a screen reader announces for a row: the kind and name,
+// then the size and date it can see in the columns, so a reader hears what a
+// sighted user reads across the row rather than the name alone. Existing
+// `getByRole('row', { name: 'File: ...' })` selectors match this as a substring.
+function rowAnnouncement(prefix: string, name: string, sizeLabel: string, dateLabel: string): string {
+    return [`${prefix}: ${name}`, sizeLabel, dateLabel].filter(Boolean).join(', ');
+}
+
 export function buildFolderRow(folder: FolderRowInput, parentId: string, overrides: Partial<FolderListRow> = {}): FolderListRow {
     const id = String(folder.id || overrides.id || '');
     const name = String(folder.name || overrides.name || 'Folder');
+    const folderSize = overrides.size ?? 0;
+    const folderModified = overrides.modifiedTime ?? 0;
     return {
         kind: 'folder',
         key: overrides.key || `folder:${id}`,
@@ -283,9 +322,14 @@ export function buildFolderRow(folder: FolderRowInput, parentId: string, overrid
         parentId: String(overrides.parentId ?? folder.parentId ?? parentId ?? ''),
         metaLabel: overrides.metaLabel ?? '—',
         sizeLabel: overrides.sizeLabel ?? '…',
-        size: overrides.size ?? 0,
-        modifiedTime: overrides.modifiedTime ?? 0,
-        ariaLabel: overrides.ariaLabel ?? `Folder: ${name}`,
+        size: folderSize,
+        modifiedTime: folderModified,
+        ariaLabel: overrides.ariaLabel ?? rowAnnouncement(
+            'Folder',
+            name,
+            folderSize > 0 ? formatBytes(folderSize) : '',
+            folderModified > 0 ? formatDate(folderModified) : '',
+        ),
         timeLabel: overrides.timeLabel,
         actionsInline: overrides.actionsInline,
         actions: overrides.actions ?? [folderAction()],
@@ -305,6 +349,8 @@ export function buildFileRow(file: FileRowInput, parentId: string, overrides: Pa
     const encrypted = Boolean(file.encrypted ?? overrides.encrypted ?? false);
     const canDelete = Boolean(file.canDelete ?? overrides.canDelete ?? canOwnerActOnFile(file));
     const canRename = Boolean(file.canRename ?? overrides.canRename ?? canDelete);
+    const metaLabel = overrides.metaLabel ?? formatDate(uploadTime);
+    const sizeLabel = overrides.sizeLabel ?? formatBytes(size);
 
     return {
         kind: 'file',
@@ -318,9 +364,14 @@ export function buildFileRow(file: FileRowInput, parentId: string, overrides: Pa
         source,
         parentId: String(overrides.parentId ?? parentId ?? ''),
         size,
-        metaLabel: overrides.metaLabel ?? formatDate(uploadTime),
-        sizeLabel: overrides.sizeLabel ?? formatBytes(size),
-        ariaLabel: overrides.ariaLabel ?? `File: ${name}`,
+        metaLabel,
+        sizeLabel,
+        ariaLabel: overrides.ariaLabel ?? rowAnnouncement(
+            'File',
+            name,
+            sizeLabel,
+            uploadTime > 0 ? formatDate(uploadTime) : '',
+        ),
         timeLabel: overrides.timeLabel,
         actionsInline: overrides.actionsInline,
         uploaderID,
@@ -404,13 +455,18 @@ function activeRowFromEventTarget(target: EventTarget | null) {
         || null;
 }
 
-function triggerRowContextMenu(row: HTMLElement) {
-    const rect = row.getBoundingClientRect();
+// Opens the row's menu by replaying a contextmenu event, so the keyboard menu
+// key and the three-dot button land on the exact menu a right click builds. The
+// anchor is the row for the keyboard, the button for the overflow click, which
+// is where the menu should appear.
+function triggerRowContextMenu(row: HTMLElement, anchor: HTMLElement = row) {
+    const rect = anchor.getBoundingClientRect();
+    const atRow = anchor === row;
     row.dispatchEvent(new MouseEvent("contextmenu", {
         bubbles: true,
         cancelable: true,
-        clientX: rect.left + Math.min(48, rect.width / 2),
-        clientY: rect.top + Math.min(24, rect.height / 2),
+        clientX: atRow ? rect.left + Math.min(48, rect.width / 2) : rect.left,
+        clientY: atRow ? rect.top + Math.min(24, rect.height / 2) : rect.bottom,
     }));
 }
 
@@ -473,26 +529,6 @@ function toggleRowSelection(row: HTMLElement): void {
     selectRow(row, index);
 }
 
-// The phone previews an image in the context of its folder, so swiping moves
-// through the other images here in list order.
-async function openImagePreview(row: FileListFileRow): Promise<void> {
-    const images = getInteractiveFileListRows()
-        .filter((candidate): candidate is FileListFileRow => candidate.kind === 'file' && isImageFile(candidate.name))
-        .map((image) => ({
-            type: 'file',
-            id: Number(image.id),
-            name: image.name,
-            size: image.size,
-            encrypted: image.encrypted,
-            uploaderId: image.uploaderID,
-            uploadTime: image.uploadTime,
-        }));
-    const index = Math.max(0, images.findIndex((image) => String(image.id) === row.id));
-    const preview = await import('./modals/preview');
-    preview.activatePreviewModal();
-    await preview.openPreviewList(images, index);
-}
-
 /**
  * The command payload for a file row. Spelled out per source because the
  * command item is a discriminated union: a Telegram file has to carry the
@@ -515,7 +551,10 @@ function deleteRow(row: InteractiveFileListRow) {
         });
         return;
     }
-    if (!row.canDelete) return;
+    if (!row.canDelete) {
+        notify({ level: 'info', title: 'You can only delete files you uploaded' });
+        return;
+    }
     openDeleteModal({
         ...fileCommandFor(row, row.parentId || state.currentFolderId),
         canDelete: row.canDelete,
@@ -534,7 +573,10 @@ function renameRow(row: InteractiveFileListRow) {
         });
         return;
     }
-    if (!row.canRename) return;
+    if (!row.canRename) {
+        notify({ level: 'info', title: 'You can only rename files you uploaded' });
+        return;
+    }
     openRenameModal(fileCommandFor(row, row.parentId || state.currentFolderId));
 }
 
@@ -583,7 +625,7 @@ function activateRow(element: HTMLElement, row: InteractiveFileListRow) {
         void appActions().playVideo(target);
         return;
     }
-    if (isMobilePlatform() && isImageFile(target.name)) {
+    if (isImageFile(target.name)) {
         void openImagePreview(row);
         return;
     }
@@ -670,7 +712,9 @@ function rowsForLoadedData(data: LoadedFileData, view: FileViewIdentity): FileLi
             return buildFolderRow(folder, view.folderId, {
                 size,
                 modifiedTime,
-                sizeLabel: formatBytes(size),
+                // A folder shows a size only once one is known. Zero reads as "no
+                // files", which is rarely true and never useful, so it stays blank.
+                sizeLabel: size > 0 ? formatBytes(size) : '',
                 metaLabel: modifiedTime > 0 ? formatDate(modifiedTime) : '—',
             });
         });
@@ -743,18 +787,48 @@ function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, d
         state.telegramRootCacheDriveKey = String(request.view.channelId);
     }
     lastRenderedFileView = request.view;
+    lastRenderedDepth = state.folderPath.length;
+
+    // Where the keyboard sat before the republish, so a delete or move can hand
+    // it to the neighbour rather than drop it on <body>.
+    const previousRows = getInteractiveFileListRows();
+    const previousActiveKey = get(activeFileRowKey);
+    const previousIndex = previousRows.findIndex((row) => row.selectionKey === previousActiveKey);
 
     const afterPublish = () => {
         if (!isCurrentFileRequest(request)) return;
-        reconcileSelection(list, getInteractiveFileListRows());
-        syncDriveRowTabStops(list);
+        const logical = getInteractiveFileListRows();
+
+        // The row that should hold the keyboard next: the one that had it if it
+        // survived, its neighbour by position when a delete or move removed it,
+        // otherwise the first row of a freshly entered view.
+        let focusKey = '';
+        if (previousActiveKey && logical.some((row) => row.selectionKey === previousActiveKey)) {
+            focusKey = previousActiveKey;
+        } else if (preserveScroll && previousIndex >= 0 && logical.length) {
+            focusKey = logical[Math.min(previousIndex, logical.length - 1)].selectionKey;
+        } else if (logical.length) {
+            focusKey = logical[0].selectionKey;
+        }
+
+        reconcileSelection(list, logical);
+        syncDriveRowTabStops(list, focusKey ? rowForSelectionKey(list, focusKey) : null);
+        const restoring = !preserveScroll && request.restoreScrollTop > 0;
         if (preserveScroll) list.scrollTop = scrollTop;
+        else if (restoring) list.scrollTop = request.restoreScrollTop;
         applyPendingFocus(list);
-        // Opening a folder unmounts the row that had the keyboard, and with
-        // it the keyboard: focus fell to <body> and the arrows went dead.
-        // Only a view change, and only when nothing else has taken focus.
-        if (!preserveScroll && state.pendingFocus === null && document.activeElement === document.body && !isMobilePlatform()) {
-            list.focus({ preventScroll: true });
+
+        // Opening a folder or removing the focused row leaves focus on <body> (or
+        // on the container), where the arrows go dead. Put it on a real row so
+        // they work at once and no list-wide ring flashes; the container is the
+        // fallback only for an empty folder. Only when focus is loose, so a
+        // dialog, an input or the row the reader is on is never disturbed.
+        const focusLoose = document.activeElement === document.body || document.activeElement === list;
+        if (!isMobilePlatform() && state.pendingFocus === null && focusLoose) {
+            // When a scroll position was just restored, take the keyboard without
+            // moving a row into view, which would scroll away from it.
+            if (restoring || !focusKey) list.focus({ preventScroll: true });
+            else setFocusedLogicalRow(focusKey, { preventScroll: true });
         }
         resolveUploaderChipsForRows(rows, () => isCurrentFileRequest(request));
     };
@@ -779,6 +853,7 @@ function publishLoadedFileData(list: HTMLElement, request: FileRefreshRequest, d
                 'This folder is empty',
                 'Upload files or create a folder to start organizing this drive.',
                 { label: 'Upload files', onClick: () => chooseFilesForCurrentFolder() },
+                { label: 'New folder', onClick: openNewFolderModal },
             );
         }
         afterFileListPaint(list, afterPublish);
@@ -837,9 +912,21 @@ export function refreshFiles({ background = false }: RefreshFilesOptions = {}): 
         channelId: Number(state.activeChannel?.id ?? 0),
         folderId: state.currentFolderId,
     };
-    const presentation: FileRefreshPresentation = background || sameFileView(lastRenderedFileView, view)
+    const sameView = sameFileView(lastRenderedFileView, view);
+    const presentation: FileRefreshPresentation = background || sameView
         ? 'same-view-refresh'
         : 'foreground-navigation';
+
+    // Leaving a view remembers where it was; a step up (to a shallower folder:
+    // the breadcrumb, Back, the parent shortcut, Android Back) restores the
+    // view being returned to, while opening a folder forward starts at the top.
+    let restoreScrollTop = 0;
+    if (!sameView) {
+        if (lastRenderedFileView) scrollMemory.save(viewKey(lastRenderedFileView), list.scrollTop);
+        if (lastRenderedFileView && state.folderPath.length < lastRenderedDepth) {
+            restoreScrollTop = scrollMemory.get(viewKey(view)) ?? 0;
+        }
+    }
 
     resetFolderCaches();
     const request: FileRefreshRequest = {
@@ -847,6 +934,7 @@ export function refreshFiles({ background = false }: RefreshFilesOptions = {}): 
         view,
         presentation,
         folderEpoch: state.folderSizeEpoch,
+        restoreScrollTop,
     };
 
     if (presentation === 'foreground-navigation') {
@@ -941,6 +1029,16 @@ function handleListClick(e: MouseEvent) {
         return;
     }
 
+    // The three-dot button opens the right-click menu under itself, so the menu
+    // is discoverable without a right click. It stops before the document so the
+    // menu's own outside-click dismissal does not close it in the same tick.
+    const more = (e.target as HTMLElement).closest<HTMLButtonElement>("button.row-more");
+    if (more) {
+        triggerRowContextMenu(element, more);
+        e.stopPropagation();
+        return;
+    }
+
     if (row.kind === "folder") {
         if ((e.target as HTMLElement).closest("button.download-folder")) {
             enqueueFolderDownload(row.id, row.name, 0, row.channelId);
@@ -960,6 +1058,10 @@ function handleListClick(e: MouseEvent) {
         void appActions().playVideo(target);
         return;
     }
+    if ((e.target as HTMLElement).closest("button.open-image")) {
+        void openImagePreview(row);
+        return;
+    }
     if ((e.target as HTMLElement).closest("button.open-file")) {
         void appActions().openFile(target);
         return;
@@ -967,6 +1069,32 @@ function handleListClick(e: MouseEvent) {
     if ((e.target as HTMLElement).closest("button")) return;
     setFocusedRow(element, { preventScroll: true });
     handleRowSelection(element, e, getInteractiveFileListRows());
+}
+
+// The parent-folder shortcut is Cmd+Up on a Mac and Alt+Up on Windows and
+// Linux, matching each platform's own file manager.
+const isMacLike = isApplePlatform();
+
+// Type-ahead: printable keys build a short buffer that jumps to the next
+// matching row, cleared after a pause so a new word starts fresh.
+const TYPE_AHEAD_IDLE_MS = 700;
+let typeAheadBuffer = '';
+let typeAheadTimer: ReturnType<typeof setTimeout> | undefined;
+
+function clearTypeAhead(): void {
+    typeAheadBuffer = '';
+    if (typeAheadTimer) {
+        clearTimeout(typeAheadTimer);
+        typeAheadTimer = undefined;
+    }
+}
+
+// How many rows a page key moves: the rows that fit the viewport, less one so a
+// landmark row stays on screen. Falls back to a single row before layout.
+function pageRowCount(list: HTMLElement, renderedRows: HTMLElement[]): number {
+    const sample = renderedRows[0]?.getBoundingClientRect().height || 0;
+    if (sample <= 0 || list.clientHeight <= 0) return 1;
+    return Math.max(1, Math.floor(list.clientHeight / sample) - 1);
 }
 
 function handleListKeyDown(e: KeyboardEvent) {
@@ -990,21 +1118,48 @@ function handleListKeyDown(e: KeyboardEvent) {
 
     const current = activeRowFromEventTarget(e.target) || renderedRows[0];
     const currentRow = fileListRowForElement(current);
-    const currentIndex = Math.max(0, logicalRows.findIndex((row) => row.selectionKey === currentRow?.selectionKey));
-    let nextKey: string | null = null;
+    // The focused row may have scrolled out of the virtual window, leaving only
+    // the stored key to say where the keyboard is.
+    const activeKey = currentRow?.selectionKey || get(activeFileRowKey);
+    const currentIndex = Math.max(0, logicalRows.findIndex((row) => row.selectionKey === activeKey));
 
+    // Select the whole folder. The trash has nothing to act on a selection with,
+    // so it opts out.
+    if ((e.metaKey || e.ctrlKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'a') {
+        if (isTrashMode()) return;
+        e.preventDefault();
+        selectAllRows(logicalRows);
+        return;
+    }
+
+    // Up to the parent folder.
+    if (e.key === 'ArrowUp' && ((isMacLike && e.metaKey) || (!isMacLike && e.altKey))) {
+        if (isTrashMode() || isSearchMode()) return;
+        e.preventDefault();
+        navigateBack();
+        return;
+    }
+
+    const extendsSelection = e.shiftKey && !isTrashMode();
+    let targetIndex = -1;
     switch (e.key) {
         case 'ArrowDown':
-            nextKey = logicalRows[Math.min(logicalRows.length - 1, currentIndex + 1)]?.selectionKey ?? null;
+            targetIndex = Math.min(logicalRows.length - 1, currentIndex + 1);
             break;
         case 'ArrowUp':
-            nextKey = logicalRows[Math.max(0, currentIndex - 1)]?.selectionKey ?? null;
+            targetIndex = Math.max(0, currentIndex - 1);
+            break;
+        case 'PageDown':
+            targetIndex = pageJumpIndex(currentIndex, logicalRows.length, pageRowCount(list, renderedRows), 1);
+            break;
+        case 'PageUp':
+            targetIndex = pageJumpIndex(currentIndex, logicalRows.length, pageRowCount(list, renderedRows), -1);
             break;
         case 'Home':
-            nextKey = logicalRows[0]?.selectionKey ?? null;
+            targetIndex = 0;
             break;
         case 'End':
-            nextKey = logicalRows[logicalRows.length - 1]?.selectionKey ?? null;
+            targetIndex = logicalRows.length - 1;
             break;
         case 'ArrowRight': {
             const firstAction = current.querySelector<HTMLButtonElement>('.row-actions button:not(:disabled)');
@@ -1014,6 +1169,9 @@ function handleListKeyDown(e: KeyboardEvent) {
             return;
         }
         case ' ':
+            // The trash has nothing to select; Space there would otherwise open
+            // the live selection bar for a deleted item.
+            if (isTrashMode()) return;
             e.preventDefault();
             handleRowSelection(current, e, logicalRows);
             return;
@@ -1040,48 +1198,44 @@ function handleListKeyDown(e: KeyboardEvent) {
             e.preventDefault();
             triggerRowContextMenu(current);
             return;
-        default:
+        default: {
+            // Printable keys drive type-ahead; a shortcut combo or Space is not
+            // one of them.
+            if (e.key.length !== 1 || e.key === ' ' || e.metaKey || e.ctrlKey || e.altKey) return;
+            typeAheadBuffer += e.key;
+            if (typeAheadTimer) clearTimeout(typeAheadTimer);
+            typeAheadTimer = setTimeout(clearTypeAhead, TYPE_AHEAD_IDLE_MS);
+            const index = typeAheadIndex(logicalRows.map((row) => row.name), typeAheadBuffer, currentIndex);
+            if (index < 0) return;
+            e.preventDefault();
+            setFocusedLogicalRow(logicalRows[index].selectionKey, { preventScroll: false });
             return;
+        }
     }
 
-    if (!nextKey) return;
+    if (targetIndex < 0 || targetIndex >= logicalRows.length) return;
     e.preventDefault();
-    setFocusedLogicalRow(nextKey, { preventScroll: false });
+    if (extendsSelection) extendSelectionToIndex(logicalRows, targetIndex, currentIndex);
+    setFocusedLogicalRow(logicalRows[targetIndex].selectionKey, { preventScroll: false });
 }
 
 function handleListDblClick(e: MouseEvent) {
-    // A phone tap already opened the row; the second tap of a quick pair is not
-    // a rename request.
+    // A double click on a row opens it, the same as Enter: a folder
+    // navigates, a video plays, an image previews, a viewer file opens, anything
+    // else downloads. Rename has moved to F2 and the menu. The phone already
+    // opened on the first tap, and search and trash keep their own rules.
     if (isTrashMode() || isSearchMode() || isMobilePlatform()) return;
 
-    const row = fileListRowForElement((e.target as HTMLElement).closest(".drive-row"));
-    if (!row) return;
+    const element = (e.target as HTMLElement).closest<HTMLElement>(".drive-row");
+    const row = fileListRowForElement(element);
+    if (!element || !row) return;
+    if ((e.target as HTMLElement).closest('button, a, input, select, textarea, [contenteditable="true"]')) return;
 
-    if (row.kind === "folder") {
-        navigateToFolder(row.id, row.name);
-        return;
-    }
-
-    // Rename only from the name area and only when allowed.
-    if (!(e.target as HTMLElement).closest(".row-name")) return;
-    const target = fileTargetForRow(row);
-    if (isVideoFile(target.name)) {
-        e.preventDefault();
-        window.getSelection?.()?.removeAllRanges();
-        void appActions().playVideo(target);
-        return;
-    }
-    if (canOpenFileViewer(target.name)) {
-        e.preventDefault();
-        window.getSelection?.()?.removeAllRanges();
-        void appActions().openFile(target);
-        return;
-    }
-    if (!row.canRename) return;
+    // Opening is the whole point of the double click; the half-made text
+    // selection the two quick clicks leave behind is not.
     e.preventDefault();
-    const selection = window.getSelection?.();
-    if (selection) selection.removeAllRanges();
-    openRenameModal(fileCommandFor(row, state.currentFolderId));
+    window.getSelection?.()?.removeAllRanges();
+    activateRow(element, row);
 }
 
 function handleListDragStart(e: DragEvent) {
@@ -1155,6 +1309,9 @@ async function handleListDrop(e: DragEvent) {
 export function activateFileList(): () => void {
     const list = document.getElementById('file-list');
     if (!list) return () => {};
+
+    // A fresh list starts with an empty type-ahead buffer.
+    clearTypeAhead();
 
     const onDrop = (event: DragEvent) => {
         void handleListDrop(event);

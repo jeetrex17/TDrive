@@ -74,6 +74,56 @@ function pointer(type: string, pointerType: 'mouse' | 'touch'): Event {
 }
 
 describe('notification expiry scheduling', () => {
+    it.each([
+        ['info', 4_000],
+        ['success', 4_000],
+        ['warning', 6_000],
+        ['error', 8_000],
+    ] as const)('dismisses a %s notice after %i ms', (level, duration) => {
+        notify({ id: 'level-default', level, title: 'Status' });
+        expect(get(toasts)[0]?.durationMs).toBe(duration);
+        vi.advanceTimersByTime(duration - 1);
+        expect(get(toasts)).toHaveLength(1);
+        vi.advanceTimersByTime(1);
+        expect(get(toasts)).toHaveLength(0);
+    });
+
+    it('bounds old sticky and zero-duration requests, including progress spinners', () => {
+        notify({ id: 'legacy-sticky', title: 'Working', sticky: true, spinner: true });
+        notify({ id: 'legacy-zero', level: 'warning', title: 'Offline', durationMs: 0 });
+        expect(get(toasts).map(({ sticky, durationMs }) => ({ sticky, durationMs }))).toEqual([
+            { sticky: false, durationMs: 4_000 },
+            { sticky: false, durationMs: 6_000 },
+        ]);
+        vi.advanceTimersByTime(6_000);
+        expect(get(toasts)).toHaveLength(0);
+    });
+
+    it('allows at least eight seconds for a toast action', () => {
+        notify({ id: 'undo', title: 'Moved to Trash', durationMs: 1_000, action: { label: 'Undo', run: vi.fn() } });
+        expect(get(toasts)[0]?.durationMs).toBe(8_000);
+        vi.advanceTimersByTime(7_999);
+        expect(get(toasts)).toHaveLength(1);
+        vi.advanceTimersByTime(1);
+        expect(get(toasts)).toHaveLength(0);
+    });
+
+    it('shows the final result even after an in-progress notice expires', () => {
+        notify({ id: 'creating', title: 'Creating drive', spinner: true });
+        vi.advanceTimersByTime(4_000);
+        expect(get(toasts)).toHaveLength(0);
+
+        notify({ id: 'creating', level: 'success', title: 'Drive created' });
+        expect(get(toasts)[0]).toMatchObject({ title: 'Drive created', spinner: false });
+        vi.advanceTimersByTime(4_000);
+        expect(get(toasts)).toHaveLength(0);
+    });
+
+    it('keeps no more than three desktop notices visible', () => {
+        for (const id of ['one', 'two', 'three', 'four']) notify({ id, title: id });
+        expect(get(toasts).map(({ id }) => id)).toEqual(['two', 'three', 'four']);
+    });
+
     it('expires at the nearest deadline without running an animation-frame loop', () => {
         const animationFrame = vi.spyOn(window, 'requestAnimationFrame');
 

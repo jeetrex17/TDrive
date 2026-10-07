@@ -10,12 +10,13 @@
     import FolderInputIcon from '@lucide/svelte/icons/folder-input';
     import Trash2Icon from '@lucide/svelte/icons/trash-2';
     import UploadIcon from '@lucide/svelte/icons/upload';
+    import FolderUpIcon from '@lucide/svelte/icons/folder-up';
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
     import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+    import XIcon from '@lucide/svelte/icons/x';
     import FileTextIcon from '@lucide/svelte/icons/file-text';
     import DatabaseIcon from '@lucide/svelte/icons/database';
     import CalendarIcon from '@lucide/svelte/icons/calendar';
-    import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
     import {
         contextMenuState,
         hideContextMenu,
@@ -24,7 +25,7 @@
         type ContextMenuItem,
     } from './context-menu-store';
     import { fileTypeFamily, fileTypeIcon } from '../file-list/file-type';
-    import { createSheetDrag, sheetOffset, shouldDismiss, FLICK_SPEED } from '../modals/sheet-gesture';
+    import { createSheetDragController, FLICK_SPEED } from '../modals/sheet-gesture';
     import { isMobilePlatform } from '../../api';
     import { hapticPress } from '../mobile/haptics';
     import { installModalA11y } from '../modals/modal-a11y';
@@ -39,9 +40,11 @@
         move: FolderInputIcon,
         delete: Trash2Icon,
         upload: UploadIcon,
+        'folder-up': FolderUpIcon,
         'folder-new': FolderPlusIcon,
         refresh: RefreshCwIcon,
         external: ExternalLinkIcon,
+        clear: XIcon,
     };
 
     const DETAIL_ICONS: Record<ContextMenuDetailIcon, typeof FileIcon> = {
@@ -90,13 +93,6 @@
     let top = $state(0);
     let lastFocusVersion = 0;
     let invoker: HTMLElement | null = null;
-
-    let dragging = false;
-    let dragStartY = 0;
-    let dragDelta = 0;
-    // The drag physics are shared with every other sheet in the app, so they
-    // all behave the same way under a thumb.
-    const drag = createSheetDrag();
 
     function container(): HTMLElement | null {
         return asSheet ? sheet : panel;
@@ -237,43 +233,20 @@
     }
 
     // --- action-sheet swipe to dismiss ---------------------------------------
-
-    function onHandlePointerDown(event: PointerEvent): void {
-        if (!sheet) return;
-        dragging = true;
-        dragStartY = event.clientY;
-        dragDelta = 0;
-        drag.start(event);
-        sheet.style.transition = '';
-        (event.currentTarget as HTMLElement).setPointerCapture?.(event.pointerId);
-    }
-
-    function onHandlePointerMove(event: PointerEvent): void {
-        if (!dragging || !sheet) return;
-        dragDelta = sheetOffset(event.clientY - dragStartY, sheet.offsetHeight);
-        drag.track(event);
-        sheet.style.transform = `translateY(${dragDelta}px)`;
-    }
-
-    function onHandlePointerUp(): void {
-        if (!dragging || !sheet) return;
-        dragging = false;
-        const velocity = drag.velocity();
-        const threshold = Math.max(72, sheet.offsetHeight * 0.3);
-        // Judge where the gesture was going, not where the finger happened to
-        // stop. A flick throws the sheet; a drag that halted keeps it.
-        if (shouldDismiss(dragDelta, velocity, threshold)) {
-            void dismissAndRestoreFocus();
-        } else {
-            // Settle faster when the finger was still moving, so the return
-            // continues the gesture instead of restarting at zero speed.
+    // The pointer wiring is the shared sheet controller; this host only says
+    // how to settle (spring back) and dismiss. The grab area is the grip plus
+    // the header, so the whole top of the sheet drags.
+    const sheetDrag = createSheetDragController({
+        sheet: () => sheet,
+        threshold: (height) => Math.max(72, height * 0.3),
+        settle: (velocity) => {
+            if (!sheet) return;
             const settle = velocity > FLICK_SPEED ? 'var(--motion-fast)' : 'var(--motion-med)';
             sheet.style.transition = `transform ${settle} var(--ease-enter)`;
             sheet.style.transform = 'translateY(0)';
-        }
-        dragDelta = 0;
-        drag.reset();
-    }
+        },
+        dismiss: () => { void dismissAndRestoreFocus(); },
+    });
 
     $effect(() => {
         void positionHost();
@@ -310,35 +283,49 @@
                 tabindex="-1"
                 bind:this={sheet}
             >
-            <div
-                class="sheet-handle"
-                aria-hidden="true"
-                onpointerdown={onHandlePointerDown}
-                onpointermove={onHandlePointerMove}
-                onpointerup={onHandlePointerUp}
-                onpointercancel={onHandlePointerUp}
+            <!-- A visible, labelled way out. The scrim and swipe dismiss too, but
+                 both are hidden from assistive technology, so without this an
+                 iOS VoiceOver user has no control to close the sheet with. -->
+            <button
+                type="button"
+                class="action-sheet-close"
+                aria-label="Close"
+                onclick={() => { void dismissAndRestoreFocus(); }}
             >
-                <span></span>
-            </div>
+                <XIcon size={20} strokeWidth={2} aria-hidden="true" />
+            </button>
 
-            {#if $contextMenuState.header}
-                {@const HeaderIcon = headerIcon}
-                <div class="action-sheet-header">
-                    <span
-                        class="action-sheet-icon"
-                        class:is-folder={$contextMenuState.header.kind === 'folder'}
-                        aria-hidden="true"
-                    >
-                        <HeaderIcon size={40} strokeWidth={1.5} />
-                    </span>
-                    <span class="action-sheet-heading">
-                        <span id="action-sheet-title" class="action-sheet-title">{$contextMenuState.header.title}</span>
-                        {#if $contextMenuState.header.meta}
-                            <span class="action-sheet-meta">{$contextMenuState.header.meta}</span>
-                        {/if}
-                    </span>
-                </div>
-            {/if}
+            <!-- Grip plus header are one grab area, so the whole top drags; the
+                 Close button above sits apart and keeps its tap. -->
+            <div
+                class="sheet-grab"
+                role="presentation"
+                onpointerdown={sheetDrag.onPointerDown}
+                onpointermove={sheetDrag.onPointerMove}
+                onpointerup={sheetDrag.onPointerUp}
+                onpointercancel={sheetDrag.onPointerUp}
+            >
+                <div class="sheet-handle" aria-hidden="true"><span></span></div>
+
+                {#if $contextMenuState.header}
+                    {@const HeaderIcon = headerIcon}
+                    <div class="action-sheet-header">
+                        <span
+                            class="action-sheet-icon"
+                            class:is-folder={$contextMenuState.header.kind === 'folder'}
+                            aria-hidden="true"
+                        >
+                            <HeaderIcon size={40} strokeWidth={1.5} />
+                        </span>
+                        <span class="action-sheet-heading">
+                            <span id="action-sheet-title" class="action-sheet-title">{$contextMenuState.header.title}</span>
+                            {#if $contextMenuState.header.meta}
+                                <span class="action-sheet-meta">{$contextMenuState.header.meta}</span>
+                            {/if}
+                        </span>
+                    </div>
+                {/if}
+            </div>
 
             {#if tiles.length}
                 <div class="action-sheet-tiles">
@@ -374,9 +361,6 @@
                             </dt>
                             <dd>
                                 <span>{detail.value}</span>
-                                {#if detail.icon === 'location'}
-                                    <ChevronRightIcon size={15} strokeWidth={2} aria-hidden="true" />
-                                {/if}
                             </dd>
                         </div>
                     {/each}
@@ -412,6 +396,7 @@
             bind:this={panel}
             class="context-menu-panel"
             role="menu"
+            aria-label="Actions"
             style:left={`${left}px`}
             style:top={`${top}px`}
         >
@@ -427,7 +412,14 @@
                         tabindex="-1"
                         onclick={() => invoke(item)}
                     >
-                        {item.label}
+                        {#if item.icon}
+                            {@const RowIcon = ICONS[item.icon]}
+                            <RowIcon size={16} strokeWidth={1.9} aria-hidden="true" />
+                        {/if}
+                        <span class="context-menu-label">{item.label}</span>
+                        {#if item.shortcut}
+                            <span class="context-menu-shortcut">{item.shortcut}</span>
+                        {/if}
                     </button>
                 {/if}
             {/each}

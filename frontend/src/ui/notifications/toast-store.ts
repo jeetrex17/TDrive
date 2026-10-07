@@ -14,13 +14,15 @@ export interface ToastAction {
 
 export interface ToastItem {
     id: string;
+    /** Changes when notify replaces this id, unlike timer pause/resume updates. */
+    revision?: number;
     level: ToastLevel;
     title: string;
     body: string;
     sticky: boolean;
     spinner: boolean;
     durationMs: number;
-    // Absolute deadline for auto-dismiss; 0 for sticky toasts. The nearest-
+    // Absolute deadline for auto-dismiss. The nearest-
     // deadline scheduler in modules/notifications.ts owns this field together
     // with the paused/remainingMs pair that freezes hover time.
     expiresAt: number;

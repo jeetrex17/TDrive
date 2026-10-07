@@ -47,7 +47,7 @@
         replanImportOptions,
     } from '../../modules/modals/import-options';
     import { submitJoinDrive } from '../../modules/modals/join-drive';
-    import { resolveRequest } from '../../modules/modals/join-requests';
+    import { reloadJoinRequests, resolveRequest } from '../../modules/modals/join-requests';
     import { confirmLeaveDrive } from '../../modules/modals/leave-drive';
     import { confirmLogout } from '../../modules/modals/logout';
     import {
@@ -188,7 +188,7 @@
         <LeaveDriveModal onConfirm={confirmLeaveDrive} />
     </div>
     <div id="join-requests-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
-        <JoinRequestsModal onAction={resolveRequest} />
+        <JoinRequestsModal onAction={resolveRequest} onRetry={reloadJoinRequests} />
     </div>
     <div id="encryption-setup-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <EncryptionSetupModal onCancel={cancelEncryptionSetup} onSubmit={submitEncryptionSetup} />
@@ -225,11 +225,8 @@
         />
     </div>
 
-    <!-- The trash and the confirm it raises share one component. The confirm's
-         host comes last so that, with every overlay on the same --z-modal, the
-         later element in the document is the one drawn on top. -->
-    <div id="trash-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
-    </div>
+    <!-- The trash renders into the file list, not a dialog; only the confirm it
+         raises is a modal here. -->
     <div id="trash-confirm-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <TrashConfirmModal onConfirm={confirmTrashAction} />
     </div>

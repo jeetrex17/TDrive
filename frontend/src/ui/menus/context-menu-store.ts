@@ -7,7 +7,7 @@ import { writable } from 'svelte/store';
  */
 export type ContextMenuIcon =
     | 'open' | 'play' | 'download' | 'rename' | 'move' | 'delete'
-    | 'upload' | 'folder-new' | 'refresh' | 'external';
+    | 'upload' | 'folder-up' | 'folder-new' | 'refresh' | 'external' | 'clear';
 
 export type ContextMenuItem =
     | {
@@ -21,6 +21,11 @@ export type ContextMenuItem =
          * desktop popover ignores it and lists everything in order.
          */
         primary?: boolean;
+        /**
+         * The keyboard shortcut for the same action on the focused row, shown
+         * right-aligned in the desktop popover. The phone sheet ignores it.
+         */
+        shortcut?: string;
         action: () => void | Promise<void>;
     }
     | {

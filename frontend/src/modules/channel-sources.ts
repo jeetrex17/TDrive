@@ -254,8 +254,8 @@ export function openInTelegram(url: string): void {
 export function showChannelActions(x: number, y: number, source: ChannelSource): void {
     const url = channelTelegramUrl(source);
     const items: ContextMenuItem[] = [
-        ...(url ? [{ label: 'Open in Telegram', action: () => openInTelegram(url) }, { type: 'divider' as const }] : []),
-        { label: 'Remove from TDrive', danger: true, action: () => removeChannel(source) },
+        ...(url ? [{ label: 'Open in Telegram', icon: 'external' as const, action: () => openInTelegram(url) }, { type: 'divider' as const }] : []),
+        { label: 'Remove from TDrive', icon: 'clear', danger: true, action: () => removeChannel(source) },
     ];
     showContextMenu(x, y, items);
 }

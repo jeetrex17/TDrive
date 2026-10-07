@@ -87,8 +87,8 @@ export async function listTrash(): Promise<TrashEntry[]> {
 
 // The mutations answer with the operation envelope, so a refusal reaches the
 // user in the backend's own words instead of a wrapped call error.
-export async function restoreFromTrash(objectId: string): Promise<OperationResult> {
-    return normalizeOperationResult(await invokeBackend(binding('RestoreFromTrash'), objectId), 'Could not restore this item');
+export async function restoreFromTrash(channelId: number, objectId: string): Promise<OperationResult> {
+    return normalizeOperationResult(await invokeBackend(binding('RestoreFromTrash'), channelId, objectId), 'Could not restore this item');
 }
 
 export async function deleteFromTrashPermanently(objectId: string): Promise<OperationResult> {

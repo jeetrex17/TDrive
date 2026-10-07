@@ -1,10 +1,18 @@
-// Delete modal for TDrive frontend
+// Delete modal for TDrive frontend.
+//
+// Delete does not destroy anything: the backend moves the file or folder into
+// the Trash (backend/services/file/mutations.go), where it stays restorable
+// until the Trash is emptied or the retention sweep purges it. The dialog says
+// exactly that, and a successful delete offers a one-tap Undo that restores the
+// same object by its trash id (`f:<msgId>` for a file, the folder's own `d:…`
+// id for a folder).
 
 import { deleteFile, deleteFolder } from '../../api';
-import { invalidateFolderIndex } from '../../state';
+import { restoreFromTrash } from '../../api/trash';
+import { invalidateFolderIndex, state } from '../../state';
 import { clearSelection } from '../selection';
 import { ensureNotInsideDeletedFolder } from '../navigation';
-import { notify } from '../notifications';
+import { dismissNotification, notify } from '../notifications';
 import { humanizeBackendError } from '../errors';
 import { appActions } from '../app-actions';
 import { callWithPasswordRetry } from './encryption-password';
@@ -41,6 +49,14 @@ function isFolder(item: FileCommandItem): item is FolderCommandItem {
     return item.type === 'folder';
 }
 
+/** The trash handle for an item: a folder carries its own `d:…` id, a file is addressed by message id. */
+function trashObjectId(item: FileCommandItem): string {
+    return item.type === 'folder' ? item.id : `f:${item.id}`;
+}
+
+function activeChannelId(): number {
+    return Number(state.activeChannel?.id ?? 0);
+}
 
 export function openDeleteModal(target: FileCommandTarget): void {
     pendingTarget = target;
@@ -58,41 +74,100 @@ export function openDeleteModal(target: FileCommandTarget): void {
         const total = allowed.length;
         const folders = allowed.filter(isFolder).length;
         const files = total - folders;
-        title = total === 1 ? 'Delete 1 item?' : `Delete ${total} items?`;
+        title = total === 1 ? 'Move 1 item to Trash?' : `Move ${total} items to Trash?`;
         const skippedNote = skipped > 0
             ? ` ${skipped} item(s) you don't own will be skipped.`
             : '';
-        if (folders > 0 && files > 0) {
-            subtitle = `This will delete ${folders} folder(s), all files inside them, and ${files} selected file(s) from Telegram. This action can't be undone.${skippedNote}`;
-        } else if (folders > 0) {
-            subtitle = `This will delete ${folders} folder(s) and all files inside them from Telegram. This action can't be undone.${skippedNote}`;
-        } else if (files > 0) {
-            subtitle = `This will remove ${files} file(s) from your Telegram channel. The action can't be undone.${skippedNote}`;
-        } else {
+        if (total === 0) {
             subtitle = `Nothing in your selection can be deleted. ${skipped} item(s) you don't own were skipped.`;
+        } else if (folders > 0 && files > 0) {
+            subtitle = `${folders} folder(s) with everything inside them and ${files} file(s) move to the Trash. You can restore them from the Trash until they are purged.${skippedNote}`;
+        } else if (folders > 0) {
+            subtitle = `${folders} folder(s) and everything inside them move to the Trash. You can restore them from the Trash until they are purged.${skippedNote}`;
+        } else {
+            subtitle = `${files} file(s) move to the Trash. You can restore them from the Trash until they are purged.${skippedNote}`;
         }
-        confirmLabel = total === 0 ? 'Close' : 'Delete';
+        confirmLabel = total === 0 ? 'Close' : 'Move to Trash';
     } else if (target.type === 'folder') {
-        title = 'Delete folder?';
+        title = 'Move folder to Trash?';
         itemName = target.name.trim();
-        subtitle = "This will delete the folder and every file inside it from Telegram. This action can't be undone.";
-        confirmLabel = 'Delete';
+        subtitle = 'The folder and everything inside it moves to the Trash. You can restore it from the Trash until it is purged.';
+        confirmLabel = 'Move to Trash';
     } else {
-        title = 'Delete file?';
+        title = 'Move file to Trash?';
         itemName = target.name.trim();
-        subtitle = "This will remove the file from your Telegram channel. The action can't be undone.";
-        confirmLabel = 'Delete';
+        subtitle = 'It moves to the Trash. You can restore it from the Trash until it is purged.';
+        confirmLabel = 'Move to Trash';
     }
 
     openDeleteModalView({ title, itemName, subtitle, confirmLabel });
 }
 
+/**
+ * Restores the just-trashed items, if the drive is still the one they were
+ * deleted from. A trash id is unique only within its channel, so a restore
+ * after a drive switch could land on a different object that happens to share
+ * the id; rather than risk that, Undo declines once the active drive changes.
+ */
+async function undoDelete(objectIds: string[], channelId: number): Promise<void> {
+    if (activeChannelId() !== channelId) {
+        notify({ level: 'info', title: 'Switch back to that drive to restore from the Trash' });
+        return;
+    }
+    let restored = 0;
+    const reasons: string[] = [];
+    let switchedDrive = false;
+    for (const objectId of objectIds) {
+        if (activeChannelId() !== channelId) {
+            switchedDrive = true;
+            break;
+        }
+        try {
+            const result = await restoreFromTrash(channelId, objectId);
+            if (result.ok) restored += 1;
+            else reasons.push(humanizeBackendError(result.error));
+        } catch (error) {
+            reasons.push(humanizeBackendError(error));
+        }
+    }
+    if (restored > 0) {
+        invalidateFolderIndex();
+        if (activeChannelId() === channelId) appActions().refreshFiles();
+    }
+    if (switchedDrive) {
+        notify({ level: 'info', title: 'Switch back to that drive to restore from the Trash' });
+    }
+    if (reasons.length > 0) {
+        notify({ level: 'error', title: 'Could not restore from the Trash', body: reasons[0] });
+    }
+}
+
+/** Confirms the move to Trash, with a one-tap Undo on the items that made it. */
+function notifyMovedToTrash(items: FileCommandItem[], channelId: number): void {
+    if (items.length === 0) return;
+    const objectIds = items.map(trashObjectId);
+    const title = items.length === 1 ? 'Moved to Trash' : `Moved ${items.length} items to Trash`;
+    const toastId = notify({
+        level: 'success',
+        title,
+        action: {
+            label: 'Undo',
+            run: () => {
+                dismissNotification(toastId);
+                void undoDelete(objectIds, channelId);
+            },
+        },
+    });
+}
 
 export async function confirmDelete(): Promise<void> {
     const target = pendingTarget;
     pendingTarget = null;
     closeDeleteModalView();
     if (!target) return;
+
+    // The channel the delete runs against; Undo must not restore into another.
+    const channelId = activeChannelId();
 
     // The rows being deleted go quiet for the duration and then disappear.
     // That is the report; a notice about rows the user is already looking at,
@@ -153,7 +228,10 @@ export async function confirmDelete(): Promise<void> {
                         : `${first.error} Open Transfers for the rest.`,
                 });
             }
-            if (succeeded.length > 0) invalidateFolderIndex();
+            if (succeeded.length > 0) {
+                invalidateFolderIndex();
+                notifyMovedToTrash(succeeded, channelId);
+            }
             appActions().refreshFiles();
             return;
         }
@@ -173,6 +251,7 @@ export async function confirmDelete(): Promise<void> {
         }
         if (target.type === 'folder') ensureNotInsideDeletedFolder(target.id);
         invalidateFolderIndex();
+        notifyMovedToTrash([target], channelId);
         appActions().refreshFiles();
     } catch (error) {
         console.error('Delete failed:', error);

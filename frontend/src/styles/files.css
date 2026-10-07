@@ -1,7 +1,7 @@
 .main-content { flex: 1; min-width: 0; min-height: 0; padding: 0; display: flex; flex-direction: column; background: var(--bg-dark); }
 
 .main-content > header {
-    min-height: 70px; flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; gap: var(--space-4);
+    min-height: 56px; flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; gap: var(--space-4);
     padding: 0 var(--space-6); border-bottom: 1px solid var(--border);
 }
 
@@ -25,7 +25,7 @@
 .btn-icon { width: 16px; height: 16px; }
 /* BREADCRUMB */
 .drive-breadcrumb {
-    min-height: 48px; flex-shrink: 0; display: flex; align-items: center; gap: 10px;
+    min-height: 44px; flex-shrink: 0; display: flex; align-items: center; gap: 10px;
     padding: 0 var(--space-6); border-bottom: 1px solid var(--border);
     background: color-mix(in srgb, var(--color-surface-0) 58%, transparent);
 }
@@ -114,8 +114,9 @@
     /* The rows sit inside a box padded 10px, then pad 20px themselves, with a
        12px gap between cells: the header mirrors that exactly, or its labels
        start a dozen pixels off the figures under them. */
-    display: grid; grid-template-columns: minmax(0, 2fr) minmax(96px, 1fr) minmax(84px, 1fr) minmax(100px, auto); padding: 15px 30px; column-gap: 12px;
-    font-size: var(--type-xs); font-weight: var(--weight-semibold); color: var(--text-muted); letter-spacing: 0;
+    display: grid; grid-template-columns: minmax(0, 2fr) minmax(96px, 1fr) minmax(84px, 1fr) minmax(100px, auto);
+    align-items: center; min-height: 32px; padding: 0 30px; column-gap: var(--space-3);
+    font-size: var(--type-xs); font-weight: var(--weight-medium); color: var(--text-muted); letter-spacing: 0;
 }
 .col-name { padding-left: 10px; }
 
@@ -168,8 +169,14 @@
     padding: 0 10px;
     outline: none;
 }
+/* The container is focusable only to catch the keyboard when a row cannot hold
+   it (an empty folder, or a focused row scrolled out of the virtual window).
+   The focus indicator belongs on the row, so a ring around the whole list is
+   never right, whether focus arrived by mouse, keyboard or script. */
+.file-list-box:focus,
 .file-list-box:focus-visible {
-    box-shadow: inset var(--focus-ring);
+    outline: none;
+    box-shadow: none;
 }
 
 .file-state {
@@ -215,14 +222,16 @@
     display: block;
     width: 100%;
     min-height: 0;
-    padding: var(--space-4) var(--space-3);
+    padding: 0;
 }
 .file-state .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
+/* The skeleton is the real row's shape -- same height, tile and columns, and no
+   dividers -- so the list does not jump when the rows land over it. */
 .file-state-skeleton { display: grid; width: 100%; }
-.file-state-skeleton-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(96px, 1fr) minmax(84px, 1fr) minmax(100px, auto); align-items: center; gap: var(--space-5); min-height: 52px; padding: 0 8px; border-bottom: 1px solid var(--border); }
-.file-state-skeleton-name { display: grid; grid-template-columns: 30px minmax(0, 1fr); align-items: center; gap: 12px; min-width: 0; }
+.file-state-skeleton-row { display: grid; grid-template-columns: minmax(0, 2fr) minmax(96px, 1fr) minmax(84px, 1fr) minmax(100px, auto); align-items: center; column-gap: var(--space-3); min-height: var(--touch-target); padding: 0 var(--space-5); border-bottom: 0; }
+.file-state-skeleton-name { display: grid; grid-template-columns: var(--control-md) minmax(0, 1fr); align-items: center; gap: var(--space-3); min-width: 0; }
 .file-state-skeleton-icon, .file-state-skeleton-bar, .file-state-skeleton-meta, .file-state-skeleton-action { display: block; height: 10px; border-radius: var(--radius-pill); background-color: var(--surface-control); background-image: linear-gradient(100deg, transparent 25%, var(--bg-panel) 48%, transparent 70%); background-size: 240% 100%; animation: file-skeleton-shimmer 1.65s linear var(--skeleton-delay, 0ms) infinite; }
-.file-state-skeleton-icon { width: 30px; height: 30px; border-radius: var(--radius-md); }
+.file-state-skeleton-icon { width: var(--control-md); height: var(--control-md); border-radius: var(--radius-sm); }
 .file-state-skeleton-bar { width: min(100%, var(--skeleton-width)); }
 .file-state-skeleton-meta { width: 58%; }
 .file-state-skeleton-action { width: 28px; justify-self: end; }
@@ -245,30 +254,28 @@
     transition: opacity var(--motion-med) var(--ease-standard);
 }
 
+/* A dense file-manager row: 44px tall, a 32px tile, no gap or border between
+   rows so a run of selected rows reads as one continuous block. */
 .file-row {
-    display: grid; grid-template-columns: minmax(0, 2fr) minmax(96px, 1fr) minmax(84px, 1fr) minmax(100px, auto); padding: 12px 20px;
-    align-items: center; border-radius: var(--radius-md); transition: background var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
-    margin-bottom: 2px; cursor: default;
-    outline: none;
-    column-gap: 12px;
+    display: grid; grid-template-columns: minmax(0, 2fr) minmax(96px, 1fr) minmax(84px, 1fr) minmax(100px, auto);
+    align-items: center; min-height: var(--touch-target); padding: 0 var(--space-5);
+    column-gap: var(--space-3); cursor: default; outline: none;
+    transition: background var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
 }
-.file-row:hover { background: var(--bg-panel); }
-.file-row:focus-visible {
-    background: var(--overlay-accent-1);
-    box-shadow: inset 0 0 0 1px var(--color-accent), var(--focus-ring);
-}
-.file-row.is-keyboard-active:not(.is-selected) {
-    background: transparent;
-    box-shadow: inset 0 0 0 1px var(--overlay-accent-2);
-}
-.file-row.is-keyboard-active:not(.is-selected):hover {
-    background: var(--bg-panel);
-}
-.drive-row.is-selected {
-    background: var(--overlay-accent-1);
-    box-shadow: inset 0 0 0 1px var(--overlay-accent-3);
-}
+.file-row:hover { background: var(--overlay-neutral-2); }
+/* Selection is a continuous tint with no per-row border or radius, so adjacent
+   selected rows merge into a single band. */
+.drive-row.is-selected { background: var(--overlay-accent-1); box-shadow: none; }
 .drive-row.is-selected:hover { background: var(--overlay-accent-2); }
+/* The keyboard-active row is clearly ringed, but only while the list actually
+   holds focus, so the mark never lingers after the reader has moved on. The
+   ring is inset so the list edge never clips it. */
+.file-row:focus-visible,
+.file-list-box:focus-within .file-row.is-keyboard-active {
+    outline: none;
+    box-shadow: inset var(--focus-ring);
+    border-radius: var(--radius-sm);
+}
 .drive-row.is-dragging {
     opacity: 0.6;
 }
@@ -300,21 +307,18 @@
  * pasted into the list.
  */
 .file-type-icon {
-    /* Square, not the 40x20 letterbox it used to be. The chip doubles as the
-       photo thumbnail, and a 2:1 crop of a portrait is a strip of somebody's
-       shirt -- unrecognisable, which is the one thing a thumbnail must not be.
-       Square costs 20px of row height and is what makes the picture readable.
-       The phone shell already had its own 44px square for the same reason. */
-    width: 40px;
-    height: 40px;
-    margin-right: 12px;
+    /* A 32px square tile, borderless, that doubles as the photo thumbnail. Square
+       rather than a letterbox so a portrait crop stays recognisable, which is the
+       one thing a thumbnail must not fail at. */
+    width: var(--control-md);
+    height: var(--control-md);
+    margin-right: var(--space-3);
     flex: 0 0 auto;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     border-radius: var(--radius-sm);
     background: var(--overlay-white-1);
-    border: 1px solid var(--border);
     /* The glyph is the only thing telling one file from another, so it sits at
        label weight. At muted it reads as a smudge and the type is lost. */
     color: var(--text-main);
@@ -363,7 +367,7 @@
     display: flex;
     align-items: center;
     color: var(--color-text);
-    font-size: 0.9rem;
+    font-size: var(--type-base);
     font-weight: var(--weight-medium);
     white-space: nowrap;
     user-select: text;
@@ -382,20 +386,36 @@
     min-width: 0;
     overflow: hidden;
     color: var(--text-muted);
-    font-size: 0.85rem;
+    font-size: var(--type-sm);
+    font-weight: var(--weight-regular);
     text-overflow: ellipsis;
     white-space: nowrap;
 }
 
-.row-actions { min-width: 0; display: flex; gap: 8px; opacity: 1; justify-content: flex-end; }
+.row-actions { min-width: 0; display: flex; gap: var(--space-1); justify-content: flex-end; align-items: center; }
+/* Row actions are quiet until the row is hovered, focused within or selected;
+   on a device with no hover they stay visible, since there is no hover to wait
+   for. The trash's own Restore/Delete are the row's only affordance, so they
+   never hide (is-inline). Scoped away from the phone shell, which keeps its
+   overflow button visible even on a hover-capable device (an emulator). */
+@media (hover: hover) {
+    html:not(.mobile) .file-row .row-actions:not(.is-inline) .action-icon {
+        opacity: 0;
+        transition: opacity var(--motion-fast) var(--ease-standard);
+    }
+    html:not(.mobile) .file-row:hover .row-actions:not(.is-inline) .action-icon,
+    html:not(.mobile) .file-row:focus-within .row-actions:not(.is-inline) .action-icon,
+    html:not(.mobile) .drive-row.is-selected .row-actions:not(.is-inline) .action-icon {
+        opacity: 1;
+    }
+}
 
 /* Tracks .file-type-icon exactly. The two chips share the leading column, so
    any difference in box reads as one of them being misaligned. */
 .folder-chip {
-    width: 40px; height: 40px; margin-right: 12px;
+    width: var(--control-md); height: var(--control-md); margin-right: var(--space-3);
     flex: 0 0 auto; display: inline-flex; align-items: center; justify-content: center;
     background: var(--overlay-accent-1);
-    border: 1px solid var(--overlay-accent-2);
     border-radius: var(--radius-sm); color: var(--accent);
 }
 /* One rule for both chips. A folder and a file type share a column, so any
@@ -407,27 +427,30 @@
    square it read as a small mark adrift in an empty tile, next to thumbnails
    that reach the chip's own edges. */
 .folder-chip svg,
-.file-type-icon svg { width: 20px; height: 20px; stroke-width: 1.5; }
+.file-type-icon svg { width: 18px; height: 18px; stroke-width: 1.5; }
 
+/* A quiet, borderless 28px icon button. No tile or outline of its own: it shows
+   a soft background only on hover, so a row never reads as a strip of boxes. */
 .action-icon {
-    width: 28px; height: 28px; display: flex; align-items: center; justify-content: center;
+    width: var(--control-sm); height: var(--control-sm); display: flex; align-items: center; justify-content: center;
     border-radius: var(--radius-sm); cursor: pointer;
     /* Named properties, not `all`: `all` animates layout and paint properties
        nothing here intends to change, and it is the one transition in the app
        that can stutter under a long list. */
     transition: background var(--motion-fast) var(--ease-standard),
-                border-color var(--motion-fast) var(--ease-standard),
                 color var(--motion-fast) var(--ease-standard),
+                opacity var(--motion-fast) var(--ease-standard),
                 transform var(--motion-fast) var(--ease-standard);
-    background: var(--overlay-white-1); border: 1px solid var(--border);
-    color: var(--text-main);
+    background: transparent; border: 0;
+    color: var(--text-muted);
     padding: 0;
     appearance: none;
 }
 .action-icon svg { width: 16px; height: 16px; }
-.action-icon:hover { background: var(--bg-panel); }
+.action-icon:hover { background: var(--overlay-neutral-2); color: var(--text-main); }
+.action-icon:focus-visible { outline: none; box-shadow: var(--focus-ring); color: var(--text-main); }
 .action-icon:active { transform: translateY(0.5px) scale(0.98); }
-.action-icon.del { color: var(--danger); border-color: var(--overlay-danger-2); }
+.action-icon.del { color: var(--danger); }
 .action-icon.del:hover { background: var(--overlay-danger-1); }
 
 
@@ -444,8 +467,9 @@ html.mobile .file-list-box {
     position: relative;
     /* Breathing room above and below the card. Neither the tab bar nor the
        upload button needs an allowance: the bar sits below the body and the
-       button is docked into it. */
-    padding: var(--space-2) 0 var(--space-6);
+       button is docked into it. The keyboard inset is added so search results
+       clear the keys instead of hiding under them. */
+    padding: var(--space-2) 0 calc(var(--space-6) + var(--inset-keyboard));
     overflow-x: hidden;
     touch-action: pan-y;
     overscroll-behavior-y: contain;
@@ -542,7 +566,9 @@ html.mobile .row-name {
     min-width: 0;
     gap: 12px;
     color: var(--color-text);
-    font-size: 15px;
+    /* A rem token, not px, so iOS Dynamic Type scales the file name with the
+       rest of the chrome instead of leaving it fixed. */
+    font-size: var(--mobile-type-body);
     font-weight: var(--weight-semibold);
     line-height: 1.35;
     user-select: none;
@@ -588,7 +614,7 @@ html.mobile .row-sub {
     gap: 6px;
     min-width: 0;
     color: var(--text-muted);
-    font-size: 13px;
+    font-size: var(--mobile-type-meta);
     font-weight: var(--weight-medium);
     line-height: 1.35;
 }
@@ -620,7 +646,7 @@ html.mobile .uploader-chip {
     border-radius: var(--radius-pill);
     background: var(--overlay-neutral-2);
     color: var(--text-main);
-    font-size: 12px;
+    font-size: var(--mobile-type-caption);
     font-weight: var(--weight-semibold);
     line-height: 1;
     vertical-align: baseline;
@@ -695,6 +721,20 @@ html.mobile .is-selected .row-check {
 html.mobile .is-selected .row-check svg { opacity: 1; }
 
 html.mobile .row-actions { flex: 0 0 auto; gap: 0; }
+/* The trash's Restore and Delete forever each get a full 44px touch target and
+   real space between, so a thumb cannot catch both. The glyph stays small; an
+   invisible ::after grows the hit area (accessibility-7). */
+html.mobile .row-actions.is-inline { gap: var(--space-3); }
+html.mobile .row-actions.is-inline .action-icon {
+    position: relative;
+    width: var(--control-md);
+    height: var(--control-md);
+}
+html.mobile .row-actions.is-inline .action-icon::after {
+    content: "";
+    position: absolute;
+    inset: calc((var(--control-md) - var(--touch-target)) / 2);
+}
 html.mobile .action-icon.row-more {
     position: relative;
     width: 32px;
@@ -733,12 +773,12 @@ html.mobile .file-state-icon {
 }
 html.mobile .file-state-icon svg { width: 24px; height: 24px; }
 html.mobile .file-state-title {
-    font-size: 17px;
+    font-size: var(--mobile-type-title);
     font-weight: var(--weight-strong);
     text-wrap: balance;
 }
 html.mobile .file-state-body {
-    font-size: 15px;
+    font-size: var(--mobile-type-body);
     line-height: 1.5;
     text-wrap: pretty;
 }
@@ -750,9 +790,9 @@ html.mobile .file-state-actions {
     margin-top: 14px;
 }
 html.mobile .file-state-actions .secondary-btn {
-    min-height: 44px;
+    min-height: var(--touch-target);
     padding: 0 18px;
-    font-size: 15px;
+    font-size: var(--mobile-type-body);
 }
 html.mobile .file-state-actions .secondary-btn:first-child {
     background: var(--accent);

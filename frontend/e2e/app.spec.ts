@@ -47,9 +47,9 @@ test('auth advances through the public login surface and handles runtime errors'
     await phone.fill('+1 555 0100');
     await page.getByRole('button', { name: 'Send code' }).click();
     await expect(page.getByRole('heading', { name: 'Verify your account' })).toBeVisible();
-    await expect(page.getByText('+1 555 0100')).toBeVisible();
+    await expect(page.getByText('+15550100')).toBeVisible();
     expect(await mock.calls('LoginPhoneNumber')).toMatchObject([
-        { args: ['+1 555 0100'], state: 'fulfilled' },
+        { args: ['+15550100'], state: 'fulfilled' },
     ]);
 
     await mock.emit('login-code-invalid');
@@ -314,6 +314,12 @@ test('context menus retain vertical actions, render notifications, and restore f
     const toastStack = page.locator('#toast-stack.toast-stack');
     await expect(toastStack).toHaveCSS('position', 'fixed');
     await expect(toastStack.getByRole('alert')).toContainText('Could not get invite link');
+    const toastBox = await toastStack.boundingBox();
+    const viewport = page.viewportSize();
+    expect(toastBox).not.toBeNull();
+    expect(viewport).not.toBeNull();
+    expect(toastBox!.y).toBeGreaterThanOrEqual(68);
+    expect(viewport!.width - (toastBox!.x + toastBox!.width)).toBeGreaterThanOrEqual(19);
 
     const newDrive = page.getByRole('button', { name: 'New shared drive' });
     await newDrive.click();

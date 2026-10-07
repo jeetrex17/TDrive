@@ -52,7 +52,6 @@
         height: var(--avatar-size, 24px);
         display: grid;
         place-items: center;
-        overflow: hidden;
         border-radius: var(--radius-pill);
         background: var(--overlay-neutral-3);
         color: var(--text-main);
@@ -67,11 +66,13 @@
         width: 100%;
         height: 100%;
         object-fit: cover;
+        border-radius: inherit;
         animation: channel-avatar-in var(--motion-med) var(--ease-standard);
     }
 
     .channel-avatar-peer {
         position: absolute;
+        z-index: 1;
         right: -1px;
         bottom: -1px;
         display: grid;

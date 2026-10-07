@@ -207,7 +207,10 @@ export function transferDetailParts(transfer: TransferEvent, now = Date.now()): 
     const phase = transferPhase(transfer);
     switch (phase) {
         case 'waiting': return [status('Waiting its turn')];
-        case 'paused': return [status('Paused')];
+        // The one thing that pauses a running transfer is iOS suspending the app
+        // on the way to the background, so the row says why rather than leaving a
+        // bare "Paused" that reads as something the user did.
+        case 'paused': return [status('Paused while TDrive was in the background')];
         case 'preparing': return [status('Preparing…')];
         case 'canceling': return [status('Stopping…')];
         case 'canceled': return [status(terminal('Canceled', transfer.finishedAt, now))];

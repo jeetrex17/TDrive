@@ -83,9 +83,13 @@ export function describeBackup(state: PhotoBackupState): BackupSituation {
     const { status } = state;
     const waiting = status.pending + status.uploading;
     const hasSources = state.sources.some((source) => source.enabled);
+    // iOS gives the app no background execution, so backup only advances while
+    // TDrive is open. Say so rather than imply a scheduler the platform has not.
+    // Android's foreground service keeps running, so its copy stays as is.
+    const whileOpen = state.platform === 'ios';
 
     if (!state.settings.enabled) {
-        return { tone: 'idle', title: 'Backup is off', body: 'Turn it on to keep a copy of your photos and videos in this drive.', detail: '', primary: null, secondary: null, progress: false };
+        return { tone: 'idle', title: 'Backup is off', body: whileOpen ? 'Turn it on to keep a copy of your photos and videos in this drive while TDrive is open.' : 'Turn it on to keep a copy of your photos and videos in this drive.', detail: '', primary: null, secondary: null, progress: false };
     }
     if (state.encryptionRequired) {
         // The queue's own phase decides what the unlock leads into.
@@ -123,7 +127,7 @@ export function describeBackup(state: PhotoBackupState): BackupSituation {
             if (state.sources.some((source) => source.enabled && source.kind === 'device-folder' && source.scanComplete === false)) {
                 return { tone: 'warning', title: 'Still checking this folder', body: 'Keep TDrive open to find the remaining photos and videos.', detail: '', primary: 'start', secondary: null, progress: false };
             }
-            return { tone: 'success', title: 'Up to date', body: '', detail: '', primary: 'start', secondary: null, progress: false };
+            return { tone: 'success', title: 'Up to date', body: whileOpen ? 'New photos and videos back up while TDrive is open.' : '', detail: '', primary: 'start', secondary: null, progress: false };
         default:
             if (!hasSources) {
                 return { tone: 'idle', title: 'Choose what to back up', body: 'Add a folder or a photo library below to get started.', detail: '', primary: null, secondary: null, progress: false };

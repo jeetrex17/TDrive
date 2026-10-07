@@ -50,7 +50,7 @@
     titleId="trash-confirm-title"
     subtitle={target ? subtitle(target) : ''}
     initialFocus="#trash-confirm-cancel"
-    restoreFocus="#trash-empty"
+    restoreFocus="#trash-empty-btn"
     onClose={close}
 >
     {#if target?.kind === 'purge'}

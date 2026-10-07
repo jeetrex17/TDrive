@@ -30,7 +30,7 @@ const actions = vi.hoisted(() => ({
 
 vi.mock('../api', () => api);
 vi.mock('./app-actions', () => ({ appActions: () => actions }));
-vi.mock('./navigation', () => ({ navigateToFolder: actions.navigateToFolder }));
+vi.mock('./navigation', () => ({ navigateToFolder: actions.navigateToFolder, navigateBack: vi.fn() }));
 vi.mock('./transfers', () => ({
     chooseFilesForCurrentFolder: actions.chooseFiles,
     chooseFolderForCurrentFolder: actions.chooseFolder,

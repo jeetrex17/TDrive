@@ -110,19 +110,26 @@ func TestRangeReaderCachesBlocks(t *testing.T) {
 	defer reader.Close()
 	ref := fake.ref()
 
-	for i := 0; i < 2; i++ {
+	// Read past the opening prefix, which intentionally starts a second fetch
+	// to fill the full block in the background.
+	const off = openingChunkBytes + 100
+	for i := range 2 {
 		buf := make([]byte, 64)
-		if _, err := reader.ReadStoredAt(context.Background(), ref, buf, 100); err != nil {
+		n, err := reader.ReadStoredAt(t.Context(), ref, buf, off)
+		if err != nil {
 			t.Fatalf("read %d: %v", i, err)
 		}
+		if n != len(buf) || !bytes.Equal(buf, data[off:off+int64(len(buf))]) {
+			t.Fatalf("read %d: n = %d, want %d matching bytes", i, n, len(buf))
+		}
 	}
-	if calls := fake.calls(); len(calls) != 1 {
+	if calls := fake.calls(); len(calls) != 1 || calls[0].offset != 0 || calls[0].length != tgclient.RangeReadMaxBytes {
 		t.Fatalf("calls = %+v, want one cached block fetch", calls)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(t.Context())
 	cancel()
-	if _, err := reader.ReadStoredAt(ctx, ref, make([]byte, 64), 100); !errors.Is(err, context.Canceled) {
+	if _, err := reader.ReadStoredAt(ctx, ref, make([]byte, 64), off); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cached canceled read err = %v, want context.Canceled", err)
 	}
 	if calls := fake.calls(); len(calls) != 1 {

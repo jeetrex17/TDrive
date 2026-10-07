@@ -66,6 +66,22 @@ describe('ContextMenu', () => {
         expect(document.activeElement).toBe(buttons()[0]);
     });
 
+    it('draws each item with its icon, label and optional shortcut', async () => {
+        showContextMenu(0, 0, [
+            { label: 'Delete', icon: 'delete', danger: true, shortcut: 'Del', action: vi.fn() },
+        ]);
+        await settle();
+
+        const panel = document.querySelector<HTMLElement>('.context-menu-panel');
+        expect(panel?.getAttribute('aria-label')).toBe('Actions');
+
+        const btn = buttons()[0];
+        expect(btn.querySelector('svg')).not.toBeNull();
+        expect(btn.querySelector('.context-menu-label')?.textContent).toBe('Delete');
+        expect(btn.querySelector('.context-menu-shortcut')?.textContent).toBe('Del');
+        expect(btn.classList.contains('danger')).toBe(true);
+    });
+
     it('supports arrow, edge, and Escape keyboard behavior', async () => {
         await openMenu();
         const [first, second] = buttons();

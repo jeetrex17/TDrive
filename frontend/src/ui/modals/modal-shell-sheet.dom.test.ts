@@ -22,6 +22,11 @@ let app: Record<string, unknown> | null = null;
 const children = createRawSnippet(() => ({
     render: () => `<input id="sheet-input" />`,
 }));
+const headerWithButton = createRawSnippet(() => ({
+    render: () => `<div class="move-modal-header">`
+        + `<h3 id="sheet-title" class="modal-title">Move item</h3>`
+        + `<button id="header-btn" type="button">Back</button></div>`,
+}));
 const actions = createRawSnippet(() => ({
     render: () => `<button id="sheet-primary" class="primary-btn" type="button">Save</button>`,
 }));
@@ -101,6 +106,39 @@ describe('ModalShell sheet presentation', () => {
         const handle = host.querySelector('.sheet-handle') as HTMLElement;
 
         drag(handle, 0, 12);
+        expect(onClose).not.toHaveBeenCalled();
+        expect(host.querySelector('.modal-sheet')).not.toBeNull();
+    });
+
+    it('drags from the title row, not just the grip', async () => {
+        const onClose = mountShell('sheet');
+        const title = host.querySelector('.modal-title') as HTMLElement;
+        expect(title).not.toBeNull();
+
+        drag(title, 0, 320);
+        await vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    });
+
+    it('does not start a drag from a button in the header', () => {
+        const onClose = vi.fn();
+        app = mount(ModalShell, {
+            target: host,
+            props: {
+                hostId: 'sheet-host',
+                open: true,
+                titleId: 'sheet-title',
+                presentation: 'sheet',
+                onClose,
+                header: headerWithButton,
+                children,
+                actions,
+            },
+        });
+        flushSync();
+
+        const button = host.querySelector('#header-btn') as HTMLElement;
+        drag(button, 0, 320);
+        // The press belonged to the button, so the sheet never left.
         expect(onClose).not.toHaveBeenCalled();
         expect(host.querySelector('.modal-sheet')).not.toBeNull();
     });

@@ -234,7 +234,17 @@
         white-space: nowrap;
     }
 
-    /* 40px for the thumb, pulled back out of the row so a target this size does
+    /* A failure's reason is the one note worth reading in full, so it wraps to
+       three lines instead of being clipped to a single ellipsised one. */
+    .row[data-phase='failed'] .note {
+        display: -webkit-box;
+        -webkit-box-orient: vertical;
+        -webkit-line-clamp: 3;
+        line-clamp: 3;
+        white-space: normal;
+    }
+
+    /* 44px for the thumb, pulled back out of the row so a target this size does
        not set the height of the line the name sits on and leave the bar
        floating a long way underneath it. */
     .control {
@@ -242,9 +252,9 @@
         grid-column: 3;
         display: grid;
         place-items: center;
-        width: 40px;
-        height: 40px;
-        margin: -7px -9px -5px 0;
+        width: 44px;
+        height: 44px;
+        margin: -9px -11px -7px 0;
         padding: 0;
         border: 0;
         border-radius: var(--radius-md);

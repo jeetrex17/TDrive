@@ -26,6 +26,7 @@ const overrides = {
         { id: 2, title: 'Team assets', kind: 'shared', is_active: false, invite_link: 'https://t.me/x' },
     ]),
     GetFolderContents: byFirstArg({ '': resolves(rootContents), r1: resolves(reportsContents) }, resolves({ folders: [], files: [] })),
+    ListTrash: resolves([]),
 };
 
 async function bootMobile(page: Parameters<typeof bootTDrive>[0]) {
@@ -158,6 +159,90 @@ test('the back bridge pops one folder level and then leaves the app', async ({ p
 
     const atRoot = await page.evaluate(() => window.__tdriveHandleBack?.());
     expect(atRoot).toBe(false);
+});
+
+// A folder, a channel or the trash the Files tab is showing survives a trip to
+// another tab; only re-tapping the active Files tab resets it to the drive root.
+test('a tab round trip keeps the files view and re-tapping files resets it', async ({ page }) => {
+    await bootMobile(page);
+    await tab(page, /^Account/).click();
+    await page.getByRole('button', { name: 'Trash' }).click();
+    await expect(page.getByRole('heading', { name: 'Trash' })).toBeVisible();
+
+    await tab(page, /^Transfers/).click();
+    await expect(page.getByRole('heading', { name: 'Transfers' })).toBeVisible();
+    await tab(page, /^Files/).click();
+    await expect(page.getByRole('heading', { name: 'Trash' })).toBeVisible();
+
+    await tab(page, /^Files/).click();
+    await expect(page.getByRole('button', { name: /Switch drive/ })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Trash' })).toHaveCount(0);
+});
+
+// Multi-select has a keyboard/pointer path, not only a long press: the overflow
+// menu starts it and Select all then picks every row in the folder.
+test('the overflow menu starts selection and Select all picks every row', async ({ page }) => {
+    await bootMobile(page);
+    await page.getByRole('button', { name: /Sort and more/ }).click();
+    await page.getByRole('menuitem', { name: 'Select' }).click();
+    await expect(page.locator('.topbar-selection')).toBeVisible();
+
+    await page.getByRole('button', { name: 'Select all' }).click();
+    // One folder (Reports) and two files in the drive root.
+    await expect(page.locator('.topbar-selection-count')).toHaveText('3 selected');
+});
+
+// A settings page opens at the top with its title and a back button in the top
+// bar, not with its back control buried in the scrolling content.
+test('an account settings page carries its title and back in the top bar', async ({ page }) => {
+    await bootMobile(page);
+    await tab(page, /^Account/).click();
+    await page.getByRole('button', { name: /^Appearance/ }).click();
+
+    const topbar = page.locator('.mobile-topbar');
+    await expect(topbar.getByRole('heading', { name: 'Appearance' })).toBeVisible();
+    await expect(topbar.getByRole('heading', { name: 'Account' })).toHaveCount(0);
+
+    await topbar.getByRole('button', { name: 'Back' }).click();
+    await expect(topbar.getByRole('heading', { name: 'Account' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Appearance/ })).toBeVisible();
+});
+
+// Tapping the drive that is already active just returns to its files; it must
+// not run a full switch (which would stop the backup run and reset to root).
+test('tapping the active drive in Account opens Files without re-switching', async ({ page }) => {
+    const mock = await bootMobile(page);
+    await tab(page, /^Account/).click();
+    await page.getByRole('region', { name: 'Drives' }).getByRole('button', { name: /^My Drive/ }).click();
+
+    await expect(page.locator('.main-content')).toBeVisible();
+    await expect(page.getByRole('button', { name: /Switch drive/ })).toContainText('My Drive');
+    expect(await mock.calls('SetActiveChannel')).toEqual([]);
+});
+
+test('offline and recovery notices appear below the safe area and expire', async ({ page }) => {
+    await bootMobile(page);
+    await page.evaluate(() => document.documentElement.style.setProperty('--mobile-inset-top', '32px'));
+
+    await page.evaluate(() => window.dispatchEvent(new Event('offline')));
+    const notice = page.locator('#toast-stack .toast', { hasText: "You're offline" });
+    await expect(notice).toBeVisible();
+    await expect.poll(async () => (await notice.boundingBox())?.y ?? 0).toBeGreaterThanOrEqual(108);
+    const exitMotion = page.evaluate(() => new Promise<{ connected: boolean; animating: boolean }>((resolve) => {
+        const node = document.querySelector<HTMLElement>('#toast-stack .toast')!;
+        node.addEventListener('outrostart', () => {
+            const connected = node.isConnected;
+            requestAnimationFrame(() => resolve({
+                connected,
+                animating: node.getAnimations().some((animation) => animation.playState === 'running'),
+            }));
+        }, { once: true });
+    }));
+    expect(await exitMotion).toEqual({ connected: true, animating: true });
+    await expect(notice).toHaveCount(0, { timeout: 8000 });
+
+    await page.evaluate(() => window.dispatchEvent(new Event('online')));
+    await expect(page.locator('#toast-stack .toast', { hasText: 'Back online' })).toBeVisible();
 });
 
 test('the bars carry safe-area padding', async ({ page }) => {

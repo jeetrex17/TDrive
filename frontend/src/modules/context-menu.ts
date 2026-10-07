@@ -1,6 +1,7 @@
 // Context menu handling for TDrive frontend
 
 import { state } from '../state';
+import { isApplePlatform } from '../utils';
 import { isMobilePlatform } from '../api';
 import { clearSelection, ensureRowSelectedForContextMenu, getSelectionPayload } from './selection';
 import { openDeleteModal } from './modals/delete';
@@ -9,7 +10,8 @@ import { openMoveModal } from './modals/move';
 import { openNewFolderModal } from './modals/folder';
 import { navigateToFolder } from './navigation';
 import { enqueueDownload, enqueueFolderDownload, importFolderWithParentID, uploadWithParentID } from './transfers';
-import { canOpenFileViewer, isVideoFile } from './media-types';
+import { canOpenFileViewer, isImageFile, isVideoFile } from './media-types';
+import { openImagePreview } from './image-preview';
 import { appActions } from './app-actions';
 import {
     hideContextMenu,
@@ -20,13 +22,17 @@ import {
 import { fileListRowForElement } from '../ui/file-list/row-lookup';
 import type { FileCommandItem, FileListFileRow } from '../ui/file-list/types';
 
-// folderGroup appends the current-folder actions (upload here, new folder,
-// refresh) that make sense in the desktop popover. A phone action sheet lists
-// only the item's own actions and separates the destructive one, so those
-// callers pass folderGroup: false.
+// folderGroup appends the folder-scoped upload actions that make sense in the
+// desktop popover. A phone action sheet lists only the item's own actions and
+// separates the destructive one, so those callers pass folderGroup: false.
 interface RowMenuOptions {
     folderGroup?: boolean;
 }
+
+// Shown next to Delete in the desktop popover. A Mac keyboard's Delete key is
+// Backspace, which the file list already treats as delete; the glyph matches
+// what the user actually presses.
+const DELETE_SHORTCUT = isApplePlatform() ? '⌫' : 'Del';
 
 export function buildFolderContextMenuItems(
     folderID: string,
@@ -34,32 +40,25 @@ export function buildFolderContextMenuItems(
     { folderGroup = true }: RowMenuOptions = {},
     sourceChannelId: unknown = state.activeChannel?.id,
 ): ContextMenuItem[] {
-    // On the phone sheet the name is already in the header, so the tiles read
-    // "Open" rather than repeating it back at the reader.
+    // The menu already belongs to this folder, so items name the action, not the
+    // folder. `tile` only promotes the everyday actions on the phone sheet.
     const tile = !folderGroup;
     const items: ContextMenuItem[] = [
-        { label: tile ? 'Open' : `Open "${folderName}"`, icon: 'open', primary: tile, action: () => navigateToFolder(folderID, folderName) },
-        { label: tile ? 'Download' : `Download "${folderName}"`, icon: 'download', primary: tile, action: () => enqueueFolderDownload(folderID, folderName, 0, sourceChannelId) },
+        { label: 'Open', icon: 'open', primary: tile, shortcut: 'Enter', action: () => navigateToFolder(folderID, folderName) },
+        { label: 'Download', icon: 'download', primary: tile, action: () => enqueueFolderDownload(folderID, folderName, 0, sourceChannelId) },
     ];
     if (folderGroup) {
         items.push(
-            { label: "Upload files to this folder", action: () => uploadWithParentID(folderID) },
-            { label: "Upload folder to this folder", action: () => importFolderWithParentID(folderID) },
+            { label: "Upload files to this folder", icon: 'upload', action: () => uploadWithParentID(folderID) },
+            { label: "Upload folder to this folder", icon: 'folder-up', action: () => importFolderWithParentID(folderID) },
         );
     }
     items.push(
-        { label: "Rename…", icon: 'rename', primary: tile, action: () => openRenameModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
+        { label: "Rename…", icon: 'rename', primary: tile, shortcut: 'F2', action: () => openRenameModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
         { label: "Move to…", icon: 'move', primary: tile, action: () => openMoveModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
+        { type: "divider" },
+        { label: 'Delete', icon: 'delete', danger: true, shortcut: DELETE_SHORTCUT, action: () => openDeleteModal({ type: "folder", id: folderID, name: folderName }) },
     );
-    if (!folderGroup) items.push({ type: "divider" });
-    items.push({ label: tile ? 'Delete' : 'Delete "' + folderName + '"', icon: 'delete', danger: true, action: () => openDeleteModal({ type: "folder", id: folderID, name: folderName }) });
-    if (folderGroup) {
-        items.push(
-            { type: "divider" },
-            { label: "New folder", action: openNewFolderModal },
-            { label: "Refresh", action: () => { void appActions().triggerRefresh(); } },
-        );
-    }
     return items;
 }
 
@@ -78,39 +77,34 @@ export function buildFileContextMenuItems(row: FileListFileRow, { folderGroup = 
 
     const items: ContextMenuItem[] = [];
     if (isVideoFile(fileName)) {
-        items.push({ label: "Play", icon: 'play', primary: tile, action: () => { void appActions().playVideo({ id: fileID, name: fileName, size: fileSize, encrypted }); } });
+        items.push({ label: "Play", icon: 'play', primary: tile, shortcut: 'Enter', action: () => { void appActions().playVideo({ id: fileID, name: fileName, size: fileSize, encrypted }); } });
+    } else if (isImageFile(fileName)) {
+        items.push({ label: "Open", icon: 'open', primary: tile, shortcut: 'Enter', action: () => { void openImagePreview(row); } });
     } else if (canOpenFileViewer(fileName)) {
-        items.push({ label: "Open", icon: 'open', primary: tile, action: () => { void appActions().openFile({ id: fileID, name: fileName, size: fileSize, encrypted }); } });
+        items.push({ label: "Open", icon: 'open', primary: tile, shortcut: 'Enter', action: () => { void appActions().openFile({ id: fileID, name: fileName, size: fileSize, encrypted }); } });
     }
     items.push({ label: "Download", icon: 'download', primary: tile, action: () => enqueueDownload(fileID, fileName, fileSize, sourceChannelId) });
 
     const fileTarget: FileCommandItem = fileSource === 'tg'
         ? { type: 'file', id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: 'tg' }
         : { type: 'file', id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: 'fs' };
-    if (canRename) items.push({ label: 'Rename…', icon: 'rename', primary: tile, action: () => openRenameModal(fileTarget) });
+    if (canRename) items.push({ label: 'Rename…', icon: 'rename', primary: tile, shortcut: 'F2', action: () => openRenameModal(fileTarget) });
     items.push({ label: 'Move to…', icon: 'move', primary: tile, action: () => openMoveModal(fileTarget) });
 
-    if (folderGroup) {
-        if (canDelete) items.push({ label: 'Delete', icon: 'delete', danger: true, action: () => openDeleteModal(fileTarget) });
-        items.push(
-            { type: "divider" },
-            { label: "Upload files", action: () => { void uploadWithParentID(state.currentFolderId); } },
-            { label: "Upload folder", action: () => { void importFolderWithParentID(state.currentFolderId); } },
-            { label: "New folder", action: openNewFolderModal },
-            { label: "Refresh", action: () => { void appActions().triggerRefresh(); } },
-        );
-    } else if (canDelete) {
-        items.push({ type: "divider" }, { label: 'Delete', icon: 'delete', danger: true, action: () => openDeleteModal(fileTarget) });
+    // Upload/new-folder/refresh belong to the folder background, not to the
+    // item's own menu; Delete sits apart behind a quiet separator.
+    if (canDelete) {
+        items.push({ type: "divider" }, { label: 'Delete', icon: 'delete', danger: true, shortcut: DELETE_SHORTCUT, action: () => openDeleteModal(fileTarget) });
     }
     return items;
 }
 
 function backgroundContextMenuItems(): ContextMenuItem[] {
     return [
-        { label: "New folder", action: openNewFolderModal },
-        { label: "Upload files", action: () => { void uploadWithParentID(state.currentFolderId); } },
-        { label: "Upload folder", action: () => { void importFolderWithParentID(state.currentFolderId); } },
-        { label: "Refresh", action: () => { void appActions().triggerRefresh(); } },
+        { label: "New folder", icon: 'folder-new', action: openNewFolderModal },
+        { label: "Upload files", icon: 'upload', action: () => { void uploadWithParentID(state.currentFolderId); } },
+        { label: "Upload folder", icon: 'folder-up', action: () => { void importFolderWithParentID(state.currentFolderId); } },
+        { label: "Refresh", icon: 'refresh', action: () => { void appActions().triggerRefresh(); } },
     ];
 }
 
@@ -153,7 +147,7 @@ export function activateContextMenu(): () => void {
         // A trashed row is a real folder row with a real id, and every item on
         // the folder menu -- open, upload into, rename, delete -- would act on
         // it as if it were still in the drive. The row's own Restore and
-        // Delete forever are the only things a deleted item can do.
+        // Delete permanently are the only things a deleted item can do.
         if (state.virtualView === 'trash') return;
         const element = (e.target as HTMLElement).closest<HTMLElement>(".drive-row");
         // A folder still being created resolves to nothing, and the background
@@ -170,11 +164,12 @@ export function activateContextMenu(): () => void {
         if (state.selectedItems.size > 1) {
             const count = state.selectedItems.size;
             showContextMenu(e.clientX, e.clientY, [
-                { label: `Move ${count} items…`, action: () => openMoveModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId }) },
-                { label: `Delete ${count} items`, danger: true, action: () => openDeleteModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId }) },
+                { label: `Move ${count} items…`, icon: 'move', action: () => openMoveModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId }) },
                 { type: "divider" },
-                { label: "Clear selection", action: () => clearSelection() },
-                { label: "Refresh", action: () => { void appActions().triggerRefresh(); } },
+                { label: `Delete ${count} items`, icon: 'delete', danger: true, shortcut: DELETE_SHORTCUT, action: () => openDeleteModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId }) },
+                { type: "divider" },
+                { label: "Clear selection", icon: 'clear', action: () => clearSelection() },
+                { label: "Refresh", icon: 'refresh', action: () => { void appActions().triggerRefresh(); } },
             ]);
             return;
         }

@@ -27,7 +27,8 @@ const modals = vi.hoisted(() => ({
 
 const actions = vi.hoisted(() => ({
     playVideo: vi.fn(), openFile: vi.fn(), triggerRefresh: vi.fn(), refreshFiles: vi.fn(),
-    navigateToFolder: vi.fn(), enqueueDownload: vi.fn(), enqueueFolderDownload: vi.fn(),
+    navigateToFolder: vi.fn(), navigateBack: vi.fn(), enqueueDownload: vi.fn(), enqueueFolderDownload: vi.fn(),
+    preview: vi.fn(), notify: vi.fn(),
 }));
 
 vi.mock('../api', () => api);
@@ -37,7 +38,8 @@ vi.mock('./modals/rename', () => ({ openRenameModal: modals.openRenameModal }));
 vi.mock('./modals/move', () => ({ openMoveModal: modals.openMoveModal }));
 vi.mock('./modals/folder', () => ({ openNewFolderModal: modals.openNewFolderModal }));
 vi.mock('./app-actions', () => ({ appActions: () => actions }));
-vi.mock('./navigation', () => ({ navigateToFolder: actions.navigateToFolder }));
+vi.mock('./navigation', () => ({ navigateToFolder: actions.navigateToFolder, navigateBack: actions.navigateBack }));
+vi.mock('./notifications', () => ({ notify: actions.notify }));
 vi.mock('./transfers', () => ({
     chooseFilesForCurrentFolder: vi.fn(),
     enqueueDownload: actions.enqueueDownload,
@@ -45,13 +47,14 @@ vi.mock('./transfers', () => ({
 }));
 vi.mock('./connectivity', () => ({ isOffline: () => false }));
 vi.mock('./context-menu', () => ({ showRowContextMenu: vi.fn() }));
+vi.mock('./modals/preview', () => ({ activatePreviewModal: vi.fn(), openPreviewList: actions.preview }));
 vi.mock('./gallery', () => ({ renderGallery: vi.fn(), setPhotosMode: vi.fn() }));
 vi.mock('./uploaders', () => ({ ensureUserNames: vi.fn(), uploaderChipLabel: () => null }));
 vi.mock('./drive-data', () => ({ calculateVisibleFolderStats: vi.fn() }));
 vi.mock('./folder-index', () => ({ refreshFolderIndex: vi.fn(() => Promise.resolve({ children: new Map() })), collectDescendants: vi.fn(() => []) }));
 
 import FileList from '../ui/file-list/FileList.svelte';
-import { activateFileList, buildFileRow, buildFolderRow, renderFileListRows } from './file-list';
+import { activateFileList, buildFileRow, buildFolderRow, renderFileListRows, renderFileState } from './file-list';
 import { state } from '../state';
 import { refreshFolderIndex, collectDescendants } from './folder-index';
 import type { FileListFileRow } from '../ui/file-list/types';
@@ -124,20 +127,22 @@ describe('acting on a row from the keyboard', () => {
         });
     });
 
-    it('refuses to delete a row the published row says cannot be deleted', () => {
+    it('refuses to delete a row the published row says cannot be deleted, and says why', () => {
         publish({ canDelete: false });
 
         press(row('file:41'), 'Delete');
 
         expect(modals.openDeleteModal).not.toHaveBeenCalled();
+        expect(actions.notify).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringContaining('delete') }));
     });
 
-    it('refuses to rename a row the published row says cannot be renamed', () => {
+    it('refuses to rename a row the published row says cannot be renamed, and says why', () => {
         publish({ canRename: false });
 
         press(row('file:41'), 'F2');
 
         expect(modals.openRenameModal).not.toHaveBeenCalled();
+        expect(actions.notify).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringContaining('rename') }));
     });
 
     it('renames a folder by its id rather than by a number parsed out of it', () => {
@@ -225,12 +230,29 @@ describe('desktop activation and lifecycle', () => {
         }
     });
 
+    it('opens an image preview from Enter', async () => {
+        renderFileListRows(list, [buildFileRow({ id: 7, name: 'photo.jpg', size: 9 }, '')]);
+        flushSync();
+        press(row('file:7'), 'Enter');
+        await vi.waitFor(() => expect(actions.preview).toHaveBeenCalledTimes(1));
+        expect(actions.enqueueDownload).not.toHaveBeenCalled();
+    });
+
     it('opens folders and downloads them through distinct affordances', () => {
         press(row('folder:design'), 'Enter');
         row('folder:design').querySelector<HTMLButtonElement>('button.download-folder')?.click();
         expect(actions.navigateToFolder).toHaveBeenCalledWith('design', 'Design');
         expect(actions.enqueueFolderDownload).toHaveBeenCalledWith('design', 'Design', 0, 1);
         expect(state.selectedItems.size).toBe(0);
+    });
+
+    it('does not open a folder when its Download action is double-clicked', () => {
+        const download = row('folder:design').querySelector<HTMLButtonElement>('button.download-folder')!;
+        download.click();
+        download.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+
+        expect(actions.enqueueFolderDownload).toHaveBeenCalledTimes(1);
+        expect(actions.navigateToFolder).not.toHaveBeenCalled();
     });
 
     it.each([
@@ -247,21 +269,40 @@ describe('desktop activation and lifecycle', () => {
 
     it.each([
         ['movie.mp4', 'playVideo'], ['notes.txt', 'openFile'],
-    ] as const)('opens %s by double-clicking its name', (name, action) => {
+    ] as const)('opens %s by double-clicking anywhere on the row', (name, action) => {
         renderFileListRows(list, [buildFileRow({ id: 41, name }, '')]);
         flushSync();
-        row('file:41').querySelector('.row-name')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        row('file:41').querySelector('.row-meta')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
         expect(actions[action]).toHaveBeenCalledTimes(1);
         expect(modals.openRenameModal).not.toHaveBeenCalled();
     });
 
-    it('renames a non-previewable file only from its name area', () => {
+    it('does not play a video again when its Play action receives a double-click', () => {
+        renderFileListRows(list, [buildFileRow({ id: 41, name: 'movie.mp4' }, '')]);
+        flushSync();
+        const play = row('file:41').querySelector<HTMLButtonElement>('button.play-video')!;
+        play.click();
+        play.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, cancelable: true }));
+
+        expect(actions.playVideo).toHaveBeenCalledTimes(1);
+    });
+
+    it('previews an image on double click and from its row Open action', async () => {
+        renderFileListRows(list, [buildFileRow({ id: 41, name: 'photo.jpg', size: 25 }, '')]);
+        flushSync();
+        expect(row('file:41').querySelector('button.open-image')).not.toBeNull();
+        row('file:41').dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
+        await vi.waitFor(() => expect(actions.preview).toHaveBeenCalledTimes(1));
+        row('file:41').querySelector<HTMLButtonElement>('button.open-image')?.click();
+        await vi.waitFor(() => expect(actions.preview).toHaveBeenCalledTimes(2));
+    });
+
+    it('downloads a plain file on double click and never renames it', () => {
         renderFileListRows(list, [buildFileRow({ id: 41, name: 'bundle.zip', size: 25 }, '')]);
         flushSync();
-        row('file:41').querySelector('.row-meta')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-        expect(modals.openRenameModal).not.toHaveBeenCalled();
         row('file:41').querySelector('.row-name')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
-        expect(modals.openRenameModal).toHaveBeenCalledWith(expect.objectContaining({ id: 41, name: 'bundle.zip' }));
+        expect(actions.enqueueDownload).toHaveBeenCalledWith(41, 'bundle.zip', 25, 1);
+        expect(modals.openRenameModal).not.toHaveBeenCalled();
     });
 
     it('leaves removed listeners inactive and reactivation invokes each action once', () => {
@@ -337,6 +378,58 @@ describe('desktop keyboard focus', () => {
     });
 });
 
+describe('list semantics', () => {
+    it('is a grid for rows and a labelled group for a state message', () => {
+        expect(list.getAttribute('role')).toBe('grid');
+        expect(list.getAttribute('aria-colcount')).toBe('4');
+        renderFileState(list, 'loading', 'Loading files');
+        flushSync();
+        expect(list.getAttribute('role')).toBe('group');
+        expect(list.hasAttribute('aria-colcount')).toBe(false);
+    });
+
+    it('announces a file row with its size and date, keeping the File: prefix', () => {
+        renderFileListRows(list, [buildFileRow({ id: 7, name: 'report.pdf', size: 2048, date: 1_700_000_000 }, '')]);
+        flushSync();
+        const label = row('file:7').getAttribute('aria-label') ?? '';
+        expect(label.startsWith('File: report.pdf')).toBe(true);
+        expect(label).toContain('2 KB');
+        expect(label.split(',').length).toBeGreaterThanOrEqual(3);
+    });
+});
+
+describe('desktop keyboard shortcuts', () => {
+    it('selects the whole folder with the select-all accelerator', () => {
+        press(row('folder:design'), 'a'); // no modifier: type-ahead, not select-all
+        expect(state.selectedItems.size).toBe(0);
+        row('folder:design').dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true, cancelable: true }));
+        expect(state.selectedItems.size).toBe(2);
+    });
+
+    it('does not select the folder from the trash', () => {
+        state.virtualView = 'trash';
+        row('folder:design').dispatchEvent(new KeyboardEvent('keydown', { key: 'a', ctrlKey: true, bubbles: true, cancelable: true }));
+        expect(state.selectedItems.size).toBe(0);
+    });
+
+    it('extends the selection with Shift and an arrow', () => {
+        row('folder:design').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', shiftKey: true, bubbles: true, cancelable: true }));
+        expect(state.selectedItems.has('folder:design')).toBe(true);
+        expect(state.selectedItems.has('file:41')).toBe(true);
+    });
+
+    it('jumps to the next row whose name starts with the typed character', async () => {
+        press(row('folder:design'), 'p');
+        await vi.waitFor(() => expect(document.activeElement).toBe(row('file:41')));
+    });
+
+    it('goes up to the parent folder on the platform accelerator', () => {
+        // metaKey and altKey both set so the test holds whichever this platform uses.
+        row('file:41').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', metaKey: true, altKey: true, bubbles: true, cancelable: true }));
+        expect(actions.navigateBack).toHaveBeenCalledTimes(1);
+    });
+});
+
 describe('desktop drag target safety', () => {
     it('does not commit a drop rejected by the folder permission check', () => {
         state.dragState = { items: [], parentId: '', blocked: new Set(), row: row('file:41') };
@@ -397,11 +490,12 @@ it('deletes a folder and renames a Telegram file with their original identifiers
     expect(modals.openRenameModal).toHaveBeenCalledWith({ type: 'file', id: 99, name: 'raw.zip', size: 300, source: 'tg', parentId: 'origin' });
 });
 
-it('does not rename a read-only archive on double click', () => {
-    renderFileListRows(list, [buildFileRow({ id: 41, name: 'archive.zip', canRename: false }, '')]);
+it('never renames a read-only archive on double click', () => {
+    renderFileListRows(list, [buildFileRow({ id: 41, name: 'archive.zip', size: 10, canRename: false }, '')]);
     flushSync();
     row('file:41').querySelector('.row-name')?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true }));
     expect(modals.openRenameModal).not.toHaveBeenCalled();
+    expect(actions.enqueueDownload).toHaveBeenCalledTimes(1);
 });
 
 it('supports keyboard navigation from the list container without a focused row', async () => {
@@ -411,13 +505,26 @@ it('supports keyboard navigation from the list container without a focused row',
     await vi.waitFor(() => expect(document.activeElement).toBe(row('folder:design')));
 });
 
-it('does not consume unrelated keys or move focus into absent actions', () => {
+it('does not consume unrelated keys', () => {
     publish({ actions: [] });
-    for (const key of ['ArrowRight', 'F10', 'a']) {
+    for (const key of ['F10', 'Tab']) {
         const event = new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true });
         row('file:41').dispatchEvent(event);
         expect(event.defaultPrevented).toBe(false);
     }
+});
+
+it('reaches the More button with ArrowRight even with no quick actions', () => {
+    publish({ actions: [] });
+    press(row('file:41'), 'ArrowRight');
+    expect(document.activeElement).toBe(row('file:41').querySelector('button.row-more'));
+});
+
+it('opens the row menu from the three-dot button', () => {
+    const listener = vi.fn();
+    row('file:41').addEventListener('contextmenu', listener);
+    row('file:41').querySelector<HTMLButtonElement>('button.row-more')?.click();
+    expect(listener).toHaveBeenCalledTimes(1);
 });
 
 it('uses native drag feedback and clears highlight when a drop is committed', () => {
