@@ -7,7 +7,7 @@
 // same object by its trash id (`f:<msgId>` for a file, the folder's own `d:…`
 // id for a folder).
 
-import { deleteFile, deleteFolder } from '../../api';
+import { deleteFile, deleteFolder, type OperationResult } from '../../api';
 import { restoreFromTrash } from '../../api/trash';
 import { invalidateFolderIndex, state } from '../../state';
 import { clearSelection } from '../selection';
@@ -24,6 +24,7 @@ import type {
     FolderCommandItem,
 } from '../../ui/file-list/types';
 let pendingTarget: FileCommandTarget | null = null;
+let pendingChannelId: number | null = null;
 
 /**
  * One line for a whole batch. A selection of twelve used to answer with twelve
@@ -58,8 +59,30 @@ function activeChannelId(): number {
     return Number(state.activeChannel?.id ?? 0);
 }
 
+function deleteInChannel(channelId: number, operation: () => Promise<OperationResult>): Promise<OperationResult> {
+    // Password retry may invoke this callback again after a modal interaction.
+    // Recheck at each invocation because the backend uses the active drive.
+    if (activeChannelId() !== channelId) {
+        return Promise.resolve({
+            ok: false,
+            error: { code: 'canceled', message: 'The active drive changed before deletion' },
+        });
+    }
+    return operation();
+}
+
 export function openDeleteModal(target: FileCommandTarget): void {
+    const activeId = activeChannelId();
+    const channels = target.type === 'bulk'
+        ? target.items.map((item) => item.channelId ?? activeId)
+        : [target.channelId ?? activeId];
+    const channelId = channels[0] ?? activeId;
+    if (channelId !== activeId || channels.some((id) => id !== channelId)) {
+        notify({ level: 'info', title: 'Switch back to that drive to delete this item' });
+        return;
+    }
     pendingTarget = target;
+    pendingChannelId = channelId;
 
     let title: string;
     let itemName = '';
@@ -162,12 +185,17 @@ function notifyMovedToTrash(items: FileCommandItem[], channelId: number): void {
 
 export async function confirmDelete(): Promise<void> {
     const target = pendingTarget;
+    const channelId = pendingChannelId;
     pendingTarget = null;
+    pendingChannelId = null;
     closeDeleteModalView();
-    if (!target) return;
-
-    // The channel the delete runs against; Undo must not restore into another.
-    const channelId = activeChannelId();
+    if (!target || channelId === null) return;
+    // The backend delete API uses the active drive. Never let an open dialog
+    // redirect an item's ID after the user switches drives.
+    if (activeChannelId() !== channelId) {
+        notify({ level: 'info', title: 'Switch back to that drive to delete this item' });
+        return;
+    }
 
     // The rows being deleted go quiet for the duration and then disappear.
     // That is the report; a notice about rows the user is already looking at,
@@ -184,15 +212,17 @@ export async function confirmDelete(): Promise<void> {
             const files = target.items.filter((item) => item.type === 'file');
             const succeeded: FileCommandItem[] = [];
             const failures: Array<{ item: FileCommandItem; error: string }> = [];
+            let interrupted = false;
 
             for (const folder of folders) {
+                if (activeChannelId() !== channelId) { interrupted = true; break; }
                 try {
-                    const result = await callWithPasswordRetry(() => deleteFolder(folder.id));
+                    const result = await callWithPasswordRetry(() => deleteInChannel(channelId, () => deleteFolder(folder.id)));
                     if (!result.ok) {
                         failures.push({ item: folder, error: humanizeBackendError(result.error) });
                         continue;
                     }
-                    ensureNotInsideDeletedFolder(folder.id);
+                    if (activeChannelId() === channelId) ensureNotInsideDeletedFolder(folder.id);
                     succeeded.push(folder);
                 } catch (error) {
                     console.error('Delete folder failed:', folder, error);
@@ -201,8 +231,10 @@ export async function confirmDelete(): Promise<void> {
             }
 
             for (const file of files) {
+                if (interrupted) break;
+                if (activeChannelId() !== channelId) { interrupted = true; break; }
                 try {
-                    const result = await callWithPasswordRetry(() => deleteFile(file.id));
+                    const result = await callWithPasswordRetry(() => deleteInChannel(channelId, () => deleteFile(file.id)));
                     if (!result.ok) {
                         failures.push({ item: file, error: humanizeBackendError(result.error) });
                         continue;
@@ -212,6 +244,10 @@ export async function confirmDelete(): Promise<void> {
                     console.error('Delete file failed:', file, error);
                     failures.push({ item: file, error: humanizeBackendError(error) });
                 }
+            }
+
+            if (interrupted || activeChannelId() !== channelId) {
+                notify({ level: 'info', title: 'Switch back to that drive to finish deleting' });
             }
 
             clearSelection();
@@ -237,8 +273,8 @@ export async function confirmDelete(): Promise<void> {
         }
 
         const result = target.type === 'folder'
-            ? await callWithPasswordRetry(() => deleteFolder(target.id))
-            : await callWithPasswordRetry(() => deleteFile(target.id));
+            ? await callWithPasswordRetry(() => deleteInChannel(channelId, () => deleteFolder(target.id)))
+            : await callWithPasswordRetry(() => deleteInChannel(channelId, () => deleteFile(target.id)));
 
         if (!result.ok) {
             notify({
@@ -249,7 +285,7 @@ export async function confirmDelete(): Promise<void> {
             appActions().refreshFiles();
             return;
         }
-        if (target.type === 'folder') ensureNotInsideDeletedFolder(target.id);
+        if (target.type === 'folder' && activeChannelId() === channelId) ensureNotInsideDeletedFolder(target.id);
         invalidateFolderIndex();
         notifyMovedToTrash([target], channelId);
         appActions().refreshFiles();

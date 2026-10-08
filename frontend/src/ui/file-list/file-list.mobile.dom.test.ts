@@ -167,6 +167,23 @@ describe('phone row transfer badge', () => {
 
         expect(rows()[0].querySelector('.item-status')?.getAttribute('aria-label'))
             .toBe('Downloading. Open transfers.');
+        expect(rows()[0].querySelector('.item-status')?.getAttribute('data-spins')).toBe('false');
+    });
+
+    it('reveals Move and Delete only on deletable live rows', () => {
+        setup();
+        showFileListRows([
+            makeFileRow(),
+            makeFileRow({ id: '43', key: 'file:fs:43', selectionKey: 'file:43', canDelete: false }),
+            makeFileRow({ id: '44', key: 'file:fs:44', selectionKey: 'file:44', actionsInline: true }),
+        ]);
+        flushSync();
+
+        expect(Array.from(rows()[0].querySelectorAll('[data-swipe-action]'), (action) => action.getAttribute('data-swipe-action')))
+            .toEqual(['move', 'delete']);
+        expect(Array.from(rows()[1].querySelectorAll('[data-swipe-action]'), (action) => action.getAttribute('data-swipe-action')))
+            .toEqual(['move']);
+        expect(rows()[2].querySelector('.row-swipe-actions')).toBeNull();
     });
 
     it('explains a failed download on the row itself', () => {

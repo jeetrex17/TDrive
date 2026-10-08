@@ -1,6 +1,6 @@
 <script lang="ts">
     import CloudIcon from '@lucide/svelte/icons/cloud';
-    import CloudDownloadIcon from '@lucide/svelte/icons/cloud-download';
+    import DownloadIcon from '@lucide/svelte/icons/download';
     import ClockIcon from '@lucide/svelte/icons/clock';
     import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
     import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
@@ -21,7 +21,7 @@
     // each call site, so a new state cannot arrive wearing a borrowed icon.
     const GLYPHS = {
         cloud: CloudIcon,
-        'cloud-download': CloudDownloadIcon,
+        download: DownloadIcon,
         clock: ClockIcon,
         'circle-check': CircleCheckIcon,
         'refresh-cw': RefreshCwIcon,

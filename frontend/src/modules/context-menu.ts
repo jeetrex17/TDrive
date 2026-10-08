@@ -57,7 +57,7 @@ export function buildFolderContextMenuItems(
         { label: "Rename…", icon: 'rename', primary: tile, shortcut: 'F2', action: () => openRenameModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
         { label: "Move to…", icon: 'move', primary: tile, action: () => openMoveModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
         { type: "divider" },
-        { label: 'Delete', icon: 'delete', danger: true, shortcut: DELETE_SHORTCUT, action: () => openDeleteModal({ type: "folder", id: folderID, name: folderName }) },
+        { label: 'Delete', icon: 'delete', danger: true, shortcut: DELETE_SHORTCUT, action: () => openDeleteModal({ type: "folder", id: folderID, name: folderName, channelId: Number(sourceChannelId) }) },
     );
     return items;
 }
@@ -94,7 +94,7 @@ export function buildFileContextMenuItems(row: FileListFileRow, { folderGroup = 
     // Upload/new-folder/refresh belong to the folder background, not to the
     // item's own menu; Delete sits apart behind a quiet separator.
     if (canDelete) {
-        items.push({ type: "divider" }, { label: 'Delete', icon: 'delete', danger: true, shortcut: DELETE_SHORTCUT, action: () => openDeleteModal(fileTarget) });
+        items.push({ type: "divider" }, { label: 'Delete', icon: 'delete', danger: true, shortcut: DELETE_SHORTCUT, action: () => openDeleteModal({ ...fileTarget, parentId: row.parentId, channelId: Number(sourceChannelId) }) });
     }
     return items;
 }

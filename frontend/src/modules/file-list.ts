@@ -547,7 +547,8 @@ function deleteRow(row: InteractiveFileListRow) {
             type: "folder",
             id: row.id,
             name: row.name,
-            parentId: row.parentId || state.currentFolderId,
+            parentId: row.parentId,
+            channelId: row.channelId,
         });
         return;
     }
@@ -556,8 +557,9 @@ function deleteRow(row: InteractiveFileListRow) {
         return;
     }
     openDeleteModal({
-        ...fileCommandFor(row, row.parentId || state.currentFolderId),
+        ...fileCommandFor(row, row.parentId),
         canDelete: row.canDelete,
+        channelId: row.channelId,
     });
 }
 
@@ -968,13 +970,18 @@ function isTrashMode() {
 // opens the row's menu.
 function handleMobileRowAction(e: MouseEvent, row: HTMLElement): boolean {
     const target = e.target as HTMLElement;
-    // The revealed swipe button commits and stops there: it must not also run
-    // the tap that would have opened the row underneath it.
+    // The revealed swipe button opens its existing flow and stops there: it
+    // must not also run the tap that would have opened the row underneath it.
     const swipeAction = target.closest<HTMLButtonElement>('button[data-swipe-action]');
     if (swipeAction) {
         e.stopPropagation();
         const swiped = fileListRowForElement(swipeAction);
-        if (swiped) openMoveForRow(swiped);
+        if (swiped) {
+            switch (swipeAction.dataset.swipeAction) {
+                case 'move': openMoveForRow(swiped); break;
+                case 'delete': deleteRow(swiped); break;
+            }
+        }
         return true;
     }
 

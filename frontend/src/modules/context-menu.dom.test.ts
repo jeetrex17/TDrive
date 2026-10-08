@@ -33,6 +33,7 @@ vi.mock('./app-actions', () => ({ appActions: () => ({ triggerRefresh: vi.fn() }
 vi.mock('../ui/menus/context-menu-store', () => menu);
 
 import { showRowContextMenu } from './context-menu';
+import { openDeleteModal } from './modals/delete';
 import { showFileListRows, showFileListState } from '../ui/file-list/file-list-store';
 import { state } from '../state';
 import type { FileListFileRow } from '../ui/file-list/types';
@@ -125,6 +126,19 @@ describe('the row context menu', () => {
         download?.action();
 
         expect(transfers.enqueueDownload).toHaveBeenCalledWith(42, 'notes.txt', 2048, 5);
+    });
+
+    it('keeps the row drive on a delayed Delete menu action', () => {
+        showFileListRows([publishedFileRow({ channelId: 5 })]);
+        showRowContextMenu(renderRow('file:42'), 10, 20);
+        const deletion = (menu.showContextMenu.mock.calls[0]?.[2] as ContextMenuItem[])
+            .find((item): item is Extract<ContextMenuItem, { label: string }> =>
+                item.type !== 'divider' && item.label === 'Delete');
+        deletion?.action();
+
+        expect(openDeleteModal).toHaveBeenCalledWith(expect.objectContaining({
+            type: 'file', id: 42, channelId: 5,
+        }));
     });
 
     it('opens nothing for a row the list has already dropped', () => {

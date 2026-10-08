@@ -55,6 +55,7 @@ vi.mock('./folder-index', () => ({ refreshFolderIndex: vi.fn(), collectDescendan
 import FileList from '../ui/file-list/FileList.svelte';
 import { contextMenuState } from '../ui/menus/context-menu-store';
 import { showRowContextMenu } from './context-menu';
+import { openDeleteModal } from './modals/delete';
 import { activateFileList, buildFileRow, buildFolderRow, fileThumbnailIdentity, refreshFiles, renderFileListRows } from './file-list';
 import { state } from '../state';
 import { breadcrumbPath } from '../ui/chrome/breadcrumb-store';
@@ -302,6 +303,25 @@ it('moves a folder from its swipe affordance without opening it', () => {
     state.currentFolderId = 'work';
     click(row('Design').querySelector('button[data-swipe-action]')!);
     expect(actions.move).toHaveBeenCalledWith({ type: 'folder', id: 'design', name: 'Design', parentId: 'work' });
+    expect(actions.navigateToFolder).not.toHaveBeenCalled();
+});
+
+it('opens the existing Trash confirmation for a swiped file without downloading it', () => {
+    click(row('plan.pdf').querySelector('button[data-swipe-action="delete"]')!);
+    expect(openDeleteModal).toHaveBeenCalledWith(expect.objectContaining({
+        type: 'file', id: 41, name: 'plan.pdf', canDelete: true, channelId: 1,
+    }));
+    expect(actions.openFile).not.toHaveBeenCalled();
+    expect(actions.enqueueDownload).not.toHaveBeenCalled();
+});
+
+it('opens the existing Trash confirmation for a swiped folder without entering it', () => {
+    // The row was rendered in root; a later navigation must not retarget it.
+    state.currentFolderId = 'work';
+    click(row('Design').querySelector('button[data-swipe-action="delete"]')!);
+    expect(openDeleteModal).toHaveBeenCalledWith({
+        type: 'folder', id: 'design', name: 'Design', parentId: '', channelId: 1,
+    });
     expect(actions.navigateToFolder).not.toHaveBeenCalled();
 });
 

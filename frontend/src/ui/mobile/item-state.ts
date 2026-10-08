@@ -35,7 +35,7 @@ export interface ItemStateDescriptor {
     /** Spoken and written label. Short enough to sit in a row, plain enough to be believed. */
     readonly label: string;
     readonly tone: ItemStateTone;
-    /** Whether the glyph turns; only the two states where bytes are moving do. */
+    /** Whether the glyph turns. A directional download arrow must stay upright. */
     readonly spins: boolean;
     /**
      * Whether the row grows a second line to explain itself. Only the two
@@ -81,10 +81,10 @@ export const ITEM_STATES: Readonly<Record<ItemState, ItemStateDescriptor>> = {
         marked: true,
     },
     downloading: {
-        glyph: 'cloud-download',
+        glyph: 'download',
         label: 'Downloading',
         tone: 'accent',
-        spins: true,
+        spins: false,
         needsExplanation: false,
         detail: 'Coming down to this device now.',
         marked: true,

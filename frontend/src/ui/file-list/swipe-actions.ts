@@ -3,11 +3,9 @@
  *
  * Two decisions shape everything here.
  *
- * **Only reversible actions ride the swipe.** Move and Share can be undone by
- * doing them again; Delete cannot. A destructive action one careless thumb away
- * from a scrolling list is the single worst pattern in mobile file managers,
- * and the fact that it is the platform default does not make it safe. Delete
- * stays behind the always-visible overflow button, with a confirm.
+ * **Swipe reveals actions, but does not execute them.** Move opens its picker;
+ * Delete opens the same Trash confirmation as the overflow menu. The gesture
+ * alone never mutates a file.
  *
  * **The swipe never claims a gesture it might not own.** A file list scrolls
  * vertically, the gallery pages horizontally, and the phones reserve their

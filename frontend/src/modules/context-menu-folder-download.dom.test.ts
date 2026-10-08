@@ -57,4 +57,17 @@ describe('folder context menu download', () => {
         download.action();
         expect(transferMocks.enqueueFolderDownload).toHaveBeenCalledWith('d:screenshots', 'Screenshots', 0, undefined);
     });
+
+    it('keeps the folder drive on a delayed Delete menu action', async () => {
+        const { buildFolderContextMenuItems } = await import('./context-menu');
+        const { openDeleteModal } = await import('./modals/delete');
+        const deletion = buildFolderContextMenuItems('d:screenshots', 'Screenshots', {}, 5)
+            .find((item): item is Extract<ContextMenuItem, { label: string }> =>
+                item.type !== 'divider' && item.label === 'Delete');
+
+        deletion?.action();
+        expect(openDeleteModal).toHaveBeenCalledWith(expect.objectContaining({
+            type: 'folder', id: 'd:screenshots', channelId: 5,
+        }));
+    });
 });
