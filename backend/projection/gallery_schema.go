@@ -12,15 +12,28 @@ const galleryMaterializationVersion = 3
 // derived from files and dirents by triggers, so replay, migrations, and direct
 // projection repairs update eligibility in the same transaction.
 func EnsureGallerySchema(db *sql.DB) error {
-	if !dbTableHasColumns(db, "files", "channel_id", "msg_id", "name", "upload_time", "tombstoned", "upload_uuid") ||
-		!dbTableHasColumns(db, "dirents", "channel_id", "object_id", "object_kind", "display_name", "tombstoned") {
-		return nil
-	}
+	ready := dbTableHasColumns(db, "files", "channel_id", "msg_id", "name", "upload_time", "tombstoned", "upload_uuid") &&
+		dbTableHasColumns(db, "dirents", "channel_id", "object_id", "object_kind", "display_name", "tombstoned")
 	tx, err := db.Begin()
 	if err != nil {
 		return fmt.Errorf("projection: begin gallery schema: %w", err)
 	}
 	defer func() { _ = tx.Rollback() }()
+	// The epoch scopes on-disk caches and transfer journals. It must exist
+	// before core.Engine constructs services, even on a fresh database whose
+	// files table is only created by personal-drive migration later.
+	if err := execGalleryStatements(tx, []string{
+		`CREATE TABLE IF NOT EXISTS gallery_epoch (id INTEGER PRIMARY KEY CHECK(id=1), epoch TEXT NOT NULL)`,
+		`INSERT OR IGNORE INTO gallery_epoch(id,epoch) VALUES(1,lower(hex(randomblob(16))))`,
+	}); err != nil {
+		return err
+	}
+	if !ready {
+		if err := tx.Commit(); err != nil {
+			return fmt.Errorf("projection: commit gallery epoch: %w", err)
+		}
+		return nil
+	}
 
 	base := []string{
 		// Preview preparation was replaced by bounded, on-demand Telegram
@@ -28,8 +41,6 @@ func EnsureGallerySchema(db *sql.DB) error {
 		// development database from the earlier schema.
 		`DROP TRIGGER IF EXISTS gallery_preparation_skip_delete`,
 		`DROP TABLE IF EXISTS gallery_preparation_skips`,
-		`CREATE TABLE IF NOT EXISTS gallery_epoch (id INTEGER PRIMARY KEY CHECK(id=1), epoch TEXT NOT NULL)`,
-		`INSERT OR IGNORE INTO gallery_epoch(id,epoch) VALUES(1,lower(hex(randomblob(16))))`,
 		`CREATE TABLE IF NOT EXISTS gallery_generations (channel_id INTEGER PRIMARY KEY, revision INTEGER NOT NULL DEFAULT 0)`,
 		`CREATE TABLE IF NOT EXISTS gallery_schema_meta (id INTEGER PRIMARY KEY CHECK(id=1), version INTEGER NOT NULL)`,
 		`CREATE TABLE IF NOT EXISTS gallery_items (

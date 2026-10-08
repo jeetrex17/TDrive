@@ -74,6 +74,11 @@ skipping a block; missing or damaged blocks are fetched again. Telegram range
 reads stay bounded to 1 MiB requests, so an interrupted document does not have
 to restart from its first byte.
 
+Schema bootstrap creates the persistent gallery epoch before the file service
+is constructed, even when personal-drive migration has not created `files` yet.
+The download journal uses that epoch as its namespace, so a first-session
+download can save progress without requiring an app restart.
+
 The [download runner](../../backend/services/file/resumable_download_run.go)
 checks the pinned source again before using a checkpoint. It assembles output
 in a sibling temporary file and publishes only after complete verification.
