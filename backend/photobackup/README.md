@@ -7,7 +7,7 @@ The app resolves that scope; native adapters cannot choose an account.
 
 Current app backup is restricted to **My Drive and encrypted uploads**. The
 [access gate](../../internal/app/photo_backup_access.go) validates the personal drive;
-[uploadPhotoBackup](../../internal/app/photo_backup.go) forces encryption even for work
+[uploadPhotoBackup](../../internal/app/photo_backup_upload.go) forces encryption even for work
 queued by older builds. A legacy settings value cannot enable plaintext backup.
 
 ## Execution
@@ -39,8 +39,10 @@ queued by older builds. A legacy settings value cannot enable plaintext backup.
   continuation cursor are committed together to the Go ledger. A stopped scan
   resumes from that checkpoint when the native cursor remains valid; an expired
   native cursor restarts the source and the ledger deduplicates earlier pages.
-  The Go worker uploads one queued resource at a time using the shared file
-  service. Opening the gallery does not start an original-library download.
+  Two Go workers can prepare and upload queued resources concurrently using the
+  shared file service. Their combined staged originals cannot exceed 4 GiB;
+  a large resource may therefore serialize the pipeline. Opening the gallery
+  does not start an original-library download.
 - Mobile discovery runs while the app is active. With a native execution grant,
   an in-flight transfer can continue after backgrounding. Android uses a visible
   data-sync foreground service; iOS grants limited UIKit background time, with a
@@ -86,8 +88,10 @@ discovery for a million items.
 
 Pause cancels in-flight work and persists per account and drive. Only an explicit
 Resume clears that choice; settings changes, retries, and app restarts do not.
-Cancellation without a remote receipt holds the interrupted item for explicit
-retry because its remote outcome may be uncertain. Confirmed receipts remain
+Cancellation before any original send returns the item to pending without
+spending its retry budget. Cancellation after a send without a remote receipt
+holds the interrupted item for explicit retry because its remote outcome may be
+uncertain. Confirmed receipts remain
 complete even if cancellation arrives at the same time. Pausing does not spend
 the item's failure retry budget.
 
@@ -98,11 +102,19 @@ discovery of the same resource does not duplicate its upload. A completed
 receipt remains useful after its original source selection is removed.
 Desktop identity uses the selected source and relative file path/version.
 
-[`RunOnce`](engine.go) claims at most one job. Ordinary failures enter `error`
+[`RunNext`](engine.go) atomically claims at most one eligible job in a short SQLite
+transaction, released before staging or network work. Its result distinguishes
+an empty queue from a processed failure and a deferred, unsent item. `RunOnce`
+remains a single-job compatibility wrapper. Ordinary failures enter `error`
 with exponential backoff (default base: one minute); reaching the default eight
 attempts moves the job to `paused`. Explicit Retry resets `error`, `paused` and
 `missing` jobs to `pending`, including their attempt counters. This per-job state
 is separate from the persisted manual-pause setting, which only Resume clears.
+
+Backoff begins when the failed attempt finishes, not when it was claimed.
+An uncertain Telegram send is held as `paused` even if the caller's context is
+still live. In-call retries preserve the same send identity; automatic ledger
+retries must not invent a new identity for an uncertain accepted upload.
 
 Only a positive remote receipt marks a resource complete. A local file-index
 write failure after remote commit retains that receipt; ordinary synchronization
@@ -153,13 +165,20 @@ are not implemented.
 
 ## Resource limits and deletion
 
-Staging permits one resource at a time, at most 4 GiB. Native adapters also reserve
-512 MiB of free device storage. Staging is streamed, version-checked, canceled
-when the worker stops, and released after use. Cold launch removes abandoned
+Staging permits at most two resources with an aggregate 4 GiB reservation.
+Unknown-size resources reserve the whole backend budget. Native acquisition is
+serialized, but a completed stage can upload while the next resource is copied.
+Native adapters also retain 512 MiB of free device storage. Staging is streamed,
+size- and version-checked, and released after use. Android copy cancellation is
+cooperative; the iOS coordinated provider copy is synchronous and cannot be
+interrupted by JavaScript, so canceled work is cleaned after it returns.
+Cold launch removes abandoned
 native staging. Desktop staging uses a private snapshot to detect source
 replacement and cleans it after upload; it currently relies on write errors for
-low-disk detection. The existing uploader may use additional bounded encryption or
-multipart scratch files. Larger native resources report an error rather than
+low-disk detection. The uploader may additionally hold one ciphertext part per
+worker (at most 1900 MiB each, or a smaller whole-file ciphertext), so 4 GiB is
+the original-stage limit, not the total temporary-disk footprint. Other app
+transfers have their own scratch usage. Larger native resources report an error rather than
 silently truncating the original.
 
 The durable queue and catalog grow with the library; thumbnails retain their
@@ -178,9 +197,9 @@ starting. Explicit start, resume, or retry actions use the existing password
 dialog; automatic discovery never opens a password prompt. Canceling the dialog
 leaves the operation stopped. Passwords and keys remain session-only.
 
-The ledger is currently schema v7. Sequential migrations add manual pause,
+The ledger is currently schema v8. Sequential migrations add manual pause,
 remove charging policy, and add capture time, receipt cursors, relative folder
-paths and scan checkpoints. Backup has no charging condition; migrations preserve
+paths, scan checkpoints and a partial FIFO claim index. Backup has no charging condition; migrations preserve
 supported sources and jobs, followed by cleanup of retired sources and orphaned
 unfinished work.
 
@@ -196,23 +215,41 @@ are persisted with an installation-specific suffix. Indexed folder lookup reuses
 the hierarchy across restarts; existing completed uploads are not moved or sent
 again. The panel reports the actual destination layout.
 
-A single scoped notification/Transfers row reports the current filename, transport
-percentage, bytes, and queue counts. Byte updates are throttled to four per second;
-file completion clears the current item. State uses one snapshot, not one object
-per queued file, and stale responses cannot restore another drive's filenames.
+A single scoped notification/Transfers row reports the current filename, or
+"2 files" with byte-weighted aggregate transport progress when both are active.
+Byte updates are throttled to four per second; completion removes only that
+worker's progress slot. Two fixed slots keep state bounded independently of the
+queue, and stale callbacks cannot restore another file or drive's progress.
 
-Encrypted photo backups reuse the uploader's immutable snapshot (up to 30 MiB) to
-create encrypted thumbnails and previews before releasing the local source.
-A failed optional preview does not invalidate the original upload receipt.
+Encrypted photo backups hand off the uploader's owned immutable snapshot (up to
+30 MiB) to a run-scoped preview pipeline, releasing the original upload slot and
+native source independently of preview sends. One worker prepares encrypted
+derivatives; another resumes/sends the durable encrypted outbox. The preview
+worker reserves at most two snapshots totaling 30 MiB, including anticipated
+snapshots for originals still uploading. Temporary uploader copies and existing
+decode budgets are additional memory. Admission applies cancellable backpressure
+**before** acquiring an upload slot or sending an original if preparation falls
+behind; it never delays a known receipt waiting for capacity. Images larger than
+15 MiB may serialize under this preview reservation. Admission does not wait for
+preview network sends. Original receipts remain authoritative even if optional
+previews fail.
+Pause, lock, drive switch and logout cancel/join the pipeline and clear retained
+plaintext. Persisted ciphertext resumes on the next backup run without the
+source file or key. Natural completion drains preview work after original
+receipts are saved. The existing outbox cap is 128 entries/64 MiB. A full outbox
+or preparation failure can leave optional derivatives missing; explicit gallery
+preparation remains available, not an automatic fallback. Preview failure never
+invalidates the original receipt.
 Unlocking encryption immediately retries visible locked thumbnails; offscreen
 items remain lazy. Older encrypted images without derivatives can prepare them
 on demand, capped at 30 MiB per original and by thumbnail worker concurrency.
 Temporary originals stay encrypted on disk and derivatives use the encrypted
 cache. Larger or unsupported images may still lack a thumbnail.
 
-Wi-Fi-only policy is supported on Android. A required connectivity report older
-than two minutes, or an unavailable report, prevents uploading; other platforms
-reject that setting.
+Wi-Fi-only policy is supported on Android. While visible, the controller refreshes
+connectivity every 30 seconds during enabled, unpaused Wi-Fi-only backup, even
+after discovery finishes. A required report older than two minutes, or an
+unavailable report, prevents new uploads; other platforms reject that setting.
 
 The gallery shows supported images and videos together. Video tiles request only
 document thumbnails and open the existing streaming player on activation. Missing
@@ -233,3 +270,59 @@ Tests cover durable recovery, account isolation, resource deduplication, bounded
 folder traversal, cancellation, and 100,000-row transactional status counters.
 Native compiler checks and mocked frontend journeys do not replace real-device
 permission, low-storage, large-library, and restore testing.
+
+## Performance evidence and measurement
+
+The original workers share the existing file-service semaphore and Telegram
+chunk limiter with manual uploads. This change does not raise transport threads
+or connections. Two originals are a conservative resource choice, not a claim
+that two is optimal on every device or network.
+
+Per-run logs report original-completion wall time, completion count, known
+original bytes, peak staged-byte reservations and time including preview drain.
+Fixed logarithmic histograms report stage counts, total/max duration and p50/p95
+bucket upper bounds for budget waits, materialization, destination resolution,
+ledger work, encryption, transport, projection and previews. They retain no
+per-file samples or paths. Transfer timing includes retry/backoff; encryption
+includes ciphertext staging. Stages overlap across workers: their sums are not
+wall time or throughput. Whole-original timing includes the separately reported
+pre-send preview-admission wait when backpressure applies.
+
+Repeatable offline comparisons:
+
+```sh
+go test ./backend/photobackup -run '^$' -bench 'BenchmarkClaim' -benchmem -count=5
+go test ./backend/services/file -run '^$' -bench '^BenchmarkBackupPreviewPipeline$' -benchtime=20x -benchmem -count=5
+go test ./internal/app -run '^$' -bench '^BenchmarkPhotoBackupQueueLatency$' -benchtime=10x -benchmem -count=5
+```
+
+The service benchmark uses real encryption/SQLite, two tiny JPEGs and an offline
+Telegram fake; it requires all four derivatives in both variants. The scheduler
+benchmark uses simulated waits and compares one, two and three workers. Neither
+measures real Telegram throughput, physical-device memory or battery usage.
+
+An illustrative local run on Apple M4/macOS arm64 (2026-10-08, five repetitions
+of 20 two-image batches) produced these medians and observed ranges:
+
+| Offline service measure | Synchronous previews | Queued previews |
+| --- | --- | --- |
+| Both original calls returned | 5.23 ms (4.78–5.95) | 3.70 ms (2.89–7.98) |
+| All work, including four derivatives | 5.23 ms (4.78–5.95) | 5.52 ms (4.46–12.28) |
+| Allocated bytes per batch | 886,032 | 898,590 |
+
+These noisy small-file results show earlier original returns, not a demonstrated
+total-time improvement. The queued path has additional coordination/allocation
+cost. Separately, the real-SQLite claim/requeue benchmark with 10,000 ready jobs
+fell from about 7.84 ms before the claim-index optimization to 0.35 ms; the
+one-job case increased from about 0.30 to 0.33 ms. Candidate selection still scans
+disabled-media/source prefixes and sorts eligible errors; it is not constant
+time for every queue shape. The benchmark includes these adverse-prefix cases.
+
+For device evaluation, use the same consented photo-heavy, video-heavy and mixed
+corpora, fresh isolated ledgers/destinations, unchanged transport limits and
+repeated interleaved baseline/candidate runs. Record original durable-completion
+time separately from preview drain, bytes/second, CPU, peak RSS and scratch disk,
+retries/flood waits, and cancellation-to-quiescence time. Include constrained
+storage, Wi-Fi changes, foreground/background transitions and competing manual
+uploads. Do not select a worker count from simulated latency alone or treat
+cumulative allocated bytes (`B/op`) as peak resident memory.

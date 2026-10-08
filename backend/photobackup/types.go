@@ -10,6 +10,12 @@ var ErrInvalid = errors.New("photobackup: invalid argument")
 var ErrCursorExpired = errors.New("photobackup: cursor expired")
 var ErrScanStale = errors.New("photobackup: scan cursor changed")
 
+// ErrUploadNotStarted is only valid when the uploader can prove no original
+// send was attempted. RunNext returns Deferred; the scheduler must stop that
+// worker, not spin on the returned pending job. Use for preparation cancellation
+// or policy gates, not ordinary retryable failures.
+var ErrUploadNotStarted = errors.New("photobackup: upload not started")
+
 type Scope struct {
 	AccountID string
 	DriveID   int64

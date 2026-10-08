@@ -274,14 +274,22 @@ func (s *Service) retryVisibleSend(ctx context.Context, idempotent bool, action 
 	var outcomeUnknown error
 	err := s.sendRetryPolicy().Do(ctx, func() error {
 		err := action()
-		if !idempotent && errors.Is(err, tgclient.ErrSendOutcomeUnknown) {
+		if errors.Is(err, tgclient.ErrSendOutcomeUnknown) {
 			outcomeUnknown = err
-			return errVisibleSendOutcomeUnknownNoRetry
+			if !idempotent {
+				return errVisibleSendOutcomeUnknownNoRetry
+			}
 		}
 		return err
 	})
 	if errors.Is(err, errVisibleSendOutcomeUnknownNoRetry) {
 		return outcomeUnknown
+	}
+	// Cancellation or a later pre-send failure cannot disprove an earlier
+	// accepted-but-unacknowledged attempt. Preserve uncertainty until a retry
+	// actually succeeds with the same identity.
+	if err != nil && outcomeUnknown != nil {
+		return errors.Join(err, outcomeUnknown)
 	}
 	return err
 }

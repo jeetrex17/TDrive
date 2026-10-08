@@ -372,7 +372,9 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 	var uploadSource io.Reader = source
 	uploadSize := plaintextSize
 	if encrypted {
-		tempCipher, err := s.writeCiphertextTemp(source, plaintextSize, masterKey)
+		started := time.Now()
+		tempCipher, err := s.writeCiphertextTemp(&contextReader{ctx: ctx, source: source}, plaintextSize, masterKey)
+		reportBackupTiming(ctx, "encrypt", started)
 		if err != nil {
 			return Metadata{}, projection.Op{}, "", fmt.Errorf("encrypt: %w", err)
 		}
@@ -461,12 +463,14 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 			documentThumb = nil
 		}
 	}
+	transferStarted := time.Now()
 	err = s.retryVisibleSend(ctx, idempotentSend, func() error {
 		// A retried attempt must resend the whole body from its start.
 		if _, ok := rewindSeeker(uploadSource, 0); !ok {
 			return fmt.Errorf("staged upload source is not rewindable")
 		}
 		var serr error
+		markBackupSendAttempt(ctx)
 		if len(documentThumb) > 0 {
 			result, serr = thumbSender.SendFileWithThumbnail(ctx, peer, uploadSource, filename, caption, uploadSize, onProgress, sendRandomID, documentThumb)
 		} else if idempotentSend {
@@ -476,13 +480,17 @@ func (s *Service) uploadVisibleSource(ctx context.Context, uploadID int, source 
 		} else {
 			result, serr = s.TG.SendFile(ctx, peer, uploadSource, filename, caption, uploadSize, onProgress)
 		}
+		if result.MsgID > 0 {
+			return nil
+		}
 		return serr
 	})
-	if err != nil {
+	reportBackupTiming(ctx, "transfer", transferStarted)
+	if err != nil && result.MsgID <= 0 {
 		return Metadata{}, projection.Op{}, "", err
 	}
 	if result.MsgID == 0 {
-		return Metadata{}, projection.Op{}, "", fmt.Errorf("upload success, but could not find msgID")
+		return Metadata{}, projection.Op{}, "", fmt.Errorf("%w: upload response missing message ID", tgclient.ErrSendOutcomeUnknown)
 	}
 
 	observer.Progress(uploadID, 100.0)
@@ -576,7 +584,7 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 		done := make(chan error, 1)
 		producerKey := append([]byte(nil), masterKey...)
 		go func() {
-			err := s.encryptStoredStream(plainFile, writer, producerKey, plaintextSize)
+			err := s.encryptStoredStream(&contextReader{ctx: ctx, source: plainFile}, writer, producerKey, plaintextSize)
 			clearOwnedKey(producerKey)
 			_ = writer.CloseWithError(err)
 			done <- err
@@ -636,7 +644,9 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 		partOffset := partBase
 		var stagedPart *os.File
 		if encrypt {
+			started := time.Now()
 			stagedPart, err = stageUploadPart(ctx, stagingDir, encryptedStream, partLen)
+			reportBackupTiming(ctx, "encrypt", started)
 			if err != nil {
 				abort()
 				return Metadata{}, projection.Op{}, "", fmt.Errorf("stage encrypted part %d: %w", i, err)
@@ -673,11 +683,13 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 			abort()
 			return Metadata{}, projection.Op{}, "", err
 		}
+		transferStarted := time.Now()
 		err = s.retryVisibleSend(ctx, true, func() error {
 			if _, serr := partReader.Seek(partOffset, io.SeekStart); serr != nil {
 				return fmt.Errorf("rewind staged part %d: %w", i, serr)
 			}
 			var serr error
+			markBackupSendAttempt(ctx)
 			result, serr = tgclient.SendFileIdempotent(
 				ctx,
 				s.TG,
@@ -691,6 +703,7 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 			)
 			return serr
 		})
+		reportBackupTiming(ctx, "transfer", transferStarted)
 		cleanupPart()
 		if err != nil {
 			abort()
@@ -749,6 +762,7 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 		return Metadata{}, projection.Op{}, "", err
 	}
 	manifestHeader := projection.Format(manifestOp)
+	commitStarted := time.Now()
 	manifestMsgID, commitAttempted, err := s.commitMultipartManifest(
 		ctx,
 		channelID,
@@ -758,6 +772,7 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 		peer,
 		uploadUUID,
 	)
+	reportBackupTiming(ctx, "manifest_commit", commitStarted)
 	if err != nil {
 		if commitAttempted {
 			// Once the send starts, Telegram may have accepted the manifest even if
@@ -767,7 +782,7 @@ func (s *Service) uploadMultipart(ctx context.Context, uploadID int, plainFile i
 			if manifestMsgID > 0 {
 				return committedMeta(manifestMsgID), manifestOp, manifestHeader, err
 			}
-			return Metadata{}, projection.Op{}, "", err
+			return Metadata{}, projection.Op{}, "", fmt.Errorf("%w: manifest send: %w", tgclient.ErrSendOutcomeUnknown, err)
 		}
 		abort()
 		return Metadata{}, projection.Op{}, "", err

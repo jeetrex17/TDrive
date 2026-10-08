@@ -90,7 +90,7 @@ func (r *eventRecorder) Count(name string) int {
 	return count
 }
 
-func newTestService(t *testing.T) (*Service, *sql.DB, *tgclient.Fake, *int64) {
+func newTestService(t testing.TB) (*Service, *sql.DB, *tgclient.Fake, *int64) {
 	t.Helper()
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -149,7 +149,7 @@ func writeTempFile(t *testing.T, body string) string {
 	return path
 }
 
-func writeTempNamedFile(t *testing.T, name string, body []byte) string {
+func writeTempNamedFile(t testing.TB, name string, body []byte) string {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), name)
 	if err := os.WriteFile(path, body, 0o600); err != nil {

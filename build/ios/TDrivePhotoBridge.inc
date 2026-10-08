@@ -6,6 +6,50 @@ static NSUInteger const TDrivePhotoMaximumPageSize = 128;
 static unsigned long long const TDrivePhotoDefaultMaxBytes = 2ULL * 1024ULL * 1024ULL * 1024ULL;
 static unsigned long long const TDrivePhotoMaximumMaxBytes = 4ULL * 1024ULL * 1024ULL * 1024ULL;
 static unsigned long long const TDrivePhotoMinimumFreeBytes = 512ULL * 1024ULL * 1024ULL;
+static NSUInteger const TDrivePhotoMaximumStages = 2;
+
+// The provider may change after discovery. Never write beyond the reservation,
+// including while a coordinated iCloud read is hydrating the source.
+static BOOL TDriveCopyPhotoResource(NSURL *source, NSURL *destination, unsigned long long expectedBytes, NSError **error) {
+    NSNumber *isRegular = nil;
+    NSNumber *isSymbolicLink = nil;
+    [source getResourceValue:&isRegular forKey:NSURLIsRegularFileKey error:error];
+    [source getResourceValue:&isSymbolicLink forKey:NSURLIsSymbolicLinkKey error:error];
+    if (!isRegular.boolValue || isSymbolicLink.boolValue) return NO;
+    NSInputStream *input = [NSInputStream inputStreamWithURL:source];
+    NSOutputStream *output = [NSOutputStream outputStreamWithURL:destination append:NO];
+    [input open]; [output open];
+    uint8_t buffer[64 * 1024];
+    unsigned long long total = 0;
+    BOOL copied = NO;
+    for (;;) {
+        NSInteger read = [input read:buffer maxLength:sizeof(buffer)];
+        if (read < 0) { if (error) *error = input.streamError; break; }
+        if (read == 0) { copied = total == expectedBytes; break; }
+        if ((unsigned long long)read > expectedBytes - total) break;
+        NSInteger offset = 0;
+        while (offset < read) {
+            NSInteger written = [output write:buffer + offset maxLength:(NSUInteger)(read - offset)];
+            if (written <= 0) { if (error) *error = output.streamError; break; }
+            offset += written;
+        }
+        if (offset != read) break;
+        total += (unsigned long long)read;
+        if ((total & ((4ULL * 1024ULL * 1024ULL) - 1)) < (unsigned long long)read) {
+            NSNumber *available = nil;
+            [destination removeCachedResourceValueForKey:NSURLVolumeAvailableCapacityForImportantUsageKey];
+            [destination getResourceValue:&available forKey:NSURLVolumeAvailableCapacityForImportantUsageKey error:nil];
+            if (available == nil || available.unsignedLongLongValue < TDrivePhotoMinimumFreeBytes) break;
+        }
+    }
+    [input close]; [output close];
+    NSNumber *available = nil;
+    [destination removeCachedResourceValueForKey:NSURLVolumeAvailableCapacityForImportantUsageKey];
+    [destination getResourceValue:&available forKey:NSURLVolumeAvailableCapacityForImportantUsageKey error:nil];
+    if (available == nil || available.unsignedLongLongValue < TDrivePhotoMinimumFreeBytes) copied = NO;
+    if (!copied && error && *error == nil) *error = [NSError errorWithDomain:@"TDrivePhotoBackup" code:1 userInfo:@{ NSLocalizedDescriptionKey: @"The source size changed or storage became unavailable during staging" }];
+    return copied;
+}
 
 static NSString *TDriveISODate(NSDate *date) {
     if (date == nil) return (NSString *)[NSNull null];
@@ -155,7 +199,7 @@ static NSString *TDriveFolderMediaKind(NSString *name) {
 @interface TDrivePhotoBridge : NSObject <WKScriptMessageHandler, UIDocumentPickerDelegate>
 @property (nonatomic, weak) WKWebView *webView;
 @property (nonatomic, strong) NSMutableDictionary<NSString *, NSNumber *> *materializations;
-@property (nonatomic, strong) NSMutableSet<NSString *> *stagedTokens;
+@property (nonatomic, assign) BOOL stagingCleanupFailed;
 // UIKit grants only a short, system-controlled window to finish work after
 // the app leaves the foreground. The page arms this assertion while backup is
 // running; it is acquired only after backgrounding and released promptly when
@@ -176,7 +220,6 @@ static NSString *TDriveFolderMediaKind(NSString *name) {
     self = [super init];
     if (self) {
         _materializations = [NSMutableDictionary dictionary];
-        _stagedTokens = [NSMutableSet set];
         _folderScans = [NSMutableDictionary dictionary];
         _backgroundBackupTask = UIBackgroundTaskInvalid;
     }
@@ -186,7 +229,8 @@ static NSString *TDriveFolderMediaKind(NSString *name) {
 - (void)startObserving {
     NSURL *cache = [[[NSFileManager defaultManager] URLsForDirectory:NSCachesDirectory inDomains:NSUserDomainMask] firstObject];
     NSURL *stagingRoot = [cache URLByAppendingPathComponent:@"TDrivePhotoBackup" isDirectory:YES];
-    [[NSFileManager defaultManager] removeItemAtURL:stagingRoot error:nil];
+    self.stagingCleanupFailed = [[NSFileManager defaultManager] fileExistsAtPath:stagingRoot.path]
+        && ![[NSFileManager defaultManager] removeItemAtURL:stagingRoot error:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(applicationDidBecomeActive:) name:UIApplicationDidBecomeActiveNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(applicationWillResignActive:) name:UIApplicationWillResignActiveNotification object:nil];
     [[NSNotificationCenter defaultCenter] addObserver:self selector:@selector(applicationDidEnterBackground:) name:UIApplicationDidEnterBackgroundNotification object:nil];
@@ -460,11 +504,9 @@ static NSString *TDriveFolderMediaKind(NSString *name) {
 // process is holding, and a folder in iCloud Drive may not be on the device
 // until something asks for it.
 - (void)materializeFolderAsset:(NSString *)requestID root:(NSString *)root relative:(NSString *)relative arguments:(NSDictionary *)arguments {
-    @synchronized (self.materializations) {
-        if (self.materializations.count > 0 || self.stagedTokens.count > 0) {
-            [self reply:requestID result:nil error:TDrivePhotoError(@"stagingBusy", @"Release the current staged photo resource before staging another")];
-            return;
-        }
+    if (self.stagingCleanupFailed) {
+        [self reply:requestID result:nil error:TDrivePhotoError(@"cleanupFailed", @"Temporary media cleanup failed. Reopen TDrive to retry cleanup.")];
+        return;
     }
     NSURL *folder = [self openFolderForRoot:root];
     if (folder == nil) { [self reply:requestID result:nil error:TDrivePhotoError(@"folderUnavailable", @"That folder is no longer available. Add it again to keep backing it up.")]; return; }
@@ -479,7 +521,7 @@ static NSString *TDriveFolderMediaKind(NSString *name) {
     [source getResourceValue:&modified forKey:NSURLContentModificationDateKey error:nil];
     NSString *expectedVersion = [arguments[@"version"] isKindOfClass:[NSString class]] ? arguments[@"version"] : nil;
     NSString *currentVersion = [NSString stringWithFormat:@"%.0f:%llu", modified.timeIntervalSince1970, size.unsignedLongLongValue];
-    if (modified == nil) { [folder stopAccessingSecurityScopedResource]; [self reply:requestID result:nil error:TDrivePhotoError(@"assetNotFound", @"That file is no longer in the folder")]; return; }
+    if (modified == nil || size == nil || size.longLongValue < 0) { [folder stopAccessingSecurityScopedResource]; [self reply:requestID result:nil error:TDrivePhotoError(@"assetNotFound", @"That file is no longer in the folder")]; return; }
     if (expectedVersion.length > 0 && ![expectedVersion isEqualToString:currentVersion]) { [folder stopAccessingSecurityScopedResource]; [self reply:requestID result:nil error:TDrivePhotoError(@"assetChanged", @"The file changed after discovery; refresh before backing it up")]; return; }
 
     unsigned long long requestedMax = [arguments[@"maxBytes"] respondsToSelector:@selector(unsignedLongLongValue)] ? [arguments[@"maxBytes"] unsignedLongLongValue] : TDrivePhotoDefaultMaxBytes;
@@ -502,9 +544,22 @@ static NSString *TDriveFolderMediaKind(NSString *name) {
         return;
     }
     NSString *token = NSUUID.UUID.UUIDString;
+    @synchronized (self.materializations) {
+        unsigned long long reserved = 0;
+        for (NSNumber *bytes in self.materializations.allValues) reserved += bytes.unsignedLongLongValue;
+        if (self.materializations.count >= TDrivePhotoMaximumStages || size.unsignedLongLongValue > TDrivePhotoMaximumMaxBytes - reserved) {
+            [folder stopAccessingSecurityScopedResource];
+            [self reply:requestID result:nil error:TDrivePhotoError(@"stagingBusy", @"Release a staged resource before exceeding the two-file, 4 GiB staging budget")];
+            return;
+        }
+        // WebKit serializes these coordinated copies. Reservations include
+        // completed files until cleanup succeeds, not just active copy calls.
+        self.materializations[token] = size;
+    }
     NSURL *directory = [[cache URLByAppendingPathComponent:@"TDrivePhotoBackup" isDirectory:YES] URLByAppendingPathComponent:token isDirectory:YES];
     NSError *error = nil;
     if (![[NSFileManager defaultManager] createDirectoryAtURL:directory withIntermediateDirectories:YES attributes:nil error:&error]) {
+        @synchronized (self.materializations) { [self.materializations removeObjectForKey:token]; }
         [folder stopAccessingSecurityScopedResource];
         [self reply:requestID result:nil error:TDrivePhotoError(@"stagingFailed", error.localizedDescription)];
         return;
@@ -516,15 +571,25 @@ static NSString *TDriveFolderMediaKind(NSString *name) {
     __block NSError *copyError = nil;
     NSFileCoordinator *coordinator = [[NSFileCoordinator alloc] initWithFilePresenter:nil];
     [coordinator coordinateReadingItemAtURL:source options:NSFileCoordinatorReadingWithoutChanges error:&error byAccessor:^(NSURL *readable) {
-        copied = [[NSFileManager defaultManager] copyItemAtURL:readable toURL:staged error:&copyError];
+        copied = TDriveCopyPhotoResource(readable, staged, size.unsignedLongLongValue, &copyError);
+        NSNumber *afterSize = nil;
+        NSDate *afterModified = nil;
+        [readable removeCachedResourceValueForKey:NSURLFileSizeKey];
+        [readable removeCachedResourceValueForKey:NSURLContentModificationDateKey];
+        [readable getResourceValue:&afterSize forKey:NSURLFileSizeKey error:nil];
+        [readable getResourceValue:&afterModified forKey:NSURLContentModificationDateKey error:nil];
+        NSString *afterVersion = [NSString stringWithFormat:@"%.0f:%llu", afterModified.timeIntervalSince1970, afterSize.unsignedLongLongValue];
+        if (afterModified == nil || afterSize == nil || ![currentVersion isEqualToString:afterVersion]) copied = NO;
     }];
     [folder stopAccessingSecurityScopedResource];
     if (!copied) {
-        [[NSFileManager defaultManager] removeItemAtURL:directory error:nil];
+        BOOL removed = [[NSFileManager defaultManager] removeItemAtURL:directory error:nil];
+        if (removed || ![[NSFileManager defaultManager] fileExistsAtPath:directory.path]) {
+            @synchronized (self.materializations) { [self.materializations removeObjectForKey:token]; }
+        }
         [self reply:requestID result:nil error:TDrivePhotoError(@"materializeFailed", (copyError ?: error).localizedDescription ?: @"That file could not be read")];
         return;
     }
-    @synchronized (self.materializations) { [self.stagedTokens addObject:token]; }
     [self reply:requestID result:@{ @"token": token, @"path": staged.path, @"byteSize": size ?: @0, @"assetID": [root stringByAppendingString:relative], @"assetVersion": currentVersion } error:nil];
 }
 
@@ -552,7 +617,7 @@ static NSString *TDriveFolderMediaKind(NSString *name) {
     NSError *error = nil;
     BOOL existed = [[NSFileManager defaultManager] fileExistsAtPath:directory.path];
     if (existed && ![[NSFileManager defaultManager] removeItemAtURL:directory error:&error]) { [self reply:requestID result:nil error:TDrivePhotoError(@"cleanupFailed", error.localizedDescription)]; return; }
-    @synchronized (self.materializations) { [self.stagedTokens removeObject:token]; }
+    @synchronized (self.materializations) { [self.materializations removeObjectForKey:token]; }
     [self reply:requestID result:@{ @"removed": @(existed) } error:nil];
 }
 

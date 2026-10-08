@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"TDrive/backend/tgclient"
 )
 
 type Engine struct {
@@ -37,7 +39,7 @@ func Open(db *sql.DB, options Options) (*Engine, error) {
 
 // schemaVersion is what PRAGMA user_version reads on a current ledger. Never
 // edit an existing migration: a database may be on any earlier version.
-const schemaVersion = 7
+const schemaVersion = 8
 
 // migrationSteps upgrades one version at a time. from is the version a step
 // starts at, so a ledger at any earlier release replays every later step in
@@ -53,12 +55,18 @@ var migrationSteps = []struct {
 	{4, "receipt cursor", `ALTER TABLE photo_backup_settings ADD COLUMN receipt_cursor INTEGER NOT NULL DEFAULT 0`},
 	{4, "receipt index", receiptIndexDDL},
 	{5, "source relative dir", `ALTER TABLE photo_backup_jobs ADD COLUMN rel_dir TEXT NOT NULL DEFAULT ''`},
+	{7, "FIFO claim index", readyFIFOIndexDDL},
 }
 
 // receiptIndexDDL covers the receipt walk end to end: the partial predicate
 // holds only jobs that ever produced a file, and status rides along so a page
 // of the walk is answered from the index without touching the table.
 const receiptIndexDDL = `CREATE INDEX IF NOT EXISTS photo_backup_jobs_receipts ON photo_backup_jobs(account_id,drive_id,remote_message_id,status) WHERE remote_message_id>0`
+
+// Ready jobs are visited in discovery order without sorting the whole queue.
+// Completed and held jobs never occupy this index. SQLite's implicit rowid
+// suffix breaks equal-created_at ties in insertion order.
+const readyFIFOIndexDDL = `CREATE INDEX IF NOT EXISTS photo_backup_jobs_ready_fifo ON photo_backup_jobs(account_id,drive_id,status,created_at) WHERE status IN ('pending','error')`
 
 // Migrate brings the ledger up to date and then clears the work in it that
 // nobody can do, which is what a launch is the right moment for.
@@ -185,7 +193,7 @@ CREATE TRIGGER IF NOT EXISTS photo_backup_jobs_count_delete AFTER DELETE ON phot
 CREATE TRIGGER IF NOT EXISTS photo_backup_jobs_count_status AFTER UPDATE OF status ON photo_backup_jobs WHEN OLD.status<>NEW.status BEGIN UPDATE photo_backup_counts SET count=count-1 WHERE account_id=OLD.account_id AND drive_id=OLD.drive_id AND status=OLD.status; DELETE FROM photo_backup_counts WHERE account_id=OLD.account_id AND drive_id=OLD.drive_id AND status=OLD.status AND count=0; INSERT INTO photo_backup_counts(account_id,drive_id,status,count) VALUES(NEW.account_id,NEW.drive_id,NEW.status,1) ON CONFLICT(account_id,drive_id,status) DO UPDATE SET count=count+1; END;`)
 	if err == nil {
 		_, err = e.db.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS photo_backup_jobs_native_identity ON photo_backup_jobs(account_id,drive_id,asset_id,version,resource_id,path);
-CREATE INDEX IF NOT EXISTS photo_backup_jobs_last_error ON photo_backup_jobs(account_id,drive_id,updated_at DESC) WHERE last_error<>''`+";\n"+receiptIndexDDL)
+CREATE INDEX IF NOT EXISTS photo_backup_jobs_last_error ON photo_backup_jobs(account_id,drive_id,updated_at DESC) WHERE last_error<>''`+";\n"+receiptIndexDDL+";\n"+readyFIFOIndexDDL)
 	}
 	if err != nil {
 		return fmt.Errorf("photobackup migrate: %w", err)
@@ -589,106 +597,91 @@ func (e *Engine) RetryErrors(ctx context.Context, scope Scope) error {
 }
 
 func (e *Engine) RunOnce(ctx context.Context, scope Scope, upload Uploader) (int, error) {
+	result, err := e.RunNext(ctx, scope, upload)
+	if result.Completed {
+		return 1, err
+	}
+	return 0, err
+}
+
+// RunResult distinguishes an empty queue from a processed failure. Deferred
+// means preparation stopped before sending; stop this worker without canceling
+// other originals that may already be uploading.
+type RunResult struct {
+	Claimed, Completed, Deferred bool
+}
+
+// RunNext atomically claims at most one currently eligible job. Callers may run
+// a bounded number concurrently; no transaction is held during upload.
+func (e *Engine) RunNext(ctx context.Context, scope Scope, upload Uploader) (RunResult, error) {
 	if !scope.valid() || upload == nil {
-		return 0, ErrInvalid
+		return RunResult{}, ErrInvalid
 	}
 	settings, err := e.GetSettings(ctx, scope)
 	if err != nil {
-		return 0, err
+		return RunResult{}, err
 	}
 	if !settings.Enabled || settings.ManualPaused {
 		slog.Debug("photobackup: run refused", "drive_id", scope.DriveID, "reason", refusalReason(settings))
-		return 0, nil
+		return RunResult{}, nil
 	}
-	rows, err := e.db.QueryContext(ctx, `SELECT j.source_id,j.asset_id,j.version,j.path,j.name,j.media_type,j.resource_id,j.modified_at,j.captured_at,j.rel_dir,j.size,j.attempts,s.kind,s.root,s.name,s.enabled,s.added_at FROM photo_backup_jobs j JOIN photo_backup_sources s USING(account_id,drive_id,source_id) WHERE j.account_id=? AND j.drive_id=? AND s.enabled=1 AND j.status IN (?,?) AND j.next_attempt_at<=? AND ((j.media_type='photo' AND ?) OR (j.media_type='video' AND ?)) ORDER BY j.created_at LIMIT 1`, scope.AccountID, scope.DriveID, Pending, Error, e.options.Now().UnixNano(), settings.Photos, settings.Videos)
-	if err != nil {
-		return 0, err
+	x, claimed, err := e.claimNext(ctx, scope, settings)
+	if err != nil || !claimed {
+		return RunResult{}, err
 	}
-	type item struct {
-		source   Source
-		asset    Asset
-		attempts int
-	}
-	var items []item
-	for rows.Next() {
-		var x item
-		var mt, captured, added int64
-		x.source.Scope = scope
-		if err := rows.Scan(&x.source.ID, &x.asset.ID, &x.asset.Version, &x.asset.Path, &x.asset.Name, &x.asset.MediaType, &x.asset.ResourceID, &mt, &captured, &x.asset.RelDir, &x.asset.Size, &x.attempts, &x.source.Kind, &x.source.Root, &x.source.Name, &x.source.Enabled, &added); err != nil {
-			rows.Close()
-			return 0, err
-		}
-		x.asset.ModifiedAt = time.Unix(0, mt)
-		x.asset.CapturedAt = timeOrZero(captured)
-		x.source.AddedAt = time.Unix(0, added)
-		items = append(items, x)
-	}
-	if err := rows.Err(); err != nil {
-		rows.Close()
-		return 0, err
-	}
-	rows.Close()
-	done := 0
-	for _, x := range items {
-		if !x.source.Enabled {
-			continue
-		}
-		now := e.options.Now()
-		res, err := e.db.ExecContext(ctx, `UPDATE photo_backup_jobs SET status=?,updated_at=? WHERE account_id=? AND drive_id=? AND source_id=? AND asset_id=? AND version=? AND resource_id=? AND status IN (?,?)`, Uploading, now.UnixNano(), scope.AccountID, scope.DriveID, x.source.ID, x.asset.ID, x.asset.Version, x.asset.ResourceID, Pending, Error)
-		if err != nil {
-			return done, err
-		}
-		n, _ := res.RowsAffected()
-		if n == 0 {
-			continue
-		}
-		slog.Debug("photobackup: uploading", "drive_id", scope.DriveID, "source", x.source.ID, "name", x.asset.Name, "size", x.asset.Size, "attempt", x.attempts+1)
-		result, upErr := upload(ctx, UploadRequest{Scope: scope, Source: x.source, Asset: x.asset, ChannelID: scope.DriveID, ParentID: settings.DestinationParentID, Encrypt: settings.Encrypt})
-		persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
-		// A positive remote receipt is authoritative even if cancellation raced
-		// with the uploader returning. Without one, cancellation leaves the
-		// remote outcome uncertain and must require an explicit retry.
-		if result.RemoteMessageID > 0 {
-			upErr = nil
-		} else if ctx.Err() != nil {
-			// upErr is deliberately left alone: this asset is parked as Paused
-			// with its reason in last_error and the loop moves on, so the
-			// cancellation is never reported as a per-asset upload failure.
-			slog.Info("photobackup: upload interrupted, held for explicit retry", "drive_id", scope.DriveID, "name", x.asset.Name)
-			_, dbErr := e.db.ExecContext(persistCtx, `UPDATE photo_backup_jobs SET status=?,last_error=?,updated_at=? WHERE account_id=? AND drive_id=? AND source_id=? AND asset_id=? AND version=? AND resource_id=?`, Paused, "upload interrupted; remote outcome unknown", now.UnixNano(), scope.AccountID, scope.DriveID, x.source.ID, x.asset.ID, x.asset.Version, x.asset.ResourceID)
-			cancelPersist()
-			if dbErr != nil {
-				return done, dbErr
-			}
-			continue
-		}
-		if upErr == nil && result.RemoteMessageID <= 0 {
-			upErr = fmt.Errorf("photobackup: uploader returned no remote identity")
-		}
-		if upErr != nil {
-			attempts := x.attempts + 1
-			status := Error
-			if attempts >= e.options.MaxAttempts {
-				status = Paused
-			}
-			delay := e.options.BaseBackoff * time.Duration(1<<min(attempts-1, 10))
-			slog.Warn("photobackup: upload failed", "drive_id", scope.DriveID, "name", x.asset.Name, "attempts", attempts, "status", status, "retry_in", delay, "error", upErr)
-			_, dbErr := e.db.ExecContext(persistCtx, `UPDATE photo_backup_jobs SET status=?,attempts=?,next_attempt_at=?,last_error=?,updated_at=? WHERE account_id=? AND drive_id=? AND source_id=? AND asset_id=? AND version=? AND resource_id=?`, status, attempts, now.Add(delay).UnixNano(), upErr.Error(), now.UnixNano(), scope.AccountID, scope.DriveID, x.source.ID, x.asset.ID, x.asset.Version, x.asset.ResourceID)
-			cancelPersist()
-			if dbErr != nil {
-				return done, dbErr
-			}
-			continue
-		}
-		_, err = e.db.ExecContext(persistCtx, `UPDATE photo_backup_jobs SET status=?,remote_message_id=?,last_error='',updated_at=? WHERE account_id=? AND drive_id=? AND source_id=? AND asset_id=? AND version=? AND resource_id=?`, Complete, result.RemoteMessageID, now.UnixNano(), scope.AccountID, scope.DriveID, x.source.ID, x.asset.ID, x.asset.Version, x.asset.ResourceID)
+	out := RunResult{Claimed: true}
+	slog.Debug("photobackup: uploading", "drive_id", scope.DriveID, "source", x.source.ID, "name", x.asset.Name, "size", x.asset.Size, "attempt", x.attempts+1)
+	result, upErr := upload(ctx, UploadRequest{Scope: scope, Source: x.source, Asset: x.asset, ChannelID: scope.DriveID, ParentID: settings.DestinationParentID, Encrypt: settings.Encrypt})
+	now := e.options.Now()
+	persistCtx, cancelPersist := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
+	// A positive remote receipt is authoritative even if cancellation raced
+	// with the uploader returning. Without one, cancellation leaves the
+	// remote outcome uncertain and must require an explicit retry.
+	if result.RemoteMessageID > 0 {
+		upErr = nil
+	} else if errors.Is(upErr, ErrUploadNotStarted) {
+		_, dbErr := e.db.ExecContext(persistCtx, `UPDATE photo_backup_jobs SET status=?,last_error='',updated_at=? WHERE account_id=? AND drive_id=? AND source_id=? AND asset_id=? AND version=? AND resource_id=?`, Pending, now.UnixNano(), scope.AccountID, scope.DriveID, x.source.ID, x.asset.ID, x.asset.Version, x.asset.ResourceID)
 		cancelPersist()
-		if err != nil {
-			return done, err
+		out.Deferred = true
+		return out, dbErr
+	} else if ctx.Err() != nil || errors.Is(upErr, tgclient.ErrSendOutcomeUnknown) {
+		// upErr is deliberately left alone: this asset is parked as Paused
+		// with its reason in last_error and the loop moves on, so the
+		// cancellation is never reported as a per-asset upload failure.
+		slog.Info("photobackup: upload interrupted, held for explicit retry", "drive_id", scope.DriveID, "name", x.asset.Name)
+		_, dbErr := e.db.ExecContext(persistCtx, `UPDATE photo_backup_jobs SET status=?,last_error=?,updated_at=? WHERE account_id=? AND drive_id=? AND source_id=? AND asset_id=? AND version=? AND resource_id=?`, Paused, "upload interrupted; remote outcome unknown", now.UnixNano(), scope.AccountID, scope.DriveID, x.source.ID, x.asset.ID, x.asset.Version, x.asset.ResourceID)
+		cancelPersist()
+		if dbErr != nil {
+			return out, dbErr
 		}
-		slog.Info("photobackup: uploaded", "drive_id", scope.DriveID, "name", x.asset.Name, "size", x.asset.Size, "msg_id", result.RemoteMessageID)
-		done++
+		return out, nil
 	}
-	return done, nil
+	if upErr == nil && result.RemoteMessageID <= 0 {
+		upErr = fmt.Errorf("photobackup: uploader returned no remote identity")
+	}
+	if upErr != nil {
+		attempts := x.attempts + 1
+		status := Error
+		if attempts >= e.options.MaxAttempts {
+			status = Paused
+		}
+		delay := e.options.BaseBackoff * time.Duration(1<<min(attempts-1, 10))
+		slog.Warn("photobackup: upload failed", "drive_id", scope.DriveID, "name", x.asset.Name, "attempts", attempts, "status", status, "retry_in", delay, "error", upErr)
+		_, dbErr := e.db.ExecContext(persistCtx, `UPDATE photo_backup_jobs SET status=?,attempts=?,next_attempt_at=?,last_error=?,updated_at=? WHERE account_id=? AND drive_id=? AND source_id=? AND asset_id=? AND version=? AND resource_id=?`, status, attempts, now.Add(delay).UnixNano(), upErr.Error(), now.UnixNano(), scope.AccountID, scope.DriveID, x.source.ID, x.asset.ID, x.asset.Version, x.asset.ResourceID)
+		cancelPersist()
+		if dbErr != nil {
+			return out, dbErr
+		}
+		return out, nil
+	}
+	_, err = e.db.ExecContext(persistCtx, `UPDATE photo_backup_jobs SET status=?,remote_message_id=?,last_error='',updated_at=? WHERE account_id=? AND drive_id=? AND source_id=? AND asset_id=? AND version=? AND resource_id=?`, Complete, result.RemoteMessageID, now.UnixNano(), scope.AccountID, scope.DriveID, x.source.ID, x.asset.ID, x.asset.Version, x.asset.ResourceID)
+	cancelPersist()
+	if err != nil {
+		return out, err
+	}
+	slog.Info("photobackup: uploaded", "drive_id", scope.DriveID, "name", x.asset.Name, "size", x.asset.Size, "msg_id", result.RemoteMessageID)
+	out.Completed = true
+	return out, nil
 }
 
 // refusalReason names why a run did nothing, in the same words the panel uses,

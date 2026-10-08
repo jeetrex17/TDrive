@@ -53,7 +53,7 @@ func TestNativeSourceDisplayNameSurvivesRoundTrip(t *testing.T) {
 	}
 }
 
-func testEngine(t *testing.T, now *time.Time) (*Engine, Scope) {
+func testEngine(t testing.TB, now *time.Time) (*Engine, Scope) {
 	t.Helper()
 	db, err := sql.Open("sqlite", filepath.Join(t.TempDir(), "backup.db"))
 	if err != nil {
@@ -69,7 +69,7 @@ func testEngine(t *testing.T, now *time.Time) (*Engine, Scope) {
 	}
 	return e, Scope{AccountID: "acct", DriveID: 7}
 }
-func configure(t *testing.T, e *Engine, s Scope) {
+func configure(t testing.TB, e *Engine, s Scope) {
 	t.Helper()
 	ctx := context.Background()
 	if err := e.PutSettings(ctx, Settings{Scope: s, Enabled: true, Photos: true, Videos: true, DestinationParentID: "d:root", Encrypt: true}); err != nil {

@@ -544,22 +544,26 @@ func (a *App) startPhotoBackup() error {
 		return fmt.Errorf("photo backup unavailable")
 	}
 	if a.photoBackupCancel != nil {
+		a.photoBackupRerun = true
 		a.photoBackupMu.Unlock()
 		return nil
 	}
 	ctx, cancel := context.WithCancel(a.appContext())
 	a.photoBackupRunID++
+	a.photoBackupRerun = false
 	runID := a.photoBackupRunID
 	a.photoBackupCancel = cancel
 	done := make(chan struct{})
 	a.photoBackupDone = done
 	a.photoBackupMu.Unlock()
 	go func() {
+		defer cancel()
 		defer func() {
 			a.photoBackupMu.Lock()
 			if a.photoBackupRunID == runID {
 				a.photoBackupCancel = nil
 				a.photoBackupDone = nil
+				a.photoBackupRerun = false
 			}
 			a.photoBackupMu.Unlock()
 			close(done)
@@ -568,26 +572,12 @@ func (a *App) startPhotoBackup() error {
 			slog.Warn("photo backup: recover interrupted uploads failed", "drive_id", scope.DriveID, "error", err)
 		}
 		a.reconcilePhotoBackupReceipts(ctx, engine, scope)
-		logPhotoBackupRunStatus(ctx, engine, scope, "starting", 0)
-		uploaded := 0
-		for ctx.Err() == nil {
-			// A native background lease may finish the item that was already in
-			// flight, but a suspended WebView cannot safely discover or stage the
-			// next one. Foreground resume restarts this durable queue.
-			if !a.photoBackupMayStartNextJob() {
-				break
-			}
-			done, runErr := engine.RunOnce(ctx, scope, a.uploadPhotoBackup)
-			if runErr != nil {
-				slog.Warn("photo backup: run stopped", "drive_id", scope.DriveID, "uploaded", uploaded, "error", runErr)
-				break
-			}
-			uploaded += done
-			if done == 0 && (runtime.GOOS == "ios" || runtime.GOOS == "android" || !a.discoverDesktopPhotoBackup(ctx)) {
+		for {
+			a.runPhotoBackupCycle(ctx, engine, scope)
+			if !a.continuePhotoBackupRun(ctx, runID) {
 				break
 			}
 		}
-		logPhotoBackupRunStatus(ctx, engine, scope, "finished", uploaded)
 		a.emit("photo-backup:state")
 	}()
 	return nil
@@ -608,76 +598,6 @@ func logPhotoBackupRunStatus(ctx context.Context, engine *photobackup.Engine, sc
 		attrs = append(attrs, "pending", status.Pending, "failed", status.Error, "held", status.Paused+status.Missing, "complete", status.Complete)
 	}
 	slog.Info("photo backup: run "+phase, attrs...)
-}
-
-func (a *App) uploadPhotoBackup(ctx context.Context, request photobackup.UploadRequest) (photobackup.UploadResult, error) {
-	engine, err := a.photoBackupEngine()
-	if err != nil {
-		return photobackup.UploadResult{}, err
-	}
-	settings, err := engine.GetSettings(ctx, request.Scope)
-	if err != nil {
-		return photobackup.UploadResult{}, err
-	}
-	if err := a.photoBackupPolicyAllows(settings); err != nil {
-		return photobackup.UploadResult{}, err
-	}
-	progress, finishProgress := a.beginPhotoBackupProgress(ctx, request.Scope, request.Asset.Name, request.Asset.Size)
-	defer finishProgress()
-	path := request.Asset.Path
-	var token string
-	if path == "" {
-		token = randomPhotoBackupToken()
-		wait := make(chan photoBackupMaterialization, 1)
-		a.photoBackupMu.Lock()
-		a.photoBackupWaiters[token] = wait
-		a.photoBackupMu.Unlock()
-		sourceDTO := photoBackupSourceDTO(request.Source)
-		assetDTO := photoBackupAssetDTO(request.Asset)
-		a.emit("photo-backup:materialize", map[string]any{"token": token, "source": sourceDTO, "asset": assetDTO})
-		defer func() {
-			a.emit("photo-backup:release", map[string]any{"token": token, "source": sourceDTO, "asset": assetDTO, "path": path})
-		}()
-		select {
-		case <-ctx.Done():
-			a.removePhotoBackupWaiter(token)
-			return photobackup.UploadResult{}, ctx.Err()
-		case result := <-wait:
-			if result.err != "" {
-				return photobackup.UploadResult{}, errors.New(result.err)
-			}
-			path = result.path
-		case <-time.After(30 * time.Minute):
-			a.removePhotoBackupWaiter(token)
-			return photobackup.UploadResult{}, fmt.Errorf("photo backup: materialization timed out")
-		}
-	}
-	if err := validatePhotoBackupPath(path, request.Asset, request.Source); err != nil {
-		return photobackup.UploadResult{}, err
-	}
-	if request.Asset.Path != "" {
-		staged, cleanup, stageErr := stagePhotoBackupFile(ctx, path, request.Asset)
-		if stageErr != nil {
-			return photobackup.UploadResult{}, stageErr
-		}
-		defer cleanup()
-		path = staged
-	}
-	svc, err := a.requireFileService()
-	if err != nil {
-		return photobackup.UploadResult{}, err
-	}
-	destinationParentID, err := a.resolvePhotoBackupUploadParent(ctx, request)
-	if err != nil {
-		return photobackup.UploadResult{}, err
-	}
-	// Photo backup is never allowed to inherit a legacy plaintext setting. The
-	// upload boundary forces encryption even for work queued by an older build.
-	meta, err := svc.UploadBackup(ctx, request.ChannelID, path, destinationParentID, photoBackupEncrypted, progress)
-	if meta.MsgID > 0 {
-		return photobackup.UploadResult{RemoteMessageID: int64(meta.MsgID)}, nil
-	}
-	return photobackup.UploadResult{}, err
 }
 
 func (a *App) ResolvePhotoBackupResource(token, path, errorMessage string) error {

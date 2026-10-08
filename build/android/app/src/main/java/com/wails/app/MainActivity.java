@@ -137,8 +137,8 @@ public class MainActivity extends AppCompatActivity {
     private static final int PHOTO_BACKUP_PERMISSION_REQUEST = 7012;
     private static final int NOTIFICATION_PERMISSION_REQUEST = 7013;
     private static final int PHOTO_BACKUP_PAGE_LIMIT = 128;
-    // One resource is staged at a time, which permits normal phone videos while
-    // still putting a firm bound on a malicious or corrupt MediaStore row.
+    // Two resources may overlap preparation and upload, sharing one byte budget.
+    private static final int PHOTO_BACKUP_STAGE_MAX_ITEMS = 2;
     private static final long PHOTO_BACKUP_STAGE_MAX_BYTES = 4L * 1024L * 1024L * 1024L;
     // Never consume the last space the app and OS need for normal operation.
     private static final long PHOTO_BACKUP_STAGE_FREE_HEADROOM_BYTES = 512L * 1024L * 1024L;
@@ -160,9 +160,9 @@ public class MainActivity extends AppCompatActivity {
     private final Map<String, File> stagedPhotoBackupAssets = new ConcurrentHashMap<>();
     private final Map<String, AtomicBoolean> stagingPhotoBackupAssets = new ConcurrentHashMap<>();
     private final Object photoBackupStageLock = new Object();
-    // A global slot is intentional: a 4 GiB resource must never be multiplied
-    // by several simultaneous native requests.
-    private String activePhotoBackupStageKey;
+    // Includes in-progress copies and completed sources awaiting release.
+    // All access is protected by photoBackupStageLock.
+    private final Map<String, Long> photoBackupStageReservations = new HashMap<>();
 
     // System-event sources (battery/power, screen lock, network). Registered in
     // onCreate, torn down in onDestroy. Each forwards a "system:*" event to JS
@@ -844,15 +844,17 @@ public class MainActivity extends AppCompatActivity {
             AtomicBoolean cancelled = null;
             File temporary = null;
             boolean staged = false;
+            boolean owned = false;
             try {
                 JSONObject request = new JSONObject(requestJson); ref = MediaRef.parse(request.optString("id", ""));
                 JSONObject access = photoBackupAccess();
                 if (ref == null || !(access.optBoolean(ref.video ? "videos" : "images") || access.optBoolean("selectedOnly"))) throw new IOException("media asset is unavailable");
                 cancelled = new AtomicBoolean(false);
                 synchronized (photoBackupStageLock) {
-                    if (activePhotoBackupStageKey != null) throw new IOException("another media asset is staged or staging; release it first");
-                    activePhotoBackupStageKey = ref.key();
+                    if (photoBackupStageReservations.containsKey(ref.key()) || photoBackupStageReservations.size() >= PHOTO_BACKUP_STAGE_MAX_ITEMS) throw new IOException("media staging slots are full; release a staged asset first");
+                    photoBackupStageReservations.put(ref.key(), 0L);
                     stagingPhotoBackupAssets.put(ref.key(), cancelled);
+                    owned = true;
                 }
                 String expected = request.optString("version", ""); Uri uri = ContentUris.withAppendedId(MediaStore.Files.getContentUri("external"), ref.id);
                 String[] p = {MediaStore.MediaColumns.SIZE, MediaStore.MediaColumns.DATE_MODIFIED, MediaStore.MediaColumns.DISPLAY_NAME, MediaStore.Files.FileColumns.MEDIA_TYPE};
@@ -863,10 +865,24 @@ public class MainActivity extends AppCompatActivity {
                     if (size < 0 || size > PHOTO_BACKUP_STAGE_MAX_BYTES) throw new IOException("media asset exceeds the 4 GB staging limit");
                     String displayName = safeName(c.isNull(2) ? "media" : c.getString(2));
                     File root = photoBackupStageRoot(); if (!root.isDirectory() && !root.mkdirs()) throw new IOException("could not create staging area");
-                    File dir = new File(root, ref.directoryName()); if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("could not create staging area");
-                    long existingBytes = stageBytes(root);
-                    if (existingBytes > PHOTO_BACKUP_STAGE_MAX_BYTES || size > PHOTO_BACKUP_STAGE_MAX_BYTES - existingBytes) throw new IOException("media staging would exceed the 4 GB cache limit");
-                    requireStagingSpace(root, size);
+                    File dir = new File(root, ref.directoryName());
+                    if (!discardPhotoBackupTree(dir)) throw new IOException("could not clean abandoned media staging");
+                    if (!dir.isDirectory() && !dir.mkdirs()) throw new IOException("could not create staging area");
+                    synchronized (photoBackupStageLock) {
+                        long reserved = 0;
+                        long pending = 0;
+                        for (Map.Entry<String, Long> entry : photoBackupStageReservations.entrySet()) {
+                            reserved += entry.getValue();
+                            if (!stagedPhotoBackupAssets.containsKey(entry.getKey())) pending += entry.getValue();
+                        }
+                        long abandoned = unreservedStageBytes(root);
+                        if (abandoned > PHOTO_BACKUP_STAGE_MAX_BYTES - reserved || size > PHOTO_BACKUP_STAGE_MAX_BYTES - reserved - abandoned) throw new IOException("media staging would exceed the 4 GB cache limit");
+                        // Pending copies may not occupy their reserved disk yet.
+                        // Conservatively count all their bytes before admitting
+                        // another copy, including when called outside the UI queue.
+                        requireStagingSpace(root, pending + size);
+                        photoBackupStageReservations.put(ref.key(), size);
+                    }
                     File out = new File(dir, displayName); temporary = new File(dir, "." + displayName + ".partial");
                     // Only the stale file, never discard(): this runs *before*
                     // the copy, and discard() also removes the parent once it is
@@ -875,7 +891,8 @@ public class MainActivity extends AppCompatActivity {
                     // under the stream below, and every first attempt at an
                     // asset failed with ENOENT on its own .partial file.
                     temporary.delete();
-                    copyCapped(uri, temporary, PHOTO_BACKUP_STAGE_MAX_BYTES - existingBytes, cancelled, root);
+                    copyCapped(uri, temporary, size, cancelled, root);
+                    if (temporary.length() != size) throw new IOException("media asset size changed during staging; rediscover it before upload");
                     if (cancelled.get()) throw new IOException("media staging cancelled");
                     String after = mediaVersion(uri, ref.video);
                     if (!expected.equals(after)) throw new IOException("media asset changed during staging; rediscover it before upload");
@@ -890,11 +907,11 @@ public class MainActivity extends AppCompatActivity {
                 }
             } catch (Exception e) { Log.e(TAG, "Media staging failed", e); jsBridge.sendCallback(callbackId, null, e.getMessage() == null ? "could not stage media asset" : e.getMessage()); }
             finally {
-                if (!staged && temporary != null) discard(temporary);
-                if (ref != null && cancelled != null) {
+                if (owned && ref != null && cancelled != null) {
+                    boolean cleaned = staged || discardPhotoBackupTree(new File(photoBackupStageRoot(), ref.directoryName()));
                     stagingPhotoBackupAssets.remove(ref.key(), cancelled);
                     synchronized (photoBackupStageLock) {
-                        if (ref.key().equals(activePhotoBackupStageKey) && !staged) activePhotoBackupStageKey = null;
+                        if (!staged && cleaned) photoBackupStageReservations.remove(ref.key());
                     }
                 }
             }
@@ -913,21 +930,15 @@ public class MainActivity extends AppCompatActivity {
                         cancel = stagingPhotoBackupAssets.get(ref.key());
                         if (cancel != null) cancel.set(true);
                         stagedFile = stagedPhotoBackupAssets.remove(ref.key());
-                        // A completed file owns the slot even during the tiny
-                        // interval before the staging thread removes its cancel
-                        // marker. If there is no work at all, release is simply
-                        // idempotent. An active copy clears the slot in its own
-                        // finally block after it observes cancellation.
-                        if ((stagedFile != null || cancel == null)
-                                && ref.key().equals(activePhotoBackupStageKey)) {
-                            activePhotoBackupStageKey = null;
+                        // Keep deletion and reservation release atomic against
+                        // a new stage or a duplicate release of this asset.
+                        boolean removed = stagedFile == null || discardPhotoBackupFile(stagedFile);
+                        if (cancel == null || stagedFile != null) {
+                            removed = discardPhotoBackupTree(new File(photoBackupStageRoot(), ref.directoryName())) && removed;
                         }
+                        if (!removed) throw new IOException("could not remove staged media asset");
+                        if (cancel == null || stagedFile != null) photoBackupStageReservations.remove(ref.key());
                     }
-                    boolean removed = stagedFile == null || discardPhotoBackupFile(stagedFile);
-                    if (cancel == null || stagedFile != null) {
-                        removed = discardPhotoBackupTree(new File(photoBackupStageRoot(), ref.directoryName())) && removed;
-                    }
-                    if (!removed) throw new IOException("could not remove staged media asset");
                 }
             } catch (Exception e) {
                 releaseError = e.getMessage() == null ? "could not remove staged media asset" : e.getMessage();
@@ -963,12 +974,20 @@ public class MainActivity extends AppCompatActivity {
     // resolved path verifiable by Go without exposing Context cache paths.
     private File photoBackupStageRoot() { return new File(new File(getFilesDir(), "TDrive"), "photo-backup-stage"); }
 
-    private long stageBytes(File root) {
+    // Called while holding photoBackupStageLock. A failed cold-start cleanup
+    // must not make abandoned files disappear from the on-disk budget.
+    private long unreservedStageBytes(File root) {
         if (!root.isDirectory()) return 0;
         long total = 0;
         File[] entries = root.listFiles();
         if (entries == null) return 0;
         for (File entry : entries) {
+            boolean reserved = false;
+            for (String key : photoBackupStageReservations.keySet()) {
+                MediaRef ref = MediaRef.parse(key);
+                if (ref != null && photoBackupStageReservations.get(key) > 0 && entry.getName().equals(ref.directoryName())) { reserved = true; break; }
+            }
+            if (reserved) continue;
             File[] files = entry.isDirectory() ? entry.listFiles() : null;
             if (files == null) { total += entry.length(); continue; }
             for (File file : files) total += Math.max(0, file.length());
