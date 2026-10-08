@@ -347,16 +347,18 @@
                 aria-setsize={visibleRows.length}
                 title="Creating..."
             >
-                <div class="row-name" title={row.name}>
-                    <span class="folder-chip" aria-hidden="true">
-                        <FolderIcon size={20} strokeWidth={1.75} aria-hidden="true" />
-                    </span>
-                    <span class="row-text">
-                        {@render phoneLabel(row.name, false)}
-                        <span class="row-sub"><span class="row-sub-text">Creating...</span><span class="pending-indicator" aria-hidden="true"><LoaderCircleIcon size={12} strokeWidth={2.25} aria-hidden="true" /></span></span>
-                    </span>
+                <div class="row-swipe-content">
+                    <div class="row-name" title={row.name}>
+                        <span class="folder-chip" aria-hidden="true">
+                            <FolderIcon size={20} strokeWidth={1.75} aria-hidden="true" />
+                        </span>
+                        <span class="row-text">
+                            {@render phoneLabel(row.name, false)}
+                            <span class="row-sub"><span class="row-sub-text">Creating...</span><span class="pending-indicator" aria-hidden="true"><LoaderCircleIcon size={12} strokeWidth={2.25} aria-hidden="true" /></span></span>
+                        </span>
+                    </div>
+                    <div class="row-actions"></div>
                 </div>
-                <div class="row-actions"></div>
             </div>
         {:else}
             {@const selected = $selectedFileRowKeys.has(row.selectionKey)}
@@ -384,65 +386,67 @@
                 ondblclick={(event) => onRowDoubleClick(event, row)}
                 onkeydown={onGridRowKeydown}
             >
-                <div class="row-name" title={row.name}>
-                    {#if selecting}
-                        <span class="row-check" aria-hidden="true">
-                            <CheckIcon size={14} strokeWidth={3} aria-hidden="true" />
-                        </span>
-                    {/if}
-                    {#if row.kind === 'folder'}
-                        <span class="folder-chip" aria-hidden="true">
-                            <FolderIcon size={20} strokeWidth={1.75} aria-hidden="true" />
-                        </span>
-                    {:else}
-                        {@render fileIcon(row, 1.75)}
-                    {/if}
-                    <span class="row-text">
-                        {@render phoneLabel(row.name, row.kind === 'file')}
-                        {#if meta || (row.kind === 'file' && (row.encrypted || row.uploaderChip?.firstName))}
-                            <span class="row-sub">
-                                {#if meta}
-                                    <span class="row-sub-text">{meta}</span>
-                                {/if}
-                                {#if row.kind === 'file' && row.encrypted}
-                                    <span class="file-lock-badge" title="Encrypted" aria-label="Encrypted">
-                                        <LockKeyholeIcon size={12} strokeWidth={2} aria-hidden="true" />
-                                    </span>
-                                {/if}
-                                {#if row.kind === 'file' && row.uploaderChip?.firstName}
-                                    <span class="uploader-chip">
-                                        <span class="uploader-initials" aria-hidden="true">{row.uploaderChip.initials}</span>
-                                        {row.uploaderChip.firstName}
-                                    </span>
-                                {/if}
+                <div class="row-swipe-content">
+                    <div class="row-name" title={row.name}>
+                        {#if selecting}
+                            <span class="row-check" aria-hidden="true">
+                                <CheckIcon size={14} strokeWidth={3} aria-hidden="true" />
                             </span>
                         {/if}
-                        {#if mobile && stateInfo.needsExplanation}
-                            <span class="row-explain" data-tone={stateInfo.tone}>{stateInfo.detail}</span>
+                        {#if row.kind === 'folder'}
+                            <span class="folder-chip" aria-hidden="true">
+                                <FolderIcon size={20} strokeWidth={1.75} aria-hidden="true" />
+                            </span>
+                        {:else}
+                            {@render fileIcon(row, 1.75)}
                         {/if}
-                    </span>
-                </div>
-                {#if mobile}
-                    <div class="row-status">
-                        <ItemStatus state={state} onOpenQueue={() => activeTab.set('transfers')} />
+                        <span class="row-text">
+                            {@render phoneLabel(row.name, row.kind === 'file')}
+                            {#if meta || (row.kind === 'file' && (row.encrypted || row.uploaderChip?.firstName))}
+                                <span class="row-sub">
+                                    {#if meta}
+                                        <span class="row-sub-text">{meta}</span>
+                                    {/if}
+                                    {#if row.kind === 'file' && row.encrypted}
+                                        <span class="file-lock-badge" title="Encrypted" aria-label="Encrypted">
+                                            <LockKeyholeIcon size={12} strokeWidth={2} aria-hidden="true" />
+                                        </span>
+                                    {/if}
+                                    {#if row.kind === 'file' && row.uploaderChip?.firstName}
+                                        <span class="uploader-chip">
+                                            <span class="uploader-initials" aria-hidden="true">{row.uploaderChip.initials}</span>
+                                            {row.uploaderChip.firstName}
+                                        </span>
+                                    {/if}
+                                </span>
+                            {/if}
+                            {#if mobile && stateInfo.needsExplanation}
+                                <span class="row-explain" data-tone={stateInfo.tone}>{stateInfo.detail}</span>
+                            {/if}
+                        </span>
                     </div>
-                {/if}
-                <div class={`row-actions${row.actionsInline ? ' is-inline' : ''}`}>
-                    {#if row.actionsInline}
-                        <!-- Few, important, and with no menu behind them, so the
-                             phone shows them the way the desktop does rather
-                             than hiding them in a sheet built for a live item. -->
-                        {@render inlineActions(row, 20)}
-                    {:else}
-                        <button
-                            class="action-icon row-more"
-                            type="button"
-                            aria-label={`More actions for ${row.name}`}
-                            aria-haspopup="menu"
-                        >
-                            <EllipsisIcon size={20} strokeWidth={2} aria-hidden="true" />
-                        </button>
+                    {#if mobile}
+                        <div class="row-status">
+                            <ItemStatus state={state} onOpenQueue={() => activeTab.set('transfers')} />
+                        </div>
                     {/if}
+                    <div class={`row-actions${row.actionsInline ? ' is-inline' : ''}`}>
+                        {#if row.actionsInline}
+                            <!-- Few, important, and with no menu behind them, so the
+                                 phone shows them the way the desktop does rather
+                                 than hiding them in a sheet built for a live item. -->
+                            {@render inlineActions(row, 20)}
+                        {:else}
+                            <button
+                                class="action-icon row-more"
+                                type="button"
+                                aria-label={`More actions for ${row.name}`}
+                                aria-haspopup="menu"
+                            >
+                                <EllipsisIcon size={20} strokeWidth={2} aria-hidden="true" />
+                            </button>
+                        {/if}
+                    </div>
                 </div>
                 {#if mobile && !row.actionsInline}
                     <!-- Revealed by a trailing swipe. Delete is available only

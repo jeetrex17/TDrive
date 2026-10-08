@@ -122,7 +122,9 @@ test('a trailing file swipe reveals Move and a confirmed Delete', async ({ page 
     const row = page.locator('#file-list .drive-row[data-name="notes.txt"]');
     await expect(row).toBeVisible();
     const bounds = await row.boundingBox();
+    const nameBounds = await row.locator('.row-name').boundingBox();
     if (!bounds) throw new Error('file row is not visible');
+    if (!nameBounds) throw new Error('file name is not visible');
 
     const startX = bounds.x + bounds.width - 72;
     const y = bounds.y + bounds.height / 2;
@@ -144,6 +146,11 @@ test('a trailing file swipe reveals Move and a confirmed Delete', async ({ page 
     await expect(row).toHaveClass(/is-swiped/);
     await expect(row.locator('[data-swipe-action="move"]')).toBeInViewport();
     await expect(row.locator('[data-swipe-action="delete"]')).toBeInViewport();
+    const openBounds = await row.boundingBox();
+    const openNameBounds = await row.locator('.row-name').boundingBox();
+    expect(openBounds?.x).toBeCloseTo(bounds.x, 0);
+    expect(openBounds?.width).toBeCloseTo(bounds.width, 0);
+    expect(openNameBounds?.x).toBeCloseTo(nameBounds.x, 0);
     await row.locator('[data-swipe-action="delete"]').click();
 
     const confirmation = page.getByRole('dialog', { name: 'Move file to Trash?' });

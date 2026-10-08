@@ -144,10 +144,12 @@ export function bindSwipeActions(host: HTMLElement, selector: string, options: S
     let samples: Array<{ x: number; t: number }> = [];
 
     function place(target: HTMLElement, offset: number, animate: boolean): void {
-        // No transition while the finger is down, so the row tracks 1:1 rather
-        // than easing along behind it.
-        target.style.transition = animate ? 'transform 220ms cubic-bezier(0.2, 0, 0, 1)' : 'none';
-        target.style.transform = offset === 0 ? '' : `translate3d(${offset}px, 0, 0)`;
+        // Reveal the panel over the trailing controls. The filename and card
+        // stay in place, so a long name never leaves an empty row behind.
+        const actions = target.querySelector<HTMLElement>(':scope > .row-swipe-actions');
+        if (!actions) return;
+        actions.style.transition = animate ? 'transform 220ms cubic-bezier(0.2, 0, 0, 1)' : 'none';
+        actions.style.transform = `translate3d(${Math.max(0, width + offset)}px, 0, 0)`;
     }
 
     function settle(target: HTMLElement, open: boolean): void {

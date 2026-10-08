@@ -1290,26 +1290,17 @@ html.mobile .item-status.is-tappable:focus-visible {
 }
 
 /* ============================ ROW SWIPE ============================ */
-/* The strip lives just past the row's trailing edge and travels with it, so a
-   swipe reveals the action rather than pushing it in from nowhere. The list
-   clips horizontally, which is what keeps it invisible until it is wanted. */
+/* The card and filename stay put while the actions travel in over the trailing
+   controls. The card's rounded edge clips the panel throughout the gesture. */
 html.mobile .row-swipe-actions {
     position: absolute;
-    /* Starts at the LIST's right edge, not the row's. The row is inset from
-       the list by the card margin, so a strip parked at the row's edge leaves
-       that margin's worth of itself showing past the list's clip -- a coloured
-       stripe down the whole screen, on every row, at rest. Pushing it out by
-       the same margin puts its resting position exactly on the clip boundary.
-       The open distance is unchanged: moving the row by the strip's own width
-       still lands the strip flush inside the list. */
-    left: calc(100% + var(--space-3));
+    right: 0;
     top: 0;
     bottom: 0;
     display: flex;
     align-items: stretch;
-    /* The list clips this while closed. Keep it in the row's paint layer:
-       a negative stack level puts the revealed buttons behind the list. */
-    z-index: 0;
+    z-index: 2;
+    transform: translateX(100%);
 }
 
 html.mobile .row-swipe-btn {
@@ -1338,14 +1329,10 @@ html.mobile .row-swipe-btn.is-delete {
     color: var(--color-danger);
 }
 
-/* The row paints over the strip while closed, so the strip cannot show through
-   the gap between cards. */
-html.mobile .file-row { background-clip: padding-box; }
-
 @media (prefers-reduced-motion: reduce) {
     /* The settle is travel, so it goes; the row still arrives where the
        gesture asked, just without the glide. */
-    html.mobile .file-row { transition: none !important; }
+    html.mobile .row-swipe-actions { transition: none !important; }
 }
 
 /* ============================ WIDE AND LANDSCAPE ============================ */
