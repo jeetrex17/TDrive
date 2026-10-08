@@ -117,67 +117,71 @@ test('an empty folder offers file upload, folder upload, and folder creation', a
     expect(await actions.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 });
 
-test('a trailing file swipe reveals Move and a confirmed Delete', async ({ page }) => {
-    const name = 'TDrive-v1.6.0-linux-amd64.zip';
-    await page.addInitScript(() => history.replaceState(null, '', '/?mobile=android'));
-    const mock = await bootTDrive(page, {
-        ...overrides,
-        GetFolderContents: resolves({ folders: [], files: rootContents.files.map((file, index) => ({
-            ...file,
-            name: index === 0 ? name : 'TDrive-v1.6.0-windows-amd64.zip',
-            size: 63_650_000,
-            encrypted: true,
-        })) }),
-    });
-    const row = page.locator('#file-list .drive-row').filter({ has: page.locator(`[title="${name}"]`) });
-    await expect(row).toBeVisible();
-    const bounds = await row.boundingBox();
-    const nameBounds = await row.locator('.row-name').boundingBox();
-    if (!bounds) throw new Error('file row is not visible');
-    if (!nameBounds) throw new Error('file name is not visible');
+for (const name of ['TDrive-v1.6.0-linux-amd64.zip', 'notes.txt']) {
+    test(`a trailing file swipe keeps ${name} identifiable and confirms Delete`, async ({ page }) => {
+        await page.addInitScript(() => history.replaceState(null, '', '/?mobile=android'));
+        const mock = await bootTDrive(page, {
+            ...overrides,
+            GetFolderContents: resolves({ folders: [], files: rootContents.files.map((file, index) => ({
+                ...file,
+                name: index === 0 ? name : 'TDrive-v1.6.0-windows-amd64.zip',
+                size: 63_650_000,
+                encrypted: true,
+            })) }),
+        });
+        const row = page.locator('#file-list .drive-row').filter({ has: page.locator(`[title="${name}"]`) });
+        await expect(row).toBeVisible();
+        const bounds = await row.boundingBox();
+        const nameBounds = await row.locator('.row-name').boundingBox();
+        if (!bounds) throw new Error('file row is not visible');
+        if (!nameBounds) throw new Error('file name is not visible');
 
-    const startX = bounds.x + bounds.width - 72;
-    const y = bounds.y + bounds.height / 2;
-    const touch = await page.context().newCDPSession(page);
-    try {
-        await touch.send('Emulation.setTouchEmulationEnabled', { enabled: true });
-        await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: startX, y, id: 1 }] });
-        for (let step = 1; step <= 6; step += 1) {
-            await touch.send('Input.dispatchTouchEvent', {
-                type: 'touchMove',
-                touchPoints: [{ x: startX - 190 * step / 6, y, id: 1 }],
-            });
+        const startX = bounds.x + bounds.width - 72;
+        const y = bounds.y + bounds.height / 2;
+        const touch = await page.context().newCDPSession(page);
+        try {
+            await touch.send('Emulation.setTouchEmulationEnabled', { enabled: true });
+            await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: startX, y, id: 1 }] });
+            for (let step = 1; step <= 6; step += 1) {
+                await touch.send('Input.dispatchTouchEvent', {
+                    type: 'touchMove',
+                    touchPoints: [{ x: startX - 190 * step / 6, y, id: 1 }],
+                });
+            }
+            await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+        } finally {
+            await touch.detach();
         }
-        await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
-    } finally {
-        await touch.detach();
-    }
 
-    await expect(row).toHaveClass(/is-swiped/);
-    await expect(row.locator('[data-swipe-action="move"]')).toBeInViewport();
-    await expect(row.locator('[data-swipe-action="delete"]')).toBeInViewport();
-    const openBounds = await row.boundingBox();
-    const openNameBounds = await row.locator('.row-name').boundingBox();
-    expect(openBounds?.x).toBeCloseTo(bounds.x, 0);
-    expect(openBounds?.width).toBeCloseTo(bounds.width, 0);
-    expect(openNameBounds?.x).toBeLessThan(nameBounds.x - 100);
-    const actions = await row.locator('.row-swipe-actions').boundingBox();
-    expect(actions?.width).toBeLessThanOrEqual(140);
-    const tail = await row.locator('.row-label-tail').boundingBox();
-    expect(tail!.x + tail!.width).toBeGreaterThan(bounds.x + 40);
-    await expect(row.locator('.row-more')).toHaveCSS('opacity', '0');
-    await row.locator('[data-swipe-action="delete"]').click();
+        await expect(row).toHaveClass(/is-swiped/);
+        await expect(row.locator('[data-swipe-action="move"]')).toBeInViewport();
+        await expect(row.locator('[data-swipe-action="delete"]')).toBeInViewport();
+        const openBounds = await row.boundingBox();
+        const openNameBounds = await row.locator('.row-name').boundingBox();
+        expect(openBounds?.x).toBeCloseTo(bounds.x, 0);
+        expect(openBounds?.width).toBeCloseTo(bounds.width, 0);
+        expect(openNameBounds?.x).toBeLessThan(nameBounds.x - 40);
+        const actions = await row.locator('.row-swipe-actions').boundingBox();
+        expect(actions?.width).toBeLessThanOrEqual(140);
+        const tail = await row.locator('.row-label-tail').boundingBox();
+        expect(tail!.x + tail!.width).toBeGreaterThan(bounds.x + 40);
+        const head = await row.locator('.row-label-head').boundingBox();
+        expect(head!.x).toBeGreaterThanOrEqual(bounds.x + 8);
+        expect(tail!.x + tail!.width).toBeLessThanOrEqual(actions!.x);
+        await expect(row.locator('.row-more')).toHaveCSS('opacity', '0');
+        await row.locator('[data-swipe-action="delete"]').click();
 
-    const confirmation = page.getByRole('dialog', { name: 'Move file to Trash?' });
-    await expect(confirmation).toContainText(name);
-    expect(await mock.calls('DeleteFile')).toHaveLength(0);
-    await confirmation.getByRole('button', { name: 'Cancel' }).click();
-    await expect(confirmation).toBeHidden();
-    await expect(row).toBeVisible();
-    await row.locator('.row-more').focus();
-    await expect(row).not.toHaveClass(/is-swiped/);
-    await expect(row.locator('.row-more')).toHaveCSS('opacity', '1');
-});
+        const confirmation = page.getByRole('dialog', { name: 'Move file to Trash?' });
+        await expect(confirmation).toContainText(name);
+        expect(await mock.calls('DeleteFile')).toHaveLength(0);
+        await confirmation.getByRole('button', { name: 'Cancel' }).click();
+        await expect(confirmation).toBeHidden();
+        await expect(row).toBeVisible();
+        await row.locator('.row-more').focus();
+        await expect(row).not.toHaveClass(/is-swiped/);
+        await expect(row.locator('.row-more')).toHaveCSS('opacity', '1');
+    });
+}
 
 test('Android keyboard events keep the app shell fixed while the join sheet makes room', async ({ page }) => {
     const mock = await bootMobile(page);

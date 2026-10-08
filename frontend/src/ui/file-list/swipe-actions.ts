@@ -135,6 +135,7 @@ export function bindSwipeActions(host: HTMLElement, selector: string, options: S
     let startX = 0;
     let startY = 0;
     let width = 0;
+    let contentTravel = 0;
     let claimed = false;
     // Read per gesture rather than once: the reserved edge moves when the phone
     // turns, and the shell outlives the rotation.
@@ -143,14 +144,27 @@ export function bindSwipeActions(host: HTMLElement, selector: string, options: S
     // finger that paused before lifting would otherwise read as a flick.
     let samples: Array<{ x: number; t: number }> = [];
 
+    function measureContentTravel(target: HTMLElement): number {
+        const content = target.querySelector<HTMLElement>('.row-swipe-content');
+        const text = content?.querySelector<HTMLElement>('.row-text');
+        if (!content || !text) return 0;
+        // Stop the text at the normal leading padding after its icon slides out.
+        return Math.max(0, text.offsetLeft - parseFloat(getComputedStyle(content).paddingLeft));
+    }
+
     function place(target: HTMLElement, offset: number, animate: boolean): void {
-        // Slide the file details while the outer card keeps its rounded edge
-        // and separator anchored to the neighbouring rows.
+        // Details slide until the filename reaches the leading padding. Further
+        // travel reveals actions at the trailing edge without cutting the name.
         const content = target.querySelector<HTMLElement>(':scope > .row-swipe-content');
         if (!content) return;
+        const travel = Math.max(0, -offset);
+        const slide = Math.min(travel, contentTravel);
         target.classList.toggle('is-revealing', offset < 0);
-        content.style.transition = animate ? 'transform 220ms cubic-bezier(0.2, 0, 0, 1)' : 'none';
-        content.style.transform = offset === 0 ? '' : `translate3d(${offset}px, 0, 0)`;
+        content.style.transition = animate
+            ? 'transform 220ms cubic-bezier(0.2, 0, 0, 1), clip-path 220ms cubic-bezier(0.2, 0, 0, 1)'
+            : 'none';
+        content.style.transform = offset === 0 ? '' : `translate3d(${-slide}px, 0, 0)`;
+        content.style.clipPath = `inset(0 ${travel - slide}px 0 0)`;
     }
 
     function settle(target: HTMLElement, open: boolean): void {
@@ -166,6 +180,7 @@ export function bindSwipeActions(host: HTMLElement, selector: string, options: S
         const target = openRow;
         openRow = null;
         width = options.openWidth(target);
+        contentTravel = measureContentTravel(target);
         place(target, 0, true);
         options.onSettle(target, false);
     }
@@ -226,6 +241,7 @@ export function bindSwipeActions(host: HTMLElement, selector: string, options: S
             if (claim === 'list') { row = null; pointerId = -1; return; }
             claimed = true;
             width = options.openWidth(row);
+            contentTravel = measureContentTravel(row);
             // Capture so tracking survives the finger leaving the row's bounds.
             row.setPointerCapture(event.pointerId);
         }
