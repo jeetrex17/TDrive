@@ -5,6 +5,7 @@ import { expect, test as base, type Page, type ConsoleMessage } from '@playwrigh
 type MockOutcome =
     | { kind: 'resolve'; value: unknown; delayMs: number }
     | { kind: 'reject'; message: string; delayMs: number }
+    | { kind: 'deferred'; key: string; value: unknown }
     | { kind: 'return'; value: unknown };
 
 export type MockPlan =
@@ -23,6 +24,7 @@ interface BrowserMock {
     unexpectedCalls: string[];
     emit: (eventName: string, ...args: unknown[]) => void;
     setPlan: (method: string, plan: MockPlan) => void;
+    release: (key: string) => void;
 }
 
 declare global {
@@ -33,6 +35,11 @@ declare global {
 
 export function resolves(value: unknown, delayMs = 0): MockPlan {
     return { kind: 'resolve', value, delayMs };
+}
+
+/** Hold a response until the journey has established the competing user action. */
+export function deferred(key: string, value: unknown): MockPlan {
+    return { kind: 'deferred', key, value };
 }
 
 export function rejects(message: string, delayMs = 0): MockPlan {
@@ -163,6 +170,7 @@ export interface WailsMockHandle {
     calls(method?: string): Promise<MockCall[]>;
     emit(eventName: string, ...args: unknown[]): Promise<void>;
     setPlan(method: string, plan: MockPlan): Promise<void>;
+    release(key: string): Promise<void>;
 }
 
 export interface BootOptions {
@@ -205,6 +213,7 @@ export async function bootTDrive(
         let plans = configuredMethods;
         const calls: MockCall[] = [];
         const unexpectedCalls: string[] = [];
+        const pendingResponses = new Map<string, Array<() => void>>();
 
         const selectPlan = (plan: MockPlan, args: unknown[]): MockOutcome => {
             if (plan.kind === 'byFirstArg') {
@@ -313,6 +322,12 @@ export async function bootTDrive(
                 call.state = 'fulfilled';
                 return jsonResponse(200, plan.value);
             };
+            if (plan.kind === 'deferred') {
+                return new Promise<Response>((resolve) => {
+                    const pending = pendingResponses.get(plan.key) ?? [];
+                    pendingResponses.set(plan.key, [...pending, () => resolve(respond())]);
+                });
+            }
             if (plan.delayMs === 0) return Promise.resolve(respond());
             return new Promise<Response>((resolve) => {
                 window.setTimeout(() => resolve(respond()), plan.delayMs);
@@ -328,6 +343,12 @@ export async function bootTDrive(
         window.__wailsMock = {
             calls,
             unexpectedCalls,
+            release(key) {
+                const pending = pendingResponses.get(key);
+                if (!pending?.length) throw new Error(`wails-mock: no pending response for ${key}`);
+                pendingResponses.delete(key);
+                pending.forEach((respond) => respond());
+            },
             setPlan(method, plan) {
                 if (!Object.values(idToName).includes(method)) {
                     throw new Error(`wails-mock: no generated binding for ${method}`);
@@ -349,6 +370,7 @@ export async function bootTDrive(
     await page.goto(options.url ?? '/');
 
     return {
+        release: (key: string) => page.evaluate((name) => window.__wailsMock.release(name), key),
         setPlan: (method: string, plan: MockPlan) => page.evaluate(
             ([name, nextPlan]) => window.__wailsMock.setPlan(name, nextPlan),
             [method, plan] as const,
