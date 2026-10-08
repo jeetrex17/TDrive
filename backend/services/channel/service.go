@@ -12,13 +12,14 @@
 // approval-gated join records a transport error on the pending row and still
 // reports "pending", so a network blip never looks like a rejection. Leaving is
 // local-wins: the local row goes even if Telegram refuses, and the active drive
-// falls back to the personal one.
+// falls back to the personal one. A joined drive whose initial sync fails keeps
+// its membership and local row but reports an error so the invite can be retried.
 //
 // Access hashes are cached in the projection and rotate on their own: a call
 // that fails with a stale-peer error is retried exactly once against a freshly
 // resolved peer and the new hash is written back.
 //
-// Creating or joining switches the active drive as a side effect of success,
+// Creating or registering a joined drive switches the active drive,
 // and unlike its neighbours this service is constructed fresh per call because
 // it holds no state.
 package channel
@@ -26,6 +27,7 @@ package channel
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -36,6 +38,10 @@ import (
 
 type InitialSyncer interface {
 	InitialSyncEmptyChannel(ctx context.Context, channelID int64) error
+}
+
+type incrementalSyncer interface {
+	Incremental(ctx context.Context, channelID int64) error
 }
 
 type Service struct {
@@ -163,7 +169,7 @@ func (s *Service) JoinSharedDrive(ctx context.Context, inviteLink string) (JoinR
 
 	ch, err := s.registerJoinedSharedDrive(ctx, peer.ChannelID, peer.AccessHash, title, "")
 	if err != nil {
-		return JoinResult{}, err
+		return joinedResultAfterFailure(ch), err
 	}
 	_ = projection.DeletePendingJoin(s.DB, hash)
 	return JoinResult{Status: JoinStatusJoined, Channel: &ch}, nil
@@ -205,7 +211,7 @@ func (s *Service) CheckPendingJoin(ctx context.Context, inviteHash string) (Join
 		}
 		ch, err := s.registerJoinedSharedDrive(ctx, invite.ChannelID, invite.AccessHash, title, p.InviteLink)
 		if err != nil {
-			return JoinResult{}, err
+			return joinedResultAfterFailure(ch), err
 		}
 		_ = projection.DeletePendingJoin(s.DB, hash)
 		return JoinResult{Status: JoinStatusJoined, Channel: &ch}, nil
@@ -373,6 +379,16 @@ func (s *Service) pendingAfterCheckError(hash, message string) (JoinResult, erro
 	return JoinResult{Status: JoinStatusPending, Pending: &updated}, nil
 }
 
+// A failed history read does not undo accepted membership or its durable local
+// row. Backend callers retain the joined identity; frontend callers receive an
+// actionable error and can retry the invite without joining Telegram again.
+func joinedResultAfterFailure(ch projection.Channel) JoinResult {
+	if ch.ChannelID == 0 {
+		return JoinResult{}
+	}
+	return JoinResult{Status: JoinStatusJoined, Channel: &ch}
+}
+
 func (s *Service) registerJoinedSharedDrive(ctx context.Context, channelID, accessHash int64, title, inviteLink string) (projection.Channel, error) {
 	if channelID == 0 {
 		return projection.Channel{}, fmt.Errorf("channel id required")
@@ -396,8 +412,17 @@ func (s *Service) registerJoinedSharedDrive(ctx context.Context, channelID, acce
 	// Keep this synchronous so callers only return once the joined drive has
 	// projected whatever history exists.
 	if s.Sync != nil {
-		if err := s.Sync.InitialSyncEmptyChannel(ctx, channelID); err != nil {
-			fmt.Printf("initial sync failed for joined drive %d: %v\n", channelID, err)
+		err := s.Sync.InitialSyncEmptyChannel(ctx, channelID)
+		if errors.Is(err, projection.ErrChannelNotEmpty) {
+			// An earlier attempt can commit files before a later read fails.
+			// Resume through the existing incremental owner without rebuilding
+			// the projection or repeating the accepted Telegram join.
+			if syncer, ok := s.Sync.(incrementalSyncer); ok {
+				err = syncer.Incremental(ctx, channelID)
+			}
+		}
+		if err != nil {
+			return row, fmt.Errorf("joined drive, but initial sync failed. Retry this invite to load its files: %w", err)
 		}
 	}
 

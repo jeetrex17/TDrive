@@ -110,7 +110,7 @@ type HistoryMessage struct {
 	MediaSize          int64
 	DocumentName       string
 	DocumentAccessHash int64
-	DocumentID         int64
+	DocumentID         int64 // Photo ID for Telegram photos; document ID otherwise.
 	MimeType           string
 	Duration           float64 // seconds, from the video or audio attribute; 0 when unknown
 	NoForwards         bool

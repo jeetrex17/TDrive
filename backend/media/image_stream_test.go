@@ -238,6 +238,10 @@ func TestOpenImageRejectsStaleRevisionBeforeOpeningSession(t *testing.T) {
 	if !errors.Is(err, ErrStaleRevision) {
 		t.Fatalf("OpenImage stale revision error = %v, want ErrStaleRevision", err)
 	}
+	_, err = svc.OpenImage(context.Background(), testChannelID, 10, 0)
+	if !errors.Is(err, ErrStaleRevision) {
+		t.Fatalf("OpenImage zero revision error = %v, want ErrStaleRevision", err)
+	}
 	if calls := ranges.readCalls.Load(); calls != 0 {
 		t.Fatalf("stale image performed %d range reads", calls)
 	}

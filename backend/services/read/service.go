@@ -9,9 +9,10 @@
 // projection stays browsable.
 //
 // Two methods break the pattern deliberately. Listing Telegram's root bypasses
-// the projection and reads history live, filtering out multipart part documents
-// by parsing their TDX1 header; the frontend cannot do that itself because part
-// msg ids live in the parts table and never in the files table. And the orphan
+// the projection and reads history live, filtering out owned bodies with one
+// bounded projection query and excluding multipart headers before ingestion.
+// The frontend cannot do that itself because part msg ids live in the parts
+// table and never in the files table. And the orphan
 // listing is the broken-parent-chain bucket, seeded only from files that have a
 // parent, so a root-level file is never an orphan.
 //
@@ -90,6 +91,7 @@ type TelegramFile struct {
 	Size       int64
 	AccessHash int64
 	Date       int
+	UploaderID int64
 }
 
 func (s *Service) StorageUsed(channelID int64) (int64, error) {
@@ -288,6 +290,9 @@ func (s *Service) TelegramRootFiles(ctx context.Context, channelID int64) ([]Tel
 	if s.Peers == nil {
 		return nil, fmt.Errorf("peer resolver not ready")
 	}
+	if err := s.ready(); err != nil {
+		return nil, err
+	}
 	peer, err := s.Peers.ResolvePeer(ctx, channelID)
 	if err != nil {
 		return nil, err
@@ -296,29 +301,42 @@ func (s *Service) TelegramRootFiles(ctx context.Context, channelID int64) ([]Tel
 	if err != nil {
 		return nil, err
 	}
+	candidates := make([]int64, 0, len(messages))
+	for _, msg := range messages {
+		if msg.HasMedia {
+			candidates = append(candidates, msg.MsgID)
+		}
+	}
+	managed, err := projection.ManagedMsgIDsIn(ctx, s.DB, channelID, candidates)
+	if err != nil {
+		return nil, fmt.Errorf("read: filter Telegram root files: %w", err)
+	}
 
 	files := make([]TelegramFile, 0, len(messages))
 	for _, msg := range messages {
 		if !msg.HasMedia {
 			continue
 		}
-		// Multipart part documents are internal artifacts, not user files. They
-		// carry a TDX1 t=part header; skip them so they never surface at root.
-		// Their msg_ids live in file_parts, not files, so the frontend's
-		// unmanaged-file filter wouldn't otherwise exclude them.
-		if op, err := projection.Parse(projection.ExtractHeaderLine(msg.Text)); err == nil && op.Type == projection.OpFilePart {
+		if _, owned := managed[msg.MsgID]; owned {
 			continue
 		}
-		name := strings.TrimSpace(msg.DocumentName)
-		if name == "" {
-			name = "Unknown"
+		// Unsynced legacy uploads can already be opened from their document.
+		// Hidden bodies, encrypted uploads and malformed control captions must
+		// wait for their owning projection rather than appearing as raw files.
+		captionName, allowed := projection.RawAttachmentCaption(msg.Text, msg.MediaSize)
+		if !allowed {
+			continue
+		}
+		if captionName != "" {
+			msg.DocumentName = captionName
 		}
 		files = append(files, TelegramFile{
 			ID:         int(msg.MsgID),
-			Name:       name,
+			Name:       tgclient.MediaName(msg),
 			Size:       msg.MediaSize,
 			AccessHash: msg.DocumentAccessHash,
 			Date:       int(msg.Date),
+			UploaderID: msg.FromID,
 		})
 	}
 	return files, nil

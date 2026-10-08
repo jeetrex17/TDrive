@@ -204,6 +204,18 @@ func EnsureSchema(db *sql.DB) error {
 }
 
 func ensureCompatibleIndexes(db *sql.DB) error {
+	if dbTableHasColumns(db, "files", "channel_id", "content_msg_id") {
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_files_content_msg
+			ON files(channel_id, content_msg_id) WHERE content_msg_id > 0;`); err != nil {
+			return fmt.Errorf("projection: create files content-message index: %w", err)
+		}
+	}
+	if dbTableHasColumns(db, "hard_delete_plan_items", "channel_id", "msg_id") {
+		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_hard_delete_plan_items_msg
+			ON hard_delete_plan_items(channel_id, msg_id);`); err != nil {
+			return fmt.Errorf("projection: create hard-delete message index: %w", err)
+		}
+	}
 	if dbTableHasColumns(db, "files", "channel_id", "parent_id", "upload_time", "msg_id", "tombstoned") {
 		if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_files_channel_parent_latest
 			ON files(channel_id, parent_id, upload_time DESC, msg_id DESC)

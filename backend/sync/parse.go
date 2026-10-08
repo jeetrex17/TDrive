@@ -2,7 +2,6 @@ package sync
 
 import (
 	"cmp"
-	"fmt"
 	"log/slog"
 	"slices"
 	"strings"
@@ -88,10 +87,7 @@ func captionlessMediaOp(m tgclient.HistoryMessage) (projection.Op, string, bool)
 	if !m.HasMedia {
 		return projection.Op{}, "", false
 	}
-	name := strings.TrimSpace(m.DocumentName)
-	if name == "" {
-		name = fmt.Sprintf("Telegram file %d", m.MsgID)
-	}
+	name := tgclient.MediaName(m)
 	op := projection.Op{
 		Type:           projection.OpFileUpload,
 		Parent:         projection.RootParent,

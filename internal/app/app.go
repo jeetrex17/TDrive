@@ -180,6 +180,7 @@ type TDriveFile struct {
 	Size       int64  `json:"size"`
 	AccessHash int64  `json:"access_hash"`
 	Date       int    `json:"date"`
+	UploaderID int64  `json:"uploader_id"`
 }
 
 type PreviewPayload struct {
@@ -487,6 +488,7 @@ func (a *App) GetFileList() []TDriveFile {
 			Size:       f.Size,
 			AccessHash: f.AccessHash,
 			Date:       f.Date,
+			UploaderID: f.UploaderID,
 		})
 	}
 	return out
@@ -897,7 +899,7 @@ func (a *App) MsgToTdriveSystem(msgID int, name string, size int64, parentID str
 	if err != nil {
 		return operationFailure(err)
 	}
-	if err := svc.Meta(a.ActiveChannelID(), msgID, name, size, parentID); err != nil {
+	if err := svc.MetaContext(a.ctx, a.ActiveChannelID(), msgID, name, size, parentID); err != nil {
 		return operationFailure(err)
 	}
 	return operationSuccess()

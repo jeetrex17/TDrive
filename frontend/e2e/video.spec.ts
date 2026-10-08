@@ -149,6 +149,34 @@ test('plays a real file, and closing it releases the backend session', async ({ 
     await expect.poll(async () => (await mock.calls('CloseMedia')).length).toBeGreaterThan(0);
 });
 
+test('a forwarded video in a shared drive plays without a filesystem entry', async ({ page }) => {
+    await serveFixture(page);
+    const mock = await bootTDrive(page, {
+        ListChannels: resolves([
+            { id: 1, title: 'My Drive', kind: 'personal', is_active: false, invite_link: '' },
+            { id: 2, title: 'Shared files', kind: 'shared', is_active: true, invite_link: '' },
+        ]),
+        GetFolderContents: resolves({ folders: [], files: [] }),
+        GetAllFsMsgIDs: resolves([]),
+        GetFileList: resolves([{
+            name: VIDEO_FILE.name, size: VIDEO_FILE.size, id: VIDEO_FILE.msg_id,
+            date: VIDEO_FILE.upload_time, access_hash: 0,
+        }]),
+        GetMediaStats: resolves({ playback: {}, thumbnails: {} }),
+        UpdateMediaPlayback: resolves(null),
+        OpenMedia: resolves(opened({ info: { channel_id: 2, file_id: VIDEO_FILE.msg_id, source_kind: 'drive' } })),
+    });
+
+    await openTheVideo(page);
+    const player = page.locator('#video-player');
+    await expect.poll(() => player.evaluate((el: HTMLVideoElement) => el.readyState)).toBeGreaterThanOrEqual(1);
+    await expect.poll(() => player.evaluate((el: HTMLVideoElement) => el.duration)).toBeGreaterThan(0);
+    await expect(page.locator('#video-error')).toBeHidden();
+    expect(await mock.calls('OpenMedia')).toMatchObject([{ args: [VIDEO_FILE.msg_id], state: 'fulfilled' }]);
+    await page.locator('#video-close').click();
+    await expect.poll(async () => (await mock.calls('CloseMedia')).length).toBeGreaterThan(0);
+});
+
 for (const platform of ['android', 'ios'] as const) {
     test(`a touch drag scrubs the mobile timeline on ${platform}`, async ({ page, browserName }) => {
         await page.setViewportSize({ width: 390, height: 844 });
@@ -268,11 +296,17 @@ test('the speed control changes the element, not just the label', async ({ page 
     const rate = () => player.evaluate((el: HTMLVideoElement) => el.playbackRate);
     const speedButton = page.locator('#video-speed-button');
 
-    // The pill cycles rather than opening anything: one tap is the whole
-    // interaction, and it has to reach the element, not just relabel itself.
-    await speedButton.click();
-    await expect.poll(rate).toBeGreaterThan(1);
-    await expect(speedButton).toHaveText(new RegExp(`^${await rate()}x$`));
+    // A normal playback update can arrive during the single click. WebKit must
+    // keep the press/release target intact and still apply the next speed.
+    await speedButton.hover();
+    const box = await speedButton.boundingBox();
+    if (!box) throw new Error('Speed button has no bounds');
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await player.evaluate((el: HTMLVideoElement) => el.dispatchEvent(new Event('timeupdate')));
+    await page.mouse.up();
+    await expect.poll(rate).toBe(1.25);
+    await expect(speedButton).toHaveText('1.25x');
 
     // The exact rate lives in the settings panel, where the pill's cycle is
     // only a shortcut through the same state.

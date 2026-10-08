@@ -445,6 +445,16 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 				}
 			}
 		}
+	} else if media, ok := fullMsg.Media.(*tg.MessageMediaPhoto); ok {
+		ttlSeconds, _ = media.GetTTLSeconds()
+		if ref, err := mediaRefFromTG(InputPeer{}, int64(fullMsg.ID), fullMsg); err == nil {
+			hasMedia = true
+			mediaSize = ref.Size
+			documentName = ref.Name
+			documentID = ref.DocumentID
+			documentAccessHash = ref.AccessHash
+			mimeType = "image/jpeg"
+		}
 	} else if _, ok := fullMsg.Media.(*tg.MessageMediaPaidMedia); ok {
 		paid = true
 	}
@@ -569,15 +579,21 @@ func (g *Gotd) GetChannelMessage(ctx context.Context, peer InputPeer, msgID int6
 func (g *Gotd) GetFileDocument(ctx context.Context, peer InputPeer, msgID int64) (FileDocument, error) {
 	var info FileDocument
 	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
-		doc, name, err := getDocumentByMessageID(ctx, api, peer, msgID)
+		messages, err := channelMessages(ctx, api, peer, []int64{msgID})
+		if err != nil {
+			return err
+		}
+		ref, err := mediaRefFromTG(peer, msgID, messages[msgID])
 		if err != nil {
 			return err
 		}
 		info = FileDocument{
-			MsgID:  msgID,
-			Name:   name,
-			Size:   doc.Size,
-			Thumbs: fileThumbsFromDocument(doc),
+			MsgID: msgID,
+			Name:  ref.Name,
+			Size:  ref.Size,
+		}
+		if doc, _, err := documentOf(messages[msgID]); err == nil {
+			info.Thumbs = fileThumbsFromDocument(doc)
 		}
 		return nil
 	})
@@ -592,7 +608,7 @@ func (g *Gotd) GetFileDocument(ctx context.Context, peer InputPeer, msgID int64)
 func (g *Gotd) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w io.Writer, onProgress func(done, total int64)) error {
 	slog.Debug("tgclient: DownloadFile starting", "channel_id", peer.ChannelID, "msg_id", msgID)
 	err := g.runClient(ctx, func(ctx context.Context, client *telegram.Client) error {
-		doc, name, err := getDocumentByMessageID(ctx, client.API(), peer, msgID)
+		ref, err := getMediaRefByMessageID(ctx, client.API(), peer, msgID)
 		if err != nil {
 			return err
 		}
@@ -600,7 +616,7 @@ func (g *Gotd) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w 
 		if onProgress != nil {
 			dst = &progressWriter{
 				w:          w,
-				total:      doc.Size,
+				total:      ref.Size,
 				onProgress: onProgress,
 			}
 		}
@@ -610,7 +626,7 @@ func (g *Gotd) DownloadFile(ctx context.Context, peer InputPeer, msgID int64, w 
 		}
 		defer release()
 
-		return g.newDownload(documentRefFromTG(peer, msgID, doc, name)).stream(ctx, dst)
+		return g.newDownload(ref).stream(ctx, dst)
 	})
 	if err != nil {
 		slog.Error("tgclient: DownloadFile failed", "channel_id", peer.ChannelID, "msg_id", msgID, "error", err)
@@ -624,7 +640,7 @@ func (g *Gotd) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, 
 	slog.Debug("tgclient: DownloadFileAt starting", "channel_id", peer.ChannelID, "msg_id", msgID, "base_offset", baseOffset)
 	var retried int64
 	err := g.runClient(ctx, func(ctx context.Context, client *telegram.Client) error {
-		doc, name, err := getDocumentByMessageID(ctx, client.API(), peer, msgID)
+		ref, err := getMediaRefByMessageID(ctx, client.API(), peer, msgID)
 		if err != nil {
 			return err
 		}
@@ -640,18 +656,18 @@ func (g *Gotd) DownloadFileAt(ctx context.Context, peer InputPeer, msgID int64, 
 		if onProgress != nil {
 			dst = &progressWriterAt{
 				w:          dst,
-				total:      doc.Size,
+				total:      ref.Size,
 				onProgress: onProgress,
 			}
 		}
-		download := g.newDownload(documentRefFromTG(peer, msgID, doc, name))
+		download := g.newDownload(ref)
 		err = download.parallel(ctx, dst, threads)
 		retried = download.retries.Load()
 		if err != nil {
 			return err
 		}
 		if onProgress != nil {
-			onProgress(doc.Size, doc.Size)
+			onProgress(ref.Size, ref.Size)
 		}
 		return nil
 	})

@@ -108,9 +108,10 @@ it('merges root files without duplicating projected messages and shows plaintext
     expect(list.querySelector('[data-name="secret.txt"]')?.textContent).toContain('25 B');
     expect(list.querySelector('[data-name="Work"]')?.textContent).toContain('4 KB');
     expect(state.telegramRootCacheDriveKey).toBe('1');
+    expect(api.getAllFsMsgIds).not.toHaveBeenCalled();
 });
 
-it('keeps direct file de-duplication when the full index and folder stats fail', async () => {
+it('keeps direct file de-duplication when folder stats fail without loading the full index', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     api.getFolderContents.mockResolvedValue({ folders: [{ id: 'folder', name: 'Work', parentId: '' }], files: [file()] });
     api.getFileList.mockResolvedValue([{ msgId: 41, name: 'duplicate.txt', size: 1, date: 1, accessHash: 0 }]);
@@ -120,6 +121,7 @@ it('keeps direct file de-duplication when the full index and folder stats fail',
     await expectText('report.txt');
     expect(list.querySelectorAll('[data-type="file"]')).toHaveLength(1);
     expect(list.textContent).toContain('Work');
+    expect(api.getAllFsMsgIds).not.toHaveBeenCalled();
 });
 
 it('loads nested folders without fetching raw Telegram root files', async () => {
@@ -240,6 +242,21 @@ it.each([
     expect(row.canRename).toBe(allowed);
     expect(row.parentId).toBe('nested');
     expect(canOwnerActOnFile(null)).toBe(false);
+});
+
+it.each([7, 8, 0, undefined])('uses forwarded root sender %s for shared-drive rename permission', async (uploaderId) => {
+    state.activeChannel = { id: 1, title: 'Shared', kind: 'shared' };
+    state.myUserID = 7;
+    api.getFolderContents.mockResolvedValue({ folders: [], files: [] });
+    api.getFileList.mockResolvedValue([{ msgId: 99, name: 'forwarded.pdf', size: 10, date: 1, accessHash: 0, uploaderId }]);
+    refreshFiles();
+    await expectText('forwarded.pdf');
+    const view = get(fileListView);
+    if (view.kind !== 'rows') throw new Error('Forwarded file list did not load');
+    const row = view.rows.find((candidate) => candidate.kind === 'file' && candidate.id === '99');
+    if (!row || row.kind !== 'file') throw new Error('Forwarded row missing');
+    expect(row.source).toBe('tg');
+    expect(row.canRename).toBe(uploaderId === 7);
 });
 
 it('focuses and selects a requested file after its row mounts', async () => {

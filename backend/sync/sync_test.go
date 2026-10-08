@@ -526,6 +526,15 @@ func TestParseHistoryPageCanAdoptCaptionlessMedia(t *testing.T) {
 	}
 }
 
+func TestCaptionlessMediaUsesMimeNameConsistentWithTelegramListing(t *testing.T) {
+	parsed := ParseHistoryPageWithOptions([]tgclient.HistoryMessage{{
+		MsgID: 42, HasMedia: true, MediaSize: 32, MimeType: "application/pdf",
+	}}, ParseOptions{AdoptCaptionlessMedia: true})
+	if len(parsed) != 1 || parsed[0].Op.Name != "Telegram file 42.pdf" {
+		t.Fatalf("parsed = %+v, want one PDF with a usable filename", parsed)
+	}
+}
+
 func TestParseHistoryPageDoesNotAdoptMalformedTDXMedia(t *testing.T) {
 	parsed := ParseHistoryPageWithOptions([]tgclient.HistoryMessage{{
 		MsgID:        42,

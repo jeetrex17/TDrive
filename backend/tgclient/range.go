@@ -20,13 +20,19 @@ type DocumentRef struct {
 	MsgID         int64
 	Size          int64
 	Name          string
-	DocumentID    int64
+	DocumentID    int64 // Telegram document ID, or photo ID when PhotoSizeType is set.
 	AccessHash    int64
 	FileReference []byte
 	// DCID is the data center holding the document's bytes. Range reads go
 	// straight there over a pooled connection; zero means unknown, which falls
 	// back to the primary connection and Telegram's FILE_MIGRATE redirect.
 	DCID int
+	// PhotoSizeType selects the full JPEG variant of a Telegram photo. An empty
+	// value keeps the existing document file-location behavior.
+	PhotoSizeType string
+	// InlineBytes holds a cached photo variant when Telegram includes its JPEG
+	// directly. Extraction bounds this fallback to one range block.
+	InlineBytes []byte
 }
 
 // DocumentBatchResolver resolves several messages of one channel in a single

@@ -2,6 +2,7 @@ import {
     bootTDrive,
     galleryPage,
     byFirstArg,
+    deferred,
     expect,
     rejects,
     resolves,
@@ -189,27 +190,29 @@ test('windows large file lists while preserving endpoint keyboard focus', async 
 });
 
 test('returning from Photos keeps the current file list while it refreshes', async ({ page }) => {
+    const contents = {
+        folders: [
+            { id: 'alpha', name: 'Alpha', parent_id: '' },
+            { id: 'zulu', name: 'Zulu', parent_id: '' },
+        ],
+        files: [{
+            name: 'contract.txt',
+            size: 2048,
+            msg_id: 41,
+            parent_id: '',
+            upload_time: 1_735_689_600,
+            uploader_id: 7,
+            encrypted: false,
+            plaintext_size: 0,
+        }],
+    };
+    const stats = [
+        { id: 'alpha', bytes: 1024, latestUpload: 1_700_000_000 },
+        { id: 'zulu', bytes: 2048, latestUpload: 1_735_689_600 },
+    ];
     const mock = await bootTDrive(page, {
-        GetFolderContents: resolves({
-            folders: [
-                { id: 'alpha', name: 'Alpha', parent_id: '' },
-                { id: 'zulu', name: 'Zulu', parent_id: '' },
-            ],
-            files: [{
-                name: 'contract.txt',
-                size: 2048,
-                msg_id: 41,
-                parent_id: '',
-                upload_time: 1_735_689_600,
-                uploader_id: 7,
-                encrypted: false,
-                plaintext_size: 0,
-            }],
-        }, 200),
-        GetFolderStats: resolves([
-            { id: 'alpha', bytes: 1024, latestUpload: 1_700_000_000 },
-            { id: 'zulu', bytes: 2048, latestUpload: 1_735_689_600 },
-        ], 400),
+        GetFolderContents: resolves(contents),
+        GetFolderStats: resolves(stats),
     });
 
     const file = page.getByRole('row', { name: 'File: contract.txt' });
@@ -219,11 +222,11 @@ test('returning from Photos keeps the current file list while it refreshes', asy
     await expect(folders.nth(0)).toHaveAttribute('data-name', 'Zulu');
     await expect(folders.nth(0).locator('.folder-size')).toHaveText('2 KB');
     const initialFolderRequests = (await mock.calls('GetFolderContents')).length;
+    await mock.setPlan('GetFolderContents', deferred('foreground-files', contents));
     await page.keyboard.press('Control+R');
     await expect.poll(async () => (await mock.calls('GetFolderContents'))[initialFolderRequests]?.state).toBe('pending');
     await page.getByRole('button', { name: 'Photos' }).click();
     await expect(page.locator('#gallery-view')).toBeVisible();
-    const loadingStates: string[] = [];
     await page.locator('#file-list').evaluate((list) => {
         const states: string[] = window.__fileListLoadingStates = [];
         const snapshots: string[] = window.__fileListSnapshots = [];
@@ -236,20 +239,41 @@ test('returning from Photos keeps the current file list while it refreshes', asy
         new MutationObserver(record).observe(list, { childList: true, subtree: true, characterData: true });
     });
 
+    const refreshedContents = {
+        ...contents,
+        files: [...contents.files, { ...contents.files[0], name: 'refreshed.txt', msg_id: 42 }],
+    };
+    const refreshedStats = stats.map((stat) => stat.id === 'zulu' ? { ...stat, bytes: 3072 } : stat);
+    await mock.setPlan('GetFolderContents', deferred('return-files', refreshedContents));
+    await mock.setPlan('GetFolderStats', deferred('return-stats', refreshedStats));
+    const returnRequest = (await mock.calls('GetFolderContents')).length;
     await page.getByRole('button', { name: 'Personal', exact: true }).click();
-    await page.waitForTimeout(800);
-    loadingStates.push(...await page.evaluate(() => window.__fileListLoadingStates ?? []));
+    await expect.poll(async () => (await mock.calls('GetFolderContents'))[returnRequest]?.state).toBe('pending');
+    await expect(file).toBeVisible();
+    await expect(folders.nth(0).locator('.folder-size')).toHaveText('2 KB');
+
+    await mock.release('foreground-files');
+    await mock.release('return-files');
+    await expect.poll(async () => (await mock.calls('GetFolderStats')).filter((call) => call.state === 'pending').length).toBe(2);
+    await expect(file).toBeVisible();
+    await expect(page.getByRole('row', { name: 'File: refreshed.txt' })).toHaveCount(0);
+    await mock.release('return-stats');
+    // New content and stats prove this refresh painted before inspecting every
+    // intermediate DOM snapshot for loading placeholders or unstable ordering.
+    await expect(page.getByRole('row', { name: 'File: refreshed.txt' })).toBeVisible();
+    await expect(folders.nth(0).locator('.folder-size')).toHaveText('3 KB');
+    const loadingStates = await page.evaluate(() => window.__fileListLoadingStates ?? []);
     const snapshots = await page.evaluate(() => window.__fileListSnapshots ?? []);
 
     expect(loadingStates).toEqual([]);
     expect(snapshots.some((snapshot) => snapshot.includes('Alpha:—:…') || snapshot.indexOf('Alpha:') < snapshot.indexOf('Zulu:'))).toBe(false);
     await expect(file).toBeVisible();
     await expect(folders.nth(0)).toHaveAttribute('data-name', 'Zulu');
-    await expect(folders.nth(0).locator('.folder-size')).toHaveText('2 KB');
+    await expect(folders.nth(0).locator('.folder-size')).toHaveText('3 KB');
 });
 
 test('a Photos click wins over a pending drive switch', async ({ page }) => {
-    await bootTDrive(page, {
+    const mock = await bootTDrive(page, {
         ListChannels: resolves([
             PERSONAL_CHANNEL,
             {
@@ -260,16 +284,20 @@ test('a Photos click wins over a pending drive switch', async ({ page }) => {
                 invite_link: 'https://example.test/invite',
             },
         ]),
-        SetActiveChannel: resolves(null, 400),
+        SetActiveChannel: deferred('drive-switch', null),
     });
 
     await expect(page.locator('#success-screen')).toBeVisible();
     await page.getByRole('button', { name: 'Team', exact: true }).click();
+    await expect.poll(async () => (await mock.calls('SetActiveChannel'))[0]?.state).toBe('pending');
     await page.getByRole('button', { name: 'Photos' }).click();
 
     await expect(page.locator('#gallery-view')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Photos' })).toHaveAttribute('aria-current', 'page');
-    await page.waitForTimeout(500);
+    await mock.release('drive-switch');
+    // Background sync starts after the switch has applied its navigation and
+    // refreshed the selected view, so this cannot pass on the pre-switch UI.
+    await expect.poll(async () => (await mock.calls('SyncChannel')).find((call) => call.args[0] === 2)?.state).toBe('fulfilled');
     await expect(page.locator('#gallery-view')).toBeVisible();
     await expect(page.getByRole('button', { name: 'Photos' })).toHaveAttribute('aria-current', 'page');
 });
@@ -329,6 +357,31 @@ test('context menus retain vertical actions, render notifications, and restore f
     await page.keyboard.press('Escape');
     await expect(dialog).toBeHidden();
     await expect(newDrive).toBeFocused();
+});
+
+test('the sender can rename a forwarded root attachment in a shared drive', async ({ page }) => {
+    const mock = await bootTDrive(page, {
+        ListChannels: resolves([
+            { ...PERSONAL_CHANNEL, is_active: false },
+            { id: 2, title: 'Shared files', kind: 'shared', is_active: true, invite_link: '' },
+        ]),
+        GetFolderContents: resolves({ folders: [], files: [] }),
+        GetFileList: resolves([{ id: 701, name: 'forwarded.pdf', size: 321, date: 1_735_689_600, access_hash: 0, uploader_id: 7 }]),
+        ResolveUsernames: resolves({ '7': 'Test User' }),
+        MsgToTdriveSystem: resolves({ ok: true }),
+        RenameFile: resolves({ ok: true }),
+    });
+    const row = page.getByRole('row', { name: 'File: forwarded.pdf' });
+    await expect(row).toBeVisible();
+    await row.click();
+    await page.keyboard.press('F2');
+    const dialog = page.getByRole('dialog', { name: 'Rename file' });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('textbox', { name: 'File name' }).fill('renamed.pdf');
+    await dialog.getByRole('button', { name: 'Rename', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    expect(await mock.calls('MsgToTdriveSystem')).toMatchObject([{ args: [701, 'forwarded.pdf', 321, ''], state: 'fulfilled' }]);
+    expect(await mock.calls('RenameFile')).toMatchObject([{ args: [701, 'renamed.pdf'], state: 'fulfilled' }]);
 });
 
 test('gallery loads binary thumbnails and one explicitly opened original stream', async ({ page }) => {
@@ -400,15 +453,24 @@ test('mixed gallery loads video thumbnails before opening the streaming player',
 
 test('a late original completion cannot overwrite rapid gallery navigation', async ({ page }) => {
     await routeRenditions(page);
-    await bootTDrive(page, galleryPlans([FIRST_PHOTO, SECOND_PHOTO], true));
+    const mock = await bootTDrive(page, {
+        ...galleryPlans([FIRST_PHOTO, SECOND_PHOTO]),
+        OpenOriginalImage: byFirstArg({
+            [FIRST_PHOTO.msg_id]: deferred('first-original', openedOriginal(FIRST_PHOTO, RED_BASE64)),
+            [SECOND_PHOTO.msg_id]: resolves(openedOriginal(SECOND_PHOTO, BLUE_BASE64)),
+        }),
+    });
     await page.getByRole('button', { name: 'Photos' }).click();
     await expect(page.getByRole('button', { name: 'first.jpg' }).locator('img')).toHaveAttribute('src', /^blob:/);
     await page.getByRole('button', { name: 'first.jpg' }).click();
     await expect(page.getByRole('dialog', { name: 'first.jpg' })).toBeVisible();
+    await expect.poll(async () => (await mock.calls('OpenOriginalImage')).find((call) => call.args[0] === FIRST_PHOTO.msg_id)?.state).toBe('pending');
     await page.getByRole('button', { name: 'Next image' }).click();
     await expect(page.getByRole('dialog', { name: 'second.jpg' })).toBeVisible();
     await expect(page.locator('#preview-image')).toHaveAttribute('src', originalImageUrl(BLUE_BASE64));
-    await page.waitForTimeout(1100);
+    await mock.release('first-original');
+    // Closing the late capability proves the viewer processed the stale result.
+    await expect.poll(async () => (await mock.calls('CloseMedia')).find((call) => call.args[0] === 'original-101')?.state).toBe('fulfilled');
     await expect(page.locator('#preview-image')).toHaveAttribute('src', originalImageUrl(BLUE_BASE64));
     await expect(page.locator('#preview-filename')).toHaveText('second.jpg');
 });

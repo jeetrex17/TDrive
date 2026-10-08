@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
     search: vi.fn(),
     getFileList: vi.fn(),
-    getAllFsMsgIds: vi.fn(async () => [] as number[]),
     refreshFiles: vi.fn(),
     renderFileState: vi.fn(),
     renderFileListRows: vi.fn(),
@@ -21,7 +20,6 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../api', () => ({
-    getAllFsMsgIds: mocks.getAllFsMsgIds,
     getFileList: mocks.getFileList,
     search: mocks.search,
     isMobilePlatform: mocks.isMobilePlatform,
@@ -85,8 +83,6 @@ mocks.search.mockReset();
 mocks.search.mockResolvedValue([]);
 mocks.getFileList.mockReset();
 mocks.getFileList.mockResolvedValue([]);
-mocks.getAllFsMsgIds.mockReset();
-mocks.getAllFsMsgIds.mockResolvedValue([]);
 mocks.refreshFiles.mockReset();
 mocks.deselectRow.mockReset();
 mocks.isRowSelected.mockReset();
@@ -189,13 +185,10 @@ describe('search scheduling', () => {
         expect(mocks.enqueueDownload).toHaveBeenCalledWith(42, 'plan.bin', 10, 1);
     });
 
-    it('leaves a deleted file out of the results instead of offering the raw message', async () => {
+    it('trusts the raw root API to leave deleted managed files out of results', async () => {
         mocks.buildFileRow.mockClear();
         state.searchQuery = 'ghost';
-        // Deleted: no hit for it any more, but its Telegram message is still
-        // TDrive's until the trash purges it.
-        mocks.getFileList.mockResolvedValue([{ msgId: 77, name: 'ghost.bin', size: 10, date: 1 }]);
-        mocks.getAllFsMsgIds.mockResolvedValue([77]);
+        mocks.getFileList.mockResolvedValue([]);
 
         await runGlobalSearch();
 
@@ -206,7 +199,6 @@ describe('search scheduling', () => {
         mocks.buildFileRow.mockClear();
         state.searchQuery = 'ghost';
         mocks.getFileList.mockResolvedValue([{ msgId: 77, name: 'ghost.bin', size: 10, date: 1 }]);
-        mocks.getAllFsMsgIds.mockResolvedValue([]);
 
         await runGlobalSearch();
 

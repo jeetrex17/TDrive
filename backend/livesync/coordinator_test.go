@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 )
 
@@ -95,28 +96,45 @@ func TestCoordinatorCoalescesSignalBursts(t *testing.T) {
 }
 
 func TestCoordinatorIgnoresUnknownChannels(t *testing.T) {
-	activity := newFakeActivity()
-	syncer := &fakeSyncer{}
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	synctest.Test(t, func(t *testing.T) {
+		const debounce = 5 * time.Millisecond
+		activity := newFakeActivity()
+		syncer := &fakeSyncer{}
+		loads := 0
+		c := NewCoordinator(Config{
+			Activity: activity,
+			Syncer:   syncer,
+			ListChannels: func(context.Context) ([]int64, error) {
+				loads++
+				return []int64{1}, nil
+			},
+			Debounce:         debounce,
+			BackstopInterval: time.Hour,
+		})
+		c.Start(t.Context())
+		t.Cleanup(c.Stop)
+		synctest.Wait()
 
-	c := NewCoordinator(Config{
-		Activity: activity,
-		Syncer:   syncer,
-		ListChannels: func(context.Context) ([]int64, error) {
-			return []int64{1}, nil
-		},
-		Debounce:         5 * time.Millisecond,
-		BackstopInterval: time.Hour,
+		activity.Signal(99)
+		synctest.Wait()
+		if loads != 2 {
+			t.Fatalf("known-channel loads = %d, want startup and unknown-signal reload", loads)
+		}
+		// Advance beyond debounce only after the unknown signal was processed.
+		time.Sleep(debounce)
+		synctest.Wait()
+		if got := syncer.snapshot(); len(got) != 0 {
+			t.Fatalf("sync calls = %v, want none for unknown channel 99", got)
+		}
+
+		activity.Signal(1)
+		synctest.Wait()
+		time.Sleep(debounce)
+		synctest.Wait()
+		if got := syncer.snapshot(); len(got) != 1 || got[0] != 1 {
+			t.Fatalf("sync calls = %v, want [1] after a known-channel signal", got)
+		}
 	})
-	c.Start(ctx)
-	defer c.Stop()
-
-	activity.Signal(99)
-	time.Sleep(40 * time.Millisecond)
-	if syncer.count() != 0 {
-		t.Fatalf("sync count = %d, want 0", syncer.count())
-	}
 }
 
 func TestCoordinatorBackstopSyncsKnownChannels(t *testing.T) {

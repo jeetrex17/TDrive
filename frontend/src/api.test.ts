@@ -51,7 +51,12 @@ describe("api normalizers", () => {
 
     it("toRootFile maps id->msgId and access_hash->accessHash", () => {
         const f = { id: 9, name: "r", size: 3, access_hash: 42, date: 1 };
-        expect(toRootFile(f)).toEqual({ msgId: 9, name: "r", size: 3, accessHash: 42, date: 1 });
+        expect(toRootFile(f)).toEqual({ msgId: 9, name: "r", size: 3, accessHash: 42, date: 1, uploaderId: 0 });
+    });
+
+    it("keeps the sender of a forwarded root attachment for shared-drive permissions", () => {
+        const f = { id: 9, name: "forwarded.pdf", size: 3, access_hash: 42, date: 1, uploader_id: 7 };
+        expect(toRootFile(f).uploaderId).toBe(7);
     });
 
     it("toSearchHit clamps type to file|folder", () => {

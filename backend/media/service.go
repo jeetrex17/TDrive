@@ -3,6 +3,7 @@ package media
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -21,7 +22,10 @@ type Config struct {
 	DB     *sql.DB
 	Peers  PeerResolver
 	Ranges tgclient.RangeClient
-	Keys   MasterKeyProvider
+	// RawDrive and AccountID enable read-only previews of loose drive attachments.
+	RawDrive  RawDriveSource
+	AccountID func(context.Context) (int64, error)
+	Keys      MasterKeyProvider
 	// EncryptionOpenGate is held only while publishing an encrypted session.
 	// EncryptionOpenGeneration changes across each vault-lock transition, which
 	// lets slow network authentication happen outside the gate without allowing
@@ -46,6 +50,8 @@ type Service struct {
 	thumbGen      VideoThumbnailGenerator
 	imageLimits   ImageAdmissionLimits
 	resolver      *Resolver
+	rawDrive      RawDriveSource
+	accountID     func(context.Context) (int64, error)
 	server        *Server
 }
 
@@ -63,6 +69,8 @@ func NewService(cfg Config) *Service {
 		thumbGen:      cfg.ThumbGenerator,
 		imageLimits:   cfg.ImageAdmission.normalized(),
 		resolver:      NewResolver(cfg.DB),
+		rawDrive:      cfg.RawDrive,
+		accountID:     cfg.AccountID,
 	}
 	if s.thumbGen == nil {
 		s.thumbGen = NewMPVThumbnailGenerator()
@@ -76,7 +84,12 @@ func (s *Service) Resolve(ctx context.Context, channelID, fileID int64) (Logical
 	if s == nil || s.resolver == nil {
 		return LogicalFile{}, ErrDBNotReady
 	}
-	return s.resolver.Resolve(ctx, channelID, fileID)
+	file, err := s.resolver.Resolve(ctx, channelID, fileID)
+	if errors.Is(err, ErrFileNotFound) && s.rawDrive != nil {
+		source, sourceErr := s.resolveRawDrive(ctx, channelID, fileID)
+		return source.file, sourceErr
+	}
+	return file, err
 }
 
 func (s *Service) Open(ctx context.Context, channelID, fileID int64) (OpenResult, error) {
@@ -93,14 +106,14 @@ func (s *Service) OpenStream(ctx context.Context, channelID, fileID int64) (Open
 // lifecycle. The second revision check closes the sole session if a content
 // replacement raced the preflight.
 func (s *Service) OpenImage(ctx context.Context, channelID, fileID, revision int64) (OpenResult, error) {
-	if revision <= 0 {
+	if revision < 0 {
 		return OpenResult{}, ErrStaleRevision
 	}
 	file, err := s.Resolve(ctx, channelID, fileID)
 	if err != nil {
 		return OpenResult{}, err
 	}
-	if file.Revision != revision {
+	if !imageRevisionMatches(file, revision) {
 		return OpenResult{}, ErrStaleRevision
 	}
 	if !IsSupportedImageName(file.Name) {
@@ -118,7 +131,7 @@ func (s *Service) OpenImage(ctx context.Context, channelID, fileID, revision int
 		_ = s.CloseSession(opened.Token)
 		return OpenResult{}, ErrUnsupportedMediaType
 	}
-	if opened.Info.Revision != revision {
+	if !imageRevisionMatches(opened.Info, revision) {
 		_ = s.CloseSession(opened.Token)
 		return OpenResult{}, ErrStaleRevision
 	}
@@ -140,7 +153,10 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 	}
 
 	started := time.Now()
-	file, err := s.Resolve(ctx, channelID, fileID)
+	file, err := s.resolver.Resolve(ctx, channelID, fileID)
+	if errors.Is(err, ErrFileNotFound) && s.rawDrive != nil {
+		return s.openRawDrive(ctx, channelID, fileID, requiredKind)
+	}
 	if err != nil {
 		return OpenResult{}, err
 	}
@@ -183,6 +199,14 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 		return OpenResult{}, fmt.Errorf("media: resolve peer: %w", err)
 	}
 	refs, err := s.resolveSegments(ctx, peer, file.Segments)
+	if err != nil && stalePeerError(err) {
+		if refresher, ok := s.peers.(peerRefresher); ok {
+			peer, err = refresher.RefreshPeer(ctx, channelID)
+			if err == nil {
+				refs, err = s.resolveSegments(ctx, peer, file.Segments)
+			}
+		}
+	}
 	if err != nil {
 		return OpenResult{}, err
 	}

@@ -84,7 +84,9 @@ export function syncSpeedControls(
     const byID = <T extends HTMLElement>(id: string): T | null => speedMenu?.querySelector<T>(`#${id}`) ?? null;
     const customInput = byID<HTMLInputElement>("video-speed-custom-input");
     if (speedButton) {
-        speedButton.textContent = `${formatRate(rate)}x`;
+        const label = `${formatRate(rate)}x`;
+        // Replacing unchanged text during a pointer press can cancel WebKit's click.
+        if (speedButton.textContent !== label) speedButton.textContent = label;
         speedButton.title = `Playback speed: ${formatRate(rate)}x. Click to cycle`;
         speedButton.setAttribute("aria-label", speedButton.title);
     }

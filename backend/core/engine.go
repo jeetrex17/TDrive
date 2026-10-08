@@ -45,7 +45,6 @@ import (
 	"math"
 	"os"
 	"strconv"
-	"strings"
 	"sync"
 	"sync/atomic"
 
@@ -71,6 +70,7 @@ import (
 	"TDrive/backend/thumbnail"
 
 	"github.com/gotd/td/telegram"
+	"github.com/gotd/td/tgerr"
 )
 
 // EventSink is the narrow event boundary between the headless backend and a
@@ -404,7 +404,14 @@ func (e *Engine) ChannelPeer(ctx context.Context, channelID int64) (tgclient.Inp
 	if e == nil || e.tg == nil {
 		return tgclient.InputPeer{}, fmt.Errorf("tg client not ready")
 	}
-	return e.tg.ResolveDriveChannel(ctx, channelID)
+	if channelID <= 0 {
+		return tgclient.InputPeer{}, fmt.Errorf("invalid channel id %d", channelID)
+	}
+	if err := ctx.Err(); err != nil {
+		return tgclient.InputPeer{}, err
+	}
+	peer, _, err := e.controlPeer(ctx, channelID)
+	return peer, err
 }
 
 func (e *Engine) ActorID(ctx context.Context) (int64, error) {
@@ -541,14 +548,9 @@ func (e *Engine) sendControlContext(ctx context.Context, channelID int64, header
 	// Access hashes can rotate. Refresh once and retry with the same random_id;
 	// Telegram can therefore deduplicate an accepted send whose response was
 	// lost while the local cache was stale.
-	fresh, resolveErr := e.ChannelPeer(ctx, channelID)
+	fresh, resolveErr := e.RefreshPeer(ctx, channelID)
 	if resolveErr != nil {
 		return 0, err
-	}
-	if backend.DB != nil {
-		if updateErr := projection.UpdateAccessHash(backend.DB, channelID, fresh.AccessHash); updateErr != nil {
-			e.warnf("warn: could not refresh channel access hash %d: %v\n", channelID, updateErr)
-		}
 	}
 	return e.sendControlWithRetry(ctx, fresh, header, randomID)
 }
@@ -575,19 +577,12 @@ func (e *Engine) controlPeer(ctx context.Context, channelID int64) (tgclient.Inp
 			return tgclient.InputPeer{ChannelID: channelID, AccessHash: channel.AccessHash}, true, nil
 		}
 	}
-	peer, err := e.ChannelPeer(ctx, channelID)
+	peer, err := e.RefreshPeer(ctx, channelID)
 	return peer, false, err
 }
 
 func isStalePeerError(err error) bool {
-	if err == nil {
-		return false
-	}
-	message := strings.ToUpper(err.Error())
-	return strings.Contains(message, "CHANNEL_INVALID") ||
-		strings.Contains(message, "CHANNEL_PRIVATE") ||
-		strings.Contains(message, "PEER_ID_INVALID") ||
-		strings.Contains(message, "ACCESS_HASH")
+	return tgerr.Is(err, "CHANNEL_INVALID", "CHANNEL_PRIVATE", "PEER_ID_INVALID", "ACCESS_HASH_INVALID")
 }
 
 func (e *Engine) AuthService() *authsvc.Service {
@@ -847,9 +842,11 @@ func (e *Engine) newMediaService() *media.Service {
 		ranges = rc
 	}
 	return media.NewService(media.Config{
-		DB:     backend.DB,
-		Peers:  peerResolverFn(e.ResolvePeer),
-		Ranges: ranges,
+		DB:        backend.DB,
+		Peers:     e,
+		RawDrive:  e.tg,
+		AccountID: e.ActorID,
+		Ranges:    ranges,
 		Keys: media.MasterKeyProviderFunc(func(ctx context.Context, channelID int64) ([]byte, error) {
 			if ctx == nil {
 				ctx = context.Background()
