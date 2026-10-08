@@ -296,11 +296,17 @@ test('the speed control changes the element, not just the label', async ({ page 
     const rate = () => player.evaluate((el: HTMLVideoElement) => el.playbackRate);
     const speedButton = page.locator('#video-speed-button');
 
-    // The pill cycles rather than opening anything: one tap is the whole
-    // interaction, and it has to reach the element, not just relabel itself.
-    await speedButton.click();
-    await expect.poll(rate).toBeGreaterThan(1);
-    await expect(speedButton).toHaveText(new RegExp(`^${await rate()}x$`));
+    // A normal playback update can arrive during the single click. WebKit must
+    // keep the press/release target intact and still apply the next speed.
+    await speedButton.hover();
+    const box = await speedButton.boundingBox();
+    if (!box) throw new Error('Speed button has no bounds');
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await player.evaluate((el: HTMLVideoElement) => el.dispatchEvent(new Event('timeupdate')));
+    await page.mouse.up();
+    await expect.poll(rate).toBe(1.25);
+    await expect(speedButton).toHaveText('1.25x');
 
     // The exact rate lives in the settings panel, where the pill's cycle is
     // only a shortcut through the same state.
