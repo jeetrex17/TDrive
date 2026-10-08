@@ -284,13 +284,14 @@ export function toFolderItem(d: Folder): FolderItem {
     };
 }
 
-export function toRootFile(f: TDriveFile): RootFile {
+export function toRootFile(f: Partial<TDriveFile>): RootFile {
     return {
         msgId: Number(f.id ?? 0),
         name: String(f.name ?? ""),
         size: Number(f.size ?? 0),
         accessHash: Number(f.access_hash ?? 0),
         date: Number(f.date ?? 0),
+        uploaderId: Number(f.uploader_id ?? 0),
     };
 }
 

@@ -9,6 +9,7 @@ import (
 
 	"TDrive/backend/projection"
 	"TDrive/backend/services/servicecontext"
+	"TDrive/backend/tgclient"
 )
 
 const (
@@ -61,8 +62,92 @@ func (s *Service) MetaContext(ctx context.Context, channelID int64, msgID int, n
 		FileSize:       size,
 		FileUploadTime: s.now().Unix(),
 	}
+	channel, err := projection.GetChannel(s.DB, channelID)
+	if err != nil {
+		return err
+	}
+	if channel.Kind == projection.KindShared {
+		message, err := s.sharedRawAttachmentForAdoption(ctx, channelID, int64(msgID))
+		if err != nil {
+			return err
+		}
+		// The caller may hold a stale listing. Telegram owns content metadata;
+		// the subsequent rename operation owns the user's requested new name.
+		op.Name = tgclient.MediaName(message)
+		op.FileSize = message.MediaSize
+		op.FileUploadTime = message.Date
+	}
 	_, err = s.emit(ctx, channelID, op)
 	return err
+}
+
+// sharedRawAttachmentForAdoption keeps metadata adoption from claiming another
+// member's message or resurrecting a body hidden by the existing namespace.
+// Ownership comes from the destination message's sender, not its forward header.
+func (s *Service) sharedRawAttachmentForAdoption(ctx context.Context, channelID, msgID int64) (tgclient.HistoryMessage, error) {
+	if s.TG == nil || s.Peers == nil || s.ActorID == nil {
+		return tgclient.HistoryMessage{}, fmt.Errorf("file: shared metadata dependencies not ready")
+	}
+	managed, err := projection.ManagedMsgIDsIn(ctx, s.DB, channelID, []int64{msgID})
+	if err != nil {
+		return tgclient.HistoryMessage{}, err
+	}
+	if _, owned := managed[msgID]; owned {
+		return tgclient.HistoryMessage{}, fmt.Errorf("file: message already belongs to a managed file")
+	}
+	message, err := s.sharedRawAttachmentMessage(ctx, channelID, msgID)
+	if err != nil {
+		return tgclient.HistoryMessage{}, err
+	}
+	captionName, allowed := projection.RawAttachmentCaption(message.Text, message.MediaSize)
+	if !allowed {
+		return tgclient.HistoryMessage{}, fmt.Errorf("file: attachment requires its owning projection")
+	}
+	actorID, err := s.ActorID(ctx)
+	if err != nil {
+		return tgclient.HistoryMessage{}, err
+	}
+	if message.FromID <= 0 || actorID <= 0 || message.FromID != actorID {
+		return tgclient.HistoryMessage{}, fmt.Errorf("Only the uploader can manage this file in a shared drive")
+	}
+	if captionName != "" {
+		message.DocumentName = captionName
+	}
+	return message, nil
+}
+
+// Adoption changes a loose message into projected content. Preserve the raw
+// reader's protection checks here so that transition cannot bypass restrictions.
+func (s *Service) sharedRawAttachmentMessage(ctx context.Context, channelID, msgID int64) (tgclient.HistoryMessage, error) {
+	peer, err := s.Peers.ResolvePeer(ctx, channelID)
+	if err != nil {
+		return tgclient.HistoryMessage{}, err
+	}
+	if peer.ChannelID != channelID {
+		return tgclient.HistoryMessage{}, fmt.Errorf("file: shared attachment peer mismatch")
+	}
+	peer.Kind = tgclient.PeerSupergroup
+	source, err := s.TG.GetMediaSourcePeer(ctx, peer)
+	if err != nil {
+		return tgclient.HistoryMessage{}, fmt.Errorf("file: resolve shared attachment peer: %w", err)
+	}
+	if source.ID != channelID || source.Kind != peer.Kind || source.Protected || source.Restricted {
+		return tgclient.HistoryMessage{}, fmt.Errorf("file: shared attachment peer is restricted")
+	}
+	message, err := s.TG.GetChannelMessage(ctx, peer, msgID)
+	if err != nil {
+		return tgclient.HistoryMessage{}, fmt.Errorf("file: resolve shared attachment: %w", err)
+	}
+	if message.MsgID != msgID || (message.ChannelID != 0 && message.ChannelID != channelID) || (message.PeerKind != "" && message.PeerKind != peer.Kind) {
+		return tgclient.HistoryMessage{}, fmt.Errorf("file: shared attachment message mismatch")
+	}
+	if message.NoForwards || message.TTLSeconds > 0 || message.Paid || message.Restricted {
+		return tgclient.HistoryMessage{}, fmt.Errorf("file: shared attachment is restricted")
+	}
+	if !message.HasMedia || message.DocumentID <= 0 || message.MediaSize <= 0 {
+		return tgclient.HistoryMessage{}, fmt.Errorf("file: message is not a shared attachment")
+	}
+	return message, nil
 }
 
 // requireEncryptedFileKey demands the encryption key before a mutation

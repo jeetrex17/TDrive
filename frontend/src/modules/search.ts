@@ -372,7 +372,7 @@ export async function runGlobalSearch() {
                 size: file.size,
                 parentId: '',
                 uploadTime: file.date,
-                uploaderId: 0,
+                uploaderId: file.uploaderId ?? 0,
                 encrypted: false,
                 plaintextSize: 0,
                 path: 'My Drive',

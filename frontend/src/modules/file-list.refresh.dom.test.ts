@@ -244,6 +244,21 @@ it.each([
     expect(canOwnerActOnFile(null)).toBe(false);
 });
 
+it.each([7, 8, 0, undefined])('uses forwarded root sender %s for shared-drive rename permission', async (uploaderId) => {
+    state.activeChannel = { id: 1, title: 'Shared', kind: 'shared' };
+    state.myUserID = 7;
+    api.getFolderContents.mockResolvedValue({ folders: [], files: [] });
+    api.getFileList.mockResolvedValue([{ msgId: 99, name: 'forwarded.pdf', size: 10, date: 1, accessHash: 0, uploaderId }]);
+    refreshFiles();
+    await expectText('forwarded.pdf');
+    const view = get(fileListView);
+    if (view.kind !== 'rows') throw new Error('Forwarded file list did not load');
+    const row = view.rows.find((candidate) => candidate.kind === 'file' && candidate.id === '99');
+    if (!row || row.kind !== 'file') throw new Error('Forwarded row missing');
+    expect(row.source).toBe('tg');
+    expect(row.canRename).toBe(uploaderId === 7);
+});
+
 it('focuses and selects a requested file after its row mounts', async () => {
     state.pendingFocus = { type: 'file', id: 41 };
     refreshFiles();

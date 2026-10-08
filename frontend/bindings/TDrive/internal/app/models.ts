@@ -398,6 +398,7 @@ export interface TDriveFile {
     "size": number;
     "access_hash": number;
     "date": number;
+    "uploader_id": number;
 }
 
 /**

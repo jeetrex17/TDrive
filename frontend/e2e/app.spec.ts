@@ -331,6 +331,31 @@ test('context menus retain vertical actions, render notifications, and restore f
     await expect(newDrive).toBeFocused();
 });
 
+test('the sender can rename a forwarded root attachment in a shared drive', async ({ page }) => {
+    const mock = await bootTDrive(page, {
+        ListChannels: resolves([
+            { ...PERSONAL_CHANNEL, is_active: false },
+            { id: 2, title: 'Shared files', kind: 'shared', is_active: true, invite_link: '' },
+        ]),
+        GetFolderContents: resolves({ folders: [], files: [] }),
+        GetFileList: resolves([{ id: 701, name: 'forwarded.pdf', size: 321, date: 1_735_689_600, access_hash: 0, uploader_id: 7 }]),
+        ResolveUsernames: resolves({ '7': 'Test User' }),
+        MsgToTdriveSystem: resolves({ ok: true }),
+        RenameFile: resolves({ ok: true }),
+    });
+    const row = page.getByRole('row', { name: 'File: forwarded.pdf' });
+    await expect(row).toBeVisible();
+    await row.click();
+    await page.keyboard.press('F2');
+    const dialog = page.getByRole('dialog', { name: 'Rename file' });
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('textbox', { name: 'File name' }).fill('renamed.pdf');
+    await dialog.getByRole('button', { name: 'Rename', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    expect(await mock.calls('MsgToTdriveSystem')).toMatchObject([{ args: [701, 'forwarded.pdf', 321, ''], state: 'fulfilled' }]);
+    expect(await mock.calls('RenameFile')).toMatchObject([{ args: [701, 'renamed.pdf'], state: 'fulfilled' }]);
+});
+
 test('gallery loads binary thumbnails and one explicitly opened original stream', async ({ page }) => {
     const requested = await routeRenditions(page);
     const mock = await bootTDrive(page, galleryPlans([FIRST_PHOTO]));

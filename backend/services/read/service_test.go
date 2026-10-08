@@ -309,8 +309,8 @@ func TestTelegramRootFilesHidesOwnedBodiesAndNamesLooseAttachments(t *testing.T)
 		fakeTG.SeedHistory(tgclient.HistoryMessage{MsgID: id, HasMedia: true, DocumentName: "owned.pdf", MediaSize: 1})
 	}
 	fakeTG.SeedHistory(
-		tgclient.HistoryMessage{MsgID: 50, HasMedia: true, MimeType: "application/pdf", MediaSize: 1},
-		tgclient.HistoryMessage{MsgID: 51, HasMedia: true, DocumentName: "video", MimeType: "video/mp4", MediaSize: 1},
+		tgclient.HistoryMessage{MsgID: 50, FromID: 7, HasMedia: true, MimeType: "application/pdf", MediaSize: 1},
+		tgclient.HistoryMessage{MsgID: 51, FromID: 9, HasMedia: true, DocumentName: "video", MimeType: "video/mp4", MediaSize: 1},
 		tgclient.HistoryMessage{MsgID: 52, HasMedia: true, DocumentName: "archive.bin", MimeType: "application/octet-stream", MediaSize: 1},
 	)
 	files, err := svc.TelegramRootFiles(t.Context(), testChannelID)
@@ -321,8 +321,9 @@ func TestTelegramRootFilesHidesOwnedBodiesAndNamesLooseAttachments(t *testing.T)
 		t.Fatalf("files = %+v, want only three loose attachments", files)
 	}
 	want := map[int]string{50: "Telegram file 50.pdf", 51: "video.mp4", 52: "archive.bin"}
+	uploaders := map[int]int64{50: 7, 51: 9, 52: 0}
 	for _, file := range files {
-		if file.Name != want[file.ID] {
+		if file.Name != want[file.ID] || file.UploaderID != uploaders[file.ID] {
 			t.Fatalf("unexpected raw file: %+v", file)
 		}
 	}

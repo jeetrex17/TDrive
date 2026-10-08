@@ -38,6 +38,7 @@ export interface RootFile {
     size: number;
     accessHash: number;
     date: number;
+    uploaderId?: number;
 }
 
 export type SearchHitType = "file" | "folder";

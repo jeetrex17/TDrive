@@ -735,6 +735,7 @@ function rowsForLoadedData(data: LoadedFileData, view: FileViewIdentity): FileLi
             name: file.name,
             size: file.size,
             date: file.date,
+            uploaderID: file.uploaderId,
         }, view.folderId));
     const fileRows = [...filesystemRows, ...telegramRows]
         .sort((left, right) => right.uploadTime - left.uploadTime);

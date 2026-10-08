@@ -91,6 +91,7 @@ type TelegramFile struct {
 	Size       int64
 	AccessHash int64
 	Date       int
+	UploaderID int64
 }
 
 func (s *Service) StorageUsed(channelID int64) (int64, error) {
@@ -335,6 +336,7 @@ func (s *Service) TelegramRootFiles(ctx context.Context, channelID int64) ([]Tel
 			Size:       msg.MediaSize,
 			AccessHash: msg.DocumentAccessHash,
 			Date:       int(msg.Date),
+			UploaderID: msg.FromID,
 		})
 	}
 	return files, nil
