@@ -51,6 +51,8 @@ with a type such as `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf` o
    honestly, such as `Clarify contribution and architecture guidance`; do not
    invent a user-visible benefit. Open agent-created PRs as drafts unless the
    user asks otherwise.
+   CI jobs are skipped on draft PRs. Mark the PR ready for review to run CI;
+   subsequent pushes to a ready PR run CI again.
 4. Use exactly the three sections below, in this order. Keep the body concise
    and explain what changed, its meaningful scope and why it matters.
 
