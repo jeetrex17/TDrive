@@ -148,6 +148,7 @@ export function bindSwipeActions(host: HTMLElement, selector: string, options: S
         // and separator anchored to the neighbouring rows.
         const content = target.querySelector<HTMLElement>(':scope > .row-swipe-content');
         if (!content) return;
+        target.classList.toggle('is-revealing', offset < 0);
         content.style.transition = animate ? 'transform 220ms cubic-bezier(0.2, 0, 0, 1)' : 'none';
         content.style.transform = offset === 0 ? '' : `translate3d(${offset}px, 0, 0)`;
     }
@@ -239,12 +240,17 @@ export function bindSwipeActions(host: HTMLElement, selector: string, options: S
     };
 
     const onScroll = (): void => closeOpen();
+    // Keyboard focus restores the visible menu alternative after a touch swipe.
+    const onFocusIn = (event: FocusEvent): void => {
+        if (event.target instanceof Element && event.target.closest('.row-more')) closeOpen();
+    };
 
     host.addEventListener('pointerdown', onPointerDown);
     host.addEventListener('pointermove', onPointerMove, { passive: false });
     host.addEventListener('pointerup', onPointerUp);
     host.addEventListener('pointercancel', onPointerUp);
     host.addEventListener('scroll', onScroll, { passive: true });
+    host.addEventListener('focusin', onFocusIn);
 
     return () => {
         closeOpen();
@@ -253,5 +259,6 @@ export function bindSwipeActions(host: HTMLElement, selector: string, options: S
         host.removeEventListener('pointerup', onPointerUp);
         host.removeEventListener('pointercancel', onPointerUp);
         host.removeEventListener('scroll', onScroll);
+        host.removeEventListener('focusin', onFocusIn);
     };
 }

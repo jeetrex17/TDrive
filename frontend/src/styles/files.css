@@ -520,10 +520,6 @@ html.mobile .row-swipe-content {
     padding: 10px 6px 10px 12px;
     background: inherit;
 }
-html.mobile .file-row.is-swiped .row-swipe-content {
-    border-top-right-radius: var(--radius-lg);
-    border-bottom-right-radius: var(--radius-lg);
-}
 /* The card's ends, marked by the list rather than read off the DOM. A sibling
    selector can only see the rendered window, whose ends are the virtualiser's
    spacers and not the list's -- so mid-list rows came out rounded while

@@ -118,8 +118,18 @@ test('an empty folder offers file upload, folder upload, and folder creation', a
 });
 
 test('a trailing file swipe reveals Move and a confirmed Delete', async ({ page }) => {
-    const mock = await bootMobile(page);
-    const row = page.locator('#file-list .drive-row[data-name="notes.txt"]');
+    const name = 'TDrive-v1.6.0-linux-amd64.zip';
+    await page.addInitScript(() => history.replaceState(null, '', '/?mobile=android'));
+    const mock = await bootTDrive(page, {
+        ...overrides,
+        GetFolderContents: resolves({ folders: [], files: rootContents.files.map((file, index) => ({
+            ...file,
+            name: index === 0 ? name : 'TDrive-v1.6.0-windows-amd64.zip',
+            size: 63_650_000,
+            encrypted: true,
+        })) }),
+    });
+    const row = page.locator('#file-list .drive-row').filter({ has: page.locator(`[title="${name}"]`) });
     await expect(row).toBeVisible();
     const bounds = await row.boundingBox();
     const nameBounds = await row.locator('.row-name').boundingBox();
@@ -151,14 +161,22 @@ test('a trailing file swipe reveals Move and a confirmed Delete', async ({ page 
     expect(openBounds?.x).toBeCloseTo(bounds.x, 0);
     expect(openBounds?.width).toBeCloseTo(bounds.width, 0);
     expect(openNameBounds?.x).toBeLessThan(nameBounds.x - 100);
+    const actions = await row.locator('.row-swipe-actions').boundingBox();
+    expect(actions?.width).toBeLessThanOrEqual(140);
+    const tail = await row.locator('.row-label-tail').boundingBox();
+    expect(tail!.x + tail!.width).toBeGreaterThan(bounds.x + 40);
+    await expect(row.locator('.row-more')).toHaveCSS('opacity', '0');
     await row.locator('[data-swipe-action="delete"]').click();
 
     const confirmation = page.getByRole('dialog', { name: 'Move file to Trash?' });
-    await expect(confirmation).toContainText('notes.txt');
+    await expect(confirmation).toContainText(name);
     expect(await mock.calls('DeleteFile')).toHaveLength(0);
     await confirmation.getByRole('button', { name: 'Cancel' }).click();
     await expect(confirmation).toBeHidden();
     await expect(row).toBeVisible();
+    await row.locator('.row-more').focus();
+    await expect(row).not.toHaveClass(/is-swiped/);
+    await expect(row.locator('.row-more')).toHaveCSS('opacity', '1');
 });
 
 test('Android keyboard events keep the app shell fixed while the join sheet makes room', async ({ page }) => {

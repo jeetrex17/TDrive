@@ -1301,15 +1301,6 @@ html.mobile .row-swipe-actions {
     align-items: stretch;
     z-index: 0;
 }
-html.mobile .row-swipe-actions::before {
-    content: "";
-    position: absolute;
-    top: 0;
-    bottom: 0;
-    right: 100%;
-    width: var(--radius-lg);
-    background: var(--color-surface-2);
-}
 
 html.mobile .row-swipe-btn {
     display: flex;
@@ -1319,7 +1310,8 @@ html.mobile .row-swipe-btn {
     gap: 3px;
     /* Wide enough that the thumb cannot miss it once revealed, and the number
        the binder measures for the open position. */
-    width: 88px;
+    width: 64px;
+    flex: 0 0 64px;
     border: none;
     /* Not accent: accent means "bytes are moving" everywhere else in this app,
        and a stationary button borrowing it would blunt that. */
@@ -1337,10 +1329,17 @@ html.mobile .row-swipe-btn.is-delete {
     color: var(--color-danger);
 }
 
+html.mobile .row-more { transition: opacity 100ms var(--ease-standard); }
+html.mobile .file-row.is-revealing .row-more {
+    opacity: 0;
+    pointer-events: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
     /* The settle is travel, so it goes; the row still arrives where the
        gesture asked, just without the glide. */
     html.mobile .row-swipe-content { transition: none !important; }
+    html.mobile .row-more { transition: none; }
 }
 
 /* ============================ WIDE AND LANDSCAPE ============================ */
