@@ -491,24 +491,34 @@ html.mobile .file-list-box[data-nav="back"] { animation: tdrive-nav-pop var(--mo
 
 html.mobile .file-row {
     position: relative;
-    display: flex;
-    align-items: center;
-    gap: 12px;
+    display: block;
     min-height: 68px;
     /* The side margin is what makes the run of rows read as a card rather than
        a full-bleed list; the background is the card itself. */
     margin: 0 var(--space-3);
-    /* 6px on the right: the overflow button's 44px hit area ends exactly at
-       the card edge instead of spilling into scrollable overflow. */
-    padding: 10px 6px 10px 12px;
+    padding: 0;
     background: var(--color-surface-0);
     border-radius: 0;
+    overflow: hidden;
     transition: background-color 80ms var(--ease-standard);
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
     -webkit-touch-callout: none;
     user-select: none;
     -webkit-user-select: none;
+}
+html.mobile .row-swipe-content {
+    position: relative;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: inherit;
+    /* 6px on the right: the overflow button's 44px hit area ends exactly at
+       the card edge instead of spilling into scrollable overflow. */
+    padding: 10px 6px 10px 12px;
+    background: inherit;
 }
 /* The card's ends, marked by the list rather than read off the DOM. A sibling
    selector can only see the rendered window, whose ends are the virtualiser's
@@ -539,6 +549,8 @@ html.mobile .file-row + .file-row::before {
     right: 0;
     height: 1px;
     background: var(--color-border-soft);
+    z-index: 2;
+    pointer-events: none;
 }
 /* Every row state has to keep the card's own fill. The desktop rules clear the
    background to transparent for hover and keyboard focus, which is right when a
