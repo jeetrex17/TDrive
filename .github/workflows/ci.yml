@@ -43,7 +43,18 @@ env:
     ./backend/updater
 
 jobs:
+  approve-ci:
+    name: Approve CI
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    runs-on: ubuntu-22.04
+    environment: ci-approval
+    permissions: {}
+    steps:
+      - name: Release CI jobs
+        run: echo "CI approval granted."
+
   test:
+    needs: approve-ci
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: Tests and frontend build
     runs-on: ubuntu-22.04
@@ -133,6 +144,7 @@ jobs:
         run: go vet $FIRST_PARTY_GO_PACKAGES
 
   browser-contracts:
+    needs: approve-ci
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: Browser frontend contracts
     runs-on: ubuntu-22.04
@@ -183,6 +195,7 @@ jobs:
           retention-days: 7
 
   webkit-media-contracts:
+    needs: approve-ci
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: WebKit media contracts
     runs-on: macos-15
@@ -222,6 +235,7 @@ jobs:
           retention-days: 7
 
   race:
+    needs: approve-ci
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: Targeted race detector
     runs-on: ubuntu-22.04
@@ -269,6 +283,7 @@ jobs:
         run: go test -race -count=1 $RACE_GO_PACKAGES
 
   analysis:
+    needs: approve-ci
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: Static and vulnerability analysis
     runs-on: ubuntu-22.04
@@ -343,6 +358,7 @@ jobs:
   # regeneration leaves the frontend calling a backend that no longer looks
   # like that: a runtime failure every other job here stays green through.
   bindings:
+    needs: approve-ci
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: Generated bindings
     runs-on: ubuntu-22.04
@@ -437,6 +453,7 @@ jobs:
           fi
 
   wails-build:
+    needs: approve-ci
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: Wails build (${{ matrix.platform }})
     runs-on: ${{ matrix.os }}
@@ -722,6 +739,7 @@ jobs:
   # invisible to a desktop build. A change to any of them can pass every other
   # job here and still ship a phone app that does not compile.
   android-build:
+    needs: approve-ci
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: Android build (arm64-v8a)
     runs-on: ubuntu-22.04
@@ -826,6 +844,7 @@ jobs:
           retention-days: 7
 
   ios-build:
+    needs: approve-ci
     if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
     name: iOS build (simulator bundle + device archive)
     runs-on: macos-15
