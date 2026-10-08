@@ -19,9 +19,10 @@ describe('the state table', () => {
         expect(accent).toEqual(['downloading', 'syncing']);
     });
 
-    it('spins exactly the states that are in motion', () => {
+    it('keeps download direction legible instead of rotating its arrow', () => {
         const spinning = ITEM_STATE_ORDER.filter((state) => ITEM_STATES[state].spins);
-        expect(spinning).toEqual(['downloading', 'syncing']);
+        expect(spinning).toEqual(['syncing']);
+        expect(ITEM_STATES.downloading.glyph).toBe('download');
     });
 
     it('grows the row only for the states a person must act on', () => {

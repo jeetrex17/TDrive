@@ -117,6 +117,43 @@ test('an empty folder offers file upload, folder upload, and folder creation', a
     expect(await actions.evaluate((element) => element.scrollWidth <= element.clientWidth)).toBe(true);
 });
 
+test('a trailing file swipe reveals Move and a confirmed Delete', async ({ page }) => {
+    const mock = await bootMobile(page);
+    const row = page.locator('#file-list .drive-row[data-name="notes.txt"]');
+    await expect(row).toBeVisible();
+    const bounds = await row.boundingBox();
+    if (!bounds) throw new Error('file row is not visible');
+
+    const startX = bounds.x + bounds.width - 72;
+    const y = bounds.y + bounds.height / 2;
+    const touch = await page.context().newCDPSession(page);
+    try {
+        await touch.send('Emulation.setTouchEmulationEnabled', { enabled: true });
+        await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: startX, y, id: 1 }] });
+        for (let step = 1; step <= 6; step += 1) {
+            await touch.send('Input.dispatchTouchEvent', {
+                type: 'touchMove',
+                touchPoints: [{ x: startX - 190 * step / 6, y, id: 1 }],
+            });
+        }
+        await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    } finally {
+        await touch.detach();
+    }
+
+    await expect(row).toHaveClass(/is-swiped/);
+    await expect(row.locator('[data-swipe-action="move"]')).toBeInViewport();
+    await expect(row.locator('[data-swipe-action="delete"]')).toBeInViewport();
+    await row.locator('[data-swipe-action="delete"]').click();
+
+    const confirmation = page.getByRole('dialog', { name: 'Move file to Trash?' });
+    await expect(confirmation).toContainText('notes.txt');
+    expect(await mock.calls('DeleteFile')).toHaveLength(0);
+    await confirmation.getByRole('button', { name: 'Cancel' }).click();
+    await expect(confirmation).toBeHidden();
+    await expect(row).toBeVisible();
+});
+
 test('Android keyboard events keep the app shell fixed while the join sheet makes room', async ({ page }) => {
     const mock = await bootMobile(page);
     await page.getByRole('button', { name: /Switch drive/ }).click();

@@ -173,12 +173,12 @@ func TestBackupUploadTimingReportsBoundedStages(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, stage := range []string{"encrypt", "transfer", "projection"} {
+	for _, stage := range []string{"source_prepare", "encrypt", "transfer", "projection"} {
 		if elapsed, ok := stages[stage]; !ok || elapsed < 0 {
 			t.Fatalf("stage %q = %v, present=%v", stage, elapsed, ok)
 		}
 	}
-	if len(stages) != 3 {
+	if len(stages) != 4 {
 		t.Fatalf("unexpected stages: %v", stages)
 	}
 }

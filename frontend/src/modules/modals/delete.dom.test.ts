@@ -80,6 +80,53 @@ describe('openDeleteModal copy', () => {
 });
 
 describe('confirmDelete (single file)', () => {
+    it('does not delete in a different drive after the confirmation opens', async () => {
+        openDeleteModal({ type: 'file', id: 42, name: 'first.png', channelId: 11 });
+        flushSync();
+        state.activeChannel = { id: 22, title: 'Second drive', kind: 'personal' };
+        click('#delete-confirm');
+
+        expect(deleteFileMock).not.toHaveBeenCalled();
+        expect(appActionMocks.refreshFiles).not.toHaveBeenCalled();
+        expect(get(toasts).some((toast) => toast.title.includes('Switch back'))).toBe(true);
+    });
+
+    it('does not open a confirmation for a row from another drive', () => {
+        openDeleteModal({ type: 'file', id: 42, name: 'first.png', channelId: 22 });
+
+        expect(get(deleteModalState).open).toBe(false);
+        expect(get(toasts).some((toast) => toast.title.includes('Switch back'))).toBe(true);
+    });
+
+    it('does not open a bulk confirmation with mixed or stale drive identities', () => {
+        openDeleteModal({ type: 'bulk', parentId: '', items: [
+            { type: 'file', id: 42, name: 'first.png', channelId: 11 },
+            { type: 'file', id: 43, name: 'second.png', channelId: 22 },
+        ] });
+
+        expect(get(deleteModalState).open).toBe(false);
+        expect(get(toasts).some((toast) => toast.title.includes('Switch back'))).toBe(true);
+    });
+
+    it('stops a bulk delete if the active drive switches between items', async () => {
+        let finishFirst: (result: unknown) => void = () => {};
+        deleteFileMock.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }));
+        openDeleteModal({ type: 'bulk', parentId: '', items: [
+            { type: 'file', id: 42, name: 'first.png', channelId: 11 },
+            { type: 'file', id: 43, name: 'second.png', channelId: 11 },
+        ] });
+        flushSync();
+        click('#delete-confirm');
+        expect(deleteFileMock).toHaveBeenCalledTimes(1);
+
+        state.activeChannel = { id: 22, title: 'Second drive', kind: 'personal' };
+        finishFirst({ ok: true });
+        await vi.waitFor(() => expect(appActionMocks.refreshFiles).toHaveBeenCalledTimes(1));
+
+        expect(deleteFileMock).toHaveBeenCalledTimes(1);
+        expect(get(toasts).some((toast) => toast.title.includes('Switch back'))).toBe(true);
+    });
+
     it('refreshes the file list when the delete fails', async () => {
         deleteFileMock.mockResolvedValue('Error: File not found');
 

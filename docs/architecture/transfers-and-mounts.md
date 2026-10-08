@@ -43,6 +43,13 @@ flowchart TD
 ```
 
 Part messages use hidden `OpFilePart` records; they are not independent user files.
+In a multi-file batch, a multipart file emits completion as soon as its manifest
+is projected. Single-document receipts are still sorted by Telegram message ID
+and projected after the batch finishes; projecting those on arrival could apply
+operations out of order. Debug-level upload timing reports bounded stage
+histograms for slot wait, source preparation, encryption, transfer, manifest
+commit, receipt wait and local projection. Stage durations can overlap across
+files and must not be summed as batch wall time.
 Ordinary multipart uploads stage encrypted data one part at a time. If a failure
 occurs before manifest send, cleanup deletes known part receipts and queues failed
 body deletions for later sweeping. After send is attempted, even cancellation can
@@ -66,6 +73,11 @@ its bytes are synced to the staging file. Recovery validates those bytes before
 skipping a block; missing or damaged blocks are fetched again. Telegram range
 reads stay bounded to 1 MiB requests, so an interrupted document does not have
 to restart from its first byte.
+
+Schema bootstrap creates the persistent gallery epoch before the file service
+is constructed, even when personal-drive migration has not created `files` yet.
+The download journal uses that epoch as its namespace, so a first-session
+download can save progress without requiring an app restart.
 
 The [download runner](../../backend/services/file/resumable_download_run.go)
 checks the pinned source again before using a checkpoint. It assembles output

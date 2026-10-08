@@ -124,6 +124,7 @@ describe('acting on a row from the keyboard', () => {
             parentId: '',
             source: 'fs',
             canDelete: true,
+            channelId: 1,
         });
     });
 
@@ -483,7 +484,7 @@ it('does not apply late folder descendants after a drag has ended', async () => 
 
 it('deletes a folder and renames a Telegram file with their original identifiers', () => {
     press(row('folder:design'), 'Backspace');
-    expect(modals.openDeleteModal).toHaveBeenCalledWith({ type: 'folder', id: 'design', name: 'Design', parentId: '' });
+    expect(modals.openDeleteModal).toHaveBeenCalledWith({ type: 'folder', id: 'design', name: 'Design', parentId: '', channelId: 1 });
     renderFileListRows(list, [buildFileRow({ id: 99, name: 'raw.zip', source: 'tg', size: 300 }, 'origin')]);
     flushSync();
     press(row('file:99'), 'F2');

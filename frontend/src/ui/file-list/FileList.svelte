@@ -445,13 +445,9 @@
                     {/if}
                 </div>
                 {#if mobile && !row.actionsInline}
-                    <!-- Revealed by a trailing swipe. One action, and a
-                         reversible one: a destructive button a careless thumb
-                         away from a scrolling list is the worst pattern in
-                         mobile file managers, and being the platform default
-                         does not make it safe. Delete stays in the overflow
-                         sheet behind a confirm.
-
+                    <!-- Revealed by a trailing swipe. Delete is available only
+                         where the item may be deleted, and still opens the
+                         existing Trash confirmation rather than acting on swipe.
                          Hidden from assistive tech because it duplicates what
                          the always-visible overflow button already offers; a
                          screen reader should not meet the same action twice. -->
@@ -460,6 +456,12 @@
                             <FolderInputIcon size={20} strokeWidth={1.9} aria-hidden="true" />
                             <span>Move</span>
                         </button>
+                        {#if row.kind === 'folder' || row.canDelete}
+                            <button class="row-swipe-btn is-delete" type="button" tabindex="-1" data-swipe-action="delete">
+                                <Trash2Icon size={20} strokeWidth={1.9} aria-hidden="true" />
+                                <span>Delete</span>
+                            </button>
+                        {/if}
                     </div>
                 {/if}
             </div>

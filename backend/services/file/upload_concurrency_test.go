@@ -10,7 +10,9 @@ import (
 	"sync"
 	"testing"
 	"testing/synctest"
+	"time"
 
+	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
 )
 
@@ -133,6 +135,146 @@ func TestUploadBatchHonorsConfiguredConcurrency(t *testing.T) {
 				}
 			})
 		})
+	}
+}
+
+type blockNamedUploadClient struct {
+	*tgclient.Fake
+	name    string
+	entered chan<- struct{}
+	release <-chan struct{}
+}
+
+func (c *blockNamedUploadClient) SendFileWithRandomID(ctx context.Context, peer tgclient.InputPeer, r io.Reader, name, caption string, size int64, progress func(int64, int64), randomID int64) (tgclient.SendFileResult, error) {
+	if name == c.name {
+		c.entered <- struct{}{}
+		select {
+		case <-c.release:
+		case <-ctx.Done():
+			return tgclient.SendFileResult{}, ctx.Err()
+		}
+	}
+	return c.Fake.SendFileWithRandomID(ctx, peer, r, name, caption, size, progress, randomID)
+}
+
+type completionSink struct{ completed chan<- string }
+
+func (s completionSink) Emit(event string, args ...any) {
+	if event == "upload_complete" {
+		s.completed <- args[1].(string)
+	}
+}
+
+type uploadEventFunc func(string, ...any)
+
+func (f uploadEventFunc) Emit(event string, args ...any) { f(event, args...) }
+
+func TestEarlyMultipartCompletionDoesNotHoldUploadSlot(t *testing.T) {
+	svc, _, fakeTG, _ := newTestService(t)
+	svc.MaxUploadBytes = 1000
+	svc.MaxConcurrentUploads = 1
+	large := writeTempNamedFile(t, "large.bin", bytes.Repeat([]byte("x"), 2501))
+	slow := writeTempNamedFile(t, "slow.txt", []byte("slow"))
+	slowEntered := make(chan struct{}, 1)
+	slowRelease := make(chan struct{})
+	completionEntered := make(chan struct{})
+	completionRelease := make(chan struct{})
+	releaseAll := sync.OnceFunc(func() { close(slowRelease); close(completionRelease) })
+	svc.TG = &blockNamedUploadClient{Fake: fakeTG, name: "slow.txt", entered: slowEntered, release: slowRelease}
+	svc.Events = uploadEventFunc(func(event string, args ...any) {
+		if event == "upload_complete" && args[1] == "large.bin" {
+			close(completionEntered)
+			<-completionRelease
+		}
+	})
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_, _ = svc.Upload(ctx, personalChannelID, []string{large, slow}, []string{"", ""}, false)
+	}()
+	defer func() { releaseAll(); cancel(); <-done }()
+
+	select {
+	case <-completionEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("multipart completion was not emitted")
+	}
+	select {
+	case <-slowEntered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("completion observer held the upload slot and blocked the next file")
+	}
+	releaseAll()
+	<-done
+}
+
+func TestMultipartCompletionDoesNotWaitForOtherBatchFiles(t *testing.T) {
+	svc, db, fakeTG, _ := newTestService(t)
+	svc.MaxUploadBytes = 1000
+	svc.MaxConcurrentUploads = 2
+	large := writeTempNamedFile(t, "large.bin", bytes.Repeat([]byte("x"), 2501))
+	slow := writeTempNamedFile(t, "slow.txt", []byte("slow"))
+	entered := make(chan struct{}, 1)
+	release := make(chan struct{})
+	completed := make(chan string, 2)
+	svc.TG = &blockNamedUploadClient{Fake: fakeTG, name: "slow.txt", entered: entered, release: release}
+	svc.Events = completionSink{completed: completed}
+
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	var files []Metadata
+	var uploadErr error
+	go func() {
+		defer close(done)
+		files, uploadErr = svc.Upload(ctx, personalChannelID, []string{large, slow}, []string{"", ""}, false)
+	}()
+	defer func() { cancel(); <-done }()
+
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("slow upload did not enter transport")
+	}
+	select {
+	case name := <-completed:
+		if name != "large.bin" {
+			t.Fatalf("first completed file = %q, want large.bin", name)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("committed multipart file stayed incomplete while another upload was blocked")
+	}
+	var projected int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM files WHERE channel_id=? AND name=?`, personalChannelID, "large.bin").Scan(&projected); err != nil {
+		t.Fatalf("read completed file: %v", err)
+	}
+	if projected != 1 {
+		t.Fatalf("completed multipart file has %d local records, want 1", projected)
+	}
+	if len(fakeTG.SentFiles()) < 3 {
+		t.Fatal("multipart body and manifest were not committed")
+	}
+	close(release)
+	<-done
+	if uploadErr != nil || len(files) != 2 {
+		t.Fatalf("upload = (%d files, %v), want 2 files", len(files), uploadErr)
+	}
+	if !projection.FileExists(db, personalChannelID, int64(files[0].MsgID)) {
+		t.Fatal("completed multipart file is missing from the local index")
+	}
+	select {
+	case name := <-completed:
+		if name != "slow.txt" {
+			t.Fatalf("second completed file = %q, want slow.txt", name)
+		}
+	default:
+		t.Fatal("slow file completion was not emitted")
+	}
+	select {
+	case name := <-completed:
+		t.Fatalf("unexpected duplicate completion for %q", name)
+	default:
 	}
 }
 
