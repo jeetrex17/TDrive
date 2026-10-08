@@ -150,7 +150,7 @@ test('a trailing file swipe reveals Move and a confirmed Delete', async ({ page 
     const openNameBounds = await row.locator('.row-name').boundingBox();
     expect(openBounds?.x).toBeCloseTo(bounds.x, 0);
     expect(openBounds?.width).toBeCloseTo(bounds.width, 0);
-    expect(openNameBounds?.x).toBeCloseTo(nameBounds.x, 0);
+    expect(openNameBounds?.x).toBeLessThan(nameBounds.x - 100);
     await row.locator('[data-swipe-action="delete"]').click();
 
     const confirmation = page.getByRole('dialog', { name: 'Move file to Trash?' });

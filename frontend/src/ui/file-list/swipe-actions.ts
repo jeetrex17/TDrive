@@ -144,12 +144,12 @@ export function bindSwipeActions(host: HTMLElement, selector: string, options: S
     let samples: Array<{ x: number; t: number }> = [];
 
     function place(target: HTMLElement, offset: number, animate: boolean): void {
-        // Reveal the panel over the trailing controls. The filename and card
-        // stay in place, so a long name never leaves an empty row behind.
-        const actions = target.querySelector<HTMLElement>(':scope > .row-swipe-actions');
-        if (!actions) return;
-        actions.style.transition = animate ? 'transform 220ms cubic-bezier(0.2, 0, 0, 1)' : 'none';
-        actions.style.transform = `translate3d(${Math.max(0, width + offset)}px, 0, 0)`;
+        // Slide the file details while the outer card keeps its rounded edge
+        // and separator anchored to the neighbouring rows.
+        const content = target.querySelector<HTMLElement>(':scope > .row-swipe-content');
+        if (!content) return;
+        content.style.transition = animate ? 'transform 220ms cubic-bezier(0.2, 0, 0, 1)' : 'none';
+        content.style.transform = offset === 0 ? '' : `translate3d(${offset}px, 0, 0)`;
     }
 
     function settle(target: HTMLElement, open: boolean): void {

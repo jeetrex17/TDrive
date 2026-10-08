@@ -1290,8 +1290,8 @@ html.mobile .item-status.is-tappable:focus-visible {
 }
 
 /* ============================ ROW SWIPE ============================ */
-/* The card and filename stay put while the actions travel in over the trailing
-   controls. The card's rounded edge clips the panel throughout the gesture. */
+/* File details slide away to reveal actions behind them. The stationary card
+   clips both layers to its rounded edge throughout the gesture. */
 html.mobile .row-swipe-actions {
     position: absolute;
     right: 0;
@@ -1299,8 +1299,16 @@ html.mobile .row-swipe-actions {
     bottom: 0;
     display: flex;
     align-items: stretch;
-    z-index: 2;
-    transform: translateX(100%);
+    z-index: 0;
+}
+html.mobile .row-swipe-actions::before {
+    content: "";
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    right: 100%;
+    width: var(--radius-lg);
+    background: var(--color-surface-2);
 }
 
 html.mobile .row-swipe-btn {
@@ -1332,7 +1340,7 @@ html.mobile .row-swipe-btn.is-delete {
 @media (prefers-reduced-motion: reduce) {
     /* The settle is travel, so it goes; the row still arrives where the
        gesture asked, just without the glide. */
-    html.mobile .row-swipe-actions { transition: none !important; }
+    html.mobile .row-swipe-content { transition: none !important; }
 }
 
 /* ============================ WIDE AND LANDSCAPE ============================ */
