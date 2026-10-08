@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"strings"
 
+	"TDrive/backend/auth"
+
 	"github.com/gotd/td/telegram/query/dialogs"
 	"github.com/gotd/td/tg"
 	"github.com/gotd/td/tgerr"
@@ -13,22 +15,15 @@ import (
 
 const ownedDialogsBatchSize = 100
 
-// folderDialogsQuery sets the folder flag explicitly, including for folder 0.
-// Assigning FolderID directly does not set the MTProto conditional-field bit.
+// folderDialogsQuery shares the folder-flag handling used by fresh drive peer
+// resolution, so archived and primary dialog requests have the same semantics.
 type folderDialogsQuery struct {
 	api      *tg.Client
 	folderID int
 }
 
 func (q folderDialogsQuery) Query(ctx context.Context, request dialogs.Request) (tg.MessagesDialogsClass, error) {
-	req := &tg.MessagesGetDialogsRequest{
-		OffsetDate: request.OffsetDate,
-		OffsetID:   request.OffsetID,
-		OffsetPeer: request.OffsetPeer,
-		Limit:      request.Limit,
-	}
-	req.SetFolderID(q.folderID)
-	return q.api.MessagesGetDialogs(ctx, req)
+	return (auth.FolderDialogsQuery{API: q.api, FolderID: q.folderID}).Query(ctx, request)
 }
 
 // collectOwnedBroadcastChannels walks every supplied dialog folder to

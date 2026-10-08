@@ -19,12 +19,9 @@ import (
 func (g *Gotd) ResolveDocument(ctx context.Context, peer InputPeer, msgID int64) (DocumentRef, error) {
 	var ref DocumentRef
 	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
-		doc, name, err := getDocumentByMessageID(ctx, api, peer, msgID)
-		if err != nil {
-			return err
-		}
-		ref = documentRefFromTG(peer, msgID, doc, name)
-		return nil
+		var err error
+		ref, err = getMediaRefByMessageID(ctx, api, peer, msgID)
+		return err
 	})
 	return ref, err
 }
@@ -63,11 +60,11 @@ func documentRefsInOrder(peer InputPeer, msgIDs []int64, messages map[int64]tg.M
 		if !ok {
 			return nil, fmt.Errorf("message %d: %w", id, ErrMessageNotFound)
 		}
-		doc, name, err := documentOf(msg)
+		ref, err := mediaRefFromTG(peer, id, msg)
 		if err != nil {
 			return nil, fmt.Errorf("message %d: %w", id, err)
 		}
-		refs = append(refs, documentRefFromTG(peer, id, doc, name))
+		refs = append(refs, ref)
 	}
 	return refs, nil
 }
@@ -87,6 +84,9 @@ func (g *Gotd) ReadDocumentRange(ctx context.Context, ref DocumentRef, offset in
 	}
 	if crossesRangeBoundary(offset, len(dst)) {
 		return 0, fmt.Errorf("tgclient: range crosses %d-byte boundary", RangeReadMaxBytes)
+	}
+	if len(ref.InlineBytes) > 0 {
+		return readInlinePhoto(ctx, ref, offset, dst)
 	}
 
 	// Split the wait so a slow first read can be attributed. Time before the
@@ -127,6 +127,9 @@ func documentRefFromTG(peer InputPeer, msgID int64, doc *tg.Document, name strin
 // center. Should that data center turn out to be wrong, the primary connection
 // repeats the read and follows Telegram's redirect.
 func (g *Gotd) readDocumentRange(ctx context.Context, client *telegram.Client, ref DocumentRef, offset int64, dst []byte) (int, error) {
+	if len(ref.InlineBytes) > 0 {
+		return readInlinePhoto(ctx, ref, offset, dst)
+	}
 	api, pooled := g.fileAPI(ctx, client, ref.DCID)
 	n, err := g.readDocumentRangeVia(ctx, client, api, ref, offset, dst)
 	if pooled && isFileMigrate(err) {
@@ -137,14 +140,19 @@ func (g *Gotd) readDocumentRange(ctx context.Context, client *telegram.Client, r
 
 func (g *Gotd) readDocumentRangeVia(ctx context.Context, client *telegram.Client, api *tg.Client, ref DocumentRef, offset int64, dst []byte) (int, error) {
 	limit := roundedTelegramLimit(len(dst))
+	var location tg.InputFileLocationClass = &tg.InputDocumentFileLocation{
+		ID: ref.DocumentID, AccessHash: ref.AccessHash, FileReference: ref.FileReference,
+	}
+	if ref.PhotoSizeType != "" {
+		location = &tg.InputPhotoFileLocation{
+			ID: ref.DocumentID, AccessHash: ref.AccessHash, FileReference: ref.FileReference,
+			ThumbSize: ref.PhotoSizeType,
+		}
+	}
 	req := &tg.UploadGetFileRequest{
-		Location: &tg.InputDocumentFileLocation{
-			ID:            ref.DocumentID,
-			AccessHash:    ref.AccessHash,
-			FileReference: ref.FileReference,
-		},
-		Offset: offset,
-		Limit:  limit,
+		Location: location,
+		Offset:   offset,
+		Limit:    limit,
 	}
 	req.SetPrecise(true)
 	req.SetCDNSupported(true)

@@ -4,8 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"path"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -39,20 +37,18 @@ type ExternalMedia struct {
 // ExternalName normalizes a Telegram document name for the existing player.
 // A recognized MIME type supplies an extension when a post has no filename.
 func ExternalName(message tgclient.HistoryMessage) string {
-	name := path.Base(strings.ReplaceAll(strings.TrimSpace(message.DocumentName), `\`, `/`))
-	if name != "" && name != "." && name != "/" && len(name) <= 255 && streamKindForName(name) != StreamKindUnknown {
+	name := tgclient.MediaName(message)
+	if streamKindForName(name) != StreamKindUnknown {
 		return name
 	}
-	ext := map[string]string{
-		"video/mp4": ".mp4", "video/quicktime": ".mov", "video/webm": ".webm",
-		"video/x-matroska": ".mkv", "audio/mpeg": ".mp3", "audio/mp4": ".m4a",
-		"audio/aac": ".aac", "audio/ogg": ".ogg", "audio/flac": ".flac",
-		"audio/wav": ".wav", "audio/x-wav": ".wav",
-	}[strings.ToLower(message.MimeType)]
-	if ext == "" {
+	// Connected Telegram sources historically infer playable MIME even when a
+	// sender supplied an unrelated extension. Drive listings preserve that name.
+	message.DocumentName = ""
+	name = tgclient.MediaName(message)
+	if streamKindForName(name) == StreamKindUnknown {
 		return ""
 	}
-	return fmt.Sprintf("Telegram media %d%s", message.MsgID, ext)
+	return name
 }
 
 func ExternalKind(message tgclient.HistoryMessage) StreamKind {
@@ -132,7 +128,7 @@ func (s *Service) OpenExternal(ctx context.Context, source ExternalMedia, publis
 
 type externalRangeClient struct {
 	base            tgclient.RangeClient
-	client          tgclient.Client
+	client          RawDriveSource
 	peer            tgclient.InputPeer
 	original        tgclient.DocumentRef
 	validate        func(context.Context) error
@@ -157,7 +153,7 @@ func (c *externalRangeClient) ResolveDocument(ctx context.Context, _ tgclient.In
 	if err != nil {
 		return tgclient.DocumentRef{}, err
 	}
-	if ref.DocumentID != c.original.DocumentID || ref.Size != c.original.Size || ref.AccessHash != c.original.AccessHash {
+	if ref.MsgID != c.original.MsgID || ref.Peer.ChannelID != c.peer.ChannelID || ref.Peer.PeerKind() != c.peer.PeerKind() || ref.DocumentID != c.original.DocumentID || ref.Size != c.original.Size || ref.AccessHash != c.original.AccessHash || ref.PhotoSizeType != c.original.PhotoSizeType {
 		return tgclient.DocumentRef{}, ErrExternalReplaced
 	}
 	return ref, nil
@@ -175,7 +171,7 @@ func (c *externalRangeClient) checkRemote(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if channel.Protected || channel.Restricted {
+	if channel.ID != c.peer.ChannelID || channel.Kind != c.peer.PeerKind() || channel.Protected || channel.Restricted {
 		return ErrExternalRestricted
 	}
 	message, err := c.client.GetChannelMessage(ctx, c.peer, c.original.MsgID)
@@ -185,7 +181,7 @@ func (c *externalRangeClient) checkRemote(ctx context.Context) error {
 	if message.NoForwards || message.TTLSeconds > 0 || message.Paid || message.Restricted {
 		return ErrExternalRestricted
 	}
-	if message.DocumentID != c.original.DocumentID || message.MediaSize != c.original.Size || message.DocumentAccessHash != c.original.AccessHash {
+	if message.MsgID != c.original.MsgID || (message.ChannelID != 0 && message.ChannelID != c.peer.ChannelID) || (message.PeerKind != "" && message.PeerKind != c.peer.PeerKind()) || message.DocumentID != c.original.DocumentID || message.MediaSize != c.original.Size || message.DocumentAccessHash != c.original.AccessHash {
 		return ErrExternalReplaced
 	}
 	c.lastRemoteCheck.Store(time.Now().UnixNano())

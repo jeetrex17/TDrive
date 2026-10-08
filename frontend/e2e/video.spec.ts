@@ -149,6 +149,34 @@ test('plays a real file, and closing it releases the backend session', async ({ 
     await expect.poll(async () => (await mock.calls('CloseMedia')).length).toBeGreaterThan(0);
 });
 
+test('a forwarded video in a shared drive plays without a filesystem entry', async ({ page }) => {
+    await serveFixture(page);
+    const mock = await bootTDrive(page, {
+        ListChannels: resolves([
+            { id: 1, title: 'My Drive', kind: 'personal', is_active: false, invite_link: '' },
+            { id: 2, title: 'Shared files', kind: 'shared', is_active: true, invite_link: '' },
+        ]),
+        GetFolderContents: resolves({ folders: [], files: [] }),
+        GetAllFsMsgIDs: resolves([]),
+        GetFileList: resolves([{
+            name: VIDEO_FILE.name, size: VIDEO_FILE.size, id: VIDEO_FILE.msg_id,
+            date: VIDEO_FILE.upload_time, access_hash: 0,
+        }]),
+        GetMediaStats: resolves({ playback: {}, thumbnails: {} }),
+        UpdateMediaPlayback: resolves(null),
+        OpenMedia: resolves(opened({ info: { channel_id: 2, file_id: VIDEO_FILE.msg_id, source_kind: 'drive' } })),
+    });
+
+    await openTheVideo(page);
+    const player = page.locator('#video-player');
+    await expect.poll(() => player.evaluate((el: HTMLVideoElement) => el.readyState)).toBeGreaterThanOrEqual(1);
+    await expect.poll(() => player.evaluate((el: HTMLVideoElement) => el.duration)).toBeGreaterThan(0);
+    await expect(page.locator('#video-error')).toBeHidden();
+    expect(await mock.calls('OpenMedia')).toMatchObject([{ args: [VIDEO_FILE.msg_id], state: 'fulfilled' }]);
+    await page.locator('#video-close').click();
+    await expect.poll(async () => (await mock.calls('CloseMedia')).length).toBeGreaterThan(0);
+});
+
 for (const platform of ['android', 'ios'] as const) {
     test(`a touch drag scrubs the mobile timeline on ${platform}`, async ({ page, browserName }) => {
         await page.setViewportSize({ width: 390, height: 844 });

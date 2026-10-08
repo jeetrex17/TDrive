@@ -21,7 +21,7 @@ import { enqueueDownload, enqueueFolderDownload } from './transfers';
 import { appActions } from './app-actions';
 import type { FileListAction, FileListRow } from '../ui/file-list/types';
 import { fileListColumnMode } from '../ui/file-list/column-mode-store';
-import { getAllFsMsgIds, getFileList, isMobilePlatform, search } from '../api';
+import { getFileList, isMobilePlatform, search } from '../api';
 import type { RootFile, SearchHit } from '../types';
 
 let activeToken = 0;
@@ -344,23 +344,19 @@ export async function runGlobalSearch() {
     renderFileState(list, 'loading', 'Searching files');
 
     try {
-        // The managed set, not the hits, is what says whether a Telegram
-        // message is one of ours: a deleted file matches no hit and is still
-        // TDrive's until the trash purges it, so matching against the hits
-        // alone offered the file the user had just deleted back as a raw
-        // message nothing could open. Where the list cannot be read the hits
-        // are the honest fallback -- a duplicate row beats a missing one.
-        const [fsResults, tgFiles, managedIds] = await Promise.all([
+        // GetFileList already returns only raw openable Telegram attachments.
+        // De-dupe search hits against those roots so a visible TDrive file does
+        // not appear twice while avoiding a whole-drive managed-ID fetch.
+        const [fsResults, tgFiles] = await Promise.all([
             searchDrive(query, 200).catch(() => []),
             getTelegramRootFiles(driveKey),
-            getAllFsMsgIds().catch(() => [] as number[]),
         ]);
         if (token !== activeToken || (getFolderIndexDriveKey() ?? 'none') !== driveKey) return;
 
         const normalized = query.toLowerCase();
         const fs = fsResults;
 
-        const managed = new Set<string>(managedIds.map(String));
+        const managed = new Set<string>();
         for (const result of fs) {
             if (result.type === 'file') managed.add(result.id);
         }

@@ -16,7 +16,6 @@ import { notify } from './notifications';
 import { navigateBack, navigateToFolder } from './navigation';
 import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop';
 import {
-    getAllFsMsgIds,
     getFileList,
     getFolderContents as apiGetFolderContents,
     getStorageUsed,
@@ -677,16 +676,10 @@ async function loadFileData(view: FileViewIdentity): Promise<LoadedFileData> {
         view.folderId === '' ? getFileList() : Promise.resolve([] as RootFile[]),
     ]);
     const normalizedTelegramFiles = Array.isArray(telegramFiles) ? telegramFiles : [];
-    let filesystemMessageIds = new Set(filesystemFiles.map((file) => file.msgId));
-
-    if (view.folderId === '' && normalizedTelegramFiles.length > 0) {
-        try {
-            filesystemMessageIds = new Set(await getAllFsMsgIds());
-        } catch (error) {
-            // The visible folder remains correct with its direct filesystem IDs.
-            console.warn('GetAllFsMsgIDs failed:', error);
-        }
-    }
+    // The backend excludes owned Telegram bodies with a bounded query. Keep a
+    // folder-sized duplicate guard for projection changes during the two reads;
+    // fetching every message ID would make a root refresh grow with the drive.
+    const filesystemMessageIds = new Set(filesystemFiles.map((file) => file.msgId));
 
     return {
         folders: contents.folders,

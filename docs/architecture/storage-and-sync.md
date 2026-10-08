@@ -22,6 +22,14 @@ database also removes first-seen evidence and local recovery records. Remote
 history cannot reconstruct the original caption of a message edited before a
 fresh client first saw it.
 
+The root file list also reads a bounded page of Telegram history for unmanaged
+attachments. Those rows are not namespace entries: shared-drive sync does not
+automatically adopt ordinary chat attachments. Their previews use the
+[read-only media fallback](media-streaming.md), independent of sync watermarks.
+Before listing or opening a raw message, indexed ownership checks exclude
+projected files, tombstones, retained content, multipart parts, renditions and
+durable cleanup records. This prevents old bodies from reappearing as new files.
+
 ```mermaid
 flowchart LR
     Local[Local mutation] --> Send[Send Telegram operation]

@@ -108,9 +108,10 @@ it('merges root files without duplicating projected messages and shows plaintext
     expect(list.querySelector('[data-name="secret.txt"]')?.textContent).toContain('25 B');
     expect(list.querySelector('[data-name="Work"]')?.textContent).toContain('4 KB');
     expect(state.telegramRootCacheDriveKey).toBe('1');
+    expect(api.getAllFsMsgIds).not.toHaveBeenCalled();
 });
 
-it('keeps direct file de-duplication when the full index and folder stats fail', async () => {
+it('keeps direct file de-duplication when folder stats fail without loading the full index', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     api.getFolderContents.mockResolvedValue({ folders: [{ id: 'folder', name: 'Work', parentId: '' }], files: [file()] });
     api.getFileList.mockResolvedValue([{ msgId: 41, name: 'duplicate.txt', size: 1, date: 1, accessHash: 0 }]);
@@ -120,6 +121,7 @@ it('keeps direct file de-duplication when the full index and folder stats fail',
     await expectText('report.txt');
     expect(list.querySelectorAll('[data-type="file"]')).toHaveLength(1);
     expect(list.textContent).toContain('Work');
+    expect(api.getAllFsMsgIds).not.toHaveBeenCalled();
 });
 
 it('loads nested folders without fetching raw Telegram root files', async () => {

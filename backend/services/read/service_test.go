@@ -294,3 +294,55 @@ func TestTelegramRootFilesSkipsMultipartParts(t *testing.T) {
 		t.Fatalf("files = %+v, want only real.bin (multipart parts skipped)", files)
 	}
 }
+
+func TestTelegramRootFilesHidesOwnedBodiesAndNamesLooseAttachments(t *testing.T) {
+	svc, db, fakeTG := newTestService(t)
+	project(t, db, 10, projection.Op{Type: projection.OpFileUpload, Parent: projection.RootParent, Name: "managed.pdf", FileSize: 1})
+	project(t, db, 20, projection.Op{Type: projection.OpFileUpload, Parent: projection.RootParent, Name: "trashed.pdf", FileSize: 1})
+	if _, err := db.Exec(`UPDATE files SET tombstoned=1, content_msg_id=21 WHERE channel_id=? AND msg_id=20`, testChannelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`INSERT INTO file_revisions(channel_id,file_msg_id,revision,content_msg_id,committed_msg_id) VALUES(?,10,2,11,10)`, testChannelID); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []int64{10, 11, 20, 21} {
+		fakeTG.SeedHistory(tgclient.HistoryMessage{MsgID: id, HasMedia: true, DocumentName: "owned.pdf", MediaSize: 1})
+	}
+	fakeTG.SeedHistory(
+		tgclient.HistoryMessage{MsgID: 50, HasMedia: true, MimeType: "application/pdf", MediaSize: 1},
+		tgclient.HistoryMessage{MsgID: 51, HasMedia: true, DocumentName: "video", MimeType: "video/mp4", MediaSize: 1},
+		tgclient.HistoryMessage{MsgID: 52, HasMedia: true, DocumentName: "archive.bin", MimeType: "application/octet-stream", MediaSize: 1},
+	)
+	files, err := svc.TelegramRootFiles(t.Context(), testChannelID)
+	if err != nil {
+		t.Fatalf("telegram root files: %v", err)
+	}
+	if len(files) != 3 {
+		t.Fatalf("files = %+v, want only three loose attachments", files)
+	}
+	want := map[int]string{50: "Telegram file 50.pdf", 51: "video.mp4", 52: "archive.bin"}
+	for _, file := range files {
+		if file.Name != want[file.ID] {
+			t.Fatalf("unexpected raw file: %+v", file)
+		}
+	}
+}
+
+func TestTelegramRootFilesSkipsInternalHeadersBeforeProjection(t *testing.T) {
+	svc, _, fakeTG := newTestService(t)
+	for _, message := range []tgclient.HistoryMessage{
+		{MsgID: 60, HasMedia: true, MediaSize: 1, DocumentName: "attribute.bin", Text: projection.Format(projection.Op{Type: projection.OpFileUpload, Name: "visible.pdf", Parent: projection.RootParent, FileSize: 1})},
+		{MsgID: 61, HasMedia: true, MediaSize: 1, DocumentName: "private.pdf", Text: projection.Format(projection.Op{Type: projection.OpFileUpload, Name: "private.pdf", Parent: projection.RootParent, FileSize: 1, Encrypted: true})},
+		{MsgID: 62, HasMedia: true, DocumentName: "metadata.pdf", Text: "TDX1|t=unsupported"},
+		{MsgID: 63, HasMedia: true, DocumentName: "sidecar.bin", Text: projection.Format(projection.Op{Type: projection.OpFilePart, UploadUUID: "sidecar", FileSize: 1})},
+	} {
+		fakeTG.SeedHistory(message)
+	}
+	files, err := svc.TelegramRootFiles(t.Context(), testChannelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 || files[0].ID != 60 || files[0].Name != "visible.pdf" {
+		t.Fatalf("files = %+v, want only the unencrypted legacy upload", files)
+	}
+}

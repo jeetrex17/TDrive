@@ -41,6 +41,26 @@ and [`media.Service`](../../backend/media/service.go). The
 [resolver](../../backend/media/resolver.go) validates projected content and
 multipart completeness before constructing an ordered logical file.
 
+Drive roots also display unmanaged Telegram attachments directly from history.
+Opening one does not require a TDrive upload or adoption into the namespace. When
+no projected file exists, the media service checks bounded, indexed ownership
+records before resolving that exact message in the captured drive. Tombstones,
+retained revisions, parts, renditions and cleanup/control messages cannot use
+this fallback. An unencrypted legacy upload can open before sync projects it.
+
+Raw documents reuse the existing tokenized sessions, byte ranges, image admission
+and player routing. Their account/channel identity is fixed at open; permission,
+content identity and local availability checks protect subsequent uncached reads.
+They use `no-store` and session-only generated video thumbnails. MIME-derived
+extensions keep unnamed attachments consistent between listing and opening.
+Telegram photos use the largest available JPEG variant and
+`InputPhotoFileLocation` through the same range transport; this is Telegram's
+stored photo representation, not the sender's uncompressed original.
+
+Drive peers use the persisted account-specific channel access hash. Missing or
+rejected hashes are refreshed from primary and archived dialogs, including
+shared megagroups. A channel lookup never bootstraps access with a zero hash.
+
 ## Telegram chat and channel media sources
 
 The source picker lists already-open direct chats, bot chats, Saved Messages,
