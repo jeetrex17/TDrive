@@ -24,7 +24,8 @@ a replacement package identity.
 ## Build on Windows
 
 Use the pinned Go and Wails versions in [the build guide](../../README.md).
-Install the Windows SDK with `MakeAppx.exe` and `SignTool.exe`. The initial
+Install PowerShell 7 (`pwsh`) and the Windows SDK with `MakeAppx.exe` and
+`SignTool.exe`. The initial
 package targets x64; native ARM64 packaging is not included.
 
 1. Build the application with a release version, for example
