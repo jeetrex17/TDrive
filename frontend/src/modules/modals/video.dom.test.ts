@@ -146,6 +146,12 @@ async function nextTasks(): Promise<void> {
 beforeEach(async () => {
     vi.clearAllMocks();
     runtimeMocks.events.clear();
+    // Decoder fallback preferences must not redirect the next test's HTML open.
+    const playbackStorage = new Map<string, string>();
+    vi.stubGlobal("localStorage", {
+        getItem: (key: string) => playbackStorage.get(key) ?? null,
+        setItem: (key: string, value: string) => playbackStorage.set(key, value),
+    });
     document.body.innerHTML = '<div id="file-list" tabindex="-1"></div><div id="video-modal" style="display:none"></div>';
     installMediaElementStubs();
     vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => window.setTimeout(() => callback(0), 0));
@@ -534,6 +540,7 @@ describe("video HTML-to-native fallback", () => {
         const video = document.querySelector<HTMLVideoElement>("#video-player");
         expect(video).not.toBeNull();
         if (!video) return;
+        expect(video.src).toBe(opened.url);
 
         const protectionChanges: Array<string | null> = [];
         const shell = document.getElementById('video-shell')!;
