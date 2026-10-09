@@ -37,7 +37,7 @@ as generated metadata or the repository's icon policy.
 
 ## Go conventions
 
-Use the Go version in [go.mod](go.mod), currently 1.25.13, and follow the Modern Go
+Use the Go version in [go.mod](go.mod), currently 1.26.9, and follow the Modern Go
 Guidelines skill for Go changes. Prefer the standard `testing` package and the
 existing package helpers over a new assertion or mocking dependency.
 
