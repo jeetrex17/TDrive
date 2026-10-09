@@ -184,12 +184,16 @@ func TestPhotoBackupStateUsesStableWirePhases(t *testing.T) {
 
 func TestResolvePhotoBackupResourceRejectsUnknownAndUntrustedPaths(t *testing.T) {
 	app := &App{photoBackupWaiters: make(map[string]chan photoBackupMaterialization)}
-	if err := app.ResolvePhotoBackupResource("missing", "/tmp/photo.jpg", ""); err == nil {
+	outside := filepath.Join(t.TempDir(), "photo.jpg")
+	if err := os.WriteFile(outside, []byte("photo"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := app.ResolvePhotoBackupResource("missing", outside, ""); err == nil {
 		t.Fatal("unknown token accepted")
 	}
 	wait := make(chan photoBackupMaterialization, 1)
 	app.photoBackupWaiters["known"] = wait
-	if err := app.ResolvePhotoBackupResource("known", "/tmp/photo.jpg", ""); err != nil {
+	if err := app.ResolvePhotoBackupResource("known", outside, ""); err != nil {
 		t.Fatal(err)
 	}
 	result := <-wait
@@ -231,6 +235,16 @@ func TestDesktopDiscoveryRetainsCursorReconcilesAndRestarts(t *testing.T) {
 		t.Fatal(err)
 	}
 	app := &App{photoBackupAdapters: make(map[string]*photobackup.LocalFolderAdapter)}
+	closeAdapters := func() {
+		for _, adapter := range app.photoBackupAdapters {
+			adapter.Close()
+		}
+	}
+	t.Cleanup(closeAdapters)
+	resetAdapters := func() {
+		closeAdapters()
+		app.photoBackupAdapters = make(map[string]*photobackup.LocalFolderAdapter)
+	}
 	discoverAll := func() {
 		for attempts := 0; attempts < 10 && app.discoverDesktopSources(ctx, engine, scope, []photobackup.Source{source}, ""); attempts++ {
 		}
@@ -246,7 +260,7 @@ func TestDesktopDiscoveryRetainsCursorReconcilesAndRestarts(t *testing.T) {
 	if err := engine.ResetDiscovery(ctx, scope, source.ID); err != nil {
 		t.Fatal(err)
 	}
-	app.photoBackupAdapters = make(map[string]*photobackup.LocalFolderAdapter)
+	resetAdapters()
 	discoverAll()
 	status, err = engine.Status(ctx, scope)
 	if err != nil || status.Pending != 301 {
@@ -258,7 +272,7 @@ func TestDesktopDiscoveryRetainsCursorReconcilesAndRestarts(t *testing.T) {
 	if !app.discoverDesktopSources(ctx, engine, scope, []photobackup.Source{source}, "") {
 		t.Fatal("first restart page reported complete")
 	}
-	app.photoBackupAdapters = make(map[string]*photobackup.LocalFolderAdapter)
+	resetAdapters()
 	discoverAll()
 	status, err = engine.Status(ctx, scope)
 	if err != nil || status.Pending != 301 {

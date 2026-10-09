@@ -78,6 +78,17 @@ func TestMobileUploadSourceStagingKeepsOnlyOwnedCopies(t *testing.T) {
 			if err := os.WriteFile(source, content, 0o600); err != nil {
 				t.Fatal(err)
 			}
+			if !move {
+				// A caller-owned source may grant read access without write access.
+				if err := os.Chmod(source, 0o400); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := os.Chmod(source, 0o600); err != nil {
+						t.Errorf("restore source permissions: %v", err)
+					}
+				})
+			}
 			before, err := os.Lstat(source)
 			if err != nil {
 				t.Fatal(err)

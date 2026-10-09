@@ -62,6 +62,7 @@ export async function getAppVersion(): Promise<AppVersion> {
         os: String(raw?.os ?? ""),
         arch: String(raw?.arch ?? ""),
         devBuild: Boolean(raw?.dev_build),
+        storeManaged: Boolean(raw?.store_managed),
     };
 }
 

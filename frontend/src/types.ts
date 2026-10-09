@@ -189,6 +189,7 @@ export interface AppVersion {
     os: string;
     arch: string;
     devBuild: boolean;
+    storeManaged?: boolean;
 }
 
 export interface UpdateRelease {

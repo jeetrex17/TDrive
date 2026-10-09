@@ -32,6 +32,9 @@ type UpdateService struct {
 	players nativeMediaCloser
 	// version is the build stamp from main.appVersion ("dev" for local builds).
 	version string
+	// Package identity is fixed for the process lifetime. Store installs must
+	// never replace binaries in the protected MSIX installation directory.
+	storeManaged bool
 	// service drives the check/download/install lifecycle. It is built during
 	// startup rather than at construction so its state events have a webview
 	// to reach.
@@ -39,7 +42,7 @@ type UpdateService struct {
 }
 
 func newUpdateService(host serviceHost, shell appShell, players nativeMediaCloser, version string) *UpdateService {
-	return &UpdateService{host: host, shell: shell, players: players, version: version}
+	return &UpdateService{host: host, shell: shell, players: players, version: version, storeManaged: storeManagedUpdates()}
 }
 
 // appShell is the part of the running Wails application the updater has to
@@ -62,6 +65,8 @@ type nativeMediaCloser interface {
 // updateRepo is where desktop releases are published.
 const updateRepo = updater.DefaultRepo
 
+const microsoftStoreURL = "ms-windows-store://pdp/?productid=9PK3XTTDC0C0"
+
 // updatesOpenEvent asks the frontend to open the Updates panel (native menu).
 const updatesOpenEvent = "updates:open"
 
@@ -70,10 +75,11 @@ const updateStateEvent = "update_state"
 
 // AppVersionInfo describes the running build for the About/Updates panel.
 type AppVersionInfo struct {
-	Version  string `json:"version"`
-	OS       string `json:"os"`
-	Arch     string `json:"arch"`
-	DevBuild bool   `json:"dev_build"`
+	Version      string `json:"version"`
+	OS           string `json:"os"`
+	Arch         string `json:"arch"`
+	DevBuild     bool   `json:"dev_build"`
+	StoreManaged bool   `json:"store_managed"`
 }
 
 // initUpdater builds the updater once the Wails context exists so state
@@ -82,7 +88,7 @@ type AppVersionInfo struct {
 func (s *UpdateService) initUpdater() {
 	// Mobile stores own the update path, so leave the updater nil: every entry
 	// point then reports PhaseDisabled, exactly like a "dev" desktop build.
-	if application.System.IsMobile() {
+	if s.storeManaged || application.System.IsMobile() {
 		return
 	}
 	s.service = updater.New(updater.Options{
@@ -132,10 +138,11 @@ func (s *UpdateService) requestPanel() {
 func (s *UpdateService) AppVersion() AppVersionInfo {
 	_, err := updater.ParseVersion(s.version)
 	return AppVersionInfo{
-		Version:  strings.TrimPrefix(s.version, "v"),
-		OS:       goruntime.GOOS,
-		Arch:     goruntime.GOARCH,
-		DevBuild: err != nil,
+		Version:      strings.TrimPrefix(s.version, "v"),
+		OS:           goruntime.GOOS,
+		Arch:         goruntime.GOARCH,
+		DevBuild:     err != nil,
+		StoreManaged: s.storeManaged,
 	}
 }
 
@@ -198,6 +205,10 @@ func (s *UpdateService) InstallUpdateAndRestart() error {
 // the releases index when no newer release is known. The URL never comes
 // from the frontend.
 func (s *UpdateService) OpenUpdatePage() {
+	if s.storeManaged {
+		s.shell.openURL(microsoftStoreURL)
+		return
+	}
 	url := ""
 	if s.service != nil {
 		url = s.service.ReleasePageURL()

@@ -4,7 +4,7 @@ import { get } from 'svelte/store';
 // Backend bindings and the toast surface are mocked; the module factories are
 // hoisted so both static and dynamic (per-test) imports see them.
 const bindings = vi.hoisted(() => ({
-    AppVersion: vi.fn(async () => ({ version: '1.6.0', os: 'darwin', arch: 'arm64', dev_build: false })),
+    AppVersion: vi.fn(async () => ({ version: '1.6.0', os: 'darwin', arch: 'arm64', dev_build: false, store_managed: false })),
     CancelUpdateDownload: vi.fn(async () => undefined),
     CheckForUpdate: vi.fn(),
     DownloadUpdate: vi.fn(async () => undefined),
@@ -168,6 +168,27 @@ describe('activation', () => {
 
         expect(bindings.GetUpdateState).toHaveBeenCalledOnce();
         expect(bindings.AppVersion).toHaveBeenCalledOnce();
+    });
+
+    it('leaves Store-managed updates to Microsoft Store', async () => {
+        bindings.AppVersion.mockResolvedValueOnce({ version: '1.6.0', os: 'windows', arch: 'amd64', dev_build: false, store_managed: true });
+        const { mod, store } = await loadModule();
+        vi.useFakeTimers();
+        try {
+            const teardown = mod.activateUpdates();
+            await vi.waitFor(() => expect(get(store.appVersionInfo)?.storeManaged).toBe(true));
+            await mod.openUpdatesUI();
+            await mod.checkForUpdates({ explicit: true });
+            await vi.advanceTimersByTimeAsync(24 * 60 * 60 * 1000 + 10_000);
+            teardown();
+
+            expect(get(store.updatesPanelRequest)).toBe(1);
+            expect(bindings.CheckForUpdate).not.toHaveBeenCalled();
+            expect(bindings.DownloadUpdate).not.toHaveBeenCalled();
+        } finally {
+            mod.teardownUpdates();
+            vi.useRealTimers();
+        }
     });
 
     it('never starts the updater or opens its panel on a phone', async () => {

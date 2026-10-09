@@ -203,6 +203,11 @@ func (r *uploadContextReader) Read(p []byte) (int, error) {
 }
 
 func syncUploadSourceDirectory(dir string) error {
+	// Go cannot sync a directory through os.File on Windows. The staged file
+	// is synced separately, but its directory entry has weaker durability there.
+	if runtime.GOOS == "windows" {
+		return nil
+	}
 	f, err := os.Open(dir)
 	if err != nil {
 		return err
@@ -212,7 +217,12 @@ func syncUploadSourceDirectory(dir string) error {
 }
 
 func syncUploadSourceFile(path string) error {
-	f, err := os.Open(path)
+	flags := os.O_RDONLY
+	if runtime.GOOS == "windows" {
+		// Windows requires a writable handle for FlushFileBuffers.
+		flags = os.O_RDWR
+	}
+	f, err := os.OpenFile(path, flags, 0)
 	if err != nil {
 		return err
 	}

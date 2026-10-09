@@ -22,6 +22,7 @@ export interface AppVersionInfo {
     "os": string;
     "arch": string;
     "dev_build": boolean;
+    "store_managed": boolean;
 }
 
 /**
