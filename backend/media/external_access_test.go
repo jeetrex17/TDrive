@@ -3,6 +3,7 @@ package media
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -37,27 +38,36 @@ func (c *canceledCheckClient) GetMediaSourcePeer(ctx context.Context, peer tgcli
 	return c.Client.GetMediaSourcePeer(ctx, peer)
 }
 
-func TestExternalUncachedReadRechecksProtectionWithoutExpiredReference(t *testing.T) {
-	fake := tgclient.NewFake(1234)
-	peer := tgclient.InputPeer{Kind: tgclient.PeerGroup, ChannelID: 42}
-	fake.SeedMediaSourcePeers(tgclient.SourcePeer{Kind: tgclient.PeerGroup, ID: 42, Title: "Friends"})
-	fake.SeedHistory(tgclient.HistoryMessage{PeerKind: tgclient.PeerGroup, ChannelID: 42, MsgID: 7,
-		HasMedia: true, DocumentID: 701, DocumentAccessHash: 702, MediaSize: 8, DocumentName: "clip.mp4"})
-	fake.SeedSourceDocumentBody(tgclient.PeerGroup, 42, 7, []byte("12345678"))
-	ref, err := fake.ResolveDocument(t.Context(), peer, 7)
-	if err != nil {
-		t.Fatal(err)
-	}
-	reader := &externalRangeClient{base: fake, client: fake, peer: peer, original: ref}
-	reader.lastRemoteCheck.Store(time.Now().UnixNano())
-	buf := make([]byte, 8)
-	if n, err := reader.ReadDocumentRange(t.Context(), ref, 0, buf); err != nil || n != 8 {
-		t.Fatalf("initial range = %d, %v", n, err)
-	}
-	fake.SeedMediaSourcePeers(tgclient.SourcePeer{Kind: tgclient.PeerGroup, ID: 42, Title: "Friends", Protected: true})
-	reader.lastRemoteCheck.Store(0)
-	if n, err := reader.ReadDocumentRange(t.Context(), ref, 0, buf); n != 0 || !errors.Is(err, ErrExternalRestricted) {
-		t.Fatalf("protected range = %d, %v", n, err)
+func TestExternalUncachedReadPreservesOpenedProtectionPolicy(t *testing.T) {
+	for _, protected := range []bool{false, true} {
+		t.Run(fmt.Sprintf("opened protected=%v", protected), func(t *testing.T) {
+			fake := tgclient.NewFake(1234)
+			peer := tgclient.InputPeer{Kind: tgclient.PeerGroup, ChannelID: 42}
+			fake.SeedMediaSourcePeers(tgclient.SourcePeer{Kind: tgclient.PeerGroup, ID: 42, Title: "Friends", Protected: protected})
+			fake.SeedHistory(tgclient.HistoryMessage{PeerKind: tgclient.PeerGroup, ChannelID: 42, MsgID: 7,
+				HasMedia: true, DocumentID: 701, DocumentAccessHash: 702, MediaSize: 8, DocumentName: "clip.mp4"})
+			fake.SeedSourceDocumentBody(tgclient.PeerGroup, 42, 7, []byte("12345678"))
+			ref, err := fake.ResolveDocument(t.Context(), peer, 7)
+			if err != nil {
+				t.Fatal(err)
+			}
+			reader := &externalRangeClient{base: fake, client: fake, peer: peer, original: ref, protected: protected}
+			reader.lastRemoteCheck.Store(time.Now().UnixNano())
+			buf := make([]byte, 8)
+			if n, err := reader.ReadDocumentRange(t.Context(), ref, 0, buf); err != nil || n != 8 {
+				t.Fatalf("initial range=%d, %v", n, err)
+			}
+			fake.SeedMediaSourcePeers(tgclient.SourcePeer{Kind: tgclient.PeerGroup, ID: 42, Title: "Friends", Protected: true})
+			reader.lastRemoteCheck.Store(0)
+			n, err := reader.ReadDocumentRange(t.Context(), ref, 0, buf)
+			if protected {
+				if err != nil || n != 8 || string(buf) != "12345678" {
+					t.Fatalf("protected range=%d, %v", n, err)
+				}
+			} else if n != 0 || !errors.Is(err, ErrExternalRestricted) {
+				t.Fatalf("newly protected range=%d, %v", n, err)
+			}
+		})
 	}
 }
 
@@ -132,5 +142,31 @@ func TestExternalRangeRetriesAfterCanceledConcurrentCheck(t *testing.T) {
 	}
 	if got := client.calls.Load(); got != 2 {
 		t.Fatalf("remote checks = %d, want canceled leader plus live retry", got)
+	}
+}
+
+func TestExternalPhotoReferenceRefreshPreservesVariantAndIdentity(t *testing.T) {
+	for _, change := range []string{"", "photo variant", "document", "peer kind"} {
+		t.Run(change, func(t *testing.T) {
+			fake := tgclient.NewFake(1234)
+			peer := tgclient.InputPeer{Kind: tgclient.PeerGroup, ChannelID: 42}
+			fake.SeedMediaSourcePeers(tgclient.SourcePeer{Kind: tgclient.PeerGroup, ID: 42, Title: "Photos"})
+			fake.SeedHistory(tgclient.HistoryMessage{PeerKind: tgclient.PeerGroup, ChannelID: 42, MsgID: 7,
+				HasMedia: true, DocumentID: 701, DocumentAccessHash: 702, MediaSize: 8, DocumentName: "photo.jpg", MimeType: "image/jpeg"})
+			original, err := fake.ResolveDocument(t.Context(), peer, 7)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original.PhotoSizeType = "x"
+			reader := &externalRangeClient{base: &changingRawReference{RangeClient: fake, change: change}, client: fake, peer: peer, original: original}
+			ref, err := reader.ResolveDocument(t.Context(), peer, 7)
+			if change == "" {
+				if err != nil || ref.PhotoSizeType != "x" {
+					t.Fatalf("photo refresh=%#v, %v", ref, err)
+				}
+			} else if !errors.Is(err, ErrExternalReplaced) {
+				t.Fatalf("changed %s accepted: %v", change, err)
+			}
+		})
 	}
 }

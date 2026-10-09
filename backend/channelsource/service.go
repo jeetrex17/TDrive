@@ -52,6 +52,7 @@ type MediaItem struct {
 	Kind        string `json:"kind"`
 	Caption     string `json:"caption"`
 	Streamable  bool   `json:"streamable"`
+	Protected   bool   `json:"protected"`
 	BlockReason string `json:"block_reason,omitempty"`
 	TelegramURL string `json:"telegram_url"`
 }
@@ -133,6 +134,7 @@ func NewService(db *sql.DB, tg tgclient.Client, mediaService *media.Service, sel
 	}
 	return &Service{db: db, tg: tg, media: mediaService, self: self, retry: tgclient.FloodWaitRetryPolicy{
 		MaxRetries: 2, MaxWait: 30 * time.Second, MaxTotalWait: time.Minute,
+		MaxTransientRetries: 2, TransientBackoff: 500 * time.Millisecond, MaxTransientBackoff: 2 * time.Second,
 	}}, nil
 }
 
@@ -469,15 +471,16 @@ func mediaItem(channel tgclient.JoinedBroadcastChannel, message tgclient.History
 		return MediaItem{}, false
 	}
 	name := media.ExternalName(message)
+	if name == "" {
+		name = tgclient.MediaName(message)
+	}
 	kind := media.ExternalKind(message)
 	item := MediaItem{MsgID: message.MsgID, Date: message.Date, Name: name, Size: message.MediaSize,
 		Duration: int64(math.Round(message.Duration)), MimeType: message.MimeType, Kind: string(kind), Caption: message.Text,
-		TelegramURL: telegramURL(channel, message.MsgID)}
+		TelegramURL: telegramURL(channel, message.MsgID), Protected: channel.Protected || message.NoForwards}
 	switch {
 	case message.Restricted:
 		item.BlockReason = "restricted"
-	case channel.Protected || message.NoForwards:
-		item.BlockReason = "protected"
 	case message.Paid:
 		item.BlockReason = "paid"
 	case message.TTLSeconds > 0:
@@ -493,8 +496,26 @@ func mediaItem(channel tgclient.JoinedBroadcastChannel, message tgclient.History
 	return item, true
 }
 
+// Documents includes both supported document viewers and attachments that
+// remain available through Telegram when TDrive cannot preview their format.
+func validMediaKind(kind string) bool {
+	switch kind {
+	case "all", "video", "audio", "image", "document":
+		return true
+	default:
+		return false
+	}
+}
+
+func matchesMediaKind(item MediaItem, kind string) bool {
+	if kind == "all" || item.Kind == kind {
+		return true
+	}
+	return kind == "document" && (item.Kind == string(media.StreamKindPDF) || item.Kind == string(media.StreamKindText) || item.Kind == string(media.StreamKindUnknown))
+}
+
 func (s *Service) Page(ctx context.Context, channelID, offsetID int64, limit int, search, kind string) (MediaPage, error) {
-	if channelID <= 0 || offsetID < 0 || limit < 1 || limit > 100 || len(search) > 120 || (kind != "all" && kind != "video" && kind != "audio") {
+	if channelID <= 0 || offsetID < 0 || limit < 1 || limit > 100 || len(search) > 120 || !validMediaKind(kind) {
 		return MediaPage{}, ErrInvalidPage
 	}
 	source, channel, err := s.current(ctx, channelID, offsetID == 0)
@@ -535,7 +556,7 @@ func (s *Service) Page(ctx context.Context, channelID, offsetID int64, limit int
 				page.NextOffsetID = message.MsgID
 			}
 			item, ok := mediaItem(channel, message)
-			if ok && (kind == "all" || item.Kind == kind) {
+			if ok && matchesMediaKind(item, kind) {
 				page.Items = append(page.Items, item)
 			}
 			if len(page.Items) >= limit {
@@ -579,9 +600,6 @@ func (s *Service) OpenWithGate(ctx context.Context, channelID, msgID, expectedAc
 	}
 	if source.AccountID != expectedAccountID || source.Generation != expectedGeneration {
 		return media.OpenResult{}, ErrNotConnected
-	}
-	if channel.Protected {
-		return media.OpenResult{}, media.ErrExternalRestricted
 	}
 	peer := tgclient.InputPeer{ChannelID: channelID, AccessHash: channel.AccessHash}
 	var message tgclient.HistoryMessage

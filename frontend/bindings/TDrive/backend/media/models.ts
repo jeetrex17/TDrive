@@ -17,6 +17,7 @@ export interface LogicalFile {
     "stored_size": number;
     "plaintext_size": number;
     "encrypted": boolean;
+    "protected": boolean;
     "encryption_version": number;
     "multipart": boolean;
     "segments": Segment[] | null;
