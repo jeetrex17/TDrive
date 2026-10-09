@@ -127,6 +127,7 @@ func (s *MediaService) attachNativeMedia(opened media.OpenResult, rect nativepla
 	token := opened.Token
 	htmlControls := nativeHTMLControlsEnabled() && nativeplayer.SupportsHTMLControls()
 	opts := nativeplayer.Options{
+		Protected:       opened.Info.Protected,
 		UseHTMLControls: htmlControls,
 		OnState: func(state nativeplayer.State) {
 			snapshot, emit := s.recordNativeMediaState(token, reservation, state)

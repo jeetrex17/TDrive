@@ -403,7 +403,7 @@ func (p *Player) startProcess(ctx context.Context, url string, windowID uintptr,
 	p.ipcDir = ipcDir
 	p.ipcPath = filepath.Join(ipcDir, fmt.Sprintf("mpv-%d.sock", os.Getpid()))
 	_ = os.Remove(p.ipcPath)
-	args := linuxMPVArgs(version, p.ipcPath, windowID)
+	args := linuxMPVArgs(version, p.ipcPath, windowID, opts)
 
 	output := &mpvOutput{}
 	cmd := exec.CommandContext(ctx, mpvPath, args...)

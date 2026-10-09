@@ -84,7 +84,7 @@ func TestLinuxMPVArgsFitTheRuntime(t *testing.T) {
 		return slices.ContainsFunc(args, func(arg string) bool { return strings.HasPrefix(arg, option) })
 	}
 
-	old := linuxMPVArgs(mpvVersion{0, 34}, ipc, 42)
+	old := linuxMPVArgs(mpvVersion{0, 34}, ipc, 42, Options{})
 	if has(old, "--auto-window-resize") {
 		t.Fatalf("0.34 was given --auto-window-resize, which it rejects: %v", old)
 	}
@@ -92,23 +92,40 @@ func TestLinuxMPVArgsFitTheRuntime(t *testing.T) {
 		t.Fatalf("0.34 embedded args are missing basics: %v", old)
 	}
 
-	current := linuxMPVArgs(mpvVersion{0, 41}, ipc, 42)
+	current := linuxMPVArgs(mpvVersion{0, 41}, ipc, 42, Options{})
 	if !has(current, "--auto-window-resize=no") {
 		t.Fatalf("0.41 embedded args should pin the window size: %v", current)
 	}
 
-	unknown := linuxMPVArgs(mpvVersion{}, ipc, 42)
+	unknown := linuxMPVArgs(mpvVersion{}, ipc, 42, Options{})
 	if has(unknown, "--auto-window-resize") || has(unknown, "--hwdec") {
 		t.Fatalf("an unreadable version must get only universally accepted options: %v", unknown)
 	}
 
-	standalone := linuxMPVArgs(mpvVersion{0, 41}, ipc, 0)
+	standalone := linuxMPVArgs(mpvVersion{0, 41}, ipc, 0, Options{})
 	if has(standalone, "--wid") || has(standalone, "--auto-window-resize") || !has(standalone, "--osc=yes") {
 		t.Fatalf("standalone args are wrong: %v", standalone)
 	}
 	for _, args := range [][]string{old, current, unknown, standalone} {
 		if has(args, "--video-align") {
 			t.Fatalf("video alignment is already the default and predates some runtimes: %v", args)
+		}
+	}
+}
+
+func TestLinuxProtectedPlaybackKeepsOSCWithoutSaveBindings(t *testing.T) {
+	for _, windowID := range []uintptr{0, 42} {
+		args := linuxMPVArgs(mpvVersion{0, 34}, "/tmp/mpv.sock", windowID, Options{Protected: true})
+		for _, required := range []string{"--input-default-bindings=no", "--cache-on-disk=no", "--stream-record=", "--save-position-on-quit=no", "--load-scripts=no"} {
+			if !slices.Contains(args, required) {
+				t.Fatalf("protected window %d missing %s: %v", windowID, required, args)
+			}
+		}
+		if slices.Contains(args, "--input-default-bindings=yes") {
+			t.Fatalf("protected window enables screenshot/save shortcuts: %v", args)
+		}
+		if windowID == 0 && !slices.Contains(args, "--osc=yes") {
+			t.Fatalf("protected standalone playback lost mouse controls: %v", args)
 		}
 	}
 }

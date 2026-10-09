@@ -115,6 +115,8 @@ type State struct {
 type StateHandler func(State)
 
 type Options struct {
+	// Protected disables mpv features that can persist or export media.
+	Protected       bool
 	UseHTMLControls bool
 	OnState         StateHandler
 }
