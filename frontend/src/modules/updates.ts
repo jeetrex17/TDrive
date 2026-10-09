@@ -39,6 +39,7 @@ let firstCheckTimer: ReturnType<typeof setTimeout> | null = null;
 let intervalTimer: ReturnType<typeof setInterval> | null = null;
 let stopUpdateState: (() => void) | null = null;
 let stopOpenUpdates: (() => void) | null = null;
+let versionReady: Promise<void> | null = null;
 
 // Versions we've already acted on, so a phase that re-emits (or a failed
 // download dropping back to "available") can't spam toasts or retry forever.
@@ -57,12 +58,15 @@ export function activateUpdates(): () => void {
         void openUpdatesUI();
     });
 
-    void hydrateVersion();
+    const currentVersionReady = hydrateVersion();
+    versionReady = currentVersionReady;
+    void currentVersionReady.then(() => {
+        if (started && versionReady === currentVersionReady) scheduleChecks();
+    });
     void getUpdateState()
         .then(applyState)
         .catch((err) => console.warn('GetUpdateState failed:', err));
 
-    scheduleChecks();
     return teardownUpdates;
 }
 
@@ -75,6 +79,7 @@ export function teardownUpdates(): void {
     stopOpenUpdates = null;
     firstCheckTimer = null;
     intervalTimer = null;
+    versionReady = null;
     started = false;
 }
 
@@ -89,7 +94,7 @@ async function hydrateVersion(): Promise<void> {
 
 function scheduleChecks(): void {
     const info = get(appVersionInfo);
-    if (info?.devBuild) return; // updater is disabled for local builds
+    if (info?.devBuild || info?.storeManaged) return;
     firstCheckTimer = setTimeout(() => {
         void checkForUpdates();
     }, FIRST_CHECK_DELAY_MS);
@@ -108,6 +113,7 @@ function applyState(next: UpdateState | null | undefined): void {
 }
 
 function maybeAutoDownload(next: UpdateState): void {
+    if (get(appVersionInfo)?.storeManaged) return;
     if (next.phase !== 'available' || !next.installable || !next.latest) return;
     const prefs = get(updatePrefs);
     if (!prefs.autoDownload) return;
@@ -123,6 +129,7 @@ function maybeAutoDownload(next: UpdateState): void {
 }
 
 function maybeAnnounce(next: UpdateState): void {
+    if (get(appVersionInfo)?.storeManaged) return;
     if (!next.latest) return;
     if (next.phase !== 'available' && next.phase !== 'ready') return;
     const prefs = get(updatePrefs);
@@ -152,6 +159,8 @@ function maybeAnnounce(next: UpdateState): void {
 // "up to date" outcome with a toast; scheduled checks stay silent unless they
 // surface a new version through applyState.
 export async function checkForUpdates(options: { explicit?: boolean } = {}): Promise<void> {
+    if (versionReady) await versionReady;
+    if (get(appVersionInfo)?.storeManaged) return;
     try {
         const result = await requestUpdateCheck();
         applyState(result);

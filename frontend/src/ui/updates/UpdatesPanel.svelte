@@ -99,7 +99,16 @@
     </div>
 
     <div class="updates-body">
-        {#if phase === 'disabled'}
+        {#if $appVersionInfo?.storeManaged}
+            <p class="updates-status muted" role="status" aria-live="polite">
+                Updates are managed by Microsoft Store.
+            </p>
+            <div class="updates-actions">
+                <button class="updates-btn primary" type="button" onclick={openReleasePage}>
+                    Open Microsoft Store <ExternalLinkIcon size={12} strokeWidth={2} aria-hidden="true" />
+                </button>
+            </div>
+        {:else if phase === 'disabled'}
             <p class="updates-status muted" role="status" aria-live="polite">
                 Automatic updates are unavailable for this development build.
             </p>
@@ -197,7 +206,7 @@
             </p>
         {/if}
 
-        {#if $updateState.error && phase !== 'checking'}
+        {#if !$appVersionInfo?.storeManaged && $updateState.error && phase !== 'checking'}
             <div class="updates-error" role="alert">
                 <CircleAlertIcon size={14} strokeWidth={2} aria-hidden="true" />
                 <span>{humanizeBackendError($updateState.error)}</span>
@@ -205,7 +214,7 @@
         {/if}
     </div>
 
-    {#if phase !== 'disabled'}
+    {#if phase !== 'disabled' && !$appVersionInfo?.storeManaged}
         <div class="updates-preferences">
             <div class="updates-preference">
                 <div class="updates-preference-copy">

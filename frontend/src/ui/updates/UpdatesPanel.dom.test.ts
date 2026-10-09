@@ -207,10 +207,21 @@ describe('UpdatesPanel', () => {
         expect(actions.checkForUpdates).toHaveBeenCalledWith({ explicit: true });
     });
 
-    it('hides update actions for a development build', () => {
-        setState({ phase: 'disabled' });
+    it.each([
+        { storeManaged: false, copy: 'development build', action: null },
+        { storeManaged: true, copy: 'Updates are managed by Microsoft Store', action: 'Open Microsoft Store' },
+    ])('shows disabled update guidance for storeManaged=$storeManaged', ({ storeManaged, copy, action }) => {
+        appVersionInfo.set({ version: '1.6.0', os: 'windows', arch: 'amd64', devBuild: !storeManaged, storeManaged });
+        setState({ phase: storeManaged ? 'idle' : 'disabled' });
         setup();
-        expect(host?.textContent).toContain('development build');
+        expect(host?.textContent).toContain(copy);
         expect(host?.querySelector('.updates-footer')).toBeNull();
+        expect(host?.querySelector('.updates-preferences')).toBeNull();
+        if (action) {
+            byText(action)!.click();
+            expect(actions.openReleasePage).toHaveBeenCalledOnce();
+        } else {
+            expect(byText('Open Microsoft Store')).toBeNull();
+        }
     });
 });
