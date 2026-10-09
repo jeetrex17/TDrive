@@ -59,6 +59,9 @@ Categories) and is never regenerated automatically - see
 - `windows/wails.exe.manifest` - the application manifest.
 - `windows/installer/` - NSIS installer scripts (`project.nsi` +
   `wails_tools.nsh`), used by `wails3 task windows:package`.
+- `windows/store/` - Microsoft Store identity and MSIX assets. See the
+  [Store packaging guide](windows/store/README.md) for CI test packages,
+  laptop installation and manual publishing.
 
 ## Linux
 

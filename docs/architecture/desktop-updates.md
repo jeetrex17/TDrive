@@ -6,6 +6,13 @@ and replace the running installation while retaining a previous copy. The
 [UpdateService](../../internal/app/updates.go) connects it to native players, restart and
 startup cleanup. Mobile stores own the mobile update path.
 
+Windows processes with package identity, including sideloaded MSIX packages,
+also leave the GitHub updater disabled. The Updates panel directs these installs
+to Microsoft Store. Runtime identity detection prevents binary replacement and
+rollback cleanup in a protected package directory; unpackaged Windows installs
+retain the existing update path. See the
+[MSIX guide](../../build/windows/store/README.md) for packaging and testing.
+
 ## Release discovery and trust
 
 The service asks the [GitHub source](../../backend/updater/github.go) for a
