@@ -83,3 +83,15 @@ body {
         scroll-behavior: auto;
     }
 }
+
+
+body.is-protected,
+body.is-protected * {
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+}
+
+@media print {
+    body.is-protected { visibility: hidden; }
+}

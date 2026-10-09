@@ -4,11 +4,14 @@
     import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
     import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
     import LockIcon from '@lucide/svelte/icons/lock';
+    import EyeIcon from '@lucide/svelte/icons/eye';
     import PlayIcon from '@lucide/svelte/icons/play';
     import RadioTowerIcon from '@lucide/svelte/icons/radio-tower';
     import SearchIcon from '@lucide/svelte/icons/search';
     import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
     import XIcon from '@lucide/svelte/icons/x';
+    import { setScreenProtect } from '../../api';
+    import { acquireScreenProtection, bindViewOnlyGuards } from '../viewers/view-only-guards';
     import { bindLongPress } from '../file-list/touch';
     import ChannelSortMenu from './ChannelSortMenu.svelte';
     import { fileTypeFamily, fileTypeIcon, type FileTypeFamily } from '../file-list/file-type';
@@ -17,10 +20,11 @@
     import { splitNameAndExt } from '../../utils';
     import {
         createChannelMediaPager,
-        isPlayable,
+        isOpenable,
         MAX_CHANNEL_ITEMS,
         mediaDetails,
         mediaMeta,
+        mediaActionLabel,
         mediaTitle,
         restrictionLabel,
         sortPosts,
@@ -56,6 +60,8 @@
         { value: 'all', label: 'All' },
         { value: 'video', label: 'Videos' },
         { value: 'audio', label: 'Audio' },
+        { value: 'image', label: 'Images' },
+        { value: 'document', label: 'Documents' },
     ];
     const SEARCH_DELAY_MS = 300;
     const SKELETON_WIDTHS = [62, 44, 71, 38, 56, 49];
@@ -91,11 +97,11 @@
                 body: kind === 'all' ? 'Try a different word.' : 'Switch to All to search every post.',
             };
         }
-        const noun = kind === 'video' ? 'videos' : kind === 'audio' ? 'audio' : 'videos or audio';
+        const noun = { all: 'files', video: 'videos', audio: 'audio', image: 'images', document: 'documents' }[kind];
         const older = view.status === 'empty' && view.hasMore;
         return {
             title: `No ${noun} yet`,
-            body: older ? 'None in the latest posts.' : 'Posts with video or audio show up here.',
+            body: older ? 'None in the latest posts.' : 'Images, documents, video and audio show up here.',
         };
     });
 
@@ -175,20 +181,27 @@
         onActions?.(rect.left, rect.bottom + 4, source);
     }
 
+    function bindProtectedPost(row: HTMLElement, protectedContent: boolean) {
+        let currentProtection = protectedContent;
+        const cleanup = bindViewOnlyGuards(row, () => currentProtection, true);
+        return { update: (next: boolean) => { currentProtection = next; }, destroy: cleanup };
+    }
+
     function family(item: ChannelMediaItem): FileTypeFamily {
-        if (item.kind === 'video' || item.kind === 'audio') return item.kind;
+        if (item.kind === 'video' || item.kind === 'audio' || item.kind === 'image') return item.kind;
+        if (item.kind === 'pdf' || item.kind === 'text') return 'document';
         return fileTypeFamily(splitNameAndExt(item.name).ext);
     }
 
     // A whole channel being protected is said once, in the bar; repeating it
     // on every row would only add noise.
     function badge(item: ChannelMediaItem): string {
-        return source.protected && item.blockReason === 'protected' ? '' : restrictionLabel(item);
+        return source.protected && (item.protected || item.blockReason === 'protected') ? '' : restrictionLabel(item);
     }
 
     function rowLabel(item: ChannelMediaItem): string {
         const parts = [mediaTitle(item), mediaMeta(item).replace(/ · /g, ', '), badge(item)].filter(Boolean).join(', ');
-        if (isPlayable(item)) return `Play ${parts}`;
+        if (isOpenable(item)) return `${mediaActionLabel(item)} ${parts}`;
         return item.telegramUrl ? `Open in Telegram: ${parts}` : `Unavailable in TDrive: ${parts}`;
     }
 
@@ -215,6 +228,11 @@
         event.preventDefault();
         rows[Math.max(0, Math.min(rows.length - 1, next))]?.focus();
     }
+
+    $effect(() => {
+        if (!mobile || !(source.protected || shown.some((item) => item.protected))) return;
+        return acquireScreenProtection(setScreenProtect);
+    });
 
     $effect(() => {
         if (!sentinel || !scroller || typeof IntersectionObserver === 'undefined') return;
@@ -272,10 +290,10 @@
 {/snippet}
 
 {#snippet row(item: ChannelMediaItem)}
-    {@const playable = isPlayable(item)}
+    {@const openable = isOpenable(item)}
     {@const TypeIcon = fileTypeIcon(family(item))}
     {@const label = badge(item)}
-    <li class="channel-row" class:is-locked={!playable} data-msg-id={item.msgId}>
+    <li class="channel-row" class:is-locked={!openable} class:is-protected={source.protected || item.protected} use:bindProtectedPost={Boolean(source.protected || item.protected)} data-msg-id={item.msgId}>
         <button
             class="channel-row-main"
             type="button"
@@ -287,16 +305,16 @@
             <span class="file-type-icon channel-chip" aria-hidden="true">
                 <span class="chip-layer chip-type"><TypeIcon size={20} strokeWidth={1.5} /></span>
                 <span class="chip-layer chip-action">
-                    {#if playable}<PlayIcon size={16} strokeWidth={2} fill="currentColor" />{:else}<ExternalLinkIcon size={16} strokeWidth={2} />{/if}
+                    {#if openable && mediaActionLabel(item) === 'Play'}<PlayIcon size={16} strokeWidth={2} fill="currentColor" />{:else if openable}<EyeIcon size={16} strokeWidth={2} />{:else}<ExternalLinkIcon size={16} strokeWidth={2} />{/if}
                 </span>
             </span>
             <span class="channel-row-text">
                 <span class="channel-row-title">{mediaTitle(item)}</span>
                 <span class="channel-row-meta">{mediaMeta(item)}</span>
             </span>
-            {#if label}<span class="channel-row-badge">{label}</span>{/if}
+            {#if label}<span class="channel-row-badge" title={label === 'Protected' ? 'View only. Saving and forwarding are disabled.' : undefined}>{label}</span>{/if}
         </button>
-        {#if playable && item.telegramUrl && !mobile}
+        {#if openable && item.telegramUrl && !mobile}
             <button
                 class="channel-row-telegram"
                 type="button"
@@ -307,7 +325,7 @@
                 <ExternalLinkIcon size={16} strokeWidth={2} aria-hidden="true" />
             </button>
         {/if}
-        {#if mobile && (playable || item.telegramUrl)}
+        {#if mobile && (openable || item.telegramUrl)}
             <button
                 class="channel-row-actions"
                 type="button"
@@ -373,7 +391,7 @@
                 <h1 id="channel-view-title" class="channel-bar-title" title={source.title}>{source.title}</h1>
                 <span class="channel-bar-handle">{handle}</span>
                 {#if source.protected}
-                    <span class="channel-bar-protected" title="Telegram keeps this source's media from being saved or played elsewhere. They open in Telegram.">
+                    <span class="channel-bar-protected" title="View only. Saving and forwarding are disabled.">
                         <LockIcon size={12} strokeWidth={2.25} aria-hidden="true" />
                         Protected
                     </span>
@@ -558,6 +576,9 @@
 
     .channel-kinds { flex: 0 0 auto; }
 
+    /* More file types fit without squeezing labels or shrinking touch targets. */
+    .channel-topbar-kinds { overflow-x: auto; scrollbar-width: none; }
+
     .channel-search { width: clamp(150px, 18vw, 220px); }
 
     .channel-search-clear {
@@ -596,6 +617,12 @@
         align-items: center;
         border-radius: var(--radius-md);
         transition: background-color var(--motion-fast) var(--ease-standard);
+    }
+
+    .channel-row.is-protected {
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
     }
 
     .channel-row:hover,
@@ -828,7 +855,7 @@
     .channel-topbar-kinds { padding: 0 var(--space-4) var(--space-3); }
     .channel-topbar-kinds .channel-kinds { display: flex; }
     .channel-topbar-kinds .channel-kinds button {
-        flex: 1 1 0;
+        flex: 1 0 auto;
         min-height: var(--touch-target);
         font-size: var(--mobile-type-meta);
     }

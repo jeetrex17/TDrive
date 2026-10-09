@@ -1,8 +1,10 @@
-import { closeMedia, onRuntimeEvent, openStream, type MediaOpenResult } from '../../api';
+import { closeMedia, isMobilePlatform, setScreenProtect, onRuntimeEvent, openStream, type MediaOpenResult } from '../../api';
 import { formatBytes } from '../../utils';
 import { enqueueDownload } from '../transfers';
 import { notify } from '../notifications';
 import { accessEncryptedResource } from '../encryption';
+import { acquireScreenProtection } from '../../ui/viewers/view-only-guards';
+import { toAppError } from '../errors';
 import { canOpenFileViewer, fileKindLabel, fileOpenKind } from '../media-types';
 import {
     closeFileViewerView,
@@ -17,6 +19,9 @@ export interface FileViewerTarget {
     name: string;
     size: number;
     encrypted?: boolean;
+    protected?: boolean;
+    /** Backend-admitted viewer kind for a read-only source, including nameless attachments. */
+    kind?: FileViewerKind;
 }
 
 
@@ -26,6 +31,16 @@ let lifecycleObserver: MutationObserver | null = null;
 let activeToken = '';
 let activeTarget: FileViewerTarget | null = null;
 let activeReadOnly = false;
+let releaseScreenProtection: (() => void) | null = null;
+
+function syncScreenProtection(protectedContent: boolean): void {
+    if (protectedContent && isMobilePlatform()) {
+        releaseScreenProtection ??= acquireScreenProtection(setScreenProtect);
+    } else {
+        releaseScreenProtection?.();
+        releaseScreenProtection = null;
+    }
+}
 let openSeq = 0;
 let encryptedSessionsEpoch = 0;
 let unsubscribeEncryptedSessionsClosed: (() => void) | null = null;
@@ -65,8 +80,8 @@ export function teardownFileViewerModal(): void {
 
 
 export async function openFileViewer(target: FileViewerTarget, sourceOpener?: () => Promise<MediaOpenResult>): Promise<void> {
-    const kind = fileOpenKind(target.name);
-    if (!canOpenFileViewer(target.name)) {
+    const kind = sourceOpener && target.kind ? target.kind : fileOpenKind(target.name);
+    if (!(sourceOpener && target.kind) && !canOpenFileViewer(target.name)) {
         notify({ level: 'warning', title: `${fileKindLabel(target.name)} files cannot be opened yet` });
         return;
     }
@@ -78,12 +93,14 @@ export async function openFileViewer(target: FileViewerTarget, sourceOpener?: ()
         name: String(target.name || 'File'),
         size: Number(target.size || 0),
         encrypted: Boolean(target.encrypted),
+        protected: Boolean(target.protected),
     };
     activeTarget = nextTarget;
     activeReadOnly = Boolean(sourceOpener);
     closeFileViewerView();
     await releaseActiveSession();
     if (seq !== openSeq) return;
+    syncScreenProtection(nextTarget.protected);
 
     openFileViewerView({
         kind: kind as FileViewerKind,
@@ -95,6 +112,7 @@ export async function openFileViewer(target: FileViewerTarget, sourceOpener?: ()
         loading: true,
         error: '',
         readOnly: Boolean(sourceOpener),
+        protected: nextTarget.protected,
     });
 
     try {
@@ -110,14 +128,24 @@ export async function openFileViewer(target: FileViewerTarget, sourceOpener?: ()
             await closeMedia(opened.token);
             return;
         }
+        if (sourceOpener && opened.kind && opened.kind !== kind) {
+            activeToken = opened.token;
+            await releaseActiveSession();
+            if (seq === openSeq) {
+                syncScreenProtection(false);
+                setFileViewerError('This post changed. Close the viewer and refresh the source.');
+            }
+            return;
+        }
         const encrypted = nextTarget.encrypted || Boolean(opened.info.encrypted);
         if (encrypted && encryptedEpoch !== encryptedSessionsEpoch) {
             closeFileViewer();
             await closeMedia(opened.token);
             return;
         }
-        activeTarget = { ...nextTarget, encrypted };
+        activeTarget = { ...nextTarget, encrypted, protected: nextTarget.protected || Boolean(opened.info.protected) };
         activeToken = opened.token;
+        syncScreenProtection(Boolean(activeTarget.protected));
         openFileViewerView({
             kind: kind as FileViewerKind,
             token: opened.token,
@@ -128,10 +156,12 @@ export async function openFileViewer(target: FileViewerTarget, sourceOpener?: ()
             loading: false,
             error: '',
             readOnly: Boolean(sourceOpener),
+            protected: activeTarget.protected,
         });
     } catch (error) {
         if (seq !== openSeq) return;
-        setFileViewerError(String(error || 'Could not open file'));
+        syncScreenProtection(false);
+        setFileViewerError(sourceOpener ? toAppError(error, { source: 'backend' }).message : String(error || 'Could not open file'));
     } finally {
         if (seq === openSeq) setFileViewerLoading(false);
     }
@@ -155,9 +185,10 @@ export function closeFileViewer(): void {
     activeTarget = null;
     activeReadOnly = false;
     closeFileViewerView();
+    syncScreenProtection(false);
 }
 
 export function downloadActiveFile(): void {
-    if (!activeTarget || activeReadOnly) return;
+    if (!activeTarget || activeReadOnly || activeTarget.protected) return;
     enqueueDownload(activeTarget.id, activeTarget.name, activeTarget.size);
 }

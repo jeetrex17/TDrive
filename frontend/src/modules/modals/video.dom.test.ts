@@ -19,6 +19,7 @@ const apiMocks = vi.hoisted(() => ({
     openNativeMedia: vi.fn(),
     resizeNativeMedia: vi.fn(),
     setImmersive: vi.fn(),
+    setScreenProtect: vi.fn(),
     showNativeSeekThumbnail: vi.fn(),
     updateMediaPlayback: vi.fn(),
     enterFullscreen: vi.fn(),
@@ -218,6 +219,37 @@ describe("video host ownership", () => {
         expect(trigger.getAttribute("aria-label")).toBe("Playlist, 1 of 2");
         document.querySelector<HTMLVideoElement>("#video-player")!.dispatchEvent(new Event("ended"));
         await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenLastCalledWith(9));
+    });
+
+    it.each(['html', 'native'] as const)('keeps protection while the old %s player closes before opening an ordinary video', async (kind) => {
+        apiMocks.isMobilePlatform.mockReturnValue(kind === 'html');
+        const controller = await import('./video');
+        deactivateVideo = controller.activateVideoModal();
+        const original = kind === 'html' ? mediaOpenResult(7, 'protected-old') : nativeOpenResult(7, 'protected-old');
+        const protectedOpened = { ...original, info: { ...original.info, protected: true } };
+        if (kind === 'html') apiMocks.openMedia.mockResolvedValueOnce(protectedOpened).mockResolvedValue(mediaOpenResult(8, 'ordinary-next'));
+        else apiMocks.openMedia.mockResolvedValue(mediaOpenResult(8, 'ordinary-next'));
+        apiMocks.openNativeMedia.mockResolvedValue(protectedOpened);
+        await controller.openVideoModal({ id: 7, name: kind === 'html' ? 'old.mp4' : 'old.mkv' });
+        let finishClose!: () => void;
+        const close = kind === 'html' ? apiMocks.closeMedia : apiMocks.closeNativeMedia;
+        close.mockImplementationOnce(() => new Promise<void>((resolve) => { finishClose = resolve; }));
+        const switching = controller.openVideoModal({ id: 8, name: 'ordinary.mp4' });
+        await vi.waitFor(() => expect(close).toHaveBeenCalledWith('protected-old'));
+        const shell = document.getElementById('video-shell')!;
+        try {
+            expect(shell.dataset.protected).toBe('true');
+            expect(shell.dispatchEvent(new Event('copy', { bubbles: true, cancelable: true }))).toBe(false);
+            expect(shell.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))).toBe(false);
+            if (kind === 'html') expect(apiMocks.setScreenProtect.mock.calls).toEqual([[true]]);
+        } finally {
+            finishClose();
+            await switching;
+        }
+        expect(shell.dataset.protected).toBe('false');
+        expect(shell.dispatchEvent(new Event('copy', { bubbles: true, cancelable: true }))).toBe(true);
+        if (kind === 'html') expect(apiMocks.setScreenProtect.mock.calls).toEqual([[true], [false]]);
+        await controller.closeVideoModal();
     });
 
     it("does not borrow a player outside its host", () => {
@@ -484,9 +516,8 @@ describe("video open failures", () => {
 });
 
 describe("video HTML-to-native fallback", () => {
-    it("promotes one token once and restores playback intent", async () => {
-        const opened = mediaOpenResult(7, SHARED_SESSION_ID);
-        opened.info.encrypted = true;
+    it.each([false, true])("promotes one token once and restores playback intent (protected: %s)", async (protectedContent) => {
+        const opened = { ...mediaOpenResult(7, SHARED_SESSION_ID), info: { ...mediaOpenResult(7, SHARED_SESSION_ID).info, encrypted: true, protected: protectedContent } };
         apiMocks.openMedia.mockResolvedValue(opened);
         apiMocks.attachNativeMedia.mockResolvedValue({
             token: opened.token,
@@ -503,6 +534,14 @@ describe("video HTML-to-native fallback", () => {
         const video = document.querySelector<HTMLVideoElement>("#video-player");
         expect(video).not.toBeNull();
         if (!video) return;
+
+        const protectionChanges: Array<string | null> = [];
+        const shell = document.getElementById('video-shell')!;
+        const observer = new MutationObserver((records) => {
+            protectionChanges.push(...records.map((record) => record.oldValue));
+        });
+        observer.observe(shell, { attributes: true, attributeFilter: ['data-protected'], attributeOldValue: true });
+        if (protectedContent) expect(shell.dataset.protected).toBe('true');
 
         video.currentTime = 42.5;
         video.volume = 0.35;
@@ -546,7 +585,14 @@ describe("video HTML-to-native fallback", () => {
         expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(SHARED_SESSION_ID, ["set", "speed", "1.5"]);
         expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(SHARED_SESSION_ID, ["seek", "42.5", "absolute"]);
 
+        if (protectedContent) {
+            expect(protectionChanges).not.toContain('false');
+            expect(shell.dataset.protected).toBe('true');
+            expect(video.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))).toBe(false);
+        }
+        observer.disconnect();
         await videoModule.closeVideoModal();
+        expect(shell.dataset.protected).toBe('false');
         expect(apiMocks.closeNativeMedia).toHaveBeenCalledOnce();
         expect(apiMocks.closeNativeMedia).toHaveBeenCalledWith(SHARED_SESSION_ID);
         expect(apiMocks.closeMedia).not.toHaveBeenCalled();

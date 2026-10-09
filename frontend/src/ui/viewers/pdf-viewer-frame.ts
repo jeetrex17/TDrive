@@ -1,5 +1,6 @@
 import * as pdfjsLib from 'pdfjs-dist/legacy/build/pdf.mjs';
 import workerSrc from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url';
+import { bindViewOnlyGuards } from './view-only-guards';
 import { PDF_VIEWER_FRAME_SOURCE } from './pdf-frame';
 import './pdf-viewer-frame.css';
 
@@ -12,6 +13,9 @@ interface FrameRuntime {
 const statusEl = document.getElementById('status');
 const viewerContainer = document.getElementById('viewerContainer');
 const viewerEl = document.getElementById('viewer');
+const protectedContent = new URLSearchParams(window.location.search).get('protected') === '1';
+document.body.classList.toggle('is-protected', protectedContent);
+const unbindProtectedGuards = bindViewOnlyGuards(document.body, () => protectedContent);
 
 function setStatus(message: string, visible = true): void {
     if (!statusEl) return;
@@ -46,7 +50,8 @@ async function createRuntime(fileURL: string): Promise<FrameRuntime> {
         viewer: viewerEl,
         eventBus,
         linkService,
-        textLayerMode: 1,
+        textLayerMode: protectedContent ? 0 : 1,
+        annotationMode: protectedContent ? pdfjsLib.AnnotationMode.DISABLE : pdfjsLib.AnnotationMode.ENABLE_FORMS,
         removePageBorders: false,
     });
 
@@ -104,6 +109,7 @@ async function boot(): Promise<void> {
 }
 
 window.addEventListener('pagehide', () => {
+    unbindProtectedGuards();
     void runtime?.destroy();
     runtime = null;
 });

@@ -1,3 +1,4 @@
+import { acquireScreenProtection, bindViewOnlyGuards } from '../../ui/viewers/view-only-guards';
 import { htmlPictureStyle, loadPlaybackPreferences, normalizePlaybackPreferences, savePlaybackPreferences, type PlaybackPreferences, type PictureMode } from "../video/playback-preferences";
 import {
     attachNativeMedia,
@@ -11,6 +12,7 @@ import {
     openMedia,
     openNativeMedia,
     setImmersive,
+    setScreenProtect,
     updateMediaPlayback,
     type MediaOpenResult,
     type NativeMediaOpenResult,
@@ -105,6 +107,8 @@ let activeAdapter: PlayerAdapter | null = null;
 let activeNative: NativeMediaOpenResult | null = null;
 let activeMediaToken = "";
 let activeMediaEncrypted = false;
+let activeMediaProtected = false;
+let releaseScreenProtection: (() => void) | null = null;
 let unsubscribeState: (() => void) | null = null;
 let currentState: PlayerState = { ...EMPTY_PLAYER_STATE };
 let activeOpenAttempt: VideoOpenAttempt | null = null;
@@ -256,6 +260,8 @@ type ErrorAction = { label: string; run: () => void };
 let errorPrimaryAction: ErrorAction | null = null;
 
 function setError(message: string, primary: ErrorAction | null = null) {
+    releaseScreenProtection?.();
+    releaseScreenProtection = null;
     hasError = true;
     errorPrimaryAction = primary;
     if (videoDOM.errorRetryButton) videoDOM.errorRetryButton.textContent = primary ? primary.label : "Retry";
@@ -697,6 +703,7 @@ function detachActiveReferences(): PlayerAdapter | null {
     activeNative = null;
     activeMediaToken = "";
     activeMediaEncrypted = false;
+    setProtectedPlayback(Boolean(activeOpenAttempt && (activeMediaProtected || activeOpenAttempt.target.protected)));
     unsubscribeState?.();
     unsubscribeState = null;
     clearPlaybackHintTimer();
@@ -713,9 +720,11 @@ function detachActiveReferences(): PlayerAdapter | null {
 
 function detachHtmlForNative(adapter: HtmlVideoAdapter): MediaOpenResult | null {
     if (activeAdapter !== adapter) return null;
+    const wasProtected = activeMediaProtected;
     const detached = detachActiveReferences();
     const opened = detached === adapter ? adapter.detachForNative() : null;
     activeMediaEncrypted = Boolean(opened?.info.encrypted);
+    setProtectedPlayback(Boolean(wasProtected || opened?.info.protected || activeOpenAttempt?.target.protected));
     return opened;
 }
 
@@ -749,6 +758,23 @@ function preloadPoster(url: string, token: string) {
         if (videoDOM.video && isOpen() && activeMediaToken === token) videoDOM.video.poster = url;
     };
     image.src = url;
+}
+
+function setProtectedPlayback(protectedContent: boolean): void {
+    activeMediaProtected = protectedContent;
+    if (protectedContent && isMobilePlatform()) {
+        releaseScreenProtection ??= acquireScreenProtection(setScreenProtect);
+    } else {
+        releaseScreenProtection?.();
+        releaseScreenProtection = null;
+    }
+    const badge = byID<HTMLElement>('video-protected');
+    if (badge) badge.hidden = !protectedContent;
+    if (videoDOM.modal) videoDOM.modal.dataset.protected = String(protectedContent);
+    const shell = byID<HTMLElement>("video-shell");
+    if (shell) shell.dataset.protected = String(protectedContent);
+    if (protectedContent) videoDOM.video?.setAttribute('controlslist', 'nodownload');
+    else videoDOM.video?.removeAttribute('controlslist');
 }
 
 function updateMediaText(name: string, size: number, title = "") {
@@ -911,9 +937,10 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
         const displayName = opened.info.name || opened.name || attempt.target.name || "Video";
         const displaySize = opened.info.plaintextSize || opened.info.storedSize || attempt.target.size || 0;
         updateMediaText(displayName, displaySize, attempt.target.title);
-        transport?.beginSession(opened.thumbnailUrl);
+        setProtectedPlayback(Boolean(attempt.target.protected || opened.info.protected));
+        transport?.beginSession(activeMediaProtected ? "" : opened.thumbnailUrl);
         activeMediaToken = opened.token;
-        if (isMobilePlatform() && opened.thumbnailUrl) preloadPoster(`${opened.thumbnailUrl}?t=0`, opened.token);
+        if (!activeMediaProtected && isMobilePlatform() && opened.thumbnailUrl) preloadPoster(`${opened.thumbnailUrl}?t=0`, opened.token);
         activeMediaEncrypted = Boolean(opened.info.encrypted);
 
         adapter = new HtmlVideoAdapter(video, opened, {
@@ -983,7 +1010,7 @@ function handleHtmlMediaError(
     // A repackaged container that still will not decode has nothing left to
     // retry: the streams inside are ones this device has no decoder for. Point
     // at the one thing that can still work rather than at a button that cannot.
-    const action = !attempt.target.open && undecodable && isRemuxableVideo(attempt.target.name)
+    const action = !attempt.target.open && !attempt.target.protected && !activeMediaProtected && undecodable && isRemuxableVideo(attempt.target.name)
         ? downloadInstead(attempt.target)
         : null;
     void playbackTransitions.run(attempt.generation, async (isCurrent) => {
@@ -1151,7 +1178,8 @@ function activateNativePlayback(
     const displayName = opened.info.name || opened.name || attempt.target.name || "Video";
     const displaySize = opened.info.plaintextSize || opened.info.storedSize || attempt.target.size || 0;
     updateMediaText(displayName, displaySize, attempt.target.title);
-    transport?.beginSession(opened.thumbnailUrl);
+    setProtectedPlayback(Boolean(attempt.target.protected || opened.info.protected));
+    transport?.beginSession(activeMediaProtected ? "" : opened.thumbnailUrl);
 
     const adapter = new NativeMpvAdapter(opened, {
         mediaError: (detail) => handleNativeMediaError(attempt, opened.token, detail),
@@ -1196,6 +1224,8 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
         playbackIntent,
     };
     activeOpenAttempt = attempt;
+    // The old player may remain visible until its asynchronous close completes.
+    setProtectedPlayback(Boolean(activeMediaProtected || target.protected));
 
     updateMediaText(target.name || "Video", target.size || 0, target.title);
     videoDOM.video.removeAttribute("poster");
@@ -1214,24 +1244,25 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
     a11y?.activate();
     void geometry?.syncFullscreenState();
 
-    // A container iOS cannot demux and the backend will not repackage fails no
-    // matter how long it is given, so do not open a media session for it: that
-    // would spend Telegram bandwidth and API calls to reach a guaranteed
-    // failure, and leave the reader looking at a Retry button that can never
-    // work. Offer the download instead, which hands the file to the share sheet
-    // and on to a player that can open it.
-    if (isIOSPlatform() && !isIOSPlayableVideo(target.name) && !isRemuxableVideo(target.name)) {
-        const format = videoFormatLabel(target.name);
-        setError(
-            `iOS cannot open ${format} files. Download it to play in another app.`,
-            target.open ? null : downloadInstead(target),
-        );
-        return;
-    }
-
     await playbackTransitions.run(attempt.generation, async (isCurrent) => {
         await releaseActive();
         if (!isCurrent() || !isOpen()) return;
+        setProtectedPlayback(Boolean(target.protected));
+        // A container iOS cannot demux and the backend will not repackage fails no
+        // matter how long it is given, so do not open a media session for it: that
+        // would spend Telegram bandwidth and API calls to reach a guaranteed
+        // failure, and leave the reader looking at a Retry button that can never
+        // work. Offer the download instead, which hands the file to the share sheet
+        // and on to a player that can open it.
+        if (isIOSPlatform() && !isIOSPlayableVideo(target.name) && !isRemuxableVideo(target.name)) {
+            const format = videoFormatLabel(target.name);
+            setError(
+                target.open || target.protected ? `iOS cannot open ${format} files.` : `iOS cannot open ${format} files. Download it to play in another app.`,
+                target.open || target.protected ? null : downloadInstead(target),
+            );
+            return;
+        }
+
         setLoadingStatusOverride("");
         setLoading(true);
         // A container the webview handles goes to the HTML player, unless it
@@ -1528,6 +1559,7 @@ function bindEncryptedMediaLifecycle() {
 }
 
 export function teardownVideoModal(): void {
+    setProtectedPlayback(false);
     playbackTransitions.begin();
     activeOpenAttempt = null;
     hideVideoPlaylist();
@@ -1657,6 +1689,8 @@ export function activateVideoModal(): () => void {
         restoreFocus: "#file-list",
     });
     bindEncryptedMediaLifecycle();
+    const unbindProtected = bindViewOnlyGuards(videoDOM.modal, () => activeMediaProtected);
+    controlListeners.signal.addEventListener("abort", unbindProtected, { once: true });
     nativeStateRouter.bind();
     if (videoDOM.speedMenu) videoDOM.speedMenu.innerHTML = speedMenuMarkup();
     transport.bind();

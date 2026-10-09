@@ -1,6 +1,6 @@
 import { writable } from 'svelte/store';
 
-export type FileViewerKind = 'audio' | 'pdf' | 'text';
+export type FileViewerKind = 'image' | 'audio' | 'pdf' | 'text';
 
 export interface FileViewerView {
     open: boolean;
@@ -13,6 +13,7 @@ export interface FileViewerView {
     loading: boolean;
     error: string;
     readOnly: boolean;
+    protected?: boolean;
 }
 
 const initialState: FileViewerView = {
@@ -26,6 +27,7 @@ const initialState: FileViewerView = {
     loading: false,
     error: '',
     readOnly: false,
+    protected: false,
 };
 
 export const fileViewerState = writable<FileViewerView>(initialState);

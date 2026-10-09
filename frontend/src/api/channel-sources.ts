@@ -39,6 +39,7 @@ function item(value: MediaItem): ChannelMediaItem {
         kind: String(value.kind || ''),
         caption: String(value.caption || ''),
         streamable: Boolean(value.streamable),
+        protected: Boolean(value.protected),
         blockReason: String(value.block_reason || ''),
         telegramUrl: String(value.telegram_url || ''),
     };

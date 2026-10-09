@@ -41,6 +41,7 @@
         <div class="video-title-group">
             <div id="video-filename" class="video-filename"></div>
             <div id="video-meta" class="video-meta"></div>
+            <span id="video-protected" class="video-protected" title="View only. Saving and forwarding are disabled." hidden>Protected</span>
         </div>
         <button id="video-close" class="video-icon-btn video-close-btn" type="button" aria-label="Close video" title="Close">
             <XIcon size={22} aria-hidden="true" />
@@ -195,3 +196,19 @@
         </div>
     </div>
 </div>
+
+
+<style>
+    .video-protected {
+        color: var(--viewer-text-muted);
+        font-size: var(--type-xs);
+    }
+    .video-shell:global([data-protected="true"]) {
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+    }
+    @media print {
+        .video-shell:global([data-protected="true"]) { visibility: hidden; }
+    }
+</style>

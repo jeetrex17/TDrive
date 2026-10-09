@@ -26,6 +26,7 @@ export interface VideoOpenTarget {
     key?: string;
     size?: number;
     encrypted?: boolean;
+    protected?: boolean;
     /**
      * Opens media that is not a drive file, such as a Telegram channel post,
      * through its own capability. Its id means nothing to the active drive, so
@@ -67,6 +68,7 @@ export function normalizeVideoTarget(target: VideoOpenTarget): VideoOpenTarget |
         name: String(target.name || "Video"),
         size: Math.max(0, Number(target.size) || 0),
         encrypted: Boolean(target.encrypted),
+        protected: Boolean(target.protected),
     };
     const title = String(target.title || "").trim();
     if (title) normalized.title = title;

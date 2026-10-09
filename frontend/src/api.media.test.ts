@@ -135,6 +135,7 @@ describe("native media API boundary", () => {
                 plaintext_size: 4096,
                 encrypted: true,
                 multipart: true,
+                protected: true,
             },
         });
 
@@ -160,6 +161,7 @@ describe("native media API boundary", () => {
                 plaintextSize: 4096,
                 encrypted: true,
                 multipart: true,
+                protected: true,
             },
         });
     });
@@ -175,6 +177,7 @@ describe("native media API boundary", () => {
             token: nativeSessionToken,
             presentation: "embedded",
             initialState: null,
+            info: { protected: false },
         });
     });
 

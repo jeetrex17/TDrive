@@ -8,6 +8,8 @@ import { canOpenFileViewer } from '../media-types';
 
 const mocks = vi.hoisted(() => ({
     openStream: vi.fn(),
+    isMobilePlatform: vi.fn(() => false),
+    setScreenProtect: vi.fn(),
     closeMedia: vi.fn(),
     events: new Map<string, () => void>(),
     eventsOn: vi.fn(),
@@ -19,7 +21,8 @@ const mocks = vi.hoisted(() => ({
 vi.mock('../../api', () => ({
     openStream: mocks.openStream,
     closeMedia: mocks.closeMedia,
-    isMobilePlatform: () => false,
+    isMobilePlatform: mocks.isMobilePlatform,
+    setScreenProtect: mocks.setScreenProtect,
     onRuntimeEvent: (name: string, callback: () => void) => {
         mocks.eventsOn(name, callback);
         mocks.events.set(name, callback);
@@ -75,6 +78,8 @@ afterAll(async () => {
 });
 
 beforeEach(() => { mocks.openStream.mockReset();
+mocks.isMobilePlatform.mockReset().mockReturnValue(false);
+mocks.setScreenProtect.mockClear();
 mocks.closeMedia.mockReset().mockResolvedValue(undefined);
 mocks.accessEncryptedResource.mockImplementation(async (_encrypted: boolean, open: () => Promise<unknown>) => open());
 vi.stubGlobal('fetch', vi.fn(async () => new Response('secret', { status: 200 }))); });
@@ -144,6 +149,66 @@ describe('encrypted file viewer lifecycle', () => {
         mocks.enqueueDownload.mockClear();
         downloadActiveFile();
         expect(mocks.enqueueDownload).not.toHaveBeenCalled();
+    });
+
+    it.each(['image', 'pdf', 'text'] as const)('opens a source %s by its admitted kind with no drive operations', async (kind) => {
+        const opener = vi.fn().mockResolvedValue({ ...opened(`source-${kind}`, false, 'Attachment'), kind });
+        await openFileViewer({ id: 4, name: 'Attachment', size: 10, kind }, opener);
+        flushSync();
+        expect(get(fileViewerState)).toMatchObject({ open: true, readOnly: true, kind, token: `source-${kind}` });
+        expect(mocks.openStream).not.toHaveBeenCalled();
+        expect(host.querySelector('[aria-label="Download"]')).toBeNull();
+        closeFileViewer();
+        await vi.waitFor(() => expect(mocks.closeMedia).toHaveBeenCalledWith(`source-${kind}`));
+    });
+
+    it('shows an image decode error and clears it for the next source image', async () => {
+        const opener = vi.fn().mockResolvedValue({ ...opened('bad-image', false, 'image.jpg'), kind: 'image' });
+        await openFileViewer({ id: 4, name: 'image.jpg', size: 10, kind: 'image' }, opener);
+        flushSync();
+        host.querySelector('img')?.dispatchEvent(new Event('error'));
+        flushSync();
+        expect(host.querySelector('[role="alert"]')?.textContent).toBe('Could not load this image');
+        opener.mockResolvedValue({ ...opened('good-image', false, 'image.jpg'), kind: 'image' });
+        await openFileViewer({ id: 5, name: 'image.jpg', size: 10, kind: 'image' }, opener);
+        flushSync();
+        expect(host.querySelector('[role="alert"]')).toBeNull();
+        expect(host.querySelector('img')?.getAttribute('src')).toContain('good-image');
+    });
+
+    it('reports source connection failures without leaking the raw Telegram error', async () => {
+        const opener = vi.fn().mockRejectedValue(new Error('telegram get message: rpcDoRequest: connection dead'));
+        await openFileViewer({ id: 4, name: 'image.jpg', size: 10, kind: 'image' }, opener);
+        expect(get(fileViewerState)).toMatchObject({ error: 'Telegram is not reachable right now. Try again.', loading: false });
+    });
+
+    it('closes a source capability when the post changed to a different viewer kind', async () => {
+        const opener = vi.fn().mockResolvedValue({ ...opened('changed-source', false, 'note.txt'), kind: 'text' });
+        await openFileViewer({ id: 4, name: 'image.jpg', size: 10, kind: 'image' }, opener);
+        expect(get(fileViewerState).error).toContain('This post changed');
+        expect(get(fileViewerState).token).toBe('');
+        expect(mocks.closeMedia).toHaveBeenCalledWith('changed-source');
+    });
+
+    it('uses authoritative protection metadata before exposing source content', async () => {
+        const opener = vi.fn().mockResolvedValue({ ...opened('protected-source', false, 'image.jpg'), kind: 'image', info: { protected: true } });
+        await openFileViewer({ id: 4, name: 'image.jpg', size: 10, kind: 'image' }, opener);
+        flushSync();
+        expect(get(fileViewerState)).toMatchObject({ protected: true, readOnly: true });
+        const image = host.querySelector('img')!;
+        for (const name of ['contextmenu', 'copy', 'dragstart']) {
+            expect(image.dispatchEvent(new Event(name, { bubbles: true, cancelable: true }))).toBe(false);
+        }
+        expect(image.dispatchEvent(new KeyboardEvent('keydown', { key: 's', ctrlKey: true, bubbles: true, cancelable: true }))).toBe(false);
+        expect(host.querySelector('[title="View only. Saving and forwarding are disabled."]')).not.toBeNull();
+    });
+
+    it('releases native protection after a protected source open fails', async () => {
+        mocks.isMobilePlatform.mockReturnValue(true);
+        const opener = vi.fn().mockRejectedValue(new Error('connection dead'));
+        await openFileViewer({ id: 4, name: 'image.jpg', size: 10, kind: 'image', protected: true }, opener);
+        expect(mocks.setScreenProtect.mock.calls).toEqual([[true], [false]]);
+        expect(get(fileViewerState).error).toBe('Telegram is not reachable right now. Try again.');
     });
 
     it('registers the lock listener only once', () => {
