@@ -88,7 +88,7 @@ function Assert-Media([string]$MediaDir) {
 
     $metadata = @{}
     foreach ($line in Get-Content -LiteralPath (Join-Path $MediaDir "media-runtime.manifest")) {
-        if ($line -notmatch '^([a-z_]+)=(.*)$' -or $metadata.ContainsKey($Matches[1])) { Fail "malformed or duplicate media manifest entry" }
+        if ($line -notmatch '^([a-z][a-z0-9_]*)=(.*)$' -or $metadata.ContainsKey($Matches[1])) { Fail "malformed or duplicate media manifest entry" }
         $metadata[$Matches[1]] = $Matches[2]
     }
     foreach ($entry in @(@("schema", "1"), @("platform", "windows"), @("architecture", "amd64"), @("qualification", "headless-lavfi-testsrc-64x64-2frames"))) {
