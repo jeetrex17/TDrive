@@ -61,6 +61,17 @@ tasks:
     vars:
       INSTALL_SCOPE: '{{.INSTALL_SCOPE | default "user"}}'
 
+  store:package:
+    summary: Packages the existing Windows build and staged media as an MSIX
+    desc: |
+      Run windows:build and stage build/bin/media with package-mpv-windows.ps1
+      first. The default unsigned package requires a release-qualified media
+      runtime. TEST_SIGN=true creates a signed sideload test package and a
+      public certificate; PACKAGE_VERSION overrides build/config.yml's version.
+    platforms: [windows]
+    cmds:
+      - powershell -NoProfile -ExecutionPolicy Bypass -File scripts/package-msix.ps1 -AppExe "{{.ROOT_DIR}}/{{.BIN_DIR}}/{{.APP_NAME}}.exe" -OutputDir "{{.ROOT_DIR}}/dist" {{if .PACKAGE_VERSION}}-Version "{{.PACKAGE_VERSION}}"{{end}} {{if eq .TEST_SIGN "true"}}-TestSign{{end}}
+
   generate:syso:
     summary: Generates Windows `.syso` file
     dir: build
