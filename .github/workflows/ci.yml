@@ -478,6 +478,15 @@ jobs:
           ./scripts/test-mpv-metadata.ps1
           ./scripts/test-package-mpv-windows.ps1
 
+      - name: Read Windows Store version
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $config = Get-Content -LiteralPath build/config.yml -Raw
+          $match = [regex]::Match($config, '(?m)^  version: "([0-9]+\.[0-9]+\.[0-9]+)"\s*$')
+          if (-not $match.Success) { throw "build/config.yml must have a three-part info.version" }
+          "TDRIVE_STORE_VERSION=$($match.Groups[1].Value)" >> $env:GITHUB_ENV
+
       - name: Setup Go
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
@@ -616,16 +625,22 @@ jobs:
       # macOS needs the .app bundle (`package`) since the media-bundle contract
       # check below looks for build/bin/TDrive.app. Linux/Windows only need the
       # bare binary (`build`); CI and release use the same AppImage packaging
-      # script below. Windows packaging also verifies the NSIS installer.
+      # script below. Windows packaging also verifies NSIS and Store MSIX.
       - name: Build Wails app
         shell: bash
         run: |
           set -euo pipefail
           if [ "$RUNNER_OS" = "macOS" ]; then
             wails3 task package VERSION=ci
+          elif [ "$RUNNER_OS" = "Windows" ]; then
+            wails3 task build VERSION="$TDRIVE_STORE_VERSION"
           else
             wails3 task build VERSION=ci
           fi
+
+      - name: Test Windows app update and package identity behavior
+        if: runner.os == 'Windows'
+        run: go test -count=1 ./internal/app ./backend/updater
 
       - name: Package and smoke test Linux AppImage
         if: runner.os == 'Linux'
@@ -730,6 +745,134 @@ jobs:
           path: |
             dist/TDrive-windows-amd64-ci.zip
             dist/TDrive-windows-amd64-ci-setup.exe
+          if-no-files-found: error
+          retention-days: 7
+
+  windows-msix:
+    needs: [approve-ci, wails-build]
+    if: ${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}
+    name: Windows Store sideload package
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Read Store version and test packaging contract
+        shell: pwsh
+        run: |
+          $config = Get-Content -LiteralPath build/config.yml -Raw
+          $match = [regex]::Match($config, '(?m)^  version: "([0-9]+\.[0-9]+\.[0-9]+)"\s*$')
+          if (-not $match.Success) { throw "build/config.yml must have a three-part info.version" }
+          "TDRIVE_STORE_VERSION=$($match.Groups[1].Value)" >> $env:GITHUB_ENV
+          ./scripts/test-package-msix.ps1
+
+      - name: Download Windows build and qualified media
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          name: TDrive-windows-amd64-ci
+          path: msix-input
+
+      - name: Restore staged Windows build
+        shell: pwsh
+        run: |
+          Expand-Archive -LiteralPath msix-input/TDrive-windows-amd64-ci.zip -DestinationPath build/bin -Force
+          foreach ($file in @("TDrive.exe", "media/mpv.exe", "media/media-runtime.manifest")) {
+            if (-not (Test-Path -LiteralPath (Join-Path "build/bin" $file) -PathType Leaf)) {
+              throw "Windows build is missing $file"
+            }
+          }
+
+      - name: Setup Go
+        uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Install Wails task runner
+        shell: bash
+        run: |
+          go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # This ephemeral certificate is for CI sideloading. Store submission uses
+      # the unsigned task output and release-qualified mpv. No private signing
+      # key is exported or included in the upload path.
+      - name: Build signed sideload MSIX
+        shell: pwsh
+        run: |
+          wails3 task windows:store:package PACKAGE_VERSION=$env:TDRIVE_STORE_VERSION TEST_SIGN=true
+          if ($LASTEXITCODE -ne 0) { throw "Windows Store test package build failed" }
+
+      - name: Unpack and install signed MSIX
+        shell: powershell
+        run: |
+          $base = "dist/TDrive-$env:TDRIVE_STORE_VERSION-windows-x64-test"
+          $package = "$base.msix"
+          $certificate = "$base.cer"
+          $instructions = "$base-install.txt"
+          foreach ($file in @($package, $certificate, $instructions)) {
+            if (-not (Test-Path -LiteralPath $file -PathType Leaf)) { throw "MSIX artifact is missing: $file" }
+          }
+
+          $sdkBin = Join-Path ${env:ProgramFiles(x86)} "Windows Kits/10/bin"
+          $makeappx = Get-ChildItem -LiteralPath $sdkBin -Filter makeappx.exe -Recurse -File |
+            Where-Object { $_.FullName -match '[\\/]x64[\\/]makeappx\.exe$' } |
+            Sort-Object FullName -Descending | Select-Object -First 1
+          if ($null -eq $makeappx) { throw "Windows SDK makeappx.exe was not found" }
+          $unpacked = Join-Path $env:RUNNER_TEMP "tdrive-store-unpacked"
+          & $makeappx.FullName unpack /p $package /d $unpacked /o
+          if ($LASTEXITCODE -ne 0) { throw "makeappx could not unpack the signed MSIX" }
+          foreach ($file in @("AppxManifest.xml", "TDrive.exe", "media/mpv.exe", "media/media-runtime.sha256")) {
+            if (-not (Test-Path -LiteralPath (Join-Path $unpacked $file) -PathType Leaf)) {
+              throw "unpacked MSIX is missing $file"
+            }
+          }
+
+          [xml]$manifest = Get-Content -LiteralPath (Join-Path $unpacked "AppxManifest.xml") -Raw
+          $identityName = $manifest.Package.Identity.Name
+          if ([string]::IsNullOrWhiteSpace($identityName)) { throw "MSIX manifest has no package identity" }
+          $trustedCertificate = Import-Certificate -FilePath $certificate -CertStoreLocation Cert:\LocalMachine\TrustedPeople
+          try {
+            Add-AppxPackage -Path (Resolve-Path -LiteralPath $package).Path -ErrorAction Stop
+            $installed = Get-AppxPackage -Name $identityName
+            if ($null -eq $installed) { throw "signed MSIX did not register package $identityName" }
+            $installedManifest = Get-AppxPackageManifest -Package $installed.PackageFullName
+            if ($installedManifest.Package.Applications.Application.Executable -ne "TDrive.exe") {
+              throw "installed MSIX does not launch TDrive.exe"
+            }
+
+            if (Get-Process explorer -ErrorAction SilentlyContinue) {
+              $appId = $installedManifest.Package.Applications.Application.Id
+              Start-Process explorer.exe -ArgumentList "shell:AppsFolder\$($installed.PackageFamilyName)!$appId"
+              $launched = $false
+              for ($attempt = 0; $attempt -lt 30; $attempt++) {
+                if (Get-Process TDrive -ErrorAction SilentlyContinue) { $launched = $true; break }
+                Start-Sleep -Seconds 1
+              }
+              if (-not $launched) { throw "installed TDrive did not launch through its package identity" }
+              Get-Process TDrive | Stop-Process -Force
+            }
+            else {
+              Write-Host "::notice::GUI launch smoke skipped: runner has no interactive Explorer shell. MSIX installation and registration passed."
+            }
+          }
+          finally {
+            $installed = Get-AppxPackage -Name $identityName
+            if ($null -ne $installed) { $installed | Remove-AppxPackage -ErrorAction Stop }
+            if ($null -ne $trustedCertificate) {
+              Remove-Item -LiteralPath "Cert:\LocalMachine\TrustedPeople\$($trustedCertificate.Thumbprint)" -ErrorAction Stop
+            }
+          }
+
+      - name: Upload Windows Store sideload package
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: TDrive-windows-x64-msix-test
+          path: |
+            dist/TDrive-*-windows-x64-test.msix
+            dist/TDrive-*-windows-x64-test.cer
+            dist/TDrive-*-windows-x64-test-install.txt
           if-no-files-found: error
           retention-days: 7
 
