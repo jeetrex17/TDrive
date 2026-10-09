@@ -51,15 +51,6 @@ with a type such as `feat`, `fix`, `refactor`, `docs`, `test`, `chore`, `perf` o
    honestly, such as `Clarify contribution and architecture guidance`; do not
    invent a user-visible benefit. Open agent-created PRs as drafts unless the
    user asks otherwise.
-   Automatic CI is skipped on draft PRs. Mark the PR ready for review to queue
-   CI; subsequent pushes to a ready PR queue a new run. To check a draft manually,
-   use Actions > CI > Run workflow and select its branch. The manual button is
-   available once the workflow configuration is merged into master.
-   Every eligible run, including manual runs and pushes to master, waits at
-   Approve CI. Open the workflow run, choose Review deployments, select
-   ci-approval and approve it to release all test and build jobs. The repository's
-   ci-approval environment must have a required reviewer; self-review is allowed
-   so the maintainer can approve runs they initiated.
 4. Use exactly the three sections below, in this order. Keep the body concise
    and explain what changed, its meaningful scope and why it matters.
 
