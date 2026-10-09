@@ -536,7 +536,7 @@ func (s *Service) currentSource(ctx context.Context, kind string, id int64) (Sou
 
 func (s *Service) PageSource(ctx context.Context, kind string, id, offsetID int64, limit int, search, mediaKind string) (MediaPage, error) {
 	if !validSource(kind, id) || offsetID < 0 || limit < 1 || limit > 100 || len(search) > 120 ||
-		(mediaKind != "all" && mediaKind != "video" && mediaKind != "audio") {
+		!validMediaKind(mediaKind) {
 		return MediaPage{}, ErrInvalidPage
 	}
 	stored, _, source, err := s.currentSource(ctx, kind, id)
@@ -575,7 +575,7 @@ func (s *Service) PageSource(ctx context.Context, kind string, id, offsetID int6
 				page.NextOffsetID = message.MsgID
 			}
 			item, ok := mediaItem(source, message)
-			if ok && (mediaKind == "all" || item.Kind == mediaKind) {
+			if ok && matchesMediaKind(item, mediaKind) {
 				page.Items = append(page.Items, item)
 			}
 			if len(page.Items) >= limit {
@@ -607,9 +607,6 @@ func (s *Service) OpenSourceWithGate(ctx context.Context, kind string, id, msgID
 	}
 	if stored.AccountID != expectedAccountID || stored.Generation != generation {
 		return media.OpenResult{}, ErrNotConnected
-	}
-	if source.Protected {
-		return media.OpenResult{}, media.ErrExternalRestricted
 	}
 	peer := tgclient.InputPeer{Kind: source.Kind, ChannelID: id, AccessHash: source.AccessHash}
 	var message tgclient.HistoryMessage

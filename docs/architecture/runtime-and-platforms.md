@@ -81,7 +81,8 @@ Shutdown in the same file follows dependency order:
 1. Shut down the mount controller with a bounded context.
 2. Stop trash sweeping and close native media and gallery image sessions.
 3. Stop and close photo backup, including its worker and ledger.
-4. Close the engine, which stops live sync, media service and Telegram transport.
+4. Close the engine, which stops live sync, cancels and joins personal backfill,
+   then closes the media service and Telegram transport.
 5. Close logging and release the backend process lock.
 
 Vault locking and logout have their own mount and encryption ordering. They must

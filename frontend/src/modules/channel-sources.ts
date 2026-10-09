@@ -21,8 +21,9 @@ import {
 import {
     channelTelegramUrl,
     channelVideoQueue,
-    isPlayable,
+    isOpenable,
     mediaMeta,
+    mediaActionLabel,
     mediaTitle,
     type ChannelMediaItem,
     type ChannelPageMemory,
@@ -269,7 +270,7 @@ export function showPostActions(
     posts: readonly ChannelMediaItem[],
 ): void {
     const items: ContextMenuItem[] = [
-        ...(isPlayable(item) ? [{ label: 'Play', icon: 'play' as const, primary: true, action: () => openChannelPost(item, source, posts) }] : []),
+        ...(isOpenable(item) ? [{ label: mediaActionLabel(item), icon: (mediaActionLabel(item) === 'Play' ? 'play' : 'open') as 'play' | 'open', primary: true, action: () => openChannelPost(item, source, posts) }] : []),
         ...(item.telegramUrl ? [{ label: 'Open in Telegram', icon: 'external' as const, action: () => openInTelegram(item.telegramUrl) }] : []),
     ];
     if (items.length === 0) return;
@@ -279,25 +280,25 @@ export function showPostActions(
 }
 
 /**
- * Plays a post through the existing viewers with a capability scoped to this
+ * Opens a post through the existing viewers with a capability scoped to this
  * channel. A video queues the other videos the list is showing, so the player's
- * playlist and auto-next work as they do in a folder. Restricted posts belong
- * to Telegram, so they open there instead.
+ * playlist and auto-next work as they do in a folder. Unsupported, paid and expiring posts open in Telegram. Protected posts
+ * remain view-only in TDrive.
  */
 export async function openChannelPost(
     item: ChannelMediaItem,
     source: ChannelSource,
     posts: readonly ChannelMediaItem[] = [item],
 ): Promise<void> {
-    if (!isPlayable(item)) {
+    if (!isOpenable(item)) {
         openInTelegram(item.telegramUrl);
         return;
     }
     const open = (post: ChannelMediaItem) => openChannelMedia(source, post.msgId);
-    if (item.kind === 'audio') {
+    if (item.kind === 'audio' || item.kind === 'image' || item.kind === 'pdf' || item.kind === 'text') {
         const { activateFileViewerModal, openFileViewer } = await import('./modals/file-viewer');
         activateFileViewerModal();
-        await openFileViewer({ id: item.msgId, name: item.name, size: item.size, encrypted: false }, () => open(item));
+        await openFileViewer({ id: item.msgId, name: item.name, size: item.size, kind: item.kind, protected: Boolean(source.protected || item.protected), encrypted: false }, () => open(item));
         return;
     }
     const { target, playlist } = channelVideoQueue(item, source, posts, open);

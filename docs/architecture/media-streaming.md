@@ -75,7 +75,9 @@ The picker keeps its latest peer metadata in a bounded, account-scoped cache.
 Connecting a listed chat checks that single peer's current access before saving
 it, avoiding another full dialog scan. Unconnected avatars use the same cached
 metadata; when it is unavailable, the UI shows an initial instead of scanning
-all dialogs for a picture.
+all dialogs for a picture. Transient transport failures retry at most twice with
+a short bounded backoff; exhausted retries surface as connection errors rather
+than being mistaken for a protected or inaccessible peer.
 
 A public broadcast channel can also be resolved by `@username` or a `t.me`
 username or post link. [`contacts.resolveUsername`](https://core.telegram.org/method/contacts.resolveUsername)
@@ -111,10 +113,18 @@ connections.
 first through at most four batches of 100 Telegram messages. Empty batches
 end history; short batches do not, because Telegram omits deleted and withheld
 posts. Search asks Telegram to search message text and captions in that peer;
-it is not a filename index. The first supported media are ordinary document
-video and audio recognized by the player. Captions are display text and never
-parsed as TDX control operations. Messages and documents are read directly
+it is not a filename index. Sources expose the same supported attachment viewers
+as drives: video, audio, images, PDFs and text/code documents. The Images filter
+includes Telegram photos and image documents; Documents includes PDFs, text and
+unsupported attachments, which retain their Telegram fallback. Captions are
+display text and never parsed as TDX control operations. Messages and documents are read directly
 from Telegram and never entered into the TDrive drive projection.
+
+Image opens use the existing header, size and pixel-budget admission checks.
+Telegram photos use the largest available JPEG variant through photo file
+references. External viewers use the account/source capability supplied by the
+source opener and do not offer drive-ID download actions. Source removal,
+logout and viewer close revoke their sessions as they do for source playback.
 
 An open supplies account, peer kind, peer ID, message ID and connection
 generation, independent of the active drive. The media service builds one
@@ -128,17 +138,37 @@ size before accepting new bytes. Direct and basic-group message retrieval is
 scoped to history for that peer and verifies the returned peer identity, since
 Telegram's generic `messages.getMessages` has no peer argument.
 
-Peer-level or message-level `noforwards`, paid media, expiring documents,
-platform restrictions and unsupported formats cannot be opened in-app. The
-UI links to a Telegram post for channels and supergroups where a post link is
+Protected peers and posts carrying `noforwards` support viewing and streaming.
+The listing records protection separately from format admission, and the open
+response captures the current protection policy from Telegram. Protected viewers
+disable saving, copying, printing, dragging and browser context menus. PDFs render
+to canvases without selectable text or interactive annotations. Protected videos
+do not create generated seek thumbnails or thumbnail temporary files; the byte
+cache and HLS remux remain in memory. Native players disable disk cache, recording,
+watch-later persistence, external scripts and default screenshot/save shortcuts
+before media loads. These settings follow Telegram's [protected-media guidance](https://core.telegram.org/constructor/message).
+
+Protected viewers request the existing secure-screen feature on mobile. Android
+blocks screenshots, recording and the app-switcher thumbnail; iOS provides
+capture detection only. TDrive does not promise OS-level screenshot prevention
+on iOS or desktop. This is separate from its disabled in-app export controls.
+
+Paid media, expiring documents, platform restrictions and unsupported formats
+still cannot be opened in-app. The UI links to a Telegram post for channels and
+supergroups where a post link is
 available; a public user handle can open its chat. Telegram does not define a
 message-specific link for ordinary DMs, bots or basic groups. External HTTP
-responses use `no-store`, and generated thumbnails remain in session temporary
-storage. Disconnect, logout and normal close revoke loopback URLs and attached
-native players. Every uncached range fetch rechecks local account and
+responses use `no-store`, and unprotected generated thumbnails remain in session
+temporary storage. Disconnect, logout and normal close revoke loopback URLs and
+attached native players. Every uncached range fetch rechecks local account and
 connection generation. Peer and message protection are checked on file
 reference refresh and at most 30 seconds after the previous successful remote
 check; concurrent reads share that check rather than issuing an RPC per block.
+An originally unprotected session stops fetching uncached bytes when a remote
+check finds its peer or post became protected; reopening captures protected
+viewer and native-player settings.
+An originally protected session retains those settings even if protection is
+later removed.
 Telegram may still serve bytes during that interval, and already cached blocks
 can remain readable until session close. Checking before open and prompt
 revocation remain the main boundary.

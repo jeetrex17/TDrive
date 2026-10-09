@@ -21,7 +21,7 @@ var (
 // uncached reads may rely on the open check.
 const externalAccessCheckInterval = 30 * time.Second
 
-// ExternalMedia is a read-only Telegram document. It never enters the TDrive
+// ExternalMedia is a read-only Telegram attachment. It never enters the TDrive
 // projection or inherits the active drive's encryption and mutation paths.
 type ExternalMedia struct {
 	Peer        tgclient.InputPeer
@@ -34,7 +34,7 @@ type ExternalMedia struct {
 	Validate    func(context.Context) error
 }
 
-// ExternalName normalizes a Telegram document name for the existing player.
+// ExternalName normalizes a Telegram attachment name for existing viewers.
 // A recognized MIME type supplies an extension when a post has no filename.
 func ExternalName(message tgclient.HistoryMessage) string {
 	name := tgclient.MediaName(message)
@@ -56,11 +56,7 @@ func ExternalKind(message tgclient.HistoryMessage) StreamKind {
 		return StreamKindUnknown
 	}
 	name := ExternalName(message)
-	kind := streamKindForName(name)
-	if kind != StreamKindVideo && kind != StreamKindAudio {
-		return StreamKindUnknown
-	}
-	return kind
+	return streamKindForName(name)
 }
 
 // OpenExternal publishes a normal tokenized session only after the caller's
@@ -73,7 +69,10 @@ func (s *Service) OpenExternal(ctx context.Context, source ExternalMedia, publis
 	if source.Client == nil || source.AccountID <= 0 || source.Generation == "" || source.Peer.ChannelID <= 0 || message.MsgID <= 0 {
 		return OpenResult{}, ErrExternalRestricted
 	}
-	if source.Protected || message.NoForwards || message.TTLSeconds > 0 || message.Paid || message.Restricted {
+	if (message.ChannelID != 0 && message.ChannelID != source.Peer.ChannelID) || (message.PeerKind != "" && message.PeerKind != source.Peer.PeerKind()) {
+		return OpenResult{}, ErrExternalRestricted
+	}
+	if message.TTLSeconds > 0 || message.Paid || message.Restricted {
 		return OpenResult{}, ErrExternalRestricted
 	}
 	name := ExternalName(message)
@@ -85,7 +84,7 @@ func (s *Service) OpenExternal(ctx context.Context, source ExternalMedia, publis
 	if err != nil {
 		return OpenResult{}, fmt.Errorf("media: resolve Telegram document: %w", err)
 	}
-	if ref.DocumentID != message.DocumentID || ref.Size != message.MediaSize || ref.AccessHash != message.DocumentAccessHash {
+	if ref.MsgID != message.MsgID || ref.Peer.ChannelID != source.Peer.ChannelID || ref.Peer.PeerKind() != source.Peer.PeerKind() || ref.DocumentID != message.DocumentID || ref.Size != message.MediaSize || ref.AccessHash != message.DocumentAccessHash {
 		return OpenResult{}, ErrExternalReplaced
 	}
 	if source.ProbeAccess {
@@ -102,18 +101,26 @@ func (s *Service) OpenExternal(ctx context.Context, source ExternalMedia, publis
 	}
 	file := LogicalFile{
 		ChannelID: source.Peer.ChannelID, FileID: message.MsgID, Revision: 1,
-		Name: name, StoredSize: ref.Size, PlaintextSize: ref.Size,
+		Name: name, StoredSize: ref.Size, PlaintextSize: ref.Size, Protected: source.Protected || message.NoForwards,
 		Segments:   []Segment{{MsgID: message.MsgID, Size: ref.Size}},
 		SourceKind: sourceKind, SourcePeerKind: string(source.Peer.PeerKind()),
 		SourceAccountID: source.AccountID, SourceGeneration: source.Generation,
 	}
-	checked := &externalRangeClient{base: s.ranges, client: source.Client, peer: source.Peer, original: ref, validate: source.Validate}
+	checked := &externalRangeClient{base: s.ranges, client: source.Client, peer: source.Peer, original: ref, validate: source.Validate, protected: file.Protected}
 	checked.lastRemoteCheck.Store(time.Now().UnixNano())
 	session, err := newSession(file, []resolvedSegment{{size: ref.Size, ref: ref}}, checked, s.thumbs, s.thumbGen, SessionOptions{
 		Context: ctx, EnableVideoThumbnails: kind == StreamKindVideo,
 	})
 	if err != nil {
 		return OpenResult{}, err
+	}
+	if kind == StreamKindImage {
+		mimeType, err := admitImage(ctx, session, name, s.imageLimits)
+		if err != nil {
+			session.Close()
+			return OpenResult{}, err
+		}
+		session.mimeType = mimeType
 	}
 	if err := publish(func() error { return s.server.Add(session) }); err != nil {
 		session.Close()
@@ -132,6 +139,7 @@ type externalRangeClient struct {
 	peer            tgclient.InputPeer
 	original        tgclient.DocumentRef
 	validate        func(context.Context) error
+	protected       bool // immutable protection policy captured when the session opened
 	lastRemoteCheck atomic.Int64
 	remoteCheckOnce sync.Once
 	remoteCheckSlot chan struct{}
@@ -171,14 +179,14 @@ func (c *externalRangeClient) checkRemote(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if channel.ID != c.peer.ChannelID || channel.Kind != c.peer.PeerKind() || channel.Protected || channel.Restricted {
+	if channel.ID != c.peer.ChannelID || channel.Kind != c.peer.PeerKind() || channel.Restricted || (channel.Protected && !c.protected) {
 		return ErrExternalRestricted
 	}
 	message, err := c.client.GetChannelMessage(ctx, c.peer, c.original.MsgID)
 	if err != nil {
 		return err
 	}
-	if message.NoForwards || message.TTLSeconds > 0 || message.Paid || message.Restricted {
+	if (message.NoForwards && !c.protected) || message.TTLSeconds > 0 || message.Paid || message.Restricted {
 		return ErrExternalRestricted
 	}
 	if message.MsgID != c.original.MsgID || (message.ChannelID != 0 && message.ChannelID != c.peer.ChannelID) || (message.PeerKind != "" && message.PeerKind != c.peer.PeerKind()) || message.DocumentID != c.original.DocumentID || message.MediaSize != c.original.Size || message.DocumentAccessHash != c.original.AccessHash {

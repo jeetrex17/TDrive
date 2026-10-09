@@ -105,7 +105,7 @@ func probeLinuxMPV(path string) (mpvVersion, error) {
 // arrived in later releases are passed only to a binary new enough to know
 // them: mpv refuses to start on an unknown option, which is how the 0.34
 // runtime shipped in AppImages failed every open on a fresh Fedora.
-func linuxMPVArgs(version mpvVersion, ipcPath string, windowID uintptr) []string {
+func linuxMPVArgs(version mpvVersion, ipcPath string, windowID uintptr, opts Options) []string {
 	args := []string{
 		"--no-config",
 		// Terminal messages stay on so a startup failure is reported by mpv
@@ -128,6 +128,7 @@ func linuxMPVArgs(version mpvVersion, ipcPath string, windowID uintptr) []string
 		"--keep-open=yes",
 		"--input-ipc-server=" + ipcPath,
 	}
+	args = append(args, protectedMPVArgs(opts.Protected)...)
 	// auto-safe hardware decoding exists since 0.34. Older builds decode in
 	// software rather than gamble on a decoder that can take the player down.
 	if version.atLeast(0, 34) {
@@ -154,12 +155,16 @@ func linuxMPVArgs(version mpvVersion, ipcPath string, windowID uintptr) []string
 	// Wayland does not provide the cross-process child-window embedding
 	// primitive used on X11. Keep playback reliable in an honest standalone
 	// mpv window and leave its native controls enabled.
+	bindings := "--input-default-bindings=yes"
+	if opts.Protected {
+		bindings = "--input-default-bindings=no"
+	}
 	return append(args,
 		"--title=TDrive Video",
 		"--osc=yes",
 		"--osd-bar=yes",
 		"--osd-level=1",
-		"--input-default-bindings=yes",
+		bindings,
 		"--input-vo-keyboard=yes",
 	)
 }

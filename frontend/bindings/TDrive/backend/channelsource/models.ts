@@ -15,6 +15,7 @@ export interface MediaItem {
     "kind": string;
     "caption": string;
     "streamable": boolean;
+    "protected": boolean;
     "block_reason"?: string;
     "telegram_url": string;
 }

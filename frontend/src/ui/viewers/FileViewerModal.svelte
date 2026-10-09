@@ -2,6 +2,7 @@
     import DownloadIcon from '@lucide/svelte/icons/download';
     import FileIcon from '@lucide/svelte/icons/file';
     import FileTextIcon from '@lucide/svelte/icons/file-text';
+    import ImageIcon from '@lucide/svelte/icons/image';
     import Music2Icon from '@lucide/svelte/icons/music-2';
     import PauseIcon from '@lucide/svelte/icons/pause';
     import PlayIcon from '@lucide/svelte/icons/play';
@@ -9,8 +10,11 @@
     import VolumeXIcon from '@lucide/svelte/icons/volume-x';
     import XIcon from '@lucide/svelte/icons/x';
     import { isMobilePlatform } from '../../api';
+    import { createZoomPanController } from '../preview/zoom-pan';
+    import { bindTouchGestures } from '../preview/touch-gestures';
     import ModalShell from '../modals/ModalShell.svelte';
     import { isPdfFrameMessage, pdfViewerFrameSrc } from './pdf-frame';
+    import { bindViewOnlyGuards } from './view-only-guards';
     import { fileViewerState } from './file-viewer-store';
     import {
         structuredTextLanguageForName,
@@ -31,6 +35,10 @@
 
     const TEXT_CHUNK_BYTES = 512 * 1024;
     const TEXT_MAX_BYTES = 5 * 1024 * 1024;
+
+    let imageLoading = $state(false);
+    let imageError = $state('');
+    let activeImageUrl = '';
 
     let audioEl = $state<HTMLAudioElement | null>(null);
     let audioCurrent = $state(0);
@@ -59,6 +67,55 @@
     let activeTextSource = '';
     let markdownView = $state<'rendered' | 'raw'>('rendered');
 
+    function bindProtectedViewer(stage: HTMLElement) {
+        const cleanup = bindViewOnlyGuards(stage.closest<HTMLElement>('#viewer-modal') ?? stage, () => Boolean($fileViewerState.protected));
+        return { destroy: cleanup };
+    }
+
+    // Share the drive preview's zoom geometry and touch recognizer. Source
+    // images keep their own capability lifecycle and have no drive actions.
+    function bindSourceImage(image: HTMLImageElement) {
+        const zoomPan = createZoomPanController(() => image);
+        const zoomAt = (x: number, y: number, factor: number) => {
+            if (image.naturalWidth > 0) zoomPan.zoomAt(x, y, factor);
+        };
+        const toggleZoom = (x: number, y: number) => {
+            if (zoomPan.scale > 1) zoomPan.reset();
+            else zoomAt(x, y, 2.5);
+        };
+        const wheel = (event: WheelEvent) => {
+            event.preventDefault();
+            zoomAt(event.clientX, event.clientY, event.deltaY < 0 ? 1.18 : 1 / 1.18);
+        };
+        const doubleClick = (event: MouseEvent) => {
+            if (!mobile) toggleZoom(event.clientX, event.clientY);
+        };
+        image.addEventListener('wheel', wheel, { passive: false });
+        image.addEventListener('dblclick', doubleClick);
+        image.addEventListener('pointerdown', zoomPan.pointerDown);
+        image.addEventListener('pointermove', zoomPan.pointerMove);
+        image.addEventListener('pointerup', zoomPan.pointerUp);
+        image.addEventListener('pointercancel', zoomPan.pointerUp);
+        const unbindTouch = bindTouchGestures(image, {
+            doubleTap: toggleZoom,
+            pinchStart: () => zoomPan.endPan(),
+            pinch: (factor, x, y) => zoomAt(x, y, factor),
+        });
+        return {
+            destroy() {
+                unbindTouch();
+                zoomPan.endPan();
+                zoomPan.reset();
+                image.removeEventListener('wheel', wheel);
+                image.removeEventListener('dblclick', doubleClick);
+                image.removeEventListener('pointerdown', zoomPan.pointerDown);
+                image.removeEventListener('pointermove', zoomPan.pointerMove);
+                image.removeEventListener('pointerup', zoomPan.pointerUp);
+                image.removeEventListener('pointercancel', zoomPan.pointerUp);
+            },
+        };
+    }
+
     function formatTime(seconds: number): string {
         if (!Number.isFinite(seconds) || seconds <= 0) return '0:00';
         const whole = Math.floor(seconds);
@@ -71,6 +128,8 @@
 
     function viewerLabel(): string {
         switch ($fileViewerState.kind) {
+            case 'image':
+                return 'Image';
             case 'audio':
                 return 'Audio';
             case 'pdf':
@@ -85,6 +144,7 @@
     function viewerStatus(): string {
         if ($fileViewerState.loading) return 'Opening';
         if ($fileViewerState.error) return 'Unavailable';
+        if ($fileViewerState.kind === 'image') return imageError ? 'Unavailable' : imageLoading ? 'Opening image' : 'Ready';
         if ($fileViewerState.kind === 'audio') return audioError ? 'Unavailable' : audioWaiting ? 'Buffering' : audioPaused ? 'Ready' : 'Playing';
         if ($fileViewerState.kind === 'pdf') return pdfError ? 'Unavailable' : pdfLoading ? 'Opening PDF' : pdfPageCount ? `${pdfPageCount} pages` : 'Ready';
         if ($fileViewerState.kind === 'text') {
@@ -290,6 +350,15 @@
 
     $effect(() => {
         const { open, kind, url } = $fileViewerState;
+        const nextUrl = open && kind === 'image' ? url : '';
+        if (nextUrl === activeImageUrl) return;
+        activeImageUrl = nextUrl;
+        imageLoading = Boolean(nextUrl);
+        imageError = '';
+    });
+
+    $effect(() => {
+        const { open, kind, url } = $fileViewerState;
         const nextUrl = open && kind === 'audio' ? url : '';
         if (nextUrl === activeAudioUrl) return;
         activeAudioUrl = nextUrl;
@@ -366,6 +435,12 @@
     </div>
 {/snippet}
 
+{#snippet protectedBadge()}
+    {#if $fileViewerState.protected}
+        <span class="file-viewer-protected" title="View only. Saving and forwarding are disabled.">Protected</span>
+    {/if}
+{/snippet}
+
 {#snippet viewerHeader()}
     {#if mobile}
     <div class="file-viewer-head">
@@ -376,10 +451,11 @@
             <h3 id="file-viewer-title" class="file-viewer-title" title={$fileViewerState.title}>
                 {$fileViewerState.title || 'Open file'}
             </h3>
-            {#if !$fileViewerState.readOnly}<button class="file-viewer-action is-icon-only" type="button" onclick={onDownload} aria-label="Download" title="Download">
+            {#if !$fileViewerState.readOnly && !$fileViewerState.protected}<button class="file-viewer-action is-icon-only" type="button" onclick={onDownload} aria-label="Download" title="Download">
                 <DownloadIcon aria-hidden="true" />
             </button>{/if}
         </div>
+        {#if $fileViewerState.protected}<div class="file-viewer-subbar">{@render protectedBadge()}</div>{/if}
         {#if shouldShowMarkdownToggle()}
             <div class="file-viewer-subbar">
                 {@render markdownToggle()}
@@ -390,7 +466,9 @@
     <div class="file-viewer-topbar">
         <div class="file-viewer-identity">
             <div class={`file-viewer-kind-mark is-${$fileViewerState.kind || 'file'}`} aria-hidden="true">
-                {#if $fileViewerState.kind === 'audio'}
+                {#if $fileViewerState.kind === 'image'}
+                    <ImageIcon strokeWidth={1.8} />
+                {:else if $fileViewerState.kind === 'audio'}
                     <Music2Icon strokeWidth={1.9} />
                 {:else if $fileViewerState.kind === 'text'}
                     <FileTextIcon strokeWidth={1.8} />
@@ -404,6 +482,7 @@
                 </h3>
                 <div class="file-viewer-meta">
                     <span>{viewerLabel()}</span>
+                    {@render protectedBadge()}
                     {#if $fileViewerState.meta}
                         <span aria-hidden="true">·</span>
                         <span>{$fileViewerState.meta}</span>
@@ -417,7 +496,7 @@
             {#if shouldShowMarkdownToggle()}
                 {@render markdownToggle()}
             {/if}
-            {#if !$fileViewerState.readOnly}<button class="file-viewer-action" type="button" onclick={onDownload} aria-label="Download" title="Download">
+            {#if !$fileViewerState.readOnly && !$fileViewerState.protected}<button class="file-viewer-action" type="button" onclick={onDownload} aria-label="Download" title="Download">
                 <DownloadIcon aria-hidden="true" />
             </button>{/if}
             <button class="file-viewer-close" type="button" onclick={onClose} aria-label="Close file" title="Close">
@@ -439,15 +518,36 @@
     header={viewerHeader}
     onClose={onClose}
 >
-    <div class="file-viewer-stage">
+    <div class="file-viewer-stage" class:is-protected={$fileViewerState.protected} use:bindProtectedViewer>
         {#if $fileViewerState.error}
             <div class="file-viewer-state" role="alert">{$fileViewerState.error}</div>
+        {:else if $fileViewerState.kind === 'image'}
+            <div class="source-image-viewer">
+                {#if imageError}
+                    <div class="file-viewer-state" role="alert">{imageError}</div>
+                {:else if $fileViewerState.url}
+                    {#key $fileViewerState.url}
+                        <img
+                            use:bindSourceImage
+                            src={$fileViewerState.url}
+                            alt={$fileViewerState.title}
+                            draggable={$fileViewerState.protected ? false : undefined}
+                            onload={() => { imageLoading = false; }}
+                            onerror={() => { imageLoading = false; imageError = 'Could not load this image'; }}
+                        />
+                    {/key}
+                    {#if imageLoading}<div class="source-image-loading" role="status">Opening image…</div>{/if}
+                {:else}
+                    <div class="file-viewer-state" role="status">Opening image…</div>
+                {/if}
+            </div>
         {:else if $fileViewerState.kind === 'audio'}
             <div class="audio-viewer">
                 <audio
                     bind:this={audioEl}
                     src={$fileViewerState.url}
                     preload="metadata"
+                    controlslist={$fileViewerState.protected ? 'nodownload' : undefined}
                     onloadedmetadata={syncAudio}
                     ontimeupdate={syncAudio}
                     onplay={syncAudio}
@@ -503,7 +603,7 @@
                         bind:this={pdfFrameEl}
                         class="pdf-frame"
                         title={$fileViewerState.title || 'PDF viewer'}
-                        src={pdfViewerFrameSrc($fileViewerState.url)}
+                        src={pdfViewerFrameSrc($fileViewerState.url, Boolean($fileViewerState.protected))}
                     ></iframe>
                     {#if pdfLoading}
                         <div class="pdf-frame-overlay" aria-live="polite">Opening PDF…</div>
@@ -543,3 +643,51 @@
         {/if}
     </div>
 </ModalShell>
+
+
+<style>
+    @media print {
+        .file-viewer-stage.is-protected { visibility: hidden; }
+    }
+    .file-viewer-protected {
+        display: inline-flex;
+        align-items: center;
+        padding: 2px 8px;
+        border-radius: var(--radius-pill);
+        background: var(--viewer-surface-2);
+        color: var(--viewer-text-muted);
+        font-size: var(--type-xs);
+    }
+    .file-viewer-stage.is-protected,
+    .file-viewer-stage.is-protected :global(*) {
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+    }
+    .source-image-viewer {
+        position: relative;
+        display: grid;
+        place-items: center;
+        height: 100%;
+        min-height: 0;
+        overflow: hidden;
+    }
+    .source-image-viewer img {
+        position: absolute;
+        inset: 0;
+        display: block;
+        width: 100%;
+        height: 100%;
+        object-fit: contain;
+        touch-action: none;
+        cursor: zoom-in;
+    }
+    .source-image-loading {
+        position: absolute;
+        inset: 0;
+        display: grid;
+        place-items: center;
+        color: var(--viewer-text-muted);
+        background: var(--viewer-surface-0);
+    }
+</style>

@@ -2,6 +2,8 @@ package media
 
 import (
 	"context"
+	"errors"
+	"os"
 	"testing"
 	"time"
 
@@ -83,5 +85,33 @@ func TestVideoSessionKeepsPlaybackCacheAndReadAhead(t *testing.T) {
 	}
 	if got := session.reader.readAhead; got != playbackReadAhead {
 		t.Fatalf("video read-ahead = %d, want %d", got, playbackReadAhead)
+	}
+}
+
+func TestProtectedVideoSessionCannotCreateThumbnailFiles(t *testing.T) {
+	tempDir := t.TempDir()
+	t.Setenv("TMPDIR", tempDir)
+	const size int64 = 512
+	ranges := newRecordingRangeClient(size)
+	file := LogicalFile{ChannelID: 1, FileID: 2, Name: "clip.mp4", StoredSize: size, PlaintextSize: size, SourceKind: "telegram", Protected: true}
+	segments := []resolvedSegment{{size: size, ref: tgclient.DocumentRef{DocumentID: 9, MsgID: 1, Size: size}}}
+	session, err := newSession(file, segments, ranges, nil, &fakeVideoThumbGenerator{available: true}, SessionOptions{EnableVideoThumbnails: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(session.Close)
+	if session.thumbs != nil || session.thumbReader != nil || session.ThumbnailURL() != "" {
+		t.Fatal("protected session created thumbnail resources")
+	}
+	session.UpdatePlayback(0, 120, 60)
+	if _, err := session.Thumbnail(t.Context(), 10); !errors.Is(err, ErrThumbnailUnavailable) {
+		t.Fatalf("protected thumbnail=%v", err)
+	}
+	entries, err := os.ReadDir(tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("protected session wrote %d temporary files", len(entries))
 	}
 }

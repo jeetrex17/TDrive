@@ -6,6 +6,8 @@ import {
     createChannelMediaPager,
     MAX_CHANNEL_ITEMS,
     mediaMeta,
+    isOpenable,
+    mediaActionLabel,
     mediaTitle,
     restrictionLabel,
     sourceKey,
@@ -159,6 +161,21 @@ describe('post presentation', () => {
         expect(['protected', 'paid', 'expires', 'restricted', 'unsupported_format', ''].map((code) => restrictionLabel(post(5, { blockReason: code }))))
             .toEqual(['Protected', 'Paid', 'Expiring', 'Restricted', '', '']);
         expect(mediaMeta(post(6, { kind: 'unknown', name: 'kit.pdf', size: 1_048_576, date: 0 }))).toBe('PDF · 1 MB');
+    });
+
+    it('admits the supported viewer kinds and keeps restrictions and unknown formats outside TDrive', () => {
+        for (const kind of ['video', 'audio', 'image', 'pdf', 'text']) {
+            const item = post(9, { kind });
+            expect(isOpenable(item)).toBe(true);
+            expect(mediaActionLabel(item)).toBe(kind === 'video' || kind === 'audio' ? 'Play' : 'Open');
+            for (const blockReason of ['protected', 'paid', 'expires', 'restricted', 'unsupported_format']) {
+                expect(isOpenable({ ...item, blockReason })).toBe(false);
+            }
+            expect(isOpenable({ ...item, streamable: false })).toBe(false);
+        }
+        expect(isOpenable(post(10, { kind: 'unknown' }))).toBe(false);
+        expect(mediaMeta(post(11, { kind: 'image', name: 'Attachment' }))).toBe('Image');
+        expect(mediaMeta(post(12, { kind: 'pdf', name: 'Attachment' }))).toBe('PDF');
     });
 
     it('gives a post its running time when Telegram knows it', () => {

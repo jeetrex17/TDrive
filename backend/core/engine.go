@@ -337,6 +337,9 @@ func (e *Engine) Close() {
 	if e != nil && e.liveSync != nil {
 		e.liveSync.Stop()
 	}
+	if e != nil && e.lifecycle != nil {
+		e.lifecycle.Close()
+	}
 	if e != nil && e.media != nil {
 		_ = e.media.Close()
 	}

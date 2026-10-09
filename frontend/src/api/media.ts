@@ -31,6 +31,8 @@ export interface MediaOpenInfo {
     plaintextSize: number;
     encrypted: boolean;
     multipart: boolean;
+    /** View-only content: save, forward and copy actions are disabled. */
+    protected?: boolean;
 }
 
 export interface MediaOpenResult {
@@ -167,6 +169,7 @@ function normalizeMediaOpenInfo(info?: LogicalFile, fallbackName?: string): Medi
         plaintextSize: Number(info?.plaintext_size ?? 0),
         encrypted: Boolean(info?.encrypted),
         multipart: Boolean(info?.multipart),
+        protected: Boolean(info?.protected),
     };
 }
 

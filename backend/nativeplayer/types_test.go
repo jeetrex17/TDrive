@@ -363,3 +363,27 @@ func TestNativePlayerEnabledIsOptOut(t *testing.T) {
 		t.Fatal("nativePlayerEnabled(\"0\") = true, want false")
 	}
 }
+
+func TestProtectedPlaybackOptionsDisablePersistence(t *testing.T) {
+	if options := protectedMPVOptions(false); len(options) != 0 {
+		t.Fatalf("ordinary playback unexpectedly restricted: %v", options)
+	}
+	options := protectedMPVOptions(true)
+	want := map[string]string{
+		"input-default-bindings": "no",
+		"cache-on-disk":          "no",
+		"stream-record":          "",
+		"save-position-on-quit":  "no",
+		"load-scripts":           "no",
+	}
+	for _, option := range options {
+		value, exists := want[option[0]]
+		if !exists || value != option[1] {
+			t.Fatalf("unexpected protective option %v", option)
+		}
+		delete(want, option[0])
+	}
+	if len(want) != 0 {
+		t.Fatalf("missing protected playback restrictions: %v", want)
+	}
+}

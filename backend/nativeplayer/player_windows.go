@@ -174,6 +174,8 @@ func (p *Player) startProcess(ctx context.Context, url string, opts Options) err
 		fmt.Sprintf("--wid=%d", p.child),
 	}
 
+	args = append(args, protectedMPVArgs(opts.Protected)...)
+
 	proc, err := startSuspendedMPV(ctx, mpvPath, args)
 	if err != nil {
 		p.closeJob()

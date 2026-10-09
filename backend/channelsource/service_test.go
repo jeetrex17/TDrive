@@ -5,17 +5,20 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"TDrive/backend/media"
 	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
 
+	"github.com/gotd/td/pool"
 	"github.com/gotd/td/tgerr"
 	_ "modernc.org/sqlite"
 )
@@ -172,7 +175,7 @@ func TestSourceBoundaryValidation(t *testing.T) {
 		query, kind string
 	}{
 		{-1, 20, "", "all"}, {0, 0, "", "all"}, {0, 101, "", "all"},
-		{0, 20, strings.Repeat("x", 121), "all"}, {0, 20, "", "image"},
+		{0, 20, strings.Repeat("x", 121), "all"}, {0, 20, "", "archive"},
 	} {
 		if _, err := sources.Page(t.Context(), testChannelID, test.offset, test.limit, test.query, test.kind); !errors.Is(err, ErrInvalidPage) {
 			t.Errorf("invalid page %+v = %v", test, err)
@@ -227,12 +230,14 @@ func TestSourceAccountGenerationAndPermissions(t *testing.T) {
 	}
 	fake.SeedJoinedBroadcastChannels(tgclient.JoinedBroadcastChannel{ID: testChannelID, AccessHash: 77, Title: "Cinema", Protected: true})
 	page, err := sources.Page(ctx, testChannelID, 0, 20, "", "all")
-	if err != nil || len(page.Items) != 1 || page.Items[0].BlockReason != "protected" {
+	if err != nil || len(page.Items) != 1 || !page.Items[0].Protected || !page.Items[0].Streamable || page.Items[0].BlockReason != "" {
 		t.Fatalf("protected page = %#v, %v", page, err)
 	}
-	if _, err := sources.Open(ctx, testChannelID, 10, second.AccountID, second.Generation); !errors.Is(err, media.ErrExternalRestricted) {
-		t.Fatalf("protected open error = %v", err)
+	opened, err := sources.Open(ctx, testChannelID, 10, second.AccountID, second.Generation)
+	if err != nil || !opened.Info.Protected {
+		t.Fatalf("protected open = %#v, %v", opened, err)
 	}
+	readOpened(t, opened.URL, []byte("video data"))
 }
 
 func TestRestrictedChannelIsUnavailable(t *testing.T) {
@@ -332,13 +337,12 @@ func TestShortBatchIsNotTheStartOfTheChannel(t *testing.T) {
 
 func TestPostRestrictionsBlockExternalOpen(t *testing.T) {
 	fake := tgclient.NewFake(testAccountID)
-	fake.SeedJoinedBroadcastChannels(tgclient.JoinedBroadcastChannel{ID: testChannelID, AccessHash: 77, Title: "Cinema"})
+	fake.SeedJoinedBroadcastChannels(tgclient.JoinedBroadcastChannel{ID: testChannelID, AccessHash: 77, Title: "Cinema", Protected: true})
 	for _, test := range []struct {
 		id      int64
 		message tgclient.HistoryMessage
 		want    string
 	}{
-		{1, tgclient.HistoryMessage{NoForwards: true}, "protected"},
 		{2, tgclient.HistoryMessage{TTLSeconds: 30}, "expires"},
 		{3, tgclient.HistoryMessage{Paid: true}, "paid"},
 		{4, tgclient.HistoryMessage{Restricted: true}, "restricted"},
@@ -362,12 +366,12 @@ func TestPostRestrictionsBlockExternalOpen(t *testing.T) {
 		t.Fatal(err)
 	}
 	page, err := sources.Page(t.Context(), testChannelID, 0, 20, "", "all")
-	if err != nil || len(page.Items) != 4 {
+	if err != nil || len(page.Items) != 3 {
 		t.Fatalf("restricted page = %#v, %v", page, err)
 	}
 	for _, item := range page.Items {
-		want := map[int64]string{1: "protected", 2: "expires", 3: "paid", 4: "restricted"}[item.MsgID]
-		if item.Streamable || item.BlockReason != want || item.TelegramURL == "" {
+		want := map[int64]string{2: "expires", 3: "paid", 4: "restricted"}[item.MsgID]
+		if item.Streamable || !item.Protected || item.BlockReason != want || item.TelegramURL == "" {
 			t.Errorf("item %d = %#v, want blocked %q", item.MsgID, item, want)
 		}
 		if _, err := sources.Open(t.Context(), testChannelID, item.MsgID, connected.AccountID, connected.Generation); !errors.Is(err, media.ErrExternalRestricted) {
@@ -500,5 +504,75 @@ func TestPagingLooksTheChannelUpWithoutWalkingDialogs(t *testing.T) {
 	t.Cleanup(func() { sources.media.CloseExternalSessions(connected.AccountID, testChannelID) })
 	if walks, lookups := fake.TelegramReads(); walks != 1 || lookups != 2 || opened.Token == "" {
 		t.Fatalf("after an open: %d dialog walks and %d lookups, want 1 and 2", walks, lookups)
+	}
+}
+
+type failingSourceHistory struct {
+	tgclient.Client
+	failure          error
+	remaining, calls int
+}
+
+func (c *failingSourceHistory) GetHistory(ctx context.Context, peer tgclient.InputPeer, minID, offsetID int64, limit int) ([]tgclient.HistoryMessage, error) {
+	c.calls++
+	if c.remaining > 0 {
+		c.remaining--
+		return nil, c.failure
+	}
+	return c.Client.GetHistory(ctx, peer, minID, offsetID, limit)
+}
+
+func TestSourcePagingRetriesTransientFailuresWithinBudget(t *testing.T) {
+	for _, test := range []struct {
+		name            string
+		failure         error
+		failures, calls int
+		cancel          bool
+		want            error
+	}{
+		{"connection recovered", fmt.Errorf("pool: %w", pool.ErrConnDead), 1, 2, false, nil},
+		{"connection exhausted", fmt.Errorf("pool: %w", pool.ErrConnDead), 3, 3, false, pool.ErrConnDead},
+		{"authentication rejected", tgerr.New(401, "AUTH_KEY_UNREGISTERED"), 1, 1, false, nil},
+		{"caller cancelled", fmt.Errorf("pool: %w", pool.ErrConnDead), 1, 1, true, context.Canceled},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			fake := tgclient.NewFake(testAccountID)
+			fake.SeedJoinedBroadcastChannels(tgclient.JoinedBroadcastChannel{ID: testChannelID, AccessHash: 77, Title: "Files"})
+			seedVideo(fake, testChannelID, 1, []byte("stream bytes"))
+			client := &failingSourceHistory{Client: fake, failure: test.failure, remaining: test.failures}
+			sources, _, _ := sourceFixture(t, client, fake)
+			if _, err := sources.Connect(t.Context(), testChannelID); err != nil {
+				t.Fatal(err)
+			}
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			var waits []time.Duration
+			sources.retry.Sleep = func(ctx context.Context, delay time.Duration) error {
+				waits = append(waits, delay)
+				if test.cancel {
+					cancel()
+					return ctx.Err()
+				}
+				return nil
+			}
+			page, err := sources.Page(ctx, testChannelID, 0, 1, "", "all")
+			if test.name == "authentication rejected" {
+				if !errors.Is(err, test.failure) {
+					t.Fatalf("auth error = %v", err)
+				}
+			} else if test.want != nil {
+				if !errors.Is(err, test.want) {
+					t.Fatalf("error = %v want %v", err, test.want)
+				}
+			} else if err != nil || len(page.Items) != 1 {
+				t.Fatalf("recovered page = %#v, %v", page, err)
+			}
+			if client.calls != test.calls {
+				t.Fatalf("history calls=%d want=%d", client.calls, test.calls)
+			}
+			if len(waits) > 0 && waits[0] != 500*time.Millisecond {
+				t.Fatalf("first backoff=%s", waits[0])
+			}
+		})
 	}
 }

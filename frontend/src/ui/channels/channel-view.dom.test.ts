@@ -93,6 +93,22 @@ describe('ChannelView', () => {
         expect(fetchMedia).toHaveBeenLastCalledWith(expect.objectContaining({ peerKind: 'channel', peerId: 51, offsetId: 0, kind: 'video' }));
     });
 
+    it('opens images and documents with Open labels and sends their filters', async () => {
+        const image = { ...VIDEO, msgId: 80, kind: 'image', name: 'forest.jpg', caption: '' };
+        const pdf = { ...VIDEO, msgId: 79, kind: 'pdf', name: 'guide.pdf', caption: '' };
+        const fetchMedia = answering(image, pdf);
+        const props = render(SOURCE, fetchMedia);
+        await settle();
+        rowNamed(/^Open forest\.jpg/)?.click();
+        expect(props.onOpenPost).toHaveBeenCalledWith(image, SOURCE, [image, pdf]);
+        expect(rowNamed(/^Open guide\.pdf/)).toBeDefined();
+        for (const [label, kind] of [['Images', 'image'], ['Documents', 'document']]) {
+            kindButton(label)?.click();
+            await settle();
+            expect(fetchMedia).toHaveBeenLastCalledWith(expect.objectContaining({ offsetId: 0, kind }));
+        }
+    });
+
     it('reorders the rows and queues videos in the order chosen', async () => {
         const second = { ...VIDEO, msgId: 72, caption: 'Episode 2', date: VIDEO.date + 60 };
         const tenth = { ...VIDEO, msgId: 73, caption: 'Episode 10', date: VIDEO.date + 120 };

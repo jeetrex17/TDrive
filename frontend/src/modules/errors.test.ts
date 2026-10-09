@@ -47,6 +47,8 @@ describe("humanizeBackendError", () => {
             ["PASSWORD_HASH_INVALID", "That two-step verification password was incorrect."],
             ["FLOOD_WAIT_30", "Telegram is temporarily limiting requests. Wait a moment and try again."],
             ["media source: find dialog: tgclient: flood wait: 29s", "Telegram is temporarily limiting requests. Wait a moment and try again."],
+            ["media source: check dialog access: waitSession: connection dead", "Telegram is not reachable right now. Try again."],
+            ["rpcDoRequest: engine forcibly closed: context canceled", "Telegram is not reachable right now. Try again."],
             ["AUTH_KEY_UNREGISTERED", "Your Telegram session expired. Sign in again."],
             ["permission denied", "You don't have permission to do that."],
             ["no space left on device", "There is not enough free disk space to finish this action."],

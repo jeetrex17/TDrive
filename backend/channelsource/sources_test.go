@@ -5,8 +5,11 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"image"
+	"image/jpeg"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -343,7 +346,7 @@ func TestPublicChannelMustServeBytesBeforeSessionPublication(t *testing.T) {
 	}
 }
 
-func TestProtectedGroupBotAndDMPostsStayOutsideMediaSessions(t *testing.T) {
+func TestProtectedGroupBotAndDMPostsRemainViewable(t *testing.T) {
 	fake := tgclient.NewFake(testAccountID)
 	fake.SeedMediaSourcePeers(
 		tgclient.SourcePeer{Kind: tgclient.PeerGroup, ID: 80, Title: "Protected group", Protected: true},
@@ -353,8 +356,10 @@ func TestProtectedGroupBotAndDMPostsStayOutsideMediaSessions(t *testing.T) {
 	seedTypedVideo(fake, tgclient.PeerGroup, 80, 5, 500, []byte("protected group bytes"))
 	fake.SeedHistory(tgclient.HistoryMessage{PeerKind: tgclient.PeerBot, ChannelID: 81, MsgID: 5,
 		HasMedia: true, DocumentID: 501, DocumentName: "clip.mp4", MediaSize: 20, NoForwards: true})
+	fake.SeedSourceDocumentBody(tgclient.PeerBot, 81, 5, []byte("protected bot bytes!"))
 	fake.SeedHistory(tgclient.HistoryMessage{PeerKind: tgclient.PeerUser, ChannelID: 82, MsgID: 5,
 		HasMedia: true, DocumentID: 502, DocumentName: "clip.mp4", MediaSize: 20, NoForwards: true})
+	fake.SeedSourceDocumentBody(tgclient.PeerUser, 82, 5, []byte("protected user bytes"))
 	sources, _, _ := sourceFixture(t, fake, fake)
 	for _, peer := range []struct {
 		kind tgclient.PeerKind
@@ -366,13 +371,13 @@ func TestProtectedGroupBotAndDMPostsStayOutsideMediaSessions(t *testing.T) {
 		}
 		connected := connectTyped(t, sources, peer.kind, peer.id, username)
 		page, err := sources.PageSource(t.Context(), string(peer.kind), peer.id, 0, 10, "", "video")
-		if err != nil || len(page.Items) != 1 || page.Items[0].Streamable || page.Items[0].BlockReason != "protected" {
+		if err != nil || len(page.Items) != 1 || !page.Items[0].Streamable || !page.Items[0].Protected || page.Items[0].BlockReason != "" {
 			t.Fatalf("%s protected page = %#v, %v", peer.kind, page, err)
 		}
-		_, err = sources.OpenSourceWithGate(t.Context(), string(peer.kind), peer.id, 5, testAccountID, connected.Generation,
+		opened, err := sources.OpenSourceWithGate(t.Context(), string(peer.kind), peer.id, 5, testAccountID, connected.Generation,
 			func(add func() error) error { return add() })
-		if !errors.Is(err, media.ErrExternalRestricted) {
-			t.Fatalf("%s open = %v", peer.kind, err)
+		if err != nil || !opened.Info.Protected || opened.ThumbnailURL != "" {
+			t.Fatalf("%s protected open = %#v, %v", peer.kind, opened, err)
 		}
 	}
 }
@@ -632,5 +637,209 @@ func TestTypedReferenceRefreshRechecksAccountAndGroupProtection(t *testing.T) {
 				t.Fatalf("changed source served body; status=%d resolves=%d", response.StatusCode, ranges.resolves.Load())
 			}
 		})
+	}
+}
+
+type sourceViewerCase struct {
+	name, filename, mime, kind, filter string
+	body                               []byte
+}
+
+type sourceViewerScope struct {
+	name                                 string
+	peer                                 tgclient.PeerKind
+	legacy, peerProtected, postProtected bool
+}
+
+func TestSourceViewersServeAllSupportedKinds(t *testing.T) {
+	var photo bytes.Buffer
+	if err := jpeg.Encode(&photo, image.NewRGBA(image.Rect(0, 0, 2, 2)), nil); err != nil {
+		t.Fatal(err)
+	}
+	for _, viewer := range []sourceViewerCase{
+		{"PDF", "", "application/pdf", "pdf", "document", []byte("%PDF-1.4 source preview")},
+		{"text", "notes.md", "text/markdown", "text", "document", []byte("# Source notes\npreview")},
+		{"photo", "Telegram photo 9.jpg", "image/jpeg", "image", "image", photo.Bytes()},
+		{"audio", "voice.mp3", "audio/mpeg", "audio", "audio", []byte("audio preview bytes")},
+		{"video", "clip.mp4", "video/mp4", "video", "video", []byte("video preview bytes")},
+	} {
+		for _, scope := range []sourceViewerScope{
+			{"typed", tgclient.PeerGroup, false, false, false},
+			{"typed protected peer", tgclient.PeerGroup, false, true, false},
+			{"typed protected post", tgclient.PeerGroup, false, false, true},
+			{"legacy", tgclient.PeerChannel, true, false, false},
+			{"legacy protected peer", tgclient.PeerChannel, true, true, false},
+			{"legacy protected post", tgclient.PeerChannel, true, false, true},
+		} {
+			t.Run(viewer.name+"/"+scope.name, func(t *testing.T) { testSourceViewer(t, viewer, scope) })
+		}
+	}
+}
+
+func testSourceViewer(t *testing.T, viewer sourceViewerCase, scope sourceViewerScope) {
+	t.Helper()
+	fake := tgclient.NewFake(testAccountID)
+	fake.SeedMediaSourcePeers(tgclient.SourcePeer{Kind: scope.peer, ID: 80, AccessHash: 77, Title: "Files", Protected: scope.peerProtected})
+	fake.SeedJoinedBroadcastChannels(tgclient.JoinedBroadcastChannel{ID: 80, AccessHash: 77, Title: "Files", Protected: scope.peerProtected})
+	fake.SeedHistory(tgclient.HistoryMessage{PeerKind: scope.peer, ChannelID: 80, MsgID: 9,
+		HasMedia: true, DocumentID: 901, DocumentAccessHash: 902, MediaSize: int64(len(viewer.body)),
+		DocumentName: viewer.filename, MimeType: viewer.mime, NoForwards: scope.postProtected})
+	fake.SeedSourceDocumentBody(scope.peer, 80, 9, viewer.body)
+	if scope.legacy {
+		fake.SeedDocumentBody(9, viewer.body)
+	}
+	var ranges tgclient.RangeClient = fake
+	if viewer.name == "photo" {
+		ranges = photoRange{RangeClient: fake}
+	}
+	refreshed := &rangeFault{RangeClient: ranges}
+	sources, _, _ := sourceFixture(t, fake, refreshed)
+	var connected SourceInfo
+	var page MediaPage
+	var opened media.OpenResult
+	var err error
+	if scope.legacy {
+		connected, err = sources.Connect(t.Context(), 80)
+		if err != nil {
+			t.Fatal(err)
+		}
+		page, err = sources.Page(t.Context(), 80, 0, 10, "", viewer.filter)
+	} else {
+		connected = connectTyped(t, sources, scope.peer, 80, "")
+		page, err = sources.PageSource(t.Context(), string(scope.peer), 80, 0, 10, "", viewer.filter)
+	}
+	protected := scope.peerProtected || scope.postProtected
+	if err != nil || len(page.Items) != 1 || page.Items[0].Kind != viewer.kind || !page.Items[0].Streamable || page.Items[0].Protected != protected {
+		t.Fatalf("%s page = %#v, %v", viewer.filter, page, err)
+	}
+	if scope.legacy {
+		opened, err = sources.Open(t.Context(), 80, 9, testAccountID, connected.Generation)
+	} else {
+		opened, err = sources.OpenSourceWithGate(t.Context(), string(scope.peer), 80, 9, testAccountID, connected.Generation, func(add func() error) error { return add() })
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(opened.Kind) != viewer.kind || opened.Name != page.Items[0].Name || opened.Info.Protected != protected {
+		t.Fatalf("open = %#v", opened)
+	}
+	if protected && opened.ThumbnailURL != "" {
+		t.Fatal("protected source published a thumbnail URL")
+	}
+	readOpened(t, opened.URL, viewer.body)
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodGet, opened.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	actual, readErr := io.ReadAll(response.Body)
+	response.Body.Close()
+	if readErr != nil || response.StatusCode != http.StatusOK || !bytes.Equal(actual, viewer.body) {
+		t.Fatalf("HTTP body status=%d bytes=%d error=%v", response.StatusCode, len(actual), readErr)
+	}
+	if !strings.Contains(response.Header.Get("Cache-Control"), "no-store") {
+		t.Fatal("source bytes must not be persisted")
+	}
+	if refreshed.resolves.Load() < 2 {
+		t.Fatal("source reference was not refreshed")
+	}
+}
+
+// The fake uses document references; this selects the photo transport variant
+// returned for these same history fields by the production resolver.
+type photoRange struct{ tgclient.RangeClient }
+
+func (c photoRange) ResolveDocument(ctx context.Context, peer tgclient.InputPeer, msgID int64) (tgclient.DocumentRef, error) {
+	ref, err := c.RangeClient.ResolveDocument(ctx, peer, msgID)
+	ref.PhotoSizeType = "y"
+	return ref, err
+}
+
+func (c photoRange) ReadDocumentRange(ctx context.Context, ref tgclient.DocumentRef, offset int64, dst []byte) (int, error) {
+	if ref.PhotoSizeType != "y" {
+		return 0, errors.New("photo read lost the selected JPEG variant")
+	}
+	return c.RangeClient.ReadDocumentRange(ctx, ref, offset, dst)
+}
+
+func TestSourceDocumentAndImageFiltersKeepBlockedAttachments(t *testing.T) {
+	fake := tgclient.NewFake(testAccountID)
+	fake.SeedJoinedBroadcastChannels(tgclient.JoinedBroadcastChannel{ID: testChannelID, AccessHash: 77, Title: "Files"})
+	fake.SeedMediaSourcePeers(tgclient.SourcePeer{Kind: tgclient.PeerChannel, ID: testChannelID, AccessHash: 77, Title: "Files"})
+	for _, test := range []struct {
+		id             int64
+		filename, mime string
+		protected      bool
+	}{
+		{1, "guide.pdf", "application/pdf", false}, {2, "notes.txt", "text/plain", false},
+		{3, "data.zip", "application/zip", false}, {4, "photo.jpg", "image/jpeg", false},
+		{5, "locked.jpg", "image/jpeg", true}, {6, "clip.mp4", "video/mp4", false},
+	} {
+		fake.SeedHistory(tgclient.HistoryMessage{PeerKind: tgclient.PeerChannel, ChannelID: testChannelID, MsgID: test.id,
+			HasMedia: true, DocumentID: 900 + test.id, DocumentAccessHash: 99, MediaSize: 20,
+			DocumentName: test.filename, MimeType: test.mime, NoForwards: test.protected})
+	}
+	sources, _, _ := sourceFixture(t, fake, fake)
+	if _, err := sources.Connect(t.Context(), testChannelID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := sources.ListSourceCandidates(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	connectTyped(t, sources, tgclient.PeerChannel, testChannelID, "")
+	for _, typed := range []bool{false, true} {
+		for _, test := range []struct {
+			filter string
+			ids    []int64
+		}{
+			{"document", []int64{3, 2, 1}}, {"image", []int64{5, 4}},
+		} {
+			var page MediaPage
+			var err error
+			if typed {
+				page, err = sources.PageSource(t.Context(), "channel", testChannelID, 0, 10, "", test.filter)
+			} else {
+				page, err = sources.Page(t.Context(), testChannelID, 0, 10, "", test.filter)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			var ids []int64
+			for _, item := range page.Items {
+				ids = append(ids, item.MsgID)
+				if item.MsgID == 3 && (item.Name != "data.zip" || item.Streamable || item.BlockReason != "unsupported_format") {
+					t.Fatalf("archive = %#v", item)
+				}
+				if item.MsgID == 5 && (!item.Streamable || !item.Protected || item.BlockReason != "") {
+					t.Fatalf("protected photo = %#v", item)
+				}
+			}
+			if !slices.Equal(ids, test.ids) {
+				t.Fatalf("typed=%v filter=%s IDs=%v want=%v", typed, test.filter, ids, test.ids)
+			}
+		}
+	}
+}
+
+func TestSourceImageAdmissionRejectsMalformedPhotoBeforePublishing(t *testing.T) {
+	fake := tgclient.NewFake(testAccountID)
+	fake.SeedMediaSourcePeers(tgclient.SourcePeer{Kind: tgclient.PeerGroup, ID: 80, Title: "Photos"})
+	body := []byte("this is not a JPEG image")
+	fake.SeedHistory(tgclient.HistoryMessage{PeerKind: tgclient.PeerGroup, ChannelID: 80, MsgID: 9,
+		HasMedia: true, DocumentID: 901, DocumentAccessHash: 902, MediaSize: int64(len(body)), DocumentName: "photo.jpg", MimeType: "image/jpeg"})
+	fake.SeedSourceDocumentBody(tgclient.PeerGroup, 80, 9, body)
+	sources, streams, _ := sourceFixture(t, fake, photoRange{RangeClient: fake})
+	connected := connectTyped(t, sources, tgclient.PeerGroup, 80, "")
+	published := false
+	_, err := sources.OpenSourceWithGate(t.Context(), "group", 80, 9, testAccountID, connected.Generation,
+		func(add func() error) error { published = true; return add() })
+	if !errors.Is(err, media.ErrInvalidImage) || published {
+		t.Fatalf("invalid photo error=%v published=%v", err, published)
+	}
+	if tokens := streams.CloseAllExternalSessions(); len(tokens) != 0 {
+		t.Fatalf("invalid photo leaked sessions: %d", len(tokens))
 	}
 }

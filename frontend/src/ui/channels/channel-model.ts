@@ -3,7 +3,7 @@ import type { VideoOpenTarget, VideoPlaylistLaunch } from '../../modules/video/v
 import { formatBytes, formatDuration, splitNameAndExt } from '../../utils';
 import { relativeTimeLabel } from '../file-list/row-meta';
 
-export type ChannelMediaKind = 'all' | 'video' | 'audio';
+export type ChannelMediaKind = 'all' | 'video' | 'audio' | 'image' | 'document';
 
 /** Telegram peers TDrive can read media from. Secret chats are intentionally absent. */
 export type SourcePeerKind = 'self' | 'user' | 'bot' | 'group' | 'supergroup' | 'channel';
@@ -57,6 +57,7 @@ export interface ChannelMediaItem {
     kind: string;
     caption: string;
     streamable: boolean;
+    protected?: boolean;
     blockReason: string;
     telegramUrl: string;
 }
@@ -218,6 +219,7 @@ export function mediaTitle(item: ChannelMediaItem): string {
     const name = fileName(item);
     if (item.kind === 'audio') return name || caption || 'Untitled audio';
     if (item.kind === 'video') return caption || name || 'Untitled video';
+    if (item.kind === 'image') return name || caption || 'Untitled image';
     return name || caption || 'Untitled file';
 }
 
@@ -231,6 +233,9 @@ export function mediaDetails(item: ChannelMediaItem): string {
 export function mediaKindLabel(item: ChannelMediaItem): string {
     if (item.kind === 'video') return 'Video';
     if (item.kind === 'audio') return 'Audio';
+    if (item.kind === 'image') return 'Image';
+    if (item.kind === 'pdf') return 'PDF';
+    if (item.kind === 'text') return 'Text';
     const { ext } = splitNameAndExt(item.name);
     return ext === 'FILE' ? 'File' : ext;
 }
@@ -258,11 +263,15 @@ const RESTRICTION_LABELS: Readonly<Record<string, string>> = {
  * is and opens it in Telegram.
  */
 export function restrictionLabel(item: ChannelMediaItem): string {
-    return RESTRICTION_LABELS[item.blockReason] ?? '';
+    return item.protected ? 'Protected' : RESTRICTION_LABELS[item.blockReason] ?? '';
 }
 
-export function isPlayable(item: ChannelMediaItem): boolean {
-    return item.streamable && !item.blockReason;
+export function isOpenable(item: ChannelMediaItem): boolean {
+    return item.streamable && !item.blockReason && ['video', 'audio', 'image', 'pdf', 'text'].includes(item.kind);
+}
+
+export function mediaActionLabel(item: ChannelMediaItem): 'Play' | 'Open' {
+    return item.kind === 'video' || item.kind === 'audio' ? 'Play' : 'Open';
 }
 
 export type ChannelSort = 'newest' | 'oldest' | 'name' | 'size' | 'length';
@@ -311,9 +320,10 @@ export function channelVideoQueue(
         name: post.name,
         title: mediaTitle(post),
         size: post.size,
+        protected: Boolean(source.protected || post.protected),
         open: () => open(post),
     });
-    const videos = posts.filter((post) => post.kind === 'video' && isPlayable(post));
+    const videos = posts.filter((post) => post.kind === 'video' && isOpenable(post));
     return {
         target: target(item),
         playlist: {

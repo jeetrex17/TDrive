@@ -14,8 +14,9 @@ export interface PdfFrameErrorMessage {
 
 export type PdfFrameMessage = PdfFrameLoadedMessage | PdfFrameErrorMessage;
 
-export function pdfViewerFrameSrc(fileURL: string): string {
+export function pdfViewerFrameSrc(fileURL: string, protectedContent = false): string {
     const params = new URLSearchParams({ file: fileURL });
+    if (protectedContent) params.set('protected', '1');
     return `/pdf-viewer.html?${params.toString()}`;
 }
 

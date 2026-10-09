@@ -81,6 +81,7 @@ type LogicalFile struct {
 	StoredSize        int64     `json:"stored_size"`
 	PlaintextSize     int64     `json:"plaintext_size"`
 	Encrypted         bool      `json:"encrypted"`
+	Protected         bool      `json:"protected"`
 	EncryptionVersion int       `json:"encryption_version"`
 	Multipart         bool      `json:"multipart"`
 	Segments          []Segment `json:"segments"`

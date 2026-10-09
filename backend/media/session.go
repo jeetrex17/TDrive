@@ -132,7 +132,8 @@ func newSession(file LogicalFile, segments []resolvedSegment, ranges tgclient.Ra
 		ReadAhead: readAhead,
 	})
 	s.warmContainerIndex()
-	if opts.EnableVideoThumbnails {
+	// Protected media stays in memory and cannot create generated frames on disk.
+	if opts.EnableVideoThumbnails && !file.Protected {
 		thumbnailCache := cache
 		if file.Encrypted || file.SourceKind != "" {
 			// Generated frames are plaintext. Keep encrypted and external

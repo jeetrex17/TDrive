@@ -113,7 +113,7 @@ static void tdrive_mpv_copy_string(mpv_handle *mpv, const char *name, char *out,
 	BOOL _loadFailed;
 	BOOL _ended;
 }
-- (BOOL)startWithURL:(NSString *)url htmlControls:(BOOL)htmlControls;
+- (BOOL)startWithURL:(NSString *)url htmlControls:(BOOL)htmlControls safetyOptions:(const char **)safetyOptions safetyCount:(int)safetyCount;
 - (void)shutdown;
 - (void)shutdownSynchronously;
 - (int)sendCommand:(int)argc argv:(const char **)argv;
@@ -153,7 +153,7 @@ static void tdrive_mpv_render_update(void *ctx) {
     return self;
 }
 
-- (BOOL)startWithURL:(NSString *)url htmlControls:(BOOL)htmlControls {
+- (BOOL)startWithURL:(NSString *)url htmlControls:(BOOL)htmlControls safetyOptions:(const char **)safetyOptions safetyCount:(int)safetyCount {
     _mpv = mpv_create();
     if (_mpv == NULL) {
         return NO;
@@ -178,6 +178,11 @@ static void tdrive_mpv_render_update(void *ctx) {
 	mpv_set_option_string(_mpv, "osc", htmlControls ? "no" : "yes");
 	mpv_set_option_string(_mpv, "osd-bar", htmlControls ? "no" : "yes");
 
+    for (int i = 0; i < safetyCount; i++) {
+        if (mpv_set_option_string(_mpv, safetyOptions[i * 2], safetyOptions[i * 2 + 1]) < 0) {
+            return NO;
+        }
+    }
     if (mpv_initialize(_mpv) < 0) {
         return NO;
     }
@@ -406,7 +411,7 @@ static NSRect tdrive_player_frame(NSView *content, double x, double y, double w,
     return NSMakeRect(x, bottomY, w, h);
 }
 
-static void* tdrive_player_create_view(const char *rawURL, double x, double y, double w, double h, int htmlControls) {
+static void* tdrive_player_create_view(const char *rawURL, double x, double y, double w, double h, int htmlControls, const char **safetyOptions, int safetyCount) {
     if (rawURL == NULL) {
         return nil;
     }
@@ -426,7 +431,7 @@ static void* tdrive_player_create_view(const char *rawURL, double x, double y, d
         if (view == nil) {
             return;
         }
-        if (![view startWithURL:url htmlControls:(htmlControls != 0)]) {
+        if (![view startWithURL:url htmlControls:(htmlControls != 0) safetyOptions:safetyOptions safetyCount:safetyCount]) {
             [view shutdownSynchronously];
             [view release];
             view = nil;
@@ -561,7 +566,21 @@ func Start(ctx context.Context, url string, rect Rect, opts Options) (*Player, e
 	if opts.UseHTMLControls {
 		htmlControls = 1
 	}
-	view := C.tdrive_player_create_view(rawURL, C.double(rect.X), C.double(rect.Y), C.double(rect.Width), C.double(rect.Height), C.int(htmlControls))
+	safetyOptions := protectedMPVOptions(opts.Protected)
+	safetyStrings := make([]*C.char, 0, len(safetyOptions)*2)
+	for _, option := range safetyOptions {
+		safetyStrings = append(safetyStrings, C.CString(option[0]), C.CString(option[1]))
+	}
+	defer func() {
+		for _, value := range safetyStrings {
+			C.free(unsafe.Pointer(value))
+		}
+	}()
+	var safetyValues **C.char
+	if len(safetyStrings) > 0 {
+		safetyValues = &safetyStrings[0]
+	}
+	view := C.tdrive_player_create_view(rawURL, C.double(rect.X), C.double(rect.Y), C.double(rect.Width), C.double(rect.Height), C.int(htmlControls), safetyValues, C.int(len(safetyOptions)))
 	if view == nil {
 		return nil, fmt.Errorf("native player: could not start libmpv view")
 	}
