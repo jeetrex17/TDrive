@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"TDrive/backend/backfill"
@@ -40,6 +41,7 @@ type fakeBackfiller struct {
 	started   int
 	release   chan struct{}
 	startedCh chan struct{}
+	canceled  chan int64
 }
 
 func newFakeBackfiller() *fakeBackfiller {
@@ -59,6 +61,10 @@ func (f *fakeBackfiller) RunPersonal(ctx context.Context, channelID int64, onPro
 	}
 	if onProgress != nil {
 		onProgress(backfill.ProgressEvent{ChannelID: channelID, Done: 1, Total: 1, Phase: "done"})
+	}
+	if f.canceled != nil {
+		<-ctx.Done()
+		f.canceled <- channelID
 	}
 	<-f.release
 	return nil
@@ -134,12 +140,15 @@ func TestUsePersonalChannelMigratesAndSetsActive(t *testing.T) {
 	db := testDB(t)
 	active := NewActiveDrive()
 	backfiller := newFakeBackfiller()
-	defer close(backfiller.release)
 
 	svc := NewService(Config{
 		DB:       db,
 		Active:   active,
 		Backfill: backfiller,
+	})
+	t.Cleanup(func() {
+		close(backfiller.release)
+		svc.Close()
 	})
 
 	if err := svc.UsePersonalChannel(context.Background(), 12345); err != nil {
@@ -161,8 +170,11 @@ func TestRestorePersonalChannelDefersBackfillUntilUse(t *testing.T) {
 	db := testDB(t)
 	active := NewActiveDrive()
 	backfiller := newFakeBackfiller()
-	defer close(backfiller.release)
 	svc := NewService(Config{DB: db, Active: active, Backfill: backfiller})
+	t.Cleanup(func() {
+		close(backfiller.release)
+		svc.Close()
+	})
 
 	if err := svc.RestorePersonalChannel(12345); err != nil {
 		t.Fatalf("RestorePersonalChannel: %v", err)
@@ -197,13 +209,16 @@ func TestRestorePersonalChannelDefersBackfillUntilUse(t *testing.T) {
 func TestKickoffBackfillRunsOnce(t *testing.T) {
 	db := testDB(t)
 	backfiller := newFakeBackfiller()
-	defer close(backfiller.release)
 	events := &fakeEvents{seen: make(chan string, 8)}
 	svc := NewService(Config{
 		DB:       db,
 		Active:   NewActiveDrive(),
 		Backfill: backfiller,
 		Events:   events,
+	})
+	t.Cleanup(func() {
+		close(backfiller.release)
+		svc.Close()
 	})
 
 	svc.kickoffPersonalBackfill(context.Background(), 77)
@@ -215,6 +230,62 @@ func TestKickoffBackfillRunsOnce(t *testing.T) {
 	if !events.Wait("backfill_progress", time.Second) {
 		t.Fatalf("backfill_progress was not emitted")
 	}
+}
+
+func TestCloseCancelsAndJoinsBackfills(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		backfiller := newFakeBackfiller()
+		backfiller.canceled = make(chan int64, 2)
+		svc := NewService(Config{Backfill: backfiller})
+		release := sync.OnceFunc(func() { close(backfiller.release) })
+		t.Cleanup(func() {
+			release()
+			svc.Close()
+		})
+
+		svc.kickoffPersonalBackfill(t.Context(), 77)
+		svc.kickoffPersonalBackfill(t.Context(), 88)
+		synctest.Wait()
+		if got := backfiller.Started(); got != 2 {
+			t.Fatalf("started backfills = %d, want 2", got)
+		}
+
+		closed := make(chan struct{})
+		go func() {
+			svc.Close()
+			close(closed)
+		}()
+		synctest.Wait()
+		if got := len(backfiller.canceled); got != 2 {
+			t.Fatalf("canceled backfills = %d, want 2", got)
+		}
+		select {
+		case <-closed:
+			t.Fatal("Close returned before canceled workers finished")
+		default:
+		}
+
+		svc.kickoffPersonalBackfill(t.Context(), 77)
+		svc.kickoffPersonalBackfill(t.Context(), 99)
+		synctest.Wait()
+		if got := backfiller.Started(); got != 2 {
+			t.Fatalf("started backfills after Close = %d, want 2", got)
+		}
+
+		release()
+		synctest.Wait()
+		select {
+		case <-closed:
+		default:
+			t.Fatal("Close did not return after canceled workers finished")
+		}
+		svc.Close()
+		svc.kickoffPersonalBackfill(t.Context(), 99)
+		synctest.Wait()
+		if got := backfiller.Started(); got != 2 {
+			t.Fatalf("started backfills after completed Close = %d, want 2", got)
+		}
+	})
 }
 
 func TestSyncChannelDelegates(t *testing.T) {

@@ -2,7 +2,7 @@
 // it: activation, incremental sync, full projection rebuild, and kicking off
 // the personal backfill. It implements none of that work — the syncer, the
 // backfiller and the rebuild function are all injected. It does not manage
-// application startup, shutdown or mounts, despite the name.
+// application startup or mounts; shutdown only cancels and joins its backfill.
 //
 // The ordering rule worth knowing is snapshot invalidation. Incremental sync
 // commits one page at a time, so mounted snapshots are invalidated on both
@@ -14,7 +14,7 @@
 // Backfill is fire-and-forget but not unbounded: at most one goroutine per
 // channel exists at a time, and a panic inside it is recovered into an error
 // event rather than taking the process down. It inherits the context of the
-// call that started it, so there is no separate stop.
+// call that started it. Close cancels and joins all outstanding backfills.
 package lifecycle
 
 import (
@@ -93,7 +93,9 @@ type Service struct {
 	OnProjectionChanged func(channelID int64)
 
 	backfillMu  sync.Mutex
-	backfilling map[int64]bool
+	backfilling map[int64]context.CancelFunc
+	backfillWG  sync.WaitGroup
+	closed      bool
 }
 
 func NewService(c Config) *Service {
@@ -112,7 +114,7 @@ func NewService(c Config) *Service {
 		Rebuild:             c.Rebuild,
 		Warnf:               c.Warnf,
 		OnProjectionChanged: c.OnProjectionChanged,
-		backfilling:         make(map[int64]bool),
+		backfilling:         make(map[int64]context.CancelFunc),
 	}
 }
 
@@ -201,19 +203,21 @@ func (s *Service) kickoffPersonalBackfill(ctx context.Context, channelID int64) 
 	}
 
 	s.backfillMu.Lock()
-	if s.backfilling == nil {
-		s.backfilling = make(map[int64]bool)
-	}
-	if s.backfilling[channelID] {
-		s.backfillMu.Unlock()
+	defer s.backfillMu.Unlock()
+	if s.closed || s.backfilling[channelID] != nil {
 		return
 	}
-	s.backfilling[channelID] = true
-	s.backfillMu.Unlock()
+	if s.backfilling == nil {
+		s.backfilling = make(map[int64]context.CancelFunc)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	s.backfilling[channelID] = cancel
 
 	slog.Info("lifecycle: personal backfill starting", "channel_id", channelID)
-	go func() {
+	// Register under the same gate as Close so no worker can start after Wait.
+	s.backfillWG.Go(func() {
 		defer func() {
+			cancel()
 			if r := recover(); r != nil {
 				slog.Error("lifecycle: personal backfill panicked", "channel_id", channelID, "recovered", r)
 				s.warnf("backfill panic: %v\n", r)
@@ -233,7 +237,19 @@ func (s *Service) kickoffPersonalBackfill(ctx context.Context, channelID int64) 
 			return
 		}
 		slog.Info("lifecycle: personal backfill complete", "channel_id", channelID)
-	}()
+	})
+}
+
+// Close stops backfill admission and waits for workers before their database,
+// Telegram client or event sink can be released. Repeated calls are safe.
+func (s *Service) Close() {
+	s.backfillMu.Lock()
+	s.closed = true
+	for _, cancel := range s.backfilling {
+		cancel()
+	}
+	s.backfillMu.Unlock()
+	s.backfillWG.Wait()
 }
 
 func (s *Service) emit(name string, args ...any) {
