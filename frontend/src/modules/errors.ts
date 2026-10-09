@@ -410,6 +410,9 @@ function classifyMessage(raw: string, source: AppErrorSource): ErrorPresentation
             retryable: true,
         };
     }
+    if (lower.includes('connection dead') || lower.includes('engine forcibly closed') || lower.includes('engine was closed')) {
+        return OPERATION_PRESENTATIONS.network_unavailable;
+    }
     if (lower.includes('context canceled') || lower.includes('forcibly closed')) {
         return {
             kind: 'unexpected',
