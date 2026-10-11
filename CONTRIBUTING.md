@@ -81,3 +81,8 @@ Explain the problem and why this change is needed.
 
 This file is the source of truth for contribution and PR guidance. Keep the
 GitHub PR template aligned with these three headings when updating the workflow.
+
+## Merging pull requests
+
+Always use **Squash and merge** for pull requests. Never use **Create a merge
+commit** or **Rebase and merge**. With the GitHub CLI, use `gh pr merge --squash`.
