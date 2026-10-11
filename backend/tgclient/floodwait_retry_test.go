@@ -3,9 +3,73 @@ package tgclient
 import (
 	"context"
 	"errors"
+	"slices"
 	"testing"
+	"testing/synctest"
 	"time"
 )
+
+func TestUploadFloodWaitPolicyWaitsThroughRepeatedLongCooldowns(t *testing.T) {
+	t.Parallel()
+
+	waits := []time.Duration{16 * time.Second, 15 * time.Second, 45 * time.Second, 90 * time.Second, 16 * time.Second}
+	policy := DefaultUploadFloodWaitRetryPolicy()
+	var slept []time.Duration
+	policy.Sleep = func(_ context.Context, wait time.Duration) error {
+		slept = append(slept, wait)
+		return nil
+	}
+	attempts := 0
+	err := policy.Do(t.Context(), func() error {
+		attempts++
+		if attempts <= len(waits) {
+			return NewFloodWaitError(waits[attempts-1])
+		}
+		return nil
+	})
+	if err != nil || attempts != len(waits)+1 || !slices.Equal(slept, waits) {
+		t.Fatalf("Do = %v, attempts %d, waits %v; want success after all %v", err, attempts, slept, waits)
+	}
+}
+
+func TestUploadFloodWaitPolicyCancellationStopsBlockedWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		done := make(chan error, 1)
+		attempts := 0
+		go func() {
+			done <- DefaultUploadFloodWaitRetryPolicy().Do(ctx, func() error {
+				attempts++
+				return NewFloodWaitError(time.Hour)
+			})
+		}()
+		synctest.Wait()
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) || attempts != 1 {
+			t.Fatalf("Do = %v after %d attempts, want cancellation after one", err, attempts)
+		}
+	})
+}
+
+func TestUploadFloodWaitPolicyKeepsTransportRetryBudget(t *testing.T) {
+	t.Parallel()
+
+	policy := DefaultUploadFloodWaitRetryPolicy()
+	policy.Sleep = func(context.Context, time.Duration) error { return nil }
+	want := errors.New("connection reset by peer")
+	attempts := 0
+	err := policy.Do(t.Context(), func() error {
+		attempts++
+		if attempts%2 == 1 {
+			return NewFloodWaitError(time.Minute)
+		}
+		return want
+	})
+	if !errors.Is(err, want) || attempts != 10 {
+		t.Fatalf("Do = %v after %d attempts, want transport error after four transport retries", err, attempts)
+	}
+}
 
 func TestFloodWaitRetryPolicyRetriesWithinBudget(t *testing.T) {
 	t.Parallel()

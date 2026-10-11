@@ -300,7 +300,7 @@ func (g *Gotd) sendFileWithThumbnail(ctx context.Context, peer InputPeer, r io.R
 	// the complete ~1.9 GiB TDrive segment. Parts travel over the home data
 	// center's connection pool, several at a time.
 	partClient := &retryingUploadClient{
-		policy: DefaultWriteFloodWaitRetryPolicy(),
+		policy: DefaultUploadFloodWaitRetryPolicy(),
 		run: func(ctx context.Context, action func(uploader.Client) error) error {
 			return g.writes.Do(ctx, writeClassUploadPart, func() error {
 				return g.runClient(ctx, func(ctx context.Context, client *telegram.Client) error {
@@ -344,37 +344,25 @@ func (g *Gotd) sendFileWithThumbnail(ctx context.Context, peer InputPeer, r io.R
 		}
 	}
 
-	var result SendFileResult
-	err = g.writes.Do(ctx, writeClassMessage, func() error {
-		return g.run(ctx, func(ctx context.Context, api *tg.Client) error {
-			req := &tg.MessagesSendMediaRequest{
-				Peer: toPeer(peer),
-				Media: &tg.InputMediaUploadedDocument{
-					File:      uploadResult,
-					MimeType:  "application/octet-stream",
-					ForceFile: true,
-					Attributes: []tg.DocumentAttributeClass{
-						&tg.DocumentAttributeFilename{FileName: name},
-					},
-				},
-				RandomID: sendRandomID,
-				Message:  caption,
-			}
-			if thumbResult != nil {
-				req.Media.(*tg.InputMediaUploadedDocument).SetThumb(thumbResult)
-			}
-			updates, err := api.MessagesSendMedia(ctx, req)
-			if err != nil {
-				// Uploading the document precedes MessagesSendMedia. A transport error
-				// at this boundary can arrive after Telegram accepted the random_id,
-				// so callers must reconcile with the same id before cleanup.
-				return fmt.Errorf("%w: send media: %w", ErrSendOutcomeUnknown, err)
-			}
-			result.MsgID, err = requiredSendMsgID(updates, sendRandomID, "send file")
+	media := &tg.InputMediaUploadedDocument{
+		File: uploadResult, MimeType: "application/octet-stream", ForceFile: true,
+		Attributes: []tg.DocumentAttributeClass{&tg.DocumentAttributeFilename{FileName: name}},
+	}
+	if thumbResult != nil {
+		media.SetThumb(thumbResult)
+	}
+	req := &tg.MessagesSendMediaRequest{
+		Peer: toPeer(peer), Media: media, RandomID: sendRandomID, Message: caption,
+	}
+	return g.sendUploadedMedia(ctx, req, func(ctx context.Context, request *tg.MessagesSendMediaRequest) (tg.UpdatesClass, error) {
+		var updates tg.UpdatesClass
+		err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+			var err error
+			updates, err = api.MessagesSendMedia(ctx, request)
 			return err
 		})
+		return updates, err
 	})
-	return result, err
 }
 
 // placeholderMessage reports the id of a history entry that carries no
