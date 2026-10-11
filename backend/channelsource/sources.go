@@ -28,7 +28,7 @@ func migrateMediaSources(db *sql.DB) error {
 		`CREATE TABLE IF NOT EXISTS connected_media_sources (
 			account_id INTEGER NOT NULL, peer_kind TEXT NOT NULL, peer_id INTEGER NOT NULL,
 			title TEXT NOT NULL, username TEXT NOT NULL DEFAULT '', protected INTEGER NOT NULL DEFAULT 0,
-			generation TEXT NOT NULL, access_hash INTEGER NOT NULL DEFAULT 0,
+			forum INTEGER NOT NULL DEFAULT 0, generation TEXT NOT NULL, access_hash INTEGER NOT NULL DEFAULT 0,
 			photo_id INTEGER NOT NULL DEFAULT 0, photo BLOB, public_resolved INTEGER NOT NULL DEFAULT 0,
 			PRIMARY KEY(account_id, peer_kind, peer_id))`,
 		`CREATE TABLE IF NOT EXISTS media_source_migrations (name TEXT PRIMARY KEY)`,
@@ -37,6 +37,9 @@ func migrateMediaSources(db *sql.DB) error {
 		if _, err := db.Exec(statement); err != nil {
 			return fmt.Errorf("media source: create metadata: %w", err)
 		}
+	}
+	if err := addMediaSourceForumColumn(db); err != nil {
+		return err
 	}
 	tx, err := db.Begin()
 	if err != nil {
@@ -63,9 +66,23 @@ func migrateMediaSources(db *sql.DB) error {
 	return tx.Commit()
 }
 
+func addMediaSourceForumColumn(db *sql.DB) error {
+	var count int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('connected_media_sources') WHERE name='forum'`).Scan(&count); err != nil {
+		return fmt.Errorf("media source: inspect forum column: %w", err)
+	}
+	if count != 0 {
+		return nil
+	}
+	if _, err := db.Exec(`ALTER TABLE connected_media_sources ADD COLUMN forum INTEGER NOT NULL DEFAULT 0`); err != nil {
+		return fmt.Errorf("media source: add forum column: %w", err)
+	}
+	return nil
+}
+
 func sourceInfo(accountID int64, peer tgclient.SourcePeer) SourceInfo {
 	info := SourceInfo{PeerKind: string(peer.Kind), PeerID: peer.ID, Title: peer.Title,
-		Username: peer.Username, Protected: peer.Protected, Available: true, AccountID: accountID,
+		Username: peer.Username, Protected: peer.Protected, Forum: peer.Forum, Available: true, AccountID: accountID,
 		CandidatesTruncated: peer.Truncated, accessHash: peer.AccessHash}
 	if peer.Kind == tgclient.PeerChannel {
 		info.ChannelID = peer.ID
@@ -79,10 +96,10 @@ func validSource(kind string, id int64) bool {
 
 func (s *Service) storedSource(ctx context.Context, accountID int64, kind string, id int64) (SourceInfo, bool, error) {
 	var info SourceInfo
-	var protected, public int
-	err := s.db.QueryRowContext(ctx, `SELECT title, username, protected, generation, access_hash, public_resolved
+	var protected, forum, public int
+	err := s.db.QueryRowContext(ctx, `SELECT title, username, protected, forum, generation, access_hash, public_resolved
 		FROM connected_media_sources WHERE account_id=? AND peer_kind=? AND peer_id=?`, accountID, kind, id).
-		Scan(&info.Title, &info.Username, &protected, &info.Generation, &info.accessHash, &public)
+		Scan(&info.Title, &info.Username, &protected, &forum, &info.Generation, &info.accessHash, &public)
 	if errors.Is(err, sql.ErrNoRows) {
 		return SourceInfo{}, false, ErrNotConnected
 	}
@@ -93,7 +110,7 @@ func (s *Service) storedSource(ctx context.Context, accountID int64, kind string
 	if kind == string(tgclient.PeerChannel) {
 		info.ChannelID = id
 	}
-	info.Protected = protected != 0
+	info.Protected, info.Forum = protected != 0, forum != 0
 	return info, public != 0, nil
 }
 
@@ -188,7 +205,7 @@ type sourceKey struct {
 }
 
 func (s *Service) connectedSourceMap(ctx context.Context, accountID int64) (map[sourceKey]SourceInfo, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT peer_kind, peer_id, title, username, protected, generation
+	rows, err := s.db.QueryContext(ctx, `SELECT peer_kind, peer_id, title, username, protected, forum, generation
 		FROM connected_media_sources WHERE account_id=?`, accountID)
 	if err != nil {
 		return nil, fmt.Errorf("media source: list connections: %w", err)
@@ -197,11 +214,11 @@ func (s *Service) connectedSourceMap(ctx context.Context, accountID int64) (map[
 	out := make(map[sourceKey]SourceInfo)
 	for rows.Next() {
 		var info SourceInfo
-		var protected int
-		if err := rows.Scan(&info.PeerKind, &info.PeerID, &info.Title, &info.Username, &protected, &info.Generation); err != nil {
+		var protected, forum int
+		if err := rows.Scan(&info.PeerKind, &info.PeerID, &info.Title, &info.Username, &protected, &forum, &info.Generation); err != nil {
 			return nil, err
 		}
-		info.AccountID, info.Connected, info.Protected = accountID, true, protected != 0
+		info.AccountID, info.Connected, info.Protected, info.Forum = accountID, true, protected != 0, forum != 0
 		if info.PeerKind == string(tgclient.PeerChannel) {
 			info.ChannelID = info.PeerID
 		}
@@ -434,13 +451,14 @@ func (s *Service) ConnectSourceWithGate(ctx context.Context, kind string, id int
 		if existing, _, err := s.storedSource(ctx, accountID, kind, id); err == nil {
 			info = existing
 			info.Available = true
+			info.Forum = peer.Forum
 			return nil
 		} else if !errors.Is(err, ErrNotConnected) {
 			return err
 		}
 		_, err := s.db.ExecContext(ctx, `INSERT INTO connected_media_sources
-			(account_id, peer_kind, peer_id, title, username, protected, generation, access_hash, photo_id, public_resolved)
-			VALUES(?,?,?,?,?,?,?,?,?,?)`, accountID, kind, id, peer.Title, peer.Username, peer.Protected,
+			(account_id, peer_kind, peer_id, title, username, protected, forum, generation, access_hash, photo_id, public_resolved)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?)`, accountID, kind, id, peer.Title, peer.Username, peer.Protected, peer.Forum,
 			generation, peer.AccessHash, peer.PhotoID, public)
 		if err != nil {
 			return fmt.Errorf("media source: connect: %w", err)
@@ -523,78 +541,24 @@ func (s *Service) currentSource(ctx context.Context, kind string, id int64) (Sou
 	if current.AccessHash == 0 && kind != string(tgclient.PeerGroup) && kind != string(tgclient.PeerSelf) {
 		current.AccessHash = stored.accessHash
 	}
-	if _, err := s.db.ExecContext(ctx, `UPDATE connected_media_sources SET title=?, username=?, protected=?, access_hash=?,
+	if _, err := s.db.ExecContext(ctx, `UPDATE connected_media_sources SET title=?, username=?, protected=?, forum=?, access_hash=?,
 		photo=CASE WHEN photo_id=? THEN photo ELSE NULL END, photo_id=?
 		WHERE account_id=? AND peer_kind=? AND peer_id=? AND generation=?`,
-		current.Title, current.Username, current.Protected, current.AccessHash, current.PhotoID, current.PhotoID,
+		current.Title, current.Username, current.Protected, current.Forum, current.AccessHash, current.PhotoID, current.PhotoID,
 		accountID, kind, id, stored.Generation); err != nil {
 		return SourceInfo{}, false, tgclient.SourcePeer{}, fmt.Errorf("media source: refresh metadata: %w", err)
 	}
 	stored.Title, stored.Username, stored.Protected, stored.Available = current.Title, current.Username, current.Protected, true
+	stored.Forum = current.Forum
 	return stored, public, current, nil
 }
 
 func (s *Service) PageSource(ctx context.Context, kind string, id, offsetID int64, limit int, search, mediaKind string) (MediaPage, error) {
-	if !validSource(kind, id) || offsetID < 0 || limit < 1 || limit > 100 || len(search) > 120 ||
-		!validMediaKind(mediaKind) {
-		return MediaPage{}, ErrInvalidPage
-	}
-	stored, _, source, err := s.currentSource(ctx, kind, id)
-	if err != nil {
-		return MediaPage{}, err
-	}
-	peer := tgclient.InputPeer{Kind: source.Kind, ChannelID: id, AccessHash: source.AccessHash}
-	search = strings.TrimSpace(search)
-	page := MediaPage{PeerKind: kind, PeerID: id, AccountID: stored.AccountID, Generation: stored.Generation,
-		Items: make([]MediaItem, 0, limit)}
-	if kind == string(tgclient.PeerChannel) {
-		page.ChannelID = id
-	}
-	cursor := offsetID
-	const batchSize = 100
-	for range 4 {
-		var messages []tgclient.HistoryMessage
-		err = s.telegram(ctx, func() error {
-			var callErr error
-			if search == "" {
-				messages, callErr = s.tg.GetHistory(ctx, peer, 0, cursor, batchSize)
-			} else {
-				messages, callErr = s.tg.SearchChannelMessages(ctx, peer, search, cursor, batchSize)
-			}
-			return callErr
-		})
-		if err != nil {
-			return MediaPage{}, fmt.Errorf("media source: page media: %w", err)
-		}
-		page.HasMore = len(messages) > 0
-		for _, message := range messages {
-			if message.MsgID <= 0 {
-				continue
-			}
-			if page.NextOffsetID == 0 || message.MsgID < page.NextOffsetID {
-				page.NextOffsetID = message.MsgID
-			}
-			item, ok := mediaItem(source, message)
-			if ok && matchesMediaKind(item, mediaKind) {
-				page.Items = append(page.Items, item)
-			}
-			if len(page.Items) >= limit {
-				break
-			}
-		}
-		if len(page.Items) >= limit || !page.HasMore || page.NextOffsetID <= 0 || page.NextOffsetID == cursor {
-			break
-		}
-		cursor = page.NextOffsetID
-	}
-	current, _, err := s.storedSource(ctx, stored.AccountID, kind, id)
-	if err != nil || current.Generation != stored.Generation {
-		return MediaPage{}, ErrNotConnected
-	}
-	if accountID, err := s.account(ctx); err != nil || accountID != stored.AccountID {
-		return MediaPage{}, ErrUnavailable
-	}
-	return page, nil
+	return s.PageSourceByTopic(ctx, kind, id, 0, offsetID, limit, search, mediaKind)
+}
+
+func (s *Service) PageSourceScoped(ctx context.Context, kind string, id, offsetID int64, limit int, search, mediaKind string, expectedAccountID int64, expectedGeneration string) (MediaPage, error) {
+	return s.PageSourceByTopicScoped(ctx, kind, id, 0, offsetID, limit, search, mediaKind, expectedAccountID, expectedGeneration)
 }
 
 func (s *Service) OpenSourceWithGate(ctx context.Context, kind string, id, msgID, expectedAccountID int64, generation string, gate func(func() error) error) (media.OpenResult, error) {

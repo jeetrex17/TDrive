@@ -2,6 +2,7 @@ package app
 
 import (
 	"encoding/base64"
+	"errors"
 	"fmt"
 
 	"TDrive/backend/channelsource"
@@ -81,12 +82,45 @@ func (s *DriveService) ChannelSourcePhoto(peerKind string, peerID, expectedAccou
 	return base64.StdEncoding.EncodeToString(photo), nil
 }
 
-func (s *DriveService) ListChannelMedia(peerKind string, peerID, offsetID int64, limit int, search, kind string) (channelsource.MediaPage, error) {
+func (s *DriveService) ListChannelMedia(peerKind string, peerID, offsetID int64, limit int, search, kind string, expectedAccountID int64, expectedGeneration string) (channelsource.MediaPage, error) {
+	if expectedAccountID <= 0 || expectedGeneration == "" {
+		return channelsource.MediaPage{}, channelsource.ErrInvalidPage
+	}
 	sources, err := s.sourceService()
 	if err != nil {
 		return channelsource.MediaPage{}, err
 	}
-	return sources.PageSource(s.host.appContext(), peerKind, peerID, offsetID, limit, search, kind)
+	return sources.PageSourceScoped(s.host.appContext(), peerKind, peerID, offsetID, limit, search, kind, expectedAccountID, expectedGeneration)
+}
+
+// ListChannelSourceTopics pages the topic picker within one connection generation.
+func (s *DriveService) ListChannelSourceTopics(peerKind string, peerID, offsetDate, offsetID, offsetTopic int64, limit int, query string, expectedAccountID int64, expectedGeneration string) (channelsource.ForumTopicPage, error) {
+	sources, err := s.sourceService()
+	if err != nil {
+		return channelsource.ForumTopicPage{}, err
+	}
+	return sources.ListSourceTopics(s.host.appContext(), peerKind, peerID, offsetDate, offsetID, offsetTopic, limit, query, expectedAccountID, expectedGeneration)
+}
+
+func (s *DriveService) ListChannelMediaByTopic(peerKind string, peerID, topicID, offsetID int64, limit int, search, kind string, expectedAccountID int64, expectedGeneration string) (channelsource.MediaPage, error) {
+	if expectedAccountID <= 0 || expectedGeneration == "" {
+		return channelsource.MediaPage{}, channelsource.ErrInvalidPage
+	}
+	sources, err := s.sourceService()
+	if err != nil {
+		return channelsource.MediaPage{}, err
+	}
+	page, err := sources.PageSourceByTopicScoped(s.host.appContext(), peerKind, peerID, topicID, offsetID, limit, search, kind, expectedAccountID, expectedGeneration)
+	switch {
+	case errors.Is(err, channelsource.ErrTopicUnavailable):
+		page.ErrorCode = "topic_unavailable"
+		return page, nil
+	case errors.Is(err, channelsource.ErrNotForum):
+		page.ErrorCode = "forum_unavailable"
+		return page, nil
+	default:
+		return page, err
+	}
 }
 
 // OpenChannelMedia publishes an account- and source-scoped capability. The

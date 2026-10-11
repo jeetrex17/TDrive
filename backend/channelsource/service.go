@@ -33,6 +33,7 @@ type SourceInfo struct {
 	Title               string `json:"title"`
 	Username            string `json:"username,omitempty"`
 	Connected           bool   `json:"connected"`
+	Forum               bool   `json:"forum"`
 	Protected           bool   `json:"protected"`
 	Available           bool   `json:"available"`
 	AccountID           int64  `json:"account_id"`
@@ -44,6 +45,7 @@ type SourceInfo struct {
 
 type MediaItem struct {
 	MsgID       int64  `json:"msg_id"`
+	TopicID     int64  `json:"topic_id"`
 	Date        int64  `json:"date"`
 	Name        string `json:"name"`
 	Size        int64  `json:"size"`
@@ -58,14 +60,18 @@ type MediaItem struct {
 }
 
 type MediaPage struct {
-	PeerKind     string      `json:"peer_kind"`
-	PeerID       int64       `json:"peer_id"`
-	ChannelID    int64       `json:"channel_id"`
-	AccountID    int64       `json:"account_id"`
-	Generation   string      `json:"generation"`
-	Items        []MediaItem `json:"items"`
-	NextOffsetID int64       `json:"next_offset_id"`
-	HasMore      bool        `json:"has_more"`
+	PeerKind     string       `json:"peer_kind"`
+	PeerID       int64        `json:"peer_id"`
+	ChannelID    int64        `json:"channel_id"`
+	AccountID    int64        `json:"account_id"`
+	Generation   string       `json:"generation"`
+	Items        []MediaItem  `json:"items"`
+	Forum        bool         `json:"forum"`
+	TopicID      int64        `json:"topic_id"`
+	Topics       []ForumTopic `json:"topics"`
+	ErrorCode    string       `json:"error_code,omitempty"`
+	NextOffsetID int64        `json:"next_offset_id"`
+	HasMore      bool         `json:"has_more"`
 }
 
 type Service struct {
@@ -475,7 +481,11 @@ func mediaItem(channel tgclient.JoinedBroadcastChannel, message tgclient.History
 		name = tgclient.MediaName(message)
 	}
 	kind := media.ExternalKind(message)
-	item := MediaItem{MsgID: message.MsgID, Date: message.Date, Name: name, Size: message.MediaSize,
+	topicID := message.TopicID
+	if channel.Forum && topicID == 0 {
+		topicID = 1
+	}
+	item := MediaItem{MsgID: message.MsgID, TopicID: topicID, Date: message.Date, Name: name, Size: message.MediaSize,
 		Duration: int64(math.Round(message.Duration)), MimeType: message.MimeType, Kind: string(kind), Caption: message.Text,
 		TelegramURL: telegramURL(channel, message.MsgID), Protected: channel.Protected || message.NoForwards}
 	switch {

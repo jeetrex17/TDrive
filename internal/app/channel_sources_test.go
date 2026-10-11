@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"io"
 	"net/http"
 	"sync/atomic"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"TDrive/backend"
+	"TDrive/backend/channelsource"
 	"TDrive/backend/core"
 	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
@@ -17,6 +19,24 @@ import (
 	"github.com/gotd/td/telegram"
 	_ "modernc.org/sqlite"
 )
+
+func TestChannelMediaPagesRequireCapturedConnectionScope(t *testing.T) {
+	// Scope validation must work without an initialized host.
+	service := &DriveService{}
+	for _, test := range []struct {
+		account    int64
+		generation string
+	}{
+		{0, ""}, {0, "connection"}, {1234, ""}, {-1, "connection"},
+	} {
+		if _, err := service.ListChannelMedia("supergroup", 77, 0, 20, "", "all", test.account, test.generation); !errors.Is(err, channelsource.ErrInvalidPage) {
+			t.Fatalf("all-topic scope (%d, %q): %v", test.account, test.generation, err)
+		}
+		if _, err := service.ListChannelMediaByTopic("supergroup", 77, 1, 0, 20, "", "all", test.account, test.generation); !errors.Is(err, channelsource.ErrInvalidPage) {
+			t.Fatalf("selected-topic scope (%d, %q): %v", test.account, test.generation, err)
+		}
+	}
+}
 
 type stalledChannelResolve struct {
 	*tgclient.Fake
