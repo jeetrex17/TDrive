@@ -65,6 +65,8 @@ export interface PreviewElements {
     readonly lockedInput: HTMLInputElement | null;
     readonly lockedUnlockButton: HTMLButtonElement | null;
     readonly lockedEyeButton: HTMLButtonElement | null;
+    readonly lockedBiometricButton: HTMLButtonElement | null;
+    readonly lockedBiometricLabel: HTMLElement | null;
     readonly lockedError: HTMLElement | null;
     readonly lockedHint: HTMLElement | null;
     readonly lockedHintText: HTMLElement | null;
@@ -115,6 +117,8 @@ export function resolvePreviewElements(host: HTMLElement): PreviewElementsResult
             lockedInput: within<HTMLInputElement>('#preview-locked-input'),
             lockedUnlockButton: within<HTMLButtonElement>('#preview-locked-unlock'),
             lockedEyeButton: within<HTMLButtonElement>('#preview-locked-eye'),
+            lockedBiometricButton: within<HTMLButtonElement>('#preview-locked-biometric'),
+            lockedBiometricLabel: within<HTMLElement>('#preview-locked-biometric-label'),
             lockedError: within<HTMLElement>('#preview-locked-error'),
             lockedHint: within<HTMLElement>('#preview-locked-hint'),
             lockedHintText: within<HTMLElement>('#preview-locked-hint-text'),

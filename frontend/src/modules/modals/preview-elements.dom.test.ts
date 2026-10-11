@@ -21,6 +21,7 @@ const FULL_MARKUP = `
             <input id="preview-locked-input" type="password">
             <button id="preview-locked-eye" type="button"></button>
             <button id="preview-locked-unlock" type="button"></button>
+            <button id="preview-locked-biometric" type="button"><span id="preview-locked-biometric-label"></span></button>
             <div id="preview-locked-error"></div>
             <div id="preview-locked-hint"><span id="preview-locked-hint-text"></span></div>
         </div>
@@ -45,6 +46,8 @@ describe("resolving the preview modal's elements", () => {
         expect(els.modal.id).toBe('preview-modal');
         expect(els.image.tagName).toBe('IMG');
         expect(els.lockedInput?.type).toBe('password');
+        expect(els.lockedBiometricButton?.id).toBe('preview-locked-biometric');
+        expect(els.lockedBiometricLabel?.id).toBe('preview-locked-biometric-label');
         expect(els.counter?.id).toBe('preview-counter');
     });
 
@@ -76,6 +79,7 @@ describe("resolving the preview modal's elements", () => {
 
         expect(resolved.elements.infoPanel).toBeNull();
         expect(resolved.elements.locked).toBeNull();
+        expect(resolved.elements.lockedBiometricButton).toBeNull();
         expect(resolved.elements.downloadButton).toBeNull();
     });
 

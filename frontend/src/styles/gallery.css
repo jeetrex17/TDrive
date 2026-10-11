@@ -370,6 +370,32 @@
     align-items: center;
     width: min(420px, calc(100vw - 48px));
 }
+.preview-unlock-biometric {
+    pointer-events: auto;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: var(--space-2);
+    width: 100%;
+    min-height: 44px;
+    padding: var(--space-3) var(--space-4);
+    border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
+    border-radius: var(--radius-xl);
+    background: rgba(18, 20, 30, 0.78);
+    color: var(--viewer-text);
+    font: inherit;
+    cursor: pointer;
+}
+.preview-unlock-biometric[hidden],
+.preview-unlock-biometric[hidden] + .preview-unlock-biometric-help { display: none; }
+.preview-unlock-biometric:focus-visible { outline: 2px solid var(--viewer-accent); outline-offset: 3px; }
+.preview-unlock-biometric:disabled { opacity: 0.5; cursor: progress; }
+.preview-unlock-biometric-help {
+    margin: var(--space-2) 0 var(--space-4);
+    color: var(--viewer-text-muted);
+    font-size: var(--type-sm);
+    text-align: center;
+}
 /* The one element: a flat, dark glass pill. No gradient and no shadow/highlight
    (kept deliberately flat); a thin accent rim plus the backdrop blur give it a
    clean defined edge against the frosted backdrop. */

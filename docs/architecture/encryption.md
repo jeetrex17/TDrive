@@ -63,6 +63,13 @@ keep their existing formats. The password remains mandatory for setup, recovery,
 password changes and enrollment on another device. The CLI and daemon use the
 password flow.
 
+The encrypted photo lightbox uses the same session unlock through its inline
+card. It offers a native biometric action only after fresh capability discovery
+reports an available, enrolled device, and always keeps password fallback.
+Browsing onto a locked photo does not launch authentication. Hiding the card on
+close, navigation or scope reset cancels pending native work and ignores late
+capability and authentication results.
+
 [`backend/biometric`](../../backend/biometric/biometric.go) owns the native provider
 contract. Each enrollment is scoped to the authenticated Telegram account, its
 personal channel and a canonical digest of the cryptographic vault configuration.

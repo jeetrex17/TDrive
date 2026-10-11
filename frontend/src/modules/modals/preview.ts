@@ -414,6 +414,7 @@ export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail
     const dom = readyElements();
     if (!dom) throw new Error('Preview unavailable');
     const token = ++previewRequestToken;
+    hideLockedState();
     const filename = target.name || 'Preview';
     activePreviewKey = getPreviewKey(target);
     activePreviewItem = target;
@@ -762,15 +763,16 @@ function hideLockedState() {
 // The reload has to name its photo now, not after the password round trip: by
 // then the reader may have paged on, and reloading whatever is showing would
 // drop them back where they were.
-function submitInlineUnlock(): Promise<void> {
+function submitInlineUnlock(biometric = false): Promise<void> {
     const target = activePreviewItem;
     const token = previewRequestToken;
-    return unlockCard?.submit(() => {
+    const onUnlocked = () => {
         // Closing, navigation, and drive resets invalidate this viewer action.
         if (token !== previewRequestToken || !isPreviewOpen()) return;
         hideLockedState();
         if (target) void loadPreview(target);
-    }) ?? Promise.resolve();
+    };
+    return (biometric ? unlockCard?.submitBiometric(onUnlocked) : unlockCard?.submit(onUnlocked)) ?? Promise.resolve();
 }
 
 // --- zoom / pan ---
@@ -1001,6 +1003,7 @@ export function teardownPreviewModal(): void {
     unsubscribePreviewReset?.();
     unsubscribePreviewReset = null;
     clearActivePreview();
+    unlockCard?.hide();
     infoOpen = false;
     infoSheetBack?.release();
     infoSheetBack = null;
@@ -1045,6 +1048,8 @@ export function activatePreviewModal(): () => void {
         input: dom.lockedInput,
         unlockButton: dom.lockedUnlockButton,
         eyeButton: dom.lockedEyeButton,
+        biometricButton: dom.lockedBiometricButton,
+        biometricLabel: dom.lockedBiometricLabel,
         error: dom.lockedError,
         hint: dom.lockedHint,
         hintText: dom.lockedHintText,
@@ -1080,6 +1085,10 @@ export function activatePreviewModal(): () => void {
     listenPreview(dom.lockedUnlockButton, "click", ((event: MouseEvent) => {
         event.stopPropagation();
         void submitInlineUnlock();
+    }) as EventListener);
+    listenPreview(dom.lockedBiometricButton, "click", ((event: MouseEvent) => {
+        event.stopPropagation();
+        void submitInlineUnlock(true);
     }) as EventListener);
     listenPreview(dom.lockedEyeButton, "click", ((event: MouseEvent) => {
         event.stopPropagation();
