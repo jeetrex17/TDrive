@@ -175,7 +175,8 @@ metadata costs disappear.
 The frontend [RenditionBroker](../../modules/renditions/broker.ts) currently
 accepts **thumbnail only**: a 512-pixel maximum edge and 1 MiB compressed limit.
 Backend preview/original rendition classes still exist, but the current image
-viewer uses an original media stream rather than a full-image Blob broker.
+viewer uses a media session rather than a full-image Blob broker. Within that
+session, oversized photos use a bounded preview when one can be obtained.
 
 A request key contains scope nonce, channel, file ID, revision and rendition kind.
 The scope itself includes the authenticated account. Backend cache identity also
@@ -324,7 +325,7 @@ sequenceDiagram
     Viewer->>Viewer: Reserve original decode budget
     Viewer->>Media: OpenOriginalImage(file ID, revision)
     Media->>Media: Validate revision, size, header and vault generation
-    Media-->>Viewer: Tokenized original stream
+    Media-->>Viewer: Tokenized original or resized preview stream
     alt Still the active request
         Viewer->>Viewer: Assign stream URL to image element
     else Viewer closed or navigated meanwhile
@@ -341,13 +342,27 @@ while opening the selected original. Navigation epochs/request tokens prevent a
 slow earlier open from replacing the current image. It uses GallerySource for
 neighbors, scanning at most 128 candidates to skip videos; this resolves metadata
 until navigation activates the selected item and opens its original. Videos have
-their own player path. Original failure can leave the thumbnail visible with an error
+their own player path. A resized preview carries `image_preview: true`; the viewer
+labels it and leaves original dimensions and EXIF unknown rather than reporting
+the derivative's dimensions as original metadata. Download continues through the
+file service with the original file ID and retains original quality. Image-session
+failure can leave the thumbnail visible with an error
 and download action.
 
 [`OpenImage`](../../../../backend/media/service.go) checks revision before and
 after open. Originals are admitted up to 256 MiB and 32 million pixels, with a
-bounded header read, and use an 8 MiB byte cache without read-ahead. GIF originals
-and animated WebP are rejected from direct display by the current admission
+bounded header read, and use an 8 MiB byte cache without read-ahead. Explicit
+`OpenOriginalImage` requests that exceed direct-view byte or pixel admission can
+instead serve a JPEG preview capped at a 1600-pixel edge and 4 MiB. The media
+service first reuses an available preview for a projected file, then uses the
+existing serialized local-image decoder when the source transfer fits its 30 MiB
+budget. Raw Telegram attachments use that same bounded decoder fallback. Generated
+previews stay in the revocable media session and are cleared on close; they are
+not written to disk or inserted into the frontend Blob broker. If no safe preview
+can be obtained, the thumbnail, error and original download action remain available.
+Apple and Android decoders sample large camera JPEGs during decode; the portable
+fallback retains its 24 MP source budget and requires an existing derivative for
+larger images. GIF originals and animated WebP are rejected from direct display by the current admission
 policy; download remains available. The current viewer does not use the older
 16 MiB/16 MP `original` rendition API, so those limits must not be conflated.
 

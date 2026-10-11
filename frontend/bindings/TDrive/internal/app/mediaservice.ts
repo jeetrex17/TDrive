@@ -115,8 +115,9 @@ export function OpenNativeMedia(msgID: number, rect: nativeplayer$0.Rect): $Canc
 }
 
 /**
- * OpenOriginalImage returns one revision-bound capability for the original
- * raster bytes. It shares the existing media range and CloseMedia lifecycle;
+ * OpenOriginalImage returns one revision-bound viewing capability: original
+ * raster bytes within direct-display limits, otherwise a bounded resized image.
+ * Original downloads use the file service. This shares the media range and CloseMedia lifecycle;
  * lifecycle checks around the open prevent logout from publishing a new
  * capability after session revocation has become terminal.
  */

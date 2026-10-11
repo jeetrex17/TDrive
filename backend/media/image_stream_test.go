@@ -175,6 +175,56 @@ func TestImageByteAdmissionIsConfigurable(t *testing.T) {
 	}
 }
 
+func TestOpenImageResizesOverBudgetPhotoWithoutChangingOriginal(t *testing.T) {
+	db := newResolverTestDB(t)
+	body := jpegFixture(t, 2000, 1500)
+	mustApplyOp(t, db, 10, projection.Op{
+		Type: projection.OpFileUpload, Parent: projection.RootParent,
+		Name: "camera.jpg", FileSize: int64(len(body)),
+	})
+	ranges := newMediaRangeFake(map[int64][]byte{10: body})
+	svc := NewService(Config{
+		DB: db, Peers: staticPeerResolver{peer: ranges.peer}, Ranges: ranges,
+		// Exercise the production fallback with a small fixture rather than
+		// allocating a 50MP source bitmap in every test run.
+		ImageAdmission: ImageAdmissionLimits{MaxPixels: 1_000_000},
+	})
+	t.Cleanup(func() { _ = svc.Close() })
+	opened, err := svc.OpenImage(t.Context(), testChannelID, 10, 1)
+	if err != nil {
+		t.Fatalf("OpenImage over-budget photo: %v", err)
+	}
+	resp, err := http.Get(opened.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	preview, err := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, format, err := image.DecodeConfig(bytes.NewReader(preview))
+	if err != nil || format != "jpeg" || config.Width != 1600 || config.Height != 1200 {
+		t.Fatalf("preview = %v %s, %v; want 1600x1200 JPEG", config, format, err)
+	}
+	assertNoStoreHeaders(t, resp.Header)
+	original, err := svc.Resolve(t.Context(), testChannelID, 10)
+	if err != nil || original.PlaintextSize != int64(len(body)) || !bytes.Equal(ranges.bodies[10], body) {
+		t.Fatalf("original was changed: %+v, %v", original, err)
+	}
+	if err := svc.CloseSession(opened.Token); err != nil {
+		t.Fatal(err)
+	}
+	closed, err := http.Get(opened.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = closed.Body.Close()
+	if closed.StatusCode != http.StatusNotFound {
+		t.Fatalf("closed preview status = %d", closed.StatusCode)
+	}
+}
+
 func TestOpenStreamRejectsGIFDirectDisplayWithTypedSafeError(t *testing.T) {
 	db := newResolverTestDB(t)
 	var encoded bytes.Buffer

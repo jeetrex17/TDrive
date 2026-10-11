@@ -23,6 +23,7 @@ var (
 	ErrStaleRevision        = errors.New("media: stale file revision")
 	ErrInvalidImage         = errors.New("media: invalid image content")
 	ErrImageTooLarge        = errors.New("media: image exceeds safe viewing limits")
+	ErrImagePreviewMissing  = errors.New("media: resized preview is unavailable")
 	ErrAnimatedImageUnsafe  = errors.New("media: animated image is unavailable for direct display")
 	ErrSessionNotFound      = errors.New("media: session not found")
 	ErrThumbnailPending     = errors.New("media: thumbnail pending")
@@ -96,6 +97,8 @@ func (f LogicalFile) SegmentCount() int {
 }
 
 type OpenResult struct {
+	// ImagePreview marks resized viewing bytes; Info still describes the original.
+	ImagePreview bool   `json:"image_preview,omitzero"`
 	Token        string `json:"token"`
 	URL          string `json:"url"`
 	ThumbnailURL string `json:"thumbnail_url"`

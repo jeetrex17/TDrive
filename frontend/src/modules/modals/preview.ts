@@ -451,9 +451,12 @@ export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail
             return null;
         }
         activeOriginalSession = { token: opened.token, url: opened.url };
-        activeFullSrc = opened.url;
+        // A derivative's dimensions and stripped EXIF do not describe the original.
+        activeFullSrc = opened.imagePreview ? '' : opened.url;
         showPreviewImage(opened.url, filename, { keepLoading: true });
-        dom.image.title = 'Original image';
+        dom.image.title = opened.imagePreview
+            ? 'Resized preview. Download for original quality.'
+            : 'Original image';
         refreshInfoPanel();
         return { src: opened.url };
     } catch (error) {

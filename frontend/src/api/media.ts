@@ -48,6 +48,8 @@ export interface MediaOpenResult {
     kind: string;
     mimeType: string;
     supportsRange: boolean;
+    /** The viewing session contains resized bytes; downloads still use the original file. */
+    imagePreview?: boolean;
     info: MediaOpenInfo;
 }
 
@@ -135,9 +137,10 @@ export async function openStream(msgId: number): Promise<MediaOpenResult> {
 }
 
 /**
- * Opens exactly one short-lived original-image stream for an immutable file
+ * Opens exactly one short-lived image stream for an immutable file
  * revision. This deliberately bypasses the rendition broker: it must never
- * create a Blob, enter the thumbnail cache, or be speculatively fetched.
+ * create a Blob, enter the thumbnail cache, or be speculatively fetched. Large
+ * originals use bounded preview bytes when the backend can provide them.
  */
 export async function openOriginalImage(msgId: number, revision: number): Promise<MediaOpenResult> {
     const opened = normalizeMediaOpenResult(await invokeBackend(rawOpenOriginalImage, msgId, revision));
@@ -155,6 +158,7 @@ export function normalizeMediaOpenResult(opened?: OpenResult): MediaOpenResult {
         kind: String(opened?.kind ?? ""),
         mimeType: String(opened?.mime_type ?? ""),
         supportsRange: Boolean(opened?.supports_range),
+        imagePreview: Boolean(opened?.image_preview),
         info: normalizeMediaOpenInfo(opened?.info, opened?.name),
     };
 }

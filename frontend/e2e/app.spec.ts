@@ -402,6 +402,38 @@ test('gallery loads binary thumbnails and one explicitly opened original stream'
     expect(requested.some((path) => path.endsWith('/preview'))).toBe(false);
 });
 
+test('gallery displays resized photo previews and downloads the original file', async ({ page }) => {
+    await routeRenditions(page);
+    const photo = { ...FIRST_PHOTO, name: '50-megapixel.jpg', size: 12_345_678 };
+    const mock = await bootTDrive(page, {
+        ...galleryPlans([photo]),
+        OpenOriginalImage: resolves({ ...openedOriginal(photo, RED_BASE64), image_preview: true }),
+        DownloadFile: resolves({ result: { ok: true }, saved_path: '/tmp/50-megapixel.jpg' }),
+    });
+    await page.getByRole('button', { name: 'Photos' }).click();
+    await page.getByRole('button', { name: photo.name }).click();
+    const image = page.locator('#preview-image');
+    await expect(image).toHaveAttribute('title', 'Resized preview. Download for original quality.');
+    // A src assignment alone does not establish browser decoding.
+    await expect.poll(() => image.evaluate(element => {
+        const image = element as HTMLImageElement;
+        return image.complete && image.naturalWidth === 2 && image.naturalHeight === 2;
+    })).toBe(true);
+    await expect(page.locator('#preview-error')).toBeHidden();
+    await page.getByRole('button', { name: 'Photo info' }).click();
+    await expect(page.locator('#preview-info-body')).toContainText('11.8 MB');
+    await expect(page.locator('#preview-info-body')).not.toContainText('Dimensions');
+    await page.getByRole('button', { name: 'Photo info' }).click();
+    await page.getByRole('button', { name: 'Download original', exact: true }).click();
+    await expect.poll(async () => (await mock.calls('DownloadFile'))[0]?.state).toBe('fulfilled');
+    expect(await mock.calls('DownloadFile')).toMatchObject([{
+        args: [1, photo.msg_id, photo.msg_id, expect.stringMatching(/^file:1:101@/)], state: 'fulfilled',
+    }]);
+    await page.getByRole('button', { name: 'Close preview' }).click();
+    await expect.poll(async () => (await mock.calls('CloseMedia'))[0]?.state).toBe('fulfilled');
+    expect(await mock.calls('CloseMedia')).toMatchObject([{ args: ['original-101'] }]);
+});
+
 test('albums open on the folder grid and scope the one gallery to a folder', async ({ page }, testInfo) => {
     const requested = await routeRenditions(page);
     await bootTDrive(page, { ...galleryPlans([FIRST_PHOTO, SECOND_PHOTO]), ...albumPlans() });

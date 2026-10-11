@@ -12,6 +12,9 @@ import (
 
 const localSourceLimit = 30 << 20
 
+// MaxLocalSourceBytes bounds source transfers for sampled preview generation.
+const MaxLocalSourceBytes = localSourceLimit
+
 // A generation owns its decoder working set until it returns. Network upload
 // concurrency must never multiply simultaneous full-resolution decodes.
 var localDecodeSlot = make(chan struct{}, 1)

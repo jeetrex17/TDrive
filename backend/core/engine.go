@@ -870,6 +870,7 @@ func (e *Engine) newMediaService() *media.Service {
 		EncryptionOpenGate:       e.mediaEncryptionMu.RLocker(),
 		EncryptionOpenGeneration: e.mediaEncryptionGeneration.Load,
 		Thumbs:                   e.thumbs,
+		ImagePreview:             e.loadImagePreview,
 	})
 }
 
