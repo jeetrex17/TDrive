@@ -42,7 +42,7 @@ test('device enrollment is explicit and Touch ID unlock is reused for the curren
 
     const panel = await openBackup(page);
     await panel.getByRole('button', { name: 'Unlock and back up', exact: true }).click();
-    const prompt = page.getByRole('dialog', { name: 'Enter encryption password' });
+    const prompt = page.getByRole('dialog', { name: 'Unlock encrypted files' });
     await expect(prompt.getByRole('button', { name: 'Use Touch ID', exact: true })).toBeVisible();
     await expect(prompt.getByLabel('Encryption password', { exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath('touch-id-unlock.png') });
@@ -66,7 +66,7 @@ test('canceling native authentication keeps encrypted work stopped and discards 
         GetPhotoBackupState: resolves(backup),
     });
     const panel = await openBackup(page);
-    const prompt = page.getByRole('dialog', { name: 'Enter encryption password' });
+    const prompt = page.getByRole('dialog', { name: 'Unlock encrypted files' });
     await panel.getByRole('button', { name: 'Unlock and back up', exact: true }).click();
     await prompt.getByRole('button', { name: 'Use Touch ID', exact: true }).click();
     await expect(prompt.getByRole('button', { name: 'Cancel', exact: true })).toBeEnabled();
@@ -161,7 +161,7 @@ for (const platform of ['desktop', 'android'] as const) {
             panel = page.getByRole('region', { name: 'Photo and video backup' });
         } else panel = await openBackup(page);
         await panel.getByRole('button', { name: 'Unlock and back up', exact: true }).click();
-        const prompt = page.getByRole('dialog', { name: 'Enter encryption password' });
+        const prompt = page.getByRole('dialog', { name: 'Unlock encrypted files' });
         await prompt.getByRole('button', { name: platform === 'android' ? 'Use biometrics' : 'Use Windows Hello', exact: true }).click();
         await expect(prompt.getByRole('alert')).toHaveText('Biometric unlock was canceled. Enter your password or try again.');
         await expect(prompt).not.toContainText('Native details');

@@ -65,7 +65,7 @@
 <ModalShell
     hostId="encryption-password-modal"
     open={$view.open}
-    title="Enter encryption password"
+    title="Unlock encrypted files"
     titleId="encryption-password-title"
     subtitle="Unlock encrypted files for this session, until you lock, sign out or close the app."
     initialFocus="#encryption-password-input"

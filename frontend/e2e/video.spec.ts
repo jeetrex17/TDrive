@@ -380,9 +380,9 @@ test('an encrypted video with the vault locked asks for the password', async ({ 
     });
     await page.getByRole('row', { name: 'File: holiday.mkv' }).getByRole('button', { name: 'Play video' }).click();
 
-    await expect(page.getByRole('dialog', { name: 'Enter encryption password' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: 'Unlock encrypted files' })).toBeVisible();
     // Nothing was played, and dismissing the prompt is a choice rather than a
     // failure to report.
-    await page.getByRole('dialog', { name: 'Enter encryption password' }).getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.getByRole('dialog', { name: 'Unlock encrypted files' }).getByRole('button', { name: 'Cancel', exact: true }).click();
     expect(await mock.calls('AttachNativeMedia')).toHaveLength(0);
 });
