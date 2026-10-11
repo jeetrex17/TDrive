@@ -177,8 +177,9 @@ func openOriginalImage(ctx context.Context, opener originalImageOpener, channelI
 	return opener.OpenImage(ctx, channelID, msgID, current.Revision)
 }
 
-// OpenOriginalImage returns one revision-bound capability for the original
-// raster bytes. It shares the existing media range and CloseMedia lifecycle;
+// OpenOriginalImage returns one revision-bound viewing capability: original
+// raster bytes within direct-display limits, otherwise a bounded resized image.
+// Original downloads use the file service. This shares the media range and CloseMedia lifecycle;
 // lifecycle checks around the open prevent logout from publishing a new
 // capability after session revocation has become terminal.
 func (s *MediaService) OpenOriginalImage(msgID int, revision int64) (media.OpenResult, error) {

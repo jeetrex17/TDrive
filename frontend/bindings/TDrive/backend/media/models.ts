@@ -33,6 +33,10 @@ export interface MediaStats {
 }
 
 export interface OpenResult {
+    /**
+     * ImagePreview marks resized viewing bytes; Info still describes the original.
+     */
+    "image_preview"?: boolean;
     "token": string;
     "url": string;
     "thumbnail_url": string;

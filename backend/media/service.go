@@ -35,6 +35,9 @@ type Config struct {
 	Thumbs                   *thumbnail.Cache
 	ThumbGenerator           VideoThumbnailGenerator
 	ImageAdmission           ImageAdmissionLimits
+	// ImagePreview returns an owned copy of an existing, revision-bound resized
+	// image. ErrImagePreviewMissing permits local sampled generation instead.
+	ImagePreview func(context.Context, LogicalFile) ([]byte, error)
 }
 
 // Service is the app-facing media entry point. It owns logical file resolution
@@ -49,6 +52,7 @@ type Service struct {
 	thumbs        *thumbnail.Cache
 	thumbGen      VideoThumbnailGenerator
 	imageLimits   ImageAdmissionLimits
+	imagePreview  func(context.Context, LogicalFile) ([]byte, error)
 	resolver      *Resolver
 	rawDrive      RawDriveSource
 	accountID     func(context.Context) (int64, error)
@@ -68,6 +72,7 @@ func NewService(cfg Config) *Service {
 		thumbs:        cfg.Thumbs,
 		thumbGen:      cfg.ThumbGenerator,
 		imageLimits:   cfg.ImageAdmission.normalized(),
+		imagePreview:  cfg.ImagePreview,
 		resolver:      NewResolver(cfg.DB),
 		rawDrive:      cfg.RawDrive,
 		accountID:     cfg.AccountID,
@@ -100,8 +105,9 @@ func (s *Service) OpenStream(ctx context.Context, channelID, fileID int64) (Open
 	return s.open(ctx, channelID, fileID, StreamKindUnknown)
 }
 
-// OpenImage opens the current original image only when the caller's projected
-// revision still matches. It deliberately reuses OpenStream so multipart,
+// OpenImage opens the current image only when the caller's projected revision
+// still matches, using a bounded preview if direct display is too large. It
+// deliberately reuses the stream path so multipart,
 // encryption, capability URLs, range reads, and CloseSession share one
 // lifecycle. The second revision check closes the sole session if a content
 // replacement raced the preflight.
@@ -119,11 +125,7 @@ func (s *Service) OpenImage(ctx context.Context, channelID, fileID, revision int
 	if !IsSupportedImageName(file.Name) {
 		return OpenResult{}, ErrUnsupportedMediaType
 	}
-	if err := validateImageMetadata(file, s.imageLimits); err != nil {
-		return OpenResult{}, err
-	}
-
-	opened, err := s.OpenStream(ctx, channelID, fileID)
+	opened, err := s.open(ctx, channelID, fileID, StreamKindImage)
 	if err != nil {
 		return OpenResult{}, err
 	}
@@ -133,6 +135,16 @@ func (s *Service) OpenImage(ctx context.Context, channelID, fileID, revision int
 	}
 	if !imageRevisionMatches(opened.Info, revision) {
 		_ = s.CloseSession(opened.Token)
+		return OpenResult{}, ErrStaleRevision
+	}
+	// Preview generation may outlast a replacement or deletion. Re-resolve the
+	// source before handing any derived pixels to the viewer.
+	current, err := s.Resolve(ctx, channelID, fileID)
+	if err != nil || !imageRevisionMatches(current, opened.Info.Revision) {
+		_ = s.CloseSession(opened.Token)
+		if err != nil {
+			return OpenResult{}, err
+		}
 		return OpenResult{}, ErrStaleRevision
 	}
 	return opened, nil
@@ -262,12 +274,10 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 		return OpenResult{}, err
 	}
 	if kind == StreamKindImage {
-		mimeType, admitErr := admitImage(ctx, session, file.Name, s.imageLimits)
-		if admitErr != nil {
+		if admitErr := s.admitViewerImage(ctx, session, requiredKind == StreamKindImage); admitErr != nil {
 			session.Close()
 			return OpenResult{}, admitErr
 		}
-		session.mimeType = mimeType
 	}
 	if file.Encrypted && s.encGate != nil && s.encGeneration != nil {
 		s.encGate.Lock()
@@ -297,6 +307,7 @@ func (s *Service) open(ctx context.Context, channelID, fileID int64, requiredKin
 		MimeType:      session.MimeType(),
 		SupportsRange: true,
 		Info:          file,
+		ImagePreview:  session.previewSize > 0,
 	}, nil
 }
 
@@ -364,6 +375,7 @@ func (s *Service) OpenResultForToken(token string) (OpenResult, error) {
 		MimeType:      session.MimeType(),
 		SupportsRange: true,
 		Info:          file,
+		ImagePreview:  session.previewSize > 0,
 	}, nil
 }
 

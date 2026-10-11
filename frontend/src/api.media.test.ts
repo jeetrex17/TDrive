@@ -286,6 +286,14 @@ describe("loopback media API boundary", () => {
         expect(OpenOriginalImage).toHaveBeenCalledWith(9, 3);
     });
 
+    it("marks resized image sessions while older original responses default to original quality", async () => {
+        mockBackendResult(vi.mocked(OpenOriginalImage), { ...opened, kind: 'image', image_preview: true });
+        await expect(openOriginalImage(9, 3)).resolves.toEqual(expect.objectContaining({ imagePreview: true }));
+
+        mockBackendResult(vi.mocked(OpenOriginalImage), { ...opened, kind: 'image' });
+        await expect(openOriginalImage(9, 3)).resolves.toEqual(expect.objectContaining({ imagePreview: false }));
+    });
+
     it("closes and updates only active media sessions", async () => {
         await closeMedia("");
         await updateMediaPlayback({ token: "", currentTime: 1, duration: 2, bufferAhead: 3 });

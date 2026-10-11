@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
     setGalleryActive: vi.fn(),
     reserveOriginal: vi.fn(),
     releaseOriginalBudget: vi.fn(),
+    renderInfo: vi.fn(() => ''),
     resetListener: undefined as undefined | (() => void),
     policyListener: undefined as undefined | ((policy: { backgrounded: boolean }) => void),
 }));
@@ -26,7 +27,7 @@ vi.mock('../../ui/gallery/gallery-controller', () => ({ setActive: mocks.setGall
 vi.mock('../notifications', () => ({ notify: mocks.notify }));
 vi.mock('../encryption', () => ({ loadEncryptionStatus: vi.fn() }));
 vi.mock('../transfers', () => ({ enqueueDownload: mocks.download }));
-vi.mock('./preview-info', () => ({ renderImageInfoHTML: vi.fn(() => '') }));
+vi.mock('./preview-info', () => ({ renderImageInfoHTML: mocks.renderInfo }));
 vi.mock('./preview-transition', () => ({ capturePreviewTransitionSource: () => null, createPreviewTransitionController: () => ({ cancel: vi.fn(), isRunning: () => false, finishOpen: () => false, beginOpen: () => false, playClose: vi.fn() }) }));
 const item = { type: 'file' as const, id: 1, name: 'Photo.jpg', channel_id: 10, content_revision: 2 };
 
@@ -78,6 +79,53 @@ describe('bounded photo viewer', () => {
         expect(mocks.releaseOriginalBudget).toHaveBeenCalledTimes(1);
         expect(mocks.setGalleryActive).toHaveBeenLastCalledWith(true);
         expect(document.querySelector('#preview-image')?.getAttribute('src')).toBeNull();
+    });
+
+    it('shows a resized preview without an error, preserves original downloads and releases its session', async () => {
+        mocks.openOriginal.mockResolvedValue({ token: 'preview-1', url: 'http://127.0.0.1/media/preview-1', kind: 'image', imagePreview: true });
+        const preview = await import('./preview');
+        preview.activatePreviewModal();
+        await preview.openPreviewList([{ ...item, size: 12_345_678 }], 0);
+        const image = document.getElementById('preview-image') as HTMLImageElement;
+        Object.defineProperties(image, {
+            naturalWidth: { configurable: true, value: 1200 },
+            naturalHeight: { configurable: true, value: 1600 },
+        });
+        image.dispatchEvent(new Event('load'));
+
+        expect(image.getAttribute('src')).toBe('http://127.0.0.1/media/preview-1');
+        expect(image.title).toBe('Resized preview. Download for original quality.');
+        expect(document.getElementById('preview-error')?.textContent).toBe('');
+        document.getElementById('preview-info-btn')!.click();
+        expect(mocks.renderInfo).toHaveBeenLastCalledWith(expect.objectContaining({ fullSrc: '', naturalWidth: 0, naturalHeight: 0 }));
+        document.getElementById('preview-download')!.click();
+        expect(mocks.download).toHaveBeenCalledExactlyOnceWith(1, 'Photo.jpg', 12_345_678);
+
+        preview.closePreviewModal();
+        expect(mocks.close).toHaveBeenCalledExactlyOnceWith('preview-1');
+        expect(mocks.releaseOriginalBudget).toHaveBeenCalledTimes(1);
+        expect(image.getAttribute('src')).toBeNull();
+    });
+
+    it('restores original dimensions and labeling after navigating away from a resized preview', async () => {
+        mocks.openOriginal.mockResolvedValueOnce({ token: 'preview-1', url: 'http://127.0.0.1/media/preview-1', kind: 'image', imagePreview: true });
+        const preview = await import('./preview');
+        preview.activatePreviewModal();
+        await preview.openPreviewList([item, { ...item, id: 2 }], 0);
+        document.getElementById('preview-next')!.click();
+        await vi.waitFor(() => expect(mocks.openOriginal).toHaveBeenCalledWith(2, 2));
+        const image = document.getElementById('preview-image') as HTMLImageElement;
+        Object.defineProperties(image, {
+            naturalWidth: { configurable: true, value: 3000 },
+            naturalHeight: { configurable: true, value: 2000 },
+        });
+        image.dispatchEvent(new Event('load'));
+        expect(image.title).toBe('Original image');
+        document.getElementById('preview-info-btn')!.click();
+        expect(mocks.renderInfo).toHaveBeenLastCalledWith(expect.objectContaining({
+            fullSrc: 'http://127.0.0.1/media/original-1', naturalWidth: 3000, naturalHeight: 2000,
+        }));
+        expect(mocks.close).toHaveBeenCalledWith('preview-1');
     });
 
     it('never prefetches neighbor originals', async () => {
@@ -188,17 +236,18 @@ describe('bounded photo viewer', () => {
         preview.closePreviewModal();
     });
 
-    it('ignores a photo that finishes after the viewer closes', async () => {
-        let resolve!: (value: { token: string; url: string; kind: string }) => void;
+    it.each([false, true])('closes a late image session after the viewer closes (resized preview: %s)', async (imagePreview) => {
+        let resolve!: (value: { token: string; url: string; kind: string; imagePreview: boolean }) => void;
         mocks.openOriginal.mockReturnValue(new Promise(yes => { resolve = yes; }));
         const preview = await import('./preview');
         preview.activatePreviewModal();
         const opening = preview.openPreviewList([item], 0);
         preview.closePreviewModal();
         expect(mocks.releaseOriginalBudget).toHaveBeenCalledTimes(1);
-        resolve({ token: 'late', url: 'http://127.0.0.1/media/late', kind: 'image' });
+        resolve({ token: 'late', url: 'http://127.0.0.1/media/late', kind: 'image', imagePreview });
         await opening;
         expect(document.querySelector('#preview-image')?.getAttribute('src')).toBeNull();
+        expect(mocks.close).toHaveBeenCalledExactlyOnceWith('late');
     });
     it('does not reopen an original when unlocking finishes after closing', async () => {
         let resolvePassword!: () => void;

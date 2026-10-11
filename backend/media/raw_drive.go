@@ -231,12 +231,10 @@ func (s *Service) openRawDrive(ctx context.Context, channelID, fileID int64, req
 		return OpenResult{}, err
 	}
 	if kind == StreamKindImage {
-		mimeType, err := admitImage(ctx, session, source.file.Name, s.imageLimits)
-		if err != nil {
+		if err := s.admitViewerImage(ctx, session, requiredKind == StreamKindImage); err != nil {
 			session.Close()
 			return OpenResult{}, err
 		}
-		session.mimeType = mimeType
 	}
 	if err := checked.validate(ctx); err != nil {
 		session.Close()
@@ -252,7 +250,7 @@ func (s *Service) openRawDrive(ctx context.Context, channelID, fileID int64, req
 		_ = s.CloseSession(session.Token())
 		return OpenResult{}, err
 	}
-	return OpenResult{Token: session.Token(), URL: session.URL(), ThumbnailURL: session.ThumbnailURL(), HLSURL: session.HLSURL(), Name: source.file.Name, Kind: kind, MimeType: session.MimeType(), SupportsRange: true, Info: source.file}, nil
+	return OpenResult{Token: session.Token(), URL: session.URL(), ThumbnailURL: session.ThumbnailURL(), HLSURL: session.HLSURL(), Name: source.file.Name, Kind: kind, MimeType: session.MimeType(), SupportsRange: true, Info: source.file, ImagePreview: session.previewSize > 0}, nil
 }
 
 // resolveRawDriveReference permits one access-hash refresh per open, including

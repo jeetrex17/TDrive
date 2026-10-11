@@ -1,6 +1,7 @@
 package media
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/base64"
@@ -25,13 +26,17 @@ type resolvedSegment struct {
 }
 
 type Session struct {
-	token          string
-	mimeType       string
-	url            string
-	thumbURL       string
-	sourceURL      string
-	hlsURL         string
-	file           LogicalFile
+	token     string
+	mimeType  string
+	url       string
+	thumbURL  string
+	sourceURL string
+	hlsURL    string
+	file      LogicalFile
+	// Resized viewing bytes are session-owned, memory-only and cleared on close.
+	// previewSize is immutable after publication, including after data is cleared.
+	previewData    []byte
+	previewSize    int64
 	segments       []resolvedSegment
 	reader         *RangeReader
 	thumbReader    *RangeReader
@@ -249,6 +254,9 @@ func (s *Session) Size() int64 {
 	if s == nil {
 		return 0
 	}
+	if s.previewSize > 0 {
+		return s.previewSize
+	}
 	return s.file.PlaintextSize
 }
 
@@ -310,6 +318,8 @@ func (s *Session) Close() {
 		return
 	}
 	s.closed = true
+	clear(s.previewData)
+	s.previewData = nil
 	s.mu.Unlock()
 	if s.cancel != nil {
 		s.cancel()
@@ -333,6 +343,20 @@ func (s *Session) Close() {
 }
 
 func (s *Session) ReadAt(ctx context.Context, p []byte, off int64) (int, error) {
+	if s.previewSize > 0 {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.closed {
+			return 0, ErrSessionNotFound
+		}
+		if err := ctx.Err(); err != nil {
+			return 0, err
+		}
+		n, err := bytes.NewReader(s.previewData).ReadAt(p, off)
+		s.lastTouch = time.Now()
+		s.served.Add(int64(n))
+		return n, err
+	}
 	return s.readPlainAt(ctx, s.reader, s.decryptor, p, off)
 }
 
