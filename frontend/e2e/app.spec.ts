@@ -487,6 +487,40 @@ test('startup failures show the fatal recovery screen', async ({ page }) => {
     await expect(recovery.getByRole('button', { name: 'Reload TDrive' })).toBeVisible();
 });
 
+test('saved-drive startup waits for the backend on Android', async ({ page }) => {
+    const mock = await bootTDrive(page, {
+        WaitForBackendReady: deferred('backend-ready', null),
+    }, { url: '/?mobile=android' });
+
+    await expect.poll(async () => (await mock.calls('WaitForBackendReady'))[0]?.state).toBe('pending');
+    await expect(page.getByRole('status')).toBeVisible();
+    expect(await mock.calls('CheckSystemStatus')).toHaveLength(0);
+    expect(await mock.calls('CheckLoginStatus')).toHaveLength(0);
+    expect(await mock.calls('PreparePersonalDrive')).toHaveLength(0);
+    await expect(page.getByRole('heading', { name: 'Choose your TDrive' })).toHaveCount(0);
+
+    // The second readiness check covers login-event driven drive preparation.
+    await mock.setPlan('WaitForBackendReady', resolves(null));
+    await mock.release('backend-ready');
+    await expect.poll(async () => (await mock.calls('WaitForBackendReady')).length).toBe(2);
+    await expect.poll(async () => (await mock.calls('PreparePersonalDrive'))[0]?.state).toBe('fulfilled');
+    await expect(page.locator('#success-screen.mobile-shell')).toBeVisible();
+});
+
+test('a rejected backend readiness call shows startup recovery', async ({ page }) => {
+    const mock = await bootTDrive(page, {
+        WaitForBackendReady: rejects('initialize backend: database permission denied'),
+    });
+
+    const recovery = page.getByRole('alert').filter({ hasText: 'Permission denied' });
+    await expect(recovery).toBeVisible();
+    await expect(recovery.getByRole('button', { name: 'Reload TDrive' })).toBeVisible();
+    await recovery.getByText('Technical details').click();
+    await expect(recovery).toContainText('database permission denied');
+    expect(await mock.calls('CheckLoginStatus')).toHaveLength(0);
+    expect(await mock.calls('PreparePersonalDrive')).toHaveLength(0);
+});
+
 test('prefers-reduced-motion disables entrance motion in Chromium', async ({ page }) => {
     await page.emulateMedia({ reducedMotion: 'reduce' });
     await bootTDrive(page, { CheckLoginStatus: resolves(false) });

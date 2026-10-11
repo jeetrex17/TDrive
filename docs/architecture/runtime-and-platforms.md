@@ -55,6 +55,14 @@ service directory. Do not hand-edit IDs or retain stale bindings as a shim.
 narrow `serviceHost`. They can be called before construction completes, so their
 existing unavailable-backend checks remain part of the bridge contract.
 
+`NewApp` creates a startup-completion signal before Wails can dispatch calls.
+`WaitForBackendReady` waits for that signal with the implicit bridge-call
+context. Startup publishes the initialized engine after its owned setup finishes;
+process-lock and engine-construction failures publish their causes, and shutdown
+releases pending waiters with cancellation. Login-success events may arrive
+while the engine is being constructed, so authenticated background work resumes
+only after publication without blocking the event callback.
+
 ```mermaid
 flowchart TD
     Start[Wails service startup] --> Paths[Choose mobile data and cache paths]
@@ -104,6 +112,16 @@ The application is hybrid, with Svelte owning substantial rendered surfaces.
 gateway, applies native platform/theme/text-scale state, connects auth events,
 activates backup on the dashboard, and initializes the session. Root rendering
 covers startup, authentication, loading, dashboard and fatal-error states.
+
+Session initialization waits for backend readiness before reading credential
+configuration or checking the saved login, so mobile storage paths are configured
+before those reads. Saved-drive preparation also waits, including the login-success
+event path, and `DriveService.PreparePersonalDrive` enforces the same wait at the Go
+boundary. While construction is pending, startup remains visible. Backend
+readiness errors that reach the webview use the startup recovery screen;
+native engine-construction failures still publish their cause and quit as above.
+Drive-configuration failures use drive recovery. Superseded asynchronous auth
+flows cannot open a drive after a newer flow or teardown.
 
 `AppRoot` chooses the desktop or mobile shell when startup finishes, after the
 bridge can identify the platform, and keeps that choice for the session.

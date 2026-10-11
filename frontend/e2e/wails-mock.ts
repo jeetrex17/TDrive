@@ -67,6 +67,7 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
     CheckForUpdate: resolves({ phase: 'up_to_date', current_version: '0.0.0-test' }),
     CheckLoginStatus: resolves(true),
     CheckSystemStatus: resolves('READY'),
+    WaitForBackendReady: resolves(null),
     EncryptionStatus: resolves({
         available: true,
         password_set: false,
