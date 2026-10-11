@@ -18,6 +18,7 @@ export {
 
 export type {
     AppVersionInfo,
+    BiometricStatus,
     ChannelInfo,
     DownloadResult,
     EncryptionStatus,

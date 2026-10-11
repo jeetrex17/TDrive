@@ -24,6 +24,14 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 // @ts-ignore: Unused imports
 import * as $models from "./models.js";
 
+export function BiometricStatus(): $CancellablePromise<$models.BiometricStatus> {
+    return $Call.ByID(2852618559);
+}
+
+export function CancelBiometricUnlock(): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(2690710799);
+}
+
 /**
  * ChangeEncryptionPassword verifies the current password, then re-wraps
  * the same master key with the new password. Existing encrypted files stay
@@ -42,6 +50,14 @@ export function CreateEncryptionPassword(password: string, hint: string): $Cance
     return $Call.ByID(1923480277, password, hint);
 }
 
+export function DisableBiometricUnlock(): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(131964295);
+}
+
+export function EnableBiometricUnlock(password: string): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(1463843832, password);
+}
+
 /**
  * EncryptionStatus reports whether the user has set an encryption
  * password, and whether that password has already been accepted for the
@@ -49,6 +65,10 @@ export function CreateEncryptionPassword(password: string, hint: string): $Cance
  */
 export function EncryptionStatus(): $CancellablePromise<$models.EncryptionStatus> {
     return $Call.ByID(2984400310);
+}
+
+export function UseBiometricUnlock(): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(107644490);
 }
 
 /**

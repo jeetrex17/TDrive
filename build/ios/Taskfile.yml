@@ -359,9 +359,11 @@ tasks:
           /usr/libexec/PlistBuddy -c "Set :$key $value" build/ios/xcode/main/Info.plist 2>/dev/null ||
             /usr/libexec/PlistBuddy -c "Add :$key bool $value" build/ios/xcode/main/Info.plist
         done
-        description=$(/usr/libexec/PlistBuddy -c "Print :NSPhotoLibraryUsageDescription" build/ios/Info.plist)
-        /usr/libexec/PlistBuddy -c "Set :NSPhotoLibraryUsageDescription $description" build/ios/xcode/main/Info.plist 2>/dev/null ||
-          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string $description" build/ios/xcode/main/Info.plist
+        for key in NSPhotoLibraryUsageDescription NSFaceIDUsageDescription; do
+          description=$(/usr/libexec/PlistBuddy -c "Print :$key" build/ios/Info.plist)
+          /usr/libexec/PlistBuddy -c "Set :$key $description" build/ios/xcode/main/Info.plist 2>/dev/null ||
+            /usr/libexec/PlistBuddy -c "Add :$key string $description" build/ios/xcode/main/Info.plist
+        done
         /usr/libexec/PlistBuddy -c 'Set :CFBundleExecutable $(EXECUTABLE_NAME)' build/ios/xcode/main/Info.plist
         /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString $(MARKETING_VERSION)' build/ios/xcode/main/Info.plist
         /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion $(CURRENT_PROJECT_VERSION)' build/ios/xcode/main/Info.plist

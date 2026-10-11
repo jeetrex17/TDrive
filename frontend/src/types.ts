@@ -118,6 +118,15 @@ export interface EncryptionStatusView {
     hint: string;
 }
 
+export type BiometricKind = 'touch_id' | 'face_id' | 'windows_hello' | 'biometric';
+
+export interface BiometricStatusView {
+    available: boolean;
+    enrolled: boolean;
+    kind: BiometricKind;
+    reason: string;
+}
+
 export interface FolderStat {
     id: string;
     bytes: number;
@@ -136,6 +145,14 @@ export type OperationErrorCode =
     | "invalid_encryption_password"
     | "encryption_password_already_set"
     | "encryption_policy_unavailable"
+    | "biometric_canceled"
+    | "biometric_unavailable"
+    | "biometric_invalidated"
+    | "biometric_not_enrolled"
+    | "biometric_busy"
+    | "biometric_failed"
+    | "biometric_cleanup_required"
+    | "biometric_locked_out"
     | "canceled"
     | "deadline_exceeded"
     | "not_found"

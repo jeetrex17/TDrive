@@ -23,6 +23,7 @@ env:
     ./internal/...
     ./cmd/tdrive
     ./backend/core
+    ./backend/biometric
     ./backend/crypto
     ./backend/daemon
     ./backend/media
@@ -470,6 +471,9 @@ jobs:
       - name: Run Windows native media tests
         if: runner.os == 'Windows'
         run: go test -count=1 ./backend/nativeplayer
+
+      - name: Run native biometric provider tests
+        run: go test -count=1 ./backend/biometric
 
       # Runs on Linux, Windows, and macOS (matrix) so folder download and
       # its tests execute natively on each OS instead of only

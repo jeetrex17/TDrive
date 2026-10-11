@@ -51,7 +51,38 @@ Categories) and is never regenerated automatically - see
 - `darwin/Info.dev.plist` - used for `wails3 task darwin:run` (dev-mode app
   bundle).
 
+Touch ID vault enrollment requires a signed app with provisioned data protection
+Keychain access. Ad-hoc packages and `darwin:run` retain password unlock and
+report biometrics unavailable. TDrive never falls back to the file-based Keychain.
+Supply a real signing identity, a provisioning profile for the bundle ID and an
+entitlements plist authorized by that profile, including the app's Keychain
+access group:
+
+```bash
+wails3 task darwin:package \
+  CODESIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+  ENTITLEMENTS_FILE=/path/to/tdrive.entitlements \
+  PROVISIONING_PROFILE=/path/to/tdrive.provisionprofile
+```
+
+Use the same entitlements with `darwin:sign` or `darwin:sign:notarize` via
+`-- --entitlements /path/to/tdrive.entitlements`, together with the packaging
+variables above, so re-signing preserves Keychain access. Provisioning and
+signing credentials belong outside the repository. Apple's
+[Mac Keychain guidance](https://developer.apple.com/documentation/technotes/tn3137-on-mac-keychains)
+describes the app identity and provisioning requirements. Confirm enrollment,
+unlock, cancellation and biometric changes on a signed app with physical Touch ID
+hardware; compilation alone cannot validate those behaviors.
+
 ## Windows
+
+Device unlock uses Windows Hello's protected signing credential to unwrap the
+local vault key. Windows can offer its Hello PIN as well as fingerprint or face
+authentication; TDrive's encryption password remains available. Hardware backing
+follows OS policy. API availability can depend on Hello enrollment and package
+identity, so test both installed desktop and MSIX packages on a real Hello device.
+Unsupported configurations fail closed and retain password unlock. Native COM
+tests run in the Windows CI matrix; they do not prove hardware authentication.
 
 - `windows/icon.ico` - generated from `appicon.png` by
   `common:generate:icons`, also a dependency of the Windows build.
@@ -119,3 +150,8 @@ wails3 task ios:package
 ```
 
 Physical-device builds require a signing identity and provisioning profile; see [ios/Taskfile.yml](ios/Taskfile.yml) for device and IPA tasks. CI checks simulator and device builds, but there is no public iOS distribution yet.
+
+The owned and generated iOS plists include `NSFaceIDUsageDescription`. Vault keys
+use device-only Keychain items protected by the current biometric set, supporting
+Face ID and Touch ID. Verify their prompts and enrollment invalidation on a
+provisioned physical device; simulator checks do not establish device security.

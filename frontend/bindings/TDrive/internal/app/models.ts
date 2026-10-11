@@ -26,6 +26,16 @@ export interface AppVersionInfo {
 }
 
 /**
+ * BiometricStatus contains capability metadata only; keys never enter Wails.
+ */
+export interface BiometricStatus {
+    "available": boolean;
+    "enrolled": boolean;
+    "kind": string;
+    "reason": string;
+}
+
+/**
  * ChannelInfo is the Wails-bound DTO for a drive listed in the sidebar.
  */
 export interface ChannelInfo {

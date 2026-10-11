@@ -72,6 +72,46 @@ afterEach(async () => {
 });
 
 describe('EncryptionPasswordModal secret lifecycle', () => {
+    it('offers enrolled Touch ID with password fallback and cancellation during the native prompt', () => {
+        const host = createHost('encryption-password-modal');
+        const onBiometric = vi.fn(() => {
+            encryptionPasswordModal.setPayload({ hint: '', biometric: { available: true, enrolled: true, kind: 'touch_id', reason: '' }, biometricBusy: true });
+            encryptionPasswordModal.setBusy(true);
+        });
+        const onCancel = vi.fn(() => encryptionPasswordModal.close());
+        mounted.push(mount(EncryptionPasswordModal, {
+            target: host,
+            props: { onCancel, onSubmit: vi.fn(), onBiometric },
+        }));
+        encryptionPasswordModal.open({ hint: '', biometric: { available: true, enrolled: true, kind: 'touch_id', reason: '' } });
+        flushSync();
+        enter(host, '#encryption-password-input', 'fallback-secret');
+        expect(host.querySelector('#encryption-password-biometric')?.textContent).toContain('Use Touch ID');
+        click(host, '#encryption-password-biometric');
+        expect(input(host, '#encryption-password-input').value).toBe('');
+        expect(input(host, '#encryption-password-input').disabled).toBe(true);
+        expect(host.querySelector<HTMLButtonElement>('#encryption-password-cancel')?.disabled).toBe(false);
+        click(host, '#encryption-password-cancel');
+        expect(onCancel).toHaveBeenCalledOnce();
+    });
+
+    it('does not offer a native prompt for unavailable or unenrolled biometrics', () => {
+        const host = createHost('encryption-password-modal');
+        mounted.push(mount(EncryptionPasswordModal, {
+            target: host,
+            props: { onCancel: vi.fn(), onSubmit: vi.fn(), onBiometric: vi.fn() },
+        }));
+        for (const biometric of [
+            { available: false, enrolled: true, kind: 'biometric' as const, reason: 'locked_out' },
+            { available: true, enrolled: false, kind: 'biometric' as const, reason: 'not_enrolled' },
+        ]) {
+            encryptionPasswordModal.open({ hint: '', biometric });
+            flushSync();
+            expect(host.querySelector('#encryption-password-biometric')).toBeNull();
+            expect(input(host, '#encryption-password-input').disabled).toBe(false);
+        }
+    });
+
     it('clears the password before cancel closes the form and on reopen', () => {
         const host = createHost('encryption-password-modal');
         let passwordAtCancel = 'not-called';
@@ -310,6 +350,48 @@ describe('EncryptionSetupModal secret lifecycle', () => {
 });
 
 describe('EncryptionSettingsModal secret lifecycle', () => {
+    it('enrolls only through an explicit device action and clears the fresh password before authentication', () => {
+        const host = createHost('encryption-settings-modal');
+        const onEnableBiometric = vi.fn((password: string) => {
+            expect(password).toBe('device-secret');
+            expect(input(host, '#encryption-biometric-password').value).toBe('');
+            encryptionSettingsModal.setPayload({ hint: '', biometric: { available: true, enrolled: false, kind: 'windows_hello', reason: '' }, biometricBusy: true });
+            encryptionSettingsModal.setBusy(true);
+        });
+        const onCancel = vi.fn(() => encryptionSettingsModal.close());
+        mounted.push(mount(EncryptionSettingsModal, {
+            target: host,
+            props: { onCancel, onSubmit: vi.fn(), onEnableBiometric, onDisableBiometric: vi.fn() },
+        }));
+        encryptionSettingsModal.open({ hint: '', biometric: { available: true, enrolled: false, kind: 'windows_hello', reason: '' } });
+        flushSync();
+        click(host, '#encryption-device-unlock-pane');
+        expect(onEnableBiometric).not.toHaveBeenCalled();
+        enter(host, '#encryption-biometric-password', 'device-secret');
+        click(host, '#encryption-biometric-enable');
+        expect(onEnableBiometric).toHaveBeenCalledOnce();
+        expect(host.querySelector<HTMLButtonElement>('#encryption-settings-cancel')?.disabled).toBe(false);
+        click(host, '#encryption-settings-cancel');
+        expect(onCancel).toHaveBeenCalledOnce();
+    });
+
+    it('lets users remove enrolled biometrics even when hardware is unavailable', () => {
+        const host = createHost('encryption-settings-modal');
+        const onDisableBiometric = vi.fn();
+        mounted.push(mount(EncryptionSettingsModal, {
+            target: host,
+            props: { onCancel: vi.fn(), onSubmit: vi.fn(), onEnableBiometric: vi.fn(), onDisableBiometric },
+        }));
+        encryptionSettingsModal.open({ hint: '', biometric: { available: false, enrolled: true, kind: 'touch_id', reason: 'locked_out' } });
+        flushSync();
+        click(host, '#encryption-device-unlock-pane');
+        expect(host.querySelector('#encryption-biometric-enable')).toBeNull();
+        expect(host.querySelector('#encryption-biometric-password')).toBeNull();
+        click(host, '#encryption-biometric-disable');
+        expect(onDisableBiometric).toHaveBeenCalledOnce();
+        expect(host.textContent).toContain('temporarily locked');
+    });
+
     const selectors = [
         '#encryption-current-password',
         '#encryption-new-password',

@@ -27,6 +27,7 @@ func (a *App) clearEncryptionSession() {
 	if a == nil {
 		return
 	}
+	a.encryption.cancelBiometricAttempt()
 	a.media.closeEncryptedNativeMedia()
 	a.revokeGalleryImages()
 	a.stopPhotoBackup()
@@ -44,6 +45,7 @@ func (a *App) closeMountForEncryptionTransitionLocked(ctx context.Context) error
 }
 
 func (a *App) lockEncryptionSession() error {
+	a.encryption.cancelBiometricAttempt()
 	ctx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
 	defer cancel()
 	release, err := a.acquireMountLifecycle(ctx)
@@ -69,6 +71,7 @@ func (a *App) lockEncryptionSessionLocked(ctx context.Context) error {
 // logout cleanup. A queued mount can only resume after logout has removed the
 // session data, at which point it cannot acquire an encryption key lease.
 func (a *App) runWithClosedMountForLogout(action func() error) error {
+	a.encryption.cancelBiometricAttempt()
 	ctx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
 	defer cancel()
 	release, err := a.acquireMountLifecycle(ctx)
@@ -87,6 +90,11 @@ func (a *App) runWithClosedMountForLogout(action func() error) error {
 	}
 	if err := a.lockEncryptionSessionLocked(ctx); err != nil {
 		return err
+	}
+	if a.encryption != nil {
+		if err := a.encryption.deleteBiometricEnrollment(ctx); err != nil {
+			return fmt.Errorf("remove biometric enrollment before logout: %w", err)
+		}
 	}
 	if action != nil {
 		if err := action(); err != nil {

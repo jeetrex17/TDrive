@@ -14,6 +14,7 @@ export { BackendInvocationError } from "./api/gateway";
 export * from "./api/session";
 export * from "./api/updates";
 export * from "./api/channel-sources";
+export * from "./api/biometric";
 
 export type {
     DownloadResult,

@@ -185,6 +185,7 @@ public class MainActivity extends AppCompatActivity {
         WailsForegroundService.attachRuntimeBridge(bridge);
         GalleryImage.nativeInit();
         GalleryVideo.nativeInit();
+        BiometricVault.initialize(this);
         bridge.initialize();
 
         // Set up WebView
@@ -2038,6 +2039,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onStart() {
         super.onStart();
+        BiometricVault.resumeForActivity(this);
         // Battery: only monitor system events while the app is visible.
         if (!systemReceiversRegistered) {
             registerSystemEventReceivers();
@@ -2155,6 +2157,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onStop() {
         super.onStop();
+        BiometricVault.cancelForActivity(this);
         if (systemReceiversRegistered) {
             unregisterSystemEventReceivers();
             systemReceiversRegistered = false;
@@ -2185,6 +2188,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onDestroy() {
+        BiometricVault.shutdown(this);
         super.onDestroy();
         unregisterSystemEventReceivers();
         WailsForegroundService.attachRuntimeBridge(null);

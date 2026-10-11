@@ -74,6 +74,7 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
         password_remembered: false,
         hint: '',
     }),
+    BiometricStatus: resolves({ available: false, enrolled: false, kind: 'biometric', reason: 'unsupported' }),
     GetAllFsMsgIDs: resolves([]),
     GetFileList: resolves([]),
     GetPhotoBackupState: resolves({ settings: { enabled: false }, sources: [], status: { phase: 'idle' } }),
