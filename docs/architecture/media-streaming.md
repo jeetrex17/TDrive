@@ -91,7 +91,8 @@ URL and surfaces an access error if Telegram withholds it. A private channel
 that the account left becomes unavailable on the next page or open.
 
 Connected metadata is local and keyed by Telegram account, peer kind and peer
-ID. It stores a connection generation, access hash and small profile photo.
+ID. It stores a connection generation, access hash, small profile photo and last
+observed forum capability. That cached capability is refreshed by live reads.
 The one-time migration copies the earlier `connected_channel_sources` rows as
 `channel` peers and preserves generation and cached photo. A marker prevents a
 disconnected legacy row from being copied again after restart. Listing uses
@@ -119,6 +120,52 @@ includes Telegram photos and image documents; Documents includes PDFs, text and
 unsupported attachments, which retain their Telegram fallback. Captions are
 display text and never parsed as TDX control operations. Messages and documents are read directly
 from Telegram and never entered into the TDrive drive projection.
+
+### Supergroup forum topics
+
+Topics are browsing scopes within one connected supergroup, not separate
+connections or projected folders. Opening a source refreshes whether Telegram
+currently enables forum topics. The default scope is **All topics**; a topic
+picker switches to General or another readable topic. Closed topics remain
+readable. Topic names and IDs come from Telegram, so renaming does not change
+the selected identity. General has ID `1`; ID `0` is TDrive's All topics scope.
+
+The transport uses Telegram's paginated
+[`messages.getForumTopics`](https://core.telegram.org/method/messages.getForumTopics)
+for topic metadata and
+[`messages.getReplies`](https://core.telegram.org/method/messages.getReplies)
+for a selected topic, including General with root ID `1`. File search
+sets [`messages.search.top_msg_id`](https://core.telegram.org/method/messages.search)
+for the selected topic. Topic search and file search are distinct queries.
+Topic metadata is resolved in batches; missing names do not prevent All topics
+from displaying readable media. Ordinary reply threads are not forum topics.
+
+```mermaid
+flowchart TD
+    Source[Connected supergroup] --> Capability[Refresh forum capability]
+    Capability --> All[All topics: peer history]
+    Capability --> Picker[Paged topic picker]
+    Picker --> Topic[Selected topic: scoped history or search]
+    All --> Page[Media page with source generation and topic scope]
+    Topic --> Page
+    Page --> View[Existing file list and attachment viewers]
+    View --> Open[Open exact source and message ID]
+    Open --> Session[Existing account-scoped media session]
+```
+
+The frontend includes topic selection in request ownership and first-page cache
+identity, resets media offsets on selection, and rejects late results from a
+previous topic. Topic lists, metadata and remembered selections have fixed
+budgets and are released with the signed-in dashboard. Topic-list failures keep
+All topics usable; a selected topic becoming unavailable presents an explicit
+action to view all topics rather than silently mixing in the group's files.
+Playback keeps the playlist captured from the visible list when it was opened;
+changing the browsing topic does not replace an active player's queue.
+The picker retains at most 200 topics per search; row labels retain 400 topic
+records. More topics can be found by server-side topic search. Optional All
+topics labels use a single lookup capped at two seconds without flood-wait
+retries. Custom emoji IDs remain in metadata; the picker currently uses a colored
+topic glyph rather than downloading custom emoji.
 
 Image opens use the existing header, size and pixel-budget admission checks.
 Telegram photos use the largest available JPEG variant through photo file
