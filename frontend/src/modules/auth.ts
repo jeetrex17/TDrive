@@ -14,6 +14,7 @@ import {
     submitCode as submitLoginCode,
     submitPassword as submitLoginPassword,
     checkLoginStatus,
+    waitForBackendReady,
     preparePersonalDrive,
     discoverPersonalDrives as fetchPersonalDrives,
     selectPersonalDrive as selectPersonalDriveApi,
@@ -28,7 +29,7 @@ import { loadEncryptionStatus } from './encryption';
 import { loadSelfUser } from './profile-menu';
 import { notify } from './notifications';
 import { appActions } from './app-actions';
-import { humanizeBackendError } from './errors';
+import { humanizeBackendError, toAppError } from './errors';
 import {
     authHint,
     authPhone,
@@ -43,6 +44,9 @@ import {
     authScreen,
     showAuthView,
     showDashboardView,
+    showFatalView,
+    showLoadingView,
+    appView,
 } from '../ui/app/app-store';
 import { parseDriveScanProgress, personalDriveSetup } from '../ui/auth/personal-drive-store';
 
@@ -176,6 +180,17 @@ async function discoverPersonalDrives(flowVersion: number): Promise<void> {
 export async function preparePersonalDriveAndContinue(): Promise<void> {
     const flowVersion = startPersonalDriveFlow();
 
+    if (get(appView).kind !== 'startup') showLoadingView();
+    try {
+        await waitForBackendReady();
+    } catch (err) {
+        if (!isCurrentPersonalDriveFlow(flowVersion)) return;
+        console.error('Backend startup failed:', err);
+        showFatalView(toAppError(err, { source: 'startup' }));
+        return;
+    }
+    if (!isCurrentPersonalDriveFlow(flowVersion)) return;
+
     let setup: PersonalDriveSetup;
     try {
         setup = await preparePersonalDrive();
@@ -244,15 +259,26 @@ export async function createPersonalDrive(): Promise<void> {
 }
 
 export async function initializeSession(): Promise<void> {
+    const flowVersion = startPersonalDriveFlow();
     resetAuthSubmissions();
 
+    try {
+        await waitForBackendReady();
+    } catch (err) {
+        if (!isCurrentPersonalDriveFlow(flowVersion)) return;
+        throw err;
+    }
+    if (!isCurrentPersonalDriveFlow(flowVersion)) return;
     const status = await checkSystemStatus();
+    if (!isCurrentPersonalDriveFlow(flowVersion)) return;
     if (status === 'NEEDS_SETUP') {
         showAuthView('setup');
         return;
     }
 
-    if (await checkLoginStatus()) {
+    const loggedIn = await checkLoginStatus();
+    if (!isCurrentPersonalDriveFlow(flowVersion)) return;
+    if (loggedIn) {
         await preparePersonalDriveAndContinue();
         return;
     }

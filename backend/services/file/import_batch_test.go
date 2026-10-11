@@ -1,6 +1,7 @@
 package file
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"errors"
@@ -15,6 +16,44 @@ import (
 	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
 )
+
+func TestRunImportWaitsThroughRepeatedThrottling(t *testing.T) {
+	svc, db, fakeTG, _ := newTestService(t)
+	svc.CreateFolder = contextTestFolderCreator(db)
+	events := &importTestEventRecorder{}
+	svc.Events = events
+	svc.MaxConcurrentUploads = 1
+	fakeTG.InjectFloodWaits(5)
+	body := "import survives Telegram cooldowns"
+	path := filepath.Join(t.TempDir(), "throttled.txt")
+	mkfile(t, path, body)
+
+	if err := svc.RunImport(t.Context(), personalChannelID, []string{path}, "", false, false); err != nil {
+		t.Fatalf("RunImport after repeated throttling: %v", err)
+	}
+	sent := fakeTG.SentFiles()
+	if len(sent) != 1 || sent[0].Size != int64(len(body)) {
+		t.Fatalf("accepted files = %+v, want one complete imported file", sent)
+	}
+	var downloaded bytes.Buffer
+	if err := fakeTG.DownloadFile(t.Context(), sent[0].Peer, sent[0].MsgID, &downloaded, nil); err != nil {
+		t.Fatalf("read accepted import: %v", err)
+	}
+	if downloaded.String() != body {
+		t.Fatalf("imported bytes = %q, want %q", downloaded.String(), body)
+	}
+	var files int
+	if err := db.QueryRow(`SELECT COUNT(*) FROM files WHERE channel_id = ?`, personalChannelID).Scan(&files); err != nil {
+		t.Fatalf("count projected files: %v", err)
+	}
+	if files != 1 {
+		t.Fatalf("projected files = %d, want one", files)
+	}
+	payload, ok := events.lastPayload("import_complete")
+	if !ok || payload["uploaded"] != 1 || payload["failed"] != 0 || payload["status"] != "done" {
+		t.Fatalf("import completion = %+v, present %v, want one uploaded and no failures", payload, ok)
+	}
+}
 
 func TestImportBatchIsBoundedAndPreservesPairs(t *testing.T) {
 	total := 2*importUploadBatchSize + 1

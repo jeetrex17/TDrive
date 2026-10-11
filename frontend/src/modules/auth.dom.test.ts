@@ -9,6 +9,7 @@ const authApi = vi.hoisted(() => ({
     submitCode: vi.fn(),
     submitPassword: vi.fn(),
     checkLoginStatus: vi.fn(),
+    waitForBackendReady: vi.fn(),
     preparePersonalDrive: vi.fn(),
     discoverPersonalDrives: vi.fn(),
     selectPersonalDrive: vi.fn(),
@@ -38,6 +39,7 @@ vi.mock('./notifications', () => ({
 
 import {
     createPersonalDrive,
+    initializeSession,
     preparePersonalDriveAndContinue,
     selectPersonalDrive,
 } from './auth';
@@ -56,12 +58,15 @@ function deferred<T>() {
 }
 
 beforeEach(() => {
-    vi.clearAllMocks();
+    vi.resetAllMocks();
     Object.defineProperty(window, 'triggerRefresh', {
         configurable: true,
         value: vi.fn(async () => undefined),
     });
     authApi.getMyUserId.mockResolvedValue(77);
+    authApi.waitForBackendReady.mockResolvedValue(undefined);
+    authApi.checkSystemStatus.mockResolvedValue('READY');
+    authApi.checkLoginStatus.mockResolvedValue(true);
     authApi.syncChannel.mockResolvedValue(undefined);
     collaborators.loadChannels.mockResolvedValue(undefined);
     collaborators.loadEncryptionStatus.mockResolvedValue(undefined);
@@ -70,6 +75,87 @@ beforeEach(() => {
 });
 
 describe('personal drive startup gate', () => {
+    it('keeps startup visible until the backend is ready before checking login', async () => {
+        const readiness = deferred<void>();
+        authApi.waitForBackendReady.mockReturnValueOnce(readiness.promise);
+        authApi.preparePersonalDrive.mockResolvedValue({ status: 'ready', activeChannelId: '8200' });
+
+        const startup = initializeSession();
+        await vi.waitFor(() => expect(authApi.waitForBackendReady).toHaveBeenCalledOnce());
+        expect(get(appView)).toEqual({ kind: 'startup' });
+        expect(authApi.checkSystemStatus).not.toHaveBeenCalled();
+        expect(authApi.checkLoginStatus).not.toHaveBeenCalled();
+        expect(authApi.preparePersonalDrive).not.toHaveBeenCalled();
+
+        readiness.resolve();
+        await startup;
+        expect(get(appView)).toEqual({ kind: 'dashboard' });
+    });
+
+    it('shows first-time credential setup only after backend readiness', async () => {
+        const readiness = deferred<void>();
+        authApi.waitForBackendReady.mockReturnValueOnce(readiness.promise);
+        authApi.checkSystemStatus.mockResolvedValue('NEEDS_SETUP');
+
+        const startup = initializeSession();
+        await vi.waitFor(() => expect(authApi.waitForBackendReady).toHaveBeenCalledOnce());
+        expect(get(appView)).toEqual({ kind: 'startup' });
+        expect(authApi.checkSystemStatus).not.toHaveBeenCalled();
+        readiness.resolve();
+        await startup;
+
+        expect(get(authScreen)).toBe('setup');
+        expect(authApi.checkLoginStatus).not.toHaveBeenCalled();
+    });
+
+    it('waits for backend readiness before a login event opens the saved drive', async () => {
+        const readiness = deferred<void>();
+        authApi.waitForBackendReady.mockReturnValueOnce(readiness.promise);
+        authApi.preparePersonalDrive.mockResolvedValue({ status: 'ready', activeChannelId: '8200' });
+
+        const preparation = preparePersonalDriveAndContinue();
+        await vi.waitFor(() => expect(authApi.waitForBackendReady).toHaveBeenCalledOnce());
+        expect(authApi.preparePersonalDrive).not.toHaveBeenCalled();
+        expect(get(appView)).toEqual({ kind: 'startup' });
+        readiness.resolve();
+        await preparation;
+        expect(get(appView)).toEqual({ kind: 'dashboard' });
+    });
+
+    it('rejects startup with the backend initialization cause', async () => {
+        authApi.waitForBackendReady.mockRejectedValueOnce(new Error('database permission denied'));
+
+        await expect(initializeSession()).rejects.toThrow('database permission denied');
+
+        expect(authApi.checkLoginStatus).not.toHaveBeenCalled();
+        expect(authApi.preparePersonalDrive).not.toHaveBeenCalled();
+        expect(get(authScreen)).toBeNull();
+    });
+
+    it('shows a startup failure if backend construction fails during login completion', async () => {
+        authApi.waitForBackendReady.mockRejectedValueOnce(new Error('database permission denied'));
+
+        await preparePersonalDriveAndContinue();
+
+        expect(get(appView)).toMatchObject({ kind: 'fatal', error: { source: 'startup' } });
+        expect(authApi.preparePersonalDrive).not.toHaveBeenCalled();
+        expect(authApi.discoverPersonalDrives).not.toHaveBeenCalled();
+    });
+
+    it('ignores stale readiness after a newer drive flow finishes', async () => {
+        const olderReadiness = deferred<void>();
+        authApi.waitForBackendReady.mockReturnValueOnce(olderReadiness.promise);
+        authApi.preparePersonalDrive.mockResolvedValue({ status: 'ready', activeChannelId: '8200' });
+
+        const olderFlow = preparePersonalDriveAndContinue();
+        await preparePersonalDriveAndContinue();
+        olderReadiness.resolve();
+        await olderFlow;
+
+        expect(authApi.preparePersonalDrive).toHaveBeenCalledOnce();
+        expect(collaborators.loadChannels).toHaveBeenCalledOnce();
+        expect(get(appView)).toEqual({ kind: 'dashboard' });
+    });
     it('takes the saved-config fast path directly to the dashboard', async () => {
         authApi.preparePersonalDrive.mockResolvedValue({ status: 'ready', activeChannelId: '8200' });
         const screens: unknown[] = [];
@@ -144,6 +230,7 @@ describe('personal drive startup gate', () => {
         }]);
 
         const olderRequest = preparePersonalDriveAndContinue();
+        await vi.waitFor(() => expect(authApi.preparePersonalDrive).toHaveBeenCalledOnce());
         const newerRequest = preparePersonalDriveAndContinue();
 
         newer.resolve({ status: 'selection_required', activeChannelId: '' });

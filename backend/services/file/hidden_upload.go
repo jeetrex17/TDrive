@@ -352,7 +352,7 @@ func (s *Service) sendHiddenFile(
 	}
 
 	var result tgclient.SendFileResult
-	err = s.sendRetryPolicy().Do(ctx, func() error {
+	err = s.retryVisibleSend(ctx, true, func() error {
 		if _, err := source.Seek(offset, io.SeekStart); err != nil {
 			return fmt.Errorf("seek staged upload: %w", err)
 		}

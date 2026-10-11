@@ -9,6 +9,7 @@ import {
     SaveSetup as rawSaveSetup,
     SubmitCode as rawSubmitCode,
     SubmitPassword as rawSubmitPassword,
+    WaitForBackendReady as rawWaitForBackendReady,
 } from "../../bindings/TDrive/internal/app/app";
 import {
     CreatePersonalDrive as rawCreatePersonalDrive,
@@ -70,6 +71,10 @@ export async function submitPassword(password: string): Promise<void> {
 
 export async function checkLoginStatus(): Promise<boolean> {
     return invokeBackend(rawCheckLoginStatus);
+}
+
+export async function waitForBackendReady(): Promise<void> {
+    await invokeBackend(rawWaitForBackendReady);
 }
 
 export async function preparePersonalDrive(): Promise<PersonalDriveSetup> {

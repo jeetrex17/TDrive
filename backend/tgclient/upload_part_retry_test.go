@@ -1,8 +1,10 @@
 package tgclient
 
 import (
+	"bytes"
 	"context"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -13,6 +15,7 @@ import (
 type transientUploadPartClient struct {
 	calls      int
 	firstError error
+	failures   []error
 	smallParts []*tg.UploadSaveFilePartRequest
 	bigParts   []*tg.UploadSaveBigFilePartRequest
 }
@@ -20,6 +23,9 @@ type transientUploadPartClient struct {
 func (c *transientUploadPartClient) UploadSaveFilePart(_ context.Context, request *tg.UploadSaveFilePartRequest) (bool, error) {
 	c.calls++
 	c.smallParts = append(c.smallParts, request)
+	if c.calls <= len(c.failures) {
+		return false, c.failures[c.calls-1]
+	}
 	if c.calls == 1 {
 		return false, c.firstError
 	}
@@ -29,10 +35,92 @@ func (c *transientUploadPartClient) UploadSaveFilePart(_ context.Context, reques
 func (c *transientUploadPartClient) UploadSaveBigFilePart(_ context.Context, request *tg.UploadSaveBigFilePartRequest) (bool, error) {
 	c.calls++
 	c.bigParts = append(c.bigParts, request)
+	if c.calls <= len(c.failures) {
+		return false, c.failures[c.calls-1]
+	}
 	if c.calls == 1 {
 		return false, c.firstError
 	}
 	return true, nil
+}
+
+func TestRetryingUploadClientRetainsPartThroughRepeatedThrottling(t *testing.T) {
+	t.Parallel()
+	for _, big := range []bool{false, true} {
+		t.Run(map[bool]string{false: "small", true: "big"}[big], func(t *testing.T) {
+			t.Parallel()
+			waits := []time.Duration{16 * time.Second, 15 * time.Second, time.Minute, 16 * time.Second}
+			partClient := &transientUploadPartClient{}
+			for _, wait := range waits {
+				partClient.failures = append(partClient.failures, NewFloodWaitError(wait))
+			}
+			policy := DefaultUploadFloodWaitRetryPolicy()
+			var slept []time.Duration
+			policy.Sleep = func(_ context.Context, wait time.Duration) error {
+				slept = append(slept, wait)
+				return nil
+			}
+			client := &retryingUploadClient{policy: policy, run: func(ctx context.Context, action func(uploader.Client) error) error {
+				return action(partClient)
+			}}
+			body := []byte("retained upload chunk")
+			var accepted bool
+			var err error
+			if big {
+				request := &tg.UploadSaveBigFilePartRequest{FileID: 97, FilePart: 12, FileTotalParts: 20, Bytes: body}
+				accepted, err = client.UploadSaveBigFilePart(t.Context(), request)
+				for _, attempt := range partClient.bigParts {
+					if attempt != request || attempt.FileID != 97 || attempt.FilePart != 12 || attempt.FileTotalParts != 20 || !bytes.Equal(attempt.Bytes, body) {
+						t.Fatalf("retried big request = %+v, want original body and identity", attempt)
+					}
+				}
+			} else {
+				request := &tg.UploadSaveFilePartRequest{FileID: 97, FilePart: 2, Bytes: body}
+				accepted, err = client.UploadSaveFilePart(t.Context(), request)
+				for _, attempt := range partClient.smallParts {
+					if attempt != request || attempt.FileID != 97 || attempt.FilePart != 2 || !bytes.Equal(attempt.Bytes, body) {
+						t.Fatalf("retried small request = %+v, want original body and identity", attempt)
+					}
+				}
+			}
+			if err != nil || !accepted || partClient.calls != 5 || !slices.Equal(slept, waits) {
+				t.Fatalf("part = %v, %v after %d calls and waits %v; want acceptance after all cooldowns", accepted, err, partClient.calls, slept)
+			}
+		})
+	}
+}
+
+func TestRetryingUploadClientReleasesSlotDuringCancelableCooldown(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	partClient := &transientUploadPartClient{firstError: NewFloodWaitError(time.Hour)}
+	policy := DefaultUploadFloodWaitRetryPolicy()
+	policy.Sleep = func(ctx context.Context, _ time.Duration) error {
+		slotCtx, stop := context.WithTimeout(ctx, time.Second)
+		defer stop()
+		var releases []func()
+		defer func() {
+			for _, release := range releases {
+				release()
+			}
+		}()
+		for range UploadThreads {
+			release, err := acquireUploadPartSlot(slotCtx)
+			if err != nil {
+				t.Fatalf("upload retained a slot during flood wait: %v", err)
+			}
+			releases = append(releases, release)
+		}
+		cancel()
+		return ctx.Err()
+	}
+	client := &retryingUploadClient{policy: policy, run: func(ctx context.Context, action func(uploader.Client) error) error {
+		return action(partClient)
+	}}
+	_, err := client.UploadSaveFilePart(ctx, &tg.UploadSaveFilePartRequest{})
+	if !errors.Is(err, context.Canceled) || partClient.calls != 1 {
+		t.Fatalf("upload part = %v after %d calls, want canceled after one", err, partClient.calls)
+	}
 }
 
 func TestRetryingUploadClientReacquiresAndRetriesSameTelegramPart(t *testing.T) {
@@ -107,7 +195,7 @@ func TestRetryingUploadClientDoesNotRetryPermanentRPCError(t *testing.T) {
 	want := errors.New("rpc error code 400: FILE_PARTS_INVALID")
 	partClient := &transientUploadPartClient{firstError: want}
 	client := &retryingUploadClient{
-		policy: DefaultWriteFloodWaitRetryPolicy(),
+		policy: DefaultUploadFloodWaitRetryPolicy(),
 		run: func(ctx context.Context, action func(uploader.Client) error) error {
 			return action(partClient)
 		},

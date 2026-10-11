@@ -130,9 +130,9 @@ type Service struct {
 	// 2 GiB cap; it is raised to the 4 GiB Premium cap once the account is known
 	// to be Premium. See maxUploadBytes.
 	MaxUploadBytes int64
-	// FloodWaitRetry bounds FLOOD_WAIT and transient-transport retries for
-	// direct Telegram transfers (uploads, downloads, deletes). The zero value
-	// uses tgclient's bounded production defaults.
+	// FloodWaitRetry overrides retry behavior for direct Telegram transfers.
+	// The zero value waits through upload throttling until cancellation and
+	// keeps download, delete and transport-failure retries bounded.
 	FloodWaitRetry tgclient.FloodWaitRetryPolicy
 	// MaxConcurrentUploads bounds active uploads across this Service, including
 	// GUI/import/daemon calls and hidden mount writes. Set it before the first
@@ -250,16 +250,26 @@ const (
 	maxUploadConcurrency     = 8
 )
 
-// sendRetryPolicy returns the bounded retry policy shared by direct Telegram
-// sends, deletes, and downloads. The zero-value FloodWaitRetry field selects
-// tgclient's production defaults.
+// sendRetryPolicy returns the bounded retry policy for deletes and downloads.
+// The zero-value FloodWaitRetry field selects tgclient's production defaults.
 func (s *Service) sendRetryPolicy() tgclient.FloodWaitRetryPolicy {
-	p := s.FloodWaitRetry
-	if p.MaxRetries == 0 && p.MaxWait == 0 && p.MaxTotalWait == 0 && p.Sleep == nil &&
-		p.MaxTransientRetries == 0 && p.TransientBackoff == 0 && p.MaxTransientBackoff == 0 && p.TransientJitter == 0 {
+	if !s.hasCustomRetryPolicy() {
 		return tgclient.DefaultWriteFloodWaitRetryPolicy()
 	}
-	return p
+	return s.FloodWaitRetry
+}
+
+func (s *Service) uploadRetryPolicy() tgclient.FloodWaitRetryPolicy {
+	if !s.hasCustomRetryPolicy() {
+		return tgclient.DefaultUploadFloodWaitRetryPolicy()
+	}
+	return s.FloodWaitRetry
+}
+
+func (s *Service) hasCustomRetryPolicy() bool {
+	p := s.FloodWaitRetry
+	return p.WaitUntilCanceled || p.MaxRetries != 0 || p.MaxWait != 0 || p.MaxTotalWait != 0 || p.Sleep != nil ||
+		p.MaxTransientRetries != 0 || p.TransientBackoff != 0 || p.MaxTransientBackoff != 0 || p.TransientJitter != 0
 }
 
 func supportsIdempotentSends(client tgclient.Client) bool {
@@ -270,9 +280,10 @@ func supportsIdempotentSends(client tgclient.Client) bool {
 // retryVisibleSend uses Telegram random_id idempotency whenever the client
 // supports it. A legacy client still retries failures known to precede a send,
 // but must surface a lost receipt rather than risk publishing a duplicate.
+// Hidden body sends share this helper to preserve unknown acceptance on cancel.
 func (s *Service) retryVisibleSend(ctx context.Context, idempotent bool, action func() error) error {
 	var outcomeUnknown error
-	err := s.sendRetryPolicy().Do(ctx, func() error {
+	err := s.uploadRetryPolicy().Do(ctx, func() error {
 		err := action()
 		if errors.Is(err, tgclient.ErrSendOutcomeUnknown) {
 			outcomeUnknown = err
