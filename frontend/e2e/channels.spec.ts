@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { expect, test, type Locator } from '@playwright/test';
 import { RED_BASE64 } from './gallery-fixtures';
-import { bootTDrive, rejects, resolves } from './wails-mock';
+import { bootTDrive, deferred, rejects, resolves, test as mockTest } from './wails-mock';
 
 const source = { peer_kind: 'channel', peer_id: 50, channel_id: 50, title: 'Field Recordings', username: 'fieldrec', connected: true, protected: false, available: true, account_id: 7, generation: 'source-a' };
 const candidate = { ...source, peer_id: 60, channel_id: 60, title: 'Tech Talks', username: 'techtalks', connected: false, generation: '' };
@@ -522,5 +522,96 @@ for (const { platform, protectedContent } of ['desktop', 'ios', 'android'].flatM
         }
         expect(await mock.calls('OpenStream')).toEqual([]);
         expect(await mock.calls('OpenMedia')).toEqual([]);
+    });
+}
+
+for (const mobile of [false, true]) {
+    mockTest(`${mobile ? 'mobile' : 'desktop'} forum topics scope files and dismiss accessibly`, async ({ page }) => {
+        if (mobile) await page.setViewportSize({ width: 390, height: 844 });
+        const forum = { ...source, peer_kind: 'supergroup', forum: true };
+        const general = { id: 1, title: 'Announcements', icon_color: 0, icon_emoji_id: '', closed: false, hidden: false };
+        const movies = { ...general, id: 42, title: 'Movies', closed: true };
+        const music = { ...general, id: 84, title: 'Music' };
+        const all = { ...mediaPage, peer_kind: 'supergroup', forum: true, topic_id: 0, topics: [general, movies, music], items: [{ ...media, topic_id: 42 }] };
+        const firstTopics = { peer_kind: 'supergroup', peer_id: 50, account_id: 7, generation: 'source-a', forum: true, topics: [general, movies], next_offset_date: 1, next_offset_id: 42, next_offset_topic: 42, has_more: true };
+        const mock = await bootTDrive(page, {
+            ListConnectedChannelSources: resolves([forum]),
+            ListChannelMedia: resolves(all),
+            ListChannelSourceTopics: resolves(firstTopics),
+            ListChannelMediaByTopic: resolves({ ...all, topic_id: 42 }),
+        }, mobile ? { url: '/?mobile=ios' } : {});
+        if (mobile) {
+            await page.getByRole('button', { name: /Switch drive/ }).click();
+            await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Supergroup Field Recordings', exact: true }).click();
+        } else {
+            await page.locator('.sidebar').getByRole('button', { name: 'Supergroup Field Recordings', exact: true }).click();
+        }
+        const trigger = page.getByRole('button', { name: 'Choose topic: All topics' });
+        await expect(page.locator('.channel-row-topic')).toContainText('Movies');
+        await trigger.click();
+        const picker = page.getByRole('dialog', { name: 'Choose a topic' });
+        await expect(picker).toBeVisible();
+        await expect(picker.getByRole('button', { name: 'Announcements', exact: true })).toBeVisible();
+        await expect(picker.getByRole('button', { name: 'General', exact: true })).toHaveCount(0);
+        // Keyboard ownership stays inside the picker and Escape returns to its trigger.
+        await page.keyboard.press('Shift+Tab');
+        expect(await picker.evaluate((node) => node.contains(document.activeElement))).toBe(true);
+        await page.keyboard.press('Escape');
+        await expect(picker).toBeHidden();
+        await expect(trigger).toBeFocused();
+        await trigger.click();
+        if (mobile) {
+            expect(await page.evaluate(() => (window as unknown as { __tdriveHandleBack: () => boolean }).__tdriveHandleBack())).toBe(true);
+            await expect(picker).toBeHidden();
+            await expect(trigger).toBeFocused();
+            await trigger.click();
+        }
+        await mock.setPlan('ListChannelSourceTopics', resolves({ ...firstTopics, topics: [music], has_more: false }));
+        await picker.getByRole('button', { name: 'Load more topics' }).click();
+        await expect(picker.getByRole('button', { name: 'Music', exact: true })).toBeVisible();
+        expect((await mock.calls('ListChannelSourceTopics')).slice(-1)[0]?.args.slice(2, 5)).toEqual([1, 42, 42]);
+        await picker.getByRole('button', { name: 'Movies', exact: true }).click();
+        await expect(page.getByRole('button', { name: 'Choose topic: Movies' })).toBeVisible();
+        await expect(page.getByRole('button', { name: /^Play forest-dawn/ })).toBeVisible();
+        await expect(page.locator('.channel-row-topic')).toHaveCount(0);
+        // Returning to a group restores its session selection, never another
+        // group's cached first page or the previously viewed All scope.
+        if (mobile) {
+            await page.getByRole('button', { name: 'Back', exact: true }).click();
+            await page.getByRole('button', { name: /Switch drive/ }).click();
+            await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Supergroup Field Recordings', exact: true }).click();
+        } else {
+            await page.getByRole('button', { name: 'Personal', exact: true }).click();
+            await page.locator('.sidebar').getByRole('button', { name: 'Supergroup Field Recordings', exact: true }).click();
+        }
+        await expect(page.getByRole('button', { name: 'Choose topic: Movies' })).toBeVisible();
+        await expect.poll(async () => (await mock.calls('ListChannelMediaByTopic')).slice(-1)[0]?.args[2]).toBe(42);
+        if (mobile) {
+            const box = await page.getByRole('button', { name: 'Choose topic: Movies' }).boundingBox();
+            expect(box!.height).toBeGreaterThanOrEqual(44);
+            await page.getByRole('button', { name: 'Search posts' }).click();
+        }
+        const search = page.getByRole('textbox', { name: 'Search files in Movies' });
+        await expect(search).toBeVisible();
+        await search.fill('forest');
+        await expect.poll(async () => (await mock.calls('ListChannelMediaByTopic')).slice(-1)[0]?.args[5]).toBe('forest');
+        expect((await mock.calls('ListChannelMediaByTopic')).slice(-1)[0]?.args[2]).toBe(42);
+        expect((await mock.calls('ListChannelMediaByTopic')).slice(-1)[0]?.args.slice(-2)).toEqual([7, 'source-a']);
+        await search.fill('');
+        await expect.poll(async () => (await mock.calls('ListChannelMediaByTopic')).slice(-1)[0]?.args[5]).toBe('');
+        if (mobile) await page.getByRole('button', { name: 'Hide search' }).click();
+        await mock.setPlan('ListChannelMediaByTopic', deferred('old-movies', { ...all, topic_id: 42, items: [{ ...media, topic_id: 42, name: 'late-movie.mp4' }] }));
+        await page.getByRole('button', { name: 'Videos', exact: true }).click();
+        await expect.poll(async () => (await mock.calls('ListChannelMediaByTopic')).slice(-1)[0]?.state).toBe('pending');
+        await page.getByRole('button', { name: 'Choose topic: Movies' }).click();
+        await picker.getByRole('button', { name: 'All topics', exact: true }).click();
+        await expect(page.getByRole('button', { name: /^Play forest-dawn/ })).toBeVisible();
+        await mock.release('old-movies');
+        await expect(page.getByRole('button', { name: /^Play late-movie/ })).toHaveCount(0);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+        await mock.setPlan('ListChannelSourceTopics', resolves({ ...firstTopics, topics: [general, movies, music], has_more: false }));
+        await page.getByRole('button', { name: 'Choose topic: All topics' }).click();
+        await expect(picker.getByRole('button', { name: 'Music', exact: true })).toBeInViewport();
+        await page.screenshot({ path: `test-results/forum-${mobile ? 'mobile' : 'desktop'}.png` });
     });
 }

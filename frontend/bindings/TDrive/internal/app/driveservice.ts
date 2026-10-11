@@ -117,8 +117,12 @@ export function LeaveSharedDrive(channelID: number): $CancellablePromise<void> {
     return $Call.ByID(1505555140, channelID);
 }
 
-export function ListChannelMedia(peerKind: string, peerID: number, offsetID: number, limit: number, search: string, kind: string): $CancellablePromise<channelsource$0.MediaPage> {
-    return $Call.ByID(3045371403, peerKind, peerID, offsetID, limit, search, kind);
+export function ListChannelMedia(peerKind: string, peerID: number, offsetID: number, limit: number, search: string, kind: string, expectedAccountID: number, expectedGeneration: string): $CancellablePromise<channelsource$0.MediaPage> {
+    return $Call.ByID(3045371403, peerKind, peerID, offsetID, limit, search, kind, expectedAccountID, expectedGeneration);
+}
+
+export function ListChannelMediaByTopic(peerKind: string, peerID: number, topicID: number, offsetID: number, limit: number, search: string, kind: string, expectedAccountID: number, expectedGeneration: string): $CancellablePromise<channelsource$0.MediaPage> {
+    return $Call.ByID(757295937, peerKind, peerID, topicID, offsetID, limit, search, kind, expectedAccountID, expectedGeneration);
 }
 
 /**
@@ -126,6 +130,13 @@ export function ListChannelMedia(peerKind: string, peerID: number, offsetID: num
  */
 export function ListChannelSourceCandidates(): $CancellablePromise<channelsource$0.SourceInfo[] | null> {
     return $Call.ByID(1986335738);
+}
+
+/**
+ * ListChannelSourceTopics pages the topic picker within one connection generation.
+ */
+export function ListChannelSourceTopics(peerKind: string, peerID: number, offsetDate: number, offsetID: number, offsetTopic: number, limit: number, query: string, expectedAccountID: number, expectedGeneration: string): $CancellablePromise<channelsource$0.ForumTopicPage> {
+    return $Call.ByID(1169234196, peerKind, peerID, offsetDate, offsetID, offsetTopic, limit, query, expectedAccountID, expectedGeneration);
 }
 
 /**

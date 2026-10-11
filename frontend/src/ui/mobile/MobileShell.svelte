@@ -33,7 +33,7 @@
     import { sourceKey } from '../channels/channel-model';
     import { closeChannel, openChannel } from '../channels/channel-store';
     import { openChannelPost, openInTelegram, recentChannelPages, showChannelActions, showPostActions } from '../../modules/channel-sources';
-    import { listChannelMedia } from '../../api';
+    import { listChannelSourceTopics, listChannelMedia } from '../../api';
 
     interface Props {
         dashboardVisible: boolean;
@@ -230,6 +230,7 @@
                         mobile
                         source={$openChannel}
                         fetchMedia={listChannelMedia}
+                        fetchTopics={listChannelSourceTopics}
                         onOpenPost={openChannelPost}
                         onOpenTelegram={openInTelegram}
                         onActions={showChannelActions}

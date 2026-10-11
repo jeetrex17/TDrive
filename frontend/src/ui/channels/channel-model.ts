@@ -1,3 +1,4 @@
+import type { ChannelTopic } from './channel-topics';
 import type { MediaOpenResult } from '../../api';
 import type { VideoOpenTarget, VideoPlaylistLaunch } from '../../modules/video/video-queue';
 import { formatBytes, formatDuration, splitNameAndExt } from '../../utils';
@@ -17,6 +18,7 @@ export interface ChannelSource {
     protected: boolean;
     /** Telegram can currently serve this peer to the signed-in account. */
     available: boolean;
+    forum?: boolean;
     /** Telegram stopped scanning one dialog folder at its fixed safety limit. */
     candidatesTruncated?: boolean;
     /** Present only after this exact public handle was verified through Telegram. */
@@ -48,6 +50,7 @@ export function sourceHandle(source: Pick<ChannelSource, 'peerKind' | 'username'
 
 export interface ChannelMediaItem {
     msgId: number;
+    topicId?: number;
     date: number;
     name: string;
     size: number;
@@ -67,6 +70,9 @@ export interface ChannelMediaPage {
     peerId: number;
     accountId: string;
     generation: string;
+    forum?: boolean;
+    topicId?: number;
+    topics?: readonly ChannelTopic[];
     items: readonly ChannelMediaItem[];
     nextOffsetId: number;
     hasMore: boolean;
@@ -75,6 +81,9 @@ export interface ChannelMediaPage {
 export interface ChannelMediaRequest {
     peerKind: SourcePeerKind;
     peerId: number;
+    accountId: string;
+    generation: string;
+    topicId?: number;
     offsetId: number;
     limit: number;
     search: string;
@@ -85,8 +94,10 @@ export type ChannelMediaFetcher = (request: ChannelMediaRequest) => Promise<Chan
 
 /** First pages of channels already opened this session, to show at once on a return visit. */
 export interface ChannelPageMemory {
-    get(source: ChannelSource): readonly ChannelMediaItem[] | undefined;
-    set(source: ChannelSource, items: readonly ChannelMediaItem[]): void;
+    get(source: ChannelSource, topicId?: number): readonly ChannelMediaItem[] | undefined;
+    set(source: ChannelSource, items: readonly ChannelMediaItem[], topicId?: number): void;
+    selectedTopic?(source: ChannelSource): ChannelTopic | undefined;
+    selectTopic?(source: ChannelSource, topic: ChannelTopic | undefined): void;
 }
 
 export type ChannelMediaView =
@@ -121,6 +132,9 @@ export function createChannelMediaPager(fetchPage: ChannelMediaFetcher) {
     let source: ChannelSource | null = null;
     let search = '';
     let kind: ChannelMediaKind = 'all';
+    let topicId = 0;
+    let forum = false;
+    let topics: readonly ChannelTopic[] = [];
     let nextOffsetId = 0;
     let hasMore = false;
     let loading = false;
@@ -147,6 +161,9 @@ export function createChannelMediaPager(fetchPage: ChannelMediaFetcher) {
             const page = await fetchPage({
                 peerKind: target.peerKind,
                 peerId: target.peerId,
+                accountId: target.accountId,
+                generation: target.generation,
+                topicId,
                 offsetId: append ? nextOffsetId : 0,
                 limit: PAGE_SIZE,
                 search,
@@ -154,13 +171,16 @@ export function createChannelMediaPager(fetchPage: ChannelMediaFetcher) {
             });
             if (current !== version) return view;
             if (page.peerKind !== target.peerKind || page.peerId !== target.peerId || page.accountId !== target.accountId
-                || page.generation !== target.generation) {
+                || page.generation !== target.generation || (page.topicId ?? 0) !== topicId) {
                 throw new Error('This channel changed while it was loading. Try again.');
             }
+            forum = Boolean(page.forum);
+            topics = page.topics ?? [];
             const seen = new Set(previous.map((item) => item.msgId));
             const fresh: ChannelMediaItem[] = [];
             for (const item of page.items) {
                 if (item.msgId <= 0 || seen.has(item.msgId)) continue;
+                if (topicId > 0 && item.topicId !== topicId) throw new Error('This response belongs to another topic. Try again.');
                 seen.add(item.msgId);
                 fresh.push(item);
             }
@@ -182,8 +202,16 @@ export function createChannelMediaPager(fetchPage: ChannelMediaFetcher) {
     return {
         snapshot: (): ChannelMediaView => view,
         load,
+        scope: () => ({ forum, topics }),
+        setTopic(nextTopicId: number): void {
+            topicId = nextTopicId;
+            reset();
+        },
         select(next: ChannelSource | null): void {
             source = next;
+            topicId = 0;
+            forum = Boolean(next?.forum);
+            topics = [];
             reset();
         },
         setFilter(nextSearch: string, nextKind: ChannelMediaKind): void {

@@ -449,6 +449,7 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 
 	return HistoryMessage{
 		MsgID:              int64(fullMsg.ID),
+		TopicID:            forumMessageTopic(fullMsg),
 		Date:               int64(fullMsg.Date),
 		FromID:             fromID,
 		Outgoing:           fullMsg.Out,

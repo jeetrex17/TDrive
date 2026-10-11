@@ -6,7 +6,7 @@
     import Link2Icon from '@lucide/svelte/icons/link-2';
     import SearchIcon from '@lucide/svelte/icons/search';
     import Trash2Icon from '@lucide/svelte/icons/trash-2';
-    import { isMobilePlatform, listChannelMedia, listMountableDrives } from '../api';
+    import { isMobilePlatform, listChannelSourceTopics, listChannelMedia, listMountableDrives } from '../api';
     import tdriveLogo from '../assets/images/tdrive-logo.png';
     import { openEncryptionSettingsModal } from '../modules/modals/encryption-settings';
     import { openLogoutModal } from '../modules/modals/logout';
@@ -350,6 +350,7 @@
                 <ChannelView
                     source={$openChannel}
                     fetchMedia={listChannelMedia}
+                        fetchTopics={listChannelSourceTopics}
                     onOpenPost={openChannelPost}
                     onOpenTelegram={openInTelegram}
                     onPostActions={showPostActions}
