@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import ChannelView from './ChannelView.svelte';
+import type { ChannelTopicFetcher } from './channel-topics';
 import type { ChannelMediaFetcher, ChannelMediaItem, ChannelMediaPage, ChannelPageMemory, ChannelSource } from './channel-model';
 
 const SOURCE: ChannelSource = { peerKind: 'channel', peerId: 51, title: 'Field Recordings', username: 'fieldrec', connected: true, protected: false, available: true, accountId: '7', generation: 'g' };
@@ -23,8 +24,8 @@ async function settle(): Promise<void> {
     flushSync();
 }
 
-function render(source: ChannelSource, fetchMedia: ChannelMediaFetcher, recentPages?: ChannelPageMemory) {
-    const props = { source, fetchMedia, onOpenPost: vi.fn(), onOpenTelegram: vi.fn(), onPostActions: vi.fn(), recentPages };
+function render(source: ChannelSource, fetchMedia: ChannelMediaFetcher, recentPages?: ChannelPageMemory, fetchTopics?: ChannelTopicFetcher) {
+    const props = { source, fetchMedia, onOpenPost: vi.fn(), onOpenTelegram: vi.fn(), onPostActions: vi.fn(), recentPages, fetchTopics };
     host = document.createElement('div');
     document.body.append(host);
     app = mount(ChannelView, { target: host, props });
@@ -177,6 +178,42 @@ describe('ChannelView', () => {
         await settle();
         expect(fetchMedia).toHaveBeenCalledTimes(3);
         expect(fetchMedia).toHaveBeenLastCalledWith(expect.objectContaining({ peerKind: 'channel', peerId: 51, offsetId: 800 }));
+    });
+
+    it('scopes files, playlist and search to the chosen topic and preserves unavailable selections', async () => {
+        const forumSource = { ...SOURCE, peerKind: 'supergroup' as const, forum: true };
+        const topics = [{ id: 1, title: 'Announcements', iconColor: 0, iconEmojiId: '', closed: false, hidden: false }, { id: 42, title: 'Movies', iconColor: 0, iconEmojiId: '', closed: true, hidden: false }];
+        const fetchTopics: ChannelTopicFetcher = vi.fn(async () => ({ peerKind: forumSource.peerKind, peerId: 51, accountId: '7', generation: 'g', forum: true, topics, next: { offsetDate: 0, offsetId: 0, offsetTopic: 0 }, hasMore: false }));
+        let missing = false;
+        const movie = { ...VIDEO, topicId: 42 };
+        const fetchMedia: ChannelMediaFetcher = vi.fn(async (request) => {
+            if (missing && request.topicId) throw Object.assign(new Error('This topic is no longer available.'), { code: 'topic_unavailable' });
+            return { peerKind: 'supergroup' as const, peerId: 51, accountId: '7', generation: 'g', forum: true, topicId: request.topicId, topics, items: [movie], nextOffsetId: 0, hasMore: false };
+        });
+        const props = render(forumSource, fetchMedia, undefined, fetchTopics);
+        await settle();
+        expect(host?.querySelector('.channel-row-topic')?.textContent).toContain('Movies');
+        host?.querySelector<HTMLButtonElement>('[aria-label="Choose topic: All topics"]')?.click();
+        await settle();
+        const choose = (name: string) => Array.from(host?.querySelectorAll<HTMLButtonElement>('.topic-option') ?? []).find((button) => button.textContent?.trim() === name)?.click();
+        expect(host?.textContent).toContain('Announcements');
+        expect(host?.textContent).not.toContain('General');
+        choose('Movies');
+        await settle();
+        expect(fetchMedia).toHaveBeenLastCalledWith(expect.objectContaining({ topicId: 42, offsetId: 0 }));
+        expect(host?.querySelector('input[placeholder="Search files in Movies"]')).not.toBeNull();
+        expect(host?.querySelector('.channel-row-topic')).toBeNull();
+        rowNamed(/^Play Dawn/)?.click();
+        expect(props.onOpenPost).toHaveBeenCalledWith(movie, expect.objectContaining({ title: 'Field Recordings · Movies' }), [movie]);
+        missing = true;
+        kindButton('Videos')?.click();
+        await settle();
+        expect(host?.textContent).toContain('Topic unavailable');
+        expect(host?.querySelector('[aria-label="Choose topic: Movies"]')).not.toBeNull();
+        Array.from(host?.querySelectorAll<HTMLButtonElement>('button') ?? []).find((button) => button.textContent === 'View all topics')?.click();
+        await settle();
+        expect(fetchMedia).toHaveBeenLastCalledWith(expect.objectContaining({ topicId: 0 }));
+        expect(rowNamed(/^Play Dawn/)).toBeDefined();
     });
 
     it('offers a retry when the first page fails', async () => {

@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onMount, tick } from 'svelte';
+    import { onMount, tick, untrack } from 'svelte';
     import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
     import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
     import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
@@ -13,6 +13,8 @@
     import { setScreenProtect } from '../../api';
     import { acquireScreenProtection, bindViewOnlyGuards } from '../viewers/view-only-guards';
     import { bindLongPress } from '../file-list/touch';
+    import ChannelTopicPicker from './ChannelTopicPicker.svelte';
+    import { mergeTopicMetadata, type ChannelTopic, type ChannelTopicFetcher } from './channel-topics';
     import ChannelSortMenu from './ChannelSortMenu.svelte';
     import { fileTypeFamily, fileTypeIcon, type FileTypeFamily } from '../file-list/file-type';
     import { pushSheet } from '../modals/sheet-stack';
@@ -41,6 +43,7 @@
     interface Props {
         source: ChannelSource;
         fetchMedia: ChannelMediaFetcher;
+        fetchTopics?: ChannelTopicFetcher;
         /** `posts` is the list as shown, which a video queues as its playlist. */
         onOpenPost: (item: ChannelMediaItem, source: ChannelSource, posts: readonly ChannelMediaItem[]) => void | Promise<void>;
         onOpenTelegram: (url: string) => void;
@@ -54,7 +57,7 @@
         mobile?: boolean;
     }
 
-    let { source, fetchMedia, onOpenPost, onOpenTelegram, onActions, onPostActions, onBack, recentPages, mobile = false }: Props = $props();
+    let { source, fetchMedia, fetchTopics, onOpenPost, onOpenTelegram, onActions, onPostActions, onBack, recentPages, mobile = false }: Props = $props();
 
     const KINDS: ReadonlyArray<{ value: ChannelMediaKind; label: string }> = [
         { value: 'all', label: 'All' },
@@ -68,6 +71,9 @@
 
     const pager = createChannelMediaPager((request) => fetchMedia(request));
 
+    let selectedTopic = $state<ChannelTopic | undefined>(untrack(() => recentPages?.selectedTopic?.(source)));
+    let forum = $state(untrack(() => Boolean(source.forum || selectedTopic)));
+    let topicNames = $state<ReadonlyMap<number, ChannelTopic>>(new Map());
     let view = $state<ChannelMediaView>({ status: 'idle' });
     let kind = $state<ChannelMediaKind>('all');
     let sort = $state<ChannelSort>('newest');
@@ -83,40 +89,77 @@
     // a channel with few videos the end stays in view, so without this it
     // would page through the whole history, request after request.
     let olderAddedRows = $state(true);
+    let viewVersion = 0;
     let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
     const items = $derived('items' in view ? view.items : []);
     // What the list shows, and so what a video queues, in the chosen order.
     const shown = $derived(sortPosts(items, sort));
+    const browsingSource = $derived(selectedTopic ? { ...source, title: `${source.title} · ${selectedTopic.title}` } : source);
+    const searchLabel = $derived(selectedTopic ? `Search files in ${selectedTopic.title}` : 'Search files');
+    const topicUnavailable = $derived(view.status === 'error' && typeof view.error === 'object' && view.error !== null && 'code' in view.error && ['topic_unavailable', 'forum_unavailable'].includes(String(view.error.code)));
     const handle = $derived(sourceHandle(source));
     const failure = $derived(view.status === 'error' ? toAppError(view.error, { source: 'backend' }) : null);
     const empty = $derived.by(() => {
         if (appliedQuery) {
             return {
                 title: `No results for “${appliedQuery}”`,
-                body: kind === 'all' ? 'Try a different word.' : 'Switch to All to search every post.',
+                body: kind === 'all' ? 'Try a different word.' : 'Choose All file types to include every format.',
             };
         }
         const noun = { all: 'files', video: 'videos', audio: 'audio', image: 'images', document: 'documents' }[kind];
         const older = view.status === 'empty' && view.hasMore;
         return {
-            title: `No ${noun} yet`,
+            title: selectedTopic ? `No ${noun} in ${selectedTopic.title}` : `No ${noun} yet`,
             body: older ? 'None in the latest posts.' : 'Images, documents, video and audio show up here.',
         };
     });
 
     async function load(append = false): Promise<void> {
+        if (pager.snapshot().status === 'loading') return;
+        const current = ++viewVersion;
         const shown = items.length;
         const pending = pager.load({ append });
         view = pager.snapshot();
-        view = await pending;
+        const fresh = await pending;
+        if (current !== viewVersion) return;
+        view = fresh;
+        syncTopicMetadata();
         olderAddedRows = !append || items.length > shown;
         if (!append) remember();
     }
 
     // The unfiltered first page is what a return visit shows at once.
     function remember(): void {
-        if (view.status === 'ready' && kind === 'all' && !appliedQuery) recentPages?.set(source, view.items);
+        if (view.status === 'ready' && kind === 'all' && !appliedQuery) recentPages?.set(source, view.items, selectedTopic?.id ?? 0);
+    }
+
+    function syncTopicMetadata(): void {
+        const scope = pager.scope();
+        if (view.status === 'ready' || view.status === 'empty') forum = scope.forum;
+        rememberTopics(scope.topics);
+    }
+
+    function rememberTopics(topics: readonly ChannelTopic[]): void {
+        const next = mergeTopicMetadata(topicNames, topics);
+        topicNames = next;
+        if (selectedTopic && next.has(selectedTopic.id)) {
+            selectedTopic = next.get(selectedTopic.id);
+            recentPages?.selectTopic?.(source, selectedTopic);
+        }
+    }
+
+    function chooseTopic(next: ChannelTopic | undefined): void {
+        if ((next?.id ?? 0) === (selectedTopic?.id ?? 0)) return;
+        selectedTopic = next;
+        recentPages?.selectTopic?.(source, next);
+        pager.setTopic(next?.id ?? 0);
+        reload();
+    }
+
+    function topicLabel(item: ChannelMediaItem): string {
+        if (!forum || selectedTopic || !item.topicId) return '';
+        return topicNames.get(item.topicId)?.title ?? `Topic ${item.topicId}`;
     }
 
     function reload(): void {
@@ -200,14 +243,14 @@
     }
 
     function rowLabel(item: ChannelMediaItem): string {
-        const parts = [mediaTitle(item), mediaMeta(item).replace(/ · /g, ', '), badge(item)].filter(Boolean).join(', ');
+        const parts = [mediaTitle(item), mediaMeta(item).replace(/ · /g, ', '), topicLabel(item), badge(item)].filter(Boolean).join(', ');
         if (isOpenable(item)) return `${mediaActionLabel(item)} ${parts}`;
         return item.telegramUrl ? `Open in Telegram: ${parts}` : `Unavailable in TDrive: ${parts}`;
     }
 
     function openPostActions(event: MouseEvent, item: ChannelMediaItem): void {
         event.preventDefault();
-        onPostActions(event.clientX, event.clientY, item, source, shown);
+        onPostActions(event.clientX, event.clientY, item, browsingSource, shown);
     }
 
     // The phone row's trailing "…": a visible way into the same actions the long
@@ -215,7 +258,7 @@
     function openRowActions(event: MouseEvent, item: ChannelMediaItem): void {
         event.stopPropagation();
         const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-        onPostActions(rect.left, rect.bottom + 4, item, source, shown);
+        onPostActions(rect.left, rect.bottom + 4, item, browsingSource, shown);
     }
 
     // Arrow keys walk the rows the way they walk the file list.
@@ -249,7 +292,7 @@
         if (!mobile || !list) return;
         return bindLongPress(list, '.channel-row', (row, x, y) => {
             const item = items.find((entry) => String(entry.msgId) === row.dataset.msgId);
-            if (item) onPostActions(x, y, item, source, shown);
+            if (item) onPostActions(x, y, item, browsingSource, shown);
         });
     });
 
@@ -262,19 +305,24 @@
 
     onMount(() => {
         pager.select(source);
-        const recent = recentPages?.get(source);
+        pager.setTopic(selectedTopic?.id ?? 0);
+        const recent = recentPages?.get(source, selectedTopic?.id ?? 0);
         if (recent?.length) {
             // Shown until the fresh page replaces it. No more pages are asked
             // for in the meantime, so nothing appends to rows about to go.
             view = { status: 'ready', items: recent, hasMore: false, capped: false };
+            const current = ++viewVersion;
             void pager.load().then((fresh) => {
+                if (current !== viewVersion) return;
                 view = fresh;
+                syncTopicMetadata();
                 remember();
             });
         } else {
             void load();
         }
         return () => {
+            viewVersion += 1;
             clearTimeout(searchTimer);
             pager.invalidate();
         };
@@ -299,7 +347,7 @@
             type="button"
             title={mediaDetails(item) || undefined}
             aria-label={rowLabel(item)}
-            onclick={() => void onOpenPost(item, source, shown)}
+            onclick={() => void onOpenPost(item, browsingSource, shown)}
             oncontextmenu={mobile ? undefined : (event) => openPostActions(event, item)}
         >
             <span class="file-type-icon channel-chip" aria-hidden="true">
@@ -310,7 +358,7 @@
             </span>
             <span class="channel-row-text">
                 <span class="channel-row-title">{mediaTitle(item)}</span>
-                <span class="channel-row-meta">{mediaMeta(item)}</span>
+                <span class="channel-row-meta">{mediaMeta(item)}{#if topicLabel(item)}<span class="channel-row-topic"> · {topicLabel(item)}</span>{/if}</span>
             </span>
             {#if label}<span class="channel-row-badge" title={label === 'Protected' ? 'View only. Saving and forwarding are disabled.' : undefined}>{label}</span>{/if}
         </button>
@@ -376,13 +424,14 @@
                         type="text"
                         enterkeyhint="search"
                         maxlength="120"
-                        placeholder="Search posts"
+                        placeholder={searchLabel}
                         autocomplete="off"
                         spellcheck="false"
-                        aria-label={`Search posts in ${source.title}`}
+                        aria-label={selectedTopic ? searchLabel : `Search files in ${source.title}`}
                     />
                 </div>
             </div>
+            {#if forum && fetchTopics}<ChannelTopicPicker {source} {mobile} fetchTopics={fetchTopics} selected={selectedTopic} onChoose={chooseTopic} onTopics={rememberTopics} />{/if}
             <div class="channel-topbar-kinds">{@render kindPicker()}</div>
         </header>
     {:else}
@@ -398,6 +447,7 @@
                 {/if}
             </div>
             <div class="channel-bar-tools">
+                {#if forum && fetchTopics}<ChannelTopicPicker {source} fetchTopics={fetchTopics} selected={selectedTopic} onChoose={chooseTopic} onTopics={rememberTopics} />{/if}
                 {@render kindPicker()}
                 <ChannelSortMenu value={sort} onChange={chooseSort} />
                 <label class="search-field channel-search">
@@ -408,10 +458,10 @@
                         onkeydown={onSearchKeydown}
                         type="text"
                         maxlength="120"
-                        placeholder="Search posts"
+                        placeholder={searchLabel}
                         autocomplete="off"
                         spellcheck="false"
-                        aria-label={`Search posts in ${source.title}`}
+                        aria-label={selectedTopic ? searchLabel : `Search files in ${source.title}`}
                     />
                     {#if query}
                         <button class="channel-search-clear" type="button" aria-label="Clear search" onclick={clearQuery}>
@@ -439,10 +489,11 @@
         {:else if failure && items.length === 0}
             <div class="file-state is-error" role="alert">
                 <div class="file-state-icon" aria-hidden="true"><TriangleAlertIcon size={24} strokeWidth={2} /></div>
-                <div class="file-state-title">Posts did not load</div>
+                <div class="file-state-title">{topicUnavailable ? 'Topic unavailable' : 'Posts did not load'}</div>
                 <div class="file-state-body">{failure.message}</div>
                 <div class="file-state-actions">
                     <button class="secondary-btn" type="button" onclick={() => void load()}>Try again</button>
+                    {#if selectedTopic}<button class="secondary-btn" type="button" onclick={() => chooseTopic(undefined)}>View all topics</button>{/if}
                 </div>
             </div>
         {:else if view.status === 'empty'}
@@ -467,8 +518,9 @@
                 <div class="channel-list-note" role="status"><span class="channel-spinner" aria-hidden="true"></span>Loading older posts</div>
             {:else if failure}
                 <div class="channel-list-note" role="alert">
-                    Older posts did not load.
+                    {topicUnavailable ? failure.message : 'Older posts did not load.'}
                     <button class="link-button" type="button" onclick={() => void load(true)}>Try again</button>
+                    {#if topicUnavailable && selectedTopic}<button class="link-button" type="button" onclick={() => chooseTopic(undefined)}>View all topics</button>{/if}
                 </div>
             {:else if view.status === 'ready' && view.capped}
                 <div class="channel-list-note">Showing the latest {MAX_CHANNEL_ITEMS} posts. Search to find older ones.</div>
@@ -568,8 +620,11 @@
     }
 
     .channel-bar-tools {
-        flex: 0 0 auto;
+        flex: 0 1 auto;
+        min-width: 0;
         display: flex;
+        flex-wrap: wrap;
+        justify-content: flex-end;
         align-items: center;
         gap: var(--space-2);
     }

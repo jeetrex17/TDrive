@@ -1,4 +1,5 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import { createChannelTopicPager, MAX_CHANNEL_TOPICS, type ChannelTopicPage } from './channel-topics';
 import type { MediaOpenResult } from '../../api';
 import {
     boundedSearch,
@@ -65,6 +66,29 @@ describe('channel media pager', () => {
         expect(calls.map((call) => [call.offsetId, call.search, call.kind])).toEqual([
             [0, '', 'all'], [9, '', 'all'], [0, 'live set', 'audio'],
         ]);
+    });
+
+    it('separates General from All and rejects stale or mis-scoped topic pages', async () => {
+        let answer!: (value: ChannelMediaPage) => void;
+        const fetch = vi.fn(() => new Promise<ChannelMediaPage>((resolve) => { answer = resolve; }));
+        const pager = createChannelMediaPager(fetch);
+        pager.select(SOURCE);
+        const old = pager.load();
+        pager.setTopic(1);
+        answer(page([post(9)]));
+        await old;
+        expect(pager.snapshot()).toEqual({ status: 'idle' });
+        const general = pager.load();
+        expect(fetch).toHaveBeenLastCalledWith(expect.objectContaining({ topicId: 1, offsetId: 0 }));
+        answer(page([post(8, { topicId: 42 })], 0, { topicId: 1 }));
+        expect((await general).status).toBe('error');
+        const retry = pager.load();
+        answer(page([post(7, { topicId: 1 })], 0, { topicId: 1, forum: true }));
+        expect(await retry).toMatchObject({ status: 'ready', items: [post(7, { topicId: 1 })] });
+        pager.setTopic(0);
+        const all = pager.load();
+        answer(page([post(8, { topicId: 42 })], 0, { topicId: 0, forum: true }));
+        expect(await all).toMatchObject({ status: 'ready', items: [post(8, { topicId: 42 })] });
     });
 
     it('stops paging at the item budget instead of dropping posts already shown', async () => {
@@ -181,5 +205,53 @@ describe('post presentation', () => {
     it('gives a post its running time when Telegram knows it', () => {
         expect(mediaMeta(post(7, { duration: 3_729, size: 0 }))).toBe('Video · 1:02:09');
         expect(mediaMeta(post(8, { kind: 'audio', name: 'a.mp3', duration: 245 }))).toBe('Audio · 4:05');
+    });
+});
+
+describe('channel topic paging', () => {
+    const topic = (id: number) => ({ id, title: `Topic ${id}`, iconColor: 0, iconEmojiId: '', closed: false, hidden: false });
+    const topicPage = (extra: Partial<ChannelTopicPage> = {}): ChannelTopicPage => ({
+        peerKind: SOURCE.peerKind, peerId: SOURCE.peerId, accountId: SOURCE.accountId, generation: SOURCE.generation,
+        forum: true, topics: [topic(1)], next: { offsetDate: 0, offsetId: 1, offsetTopic: 1 }, hasMore: true, ...extra,
+    });
+
+    it('drops a previous search and a response from another account', async () => {
+        let answer!: (page: ChannelTopicPage) => void;
+        const pager = createChannelTopicPager(() => new Promise((resolve) => { answer = resolve; }));
+        pager.select(SOURCE);
+        const old = pager.load();
+        pager.search('Music');
+        answer(topicPage());
+        await old;
+        expect(pager.snapshot().topics).toEqual([]);
+        const next = pager.load();
+        answer(topicPage({ accountId: '8' }));
+        expect(await next).toMatchObject({ status: 'error', topics: [] });
+    });
+
+    it('keeps loaded topics and retries the failed cursor before advancing', async () => {
+        const fetch = vi.fn().mockResolvedValueOnce(topicPage()).mockRejectedValueOnce(new Error('offline'))
+            .mockResolvedValueOnce(topicPage({ topics: [topic(2)], next: { offsetDate: 0, offsetId: 2, offsetTopic: 2 } }));
+        const pager = createChannelTopicPager(fetch);
+        pager.select(SOURCE);
+        await pager.load();
+        expect(await pager.load(true)).toMatchObject({ status: 'error', topics: [topic(1)], hasMore: true });
+        expect(await pager.load(true)).toMatchObject({ status: 'ready', topics: [topic(1), topic(2)] });
+        expect(fetch.mock.calls.slice(1).map(([request]) => request.offsetTopic)).toEqual([1, 1]);
+    });
+
+    it('bounds topic records and stops repeated cursors', async () => {
+        const fetch = vi.fn(async (request) => topicPage({ topics: Array.from({ length: 40 }, (_, i) => topic(request.offsetTopic + i + 1)), next: { offsetDate: 0, offsetId: 0, offsetTopic: request.offsetTopic + 40 } }));
+        const pager = createChannelTopicPager(fetch);
+        pager.select(SOURCE);
+        await pager.load();
+        for (let i = 0; i < 6; i += 1) await pager.load(true);
+        expect(pager.snapshot()).toMatchObject({ capped: true, hasMore: false });
+        expect(pager.snapshot().topics).toHaveLength(MAX_CHANNEL_TOPICS);
+        expect(fetch).toHaveBeenCalledTimes(5);
+        const repeated = createChannelTopicPager(async () => topicPage({ next: { offsetDate: 0, offsetId: 0, offsetTopic: 0 } }));
+        repeated.select(SOURCE);
+        await repeated.load();
+        expect(repeated.snapshot().hasMore).toBe(false);
     });
 });

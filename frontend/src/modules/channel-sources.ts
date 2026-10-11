@@ -1,6 +1,7 @@
 // Telegram chats and channels added as read-only media sources. Browsing one
 // never changes the active TDrive drive or imports its messages.
 
+import type { ChannelTopic } from '../ui/channels/channel-topics';
 import { get } from 'svelte/store';
 import {
     connectChannelSource,
@@ -72,12 +73,24 @@ const MAX_PHOTO_CACHE_ENTRIES = 64;
 const MAX_RECENT_SOURCE_PAGES = 12;
 const firstPages = new Map<string, readonly ChannelMediaItem[]>();
 
-const pageKey = sourceKey;
+const selectedTopics = new Map<string, ChannelTopic>();
+const pageKey = (source: ChannelSource, topicId = 0) => `${sourceKey(source)}:${topicId}`;
 
 /** Show a source's recent first page while its fresh page loads. */
 export const recentChannelPages: ChannelPageMemory = {
-    get: (source) => {
-        const key = pageKey(source);
+    selectedTopic: (source) => selectedTopics.get(sourceKey(source)),
+    selectTopic: (source, topic) => {
+        const key = sourceKey(source);
+        selectedTopics.delete(key);
+        if (topic) selectedTopics.set(key, topic);
+        while (selectedTopics.size > MAX_RECENT_SOURCE_PAGES) {
+            const oldest = selectedTopics.keys().next().value;
+            if (oldest === undefined) break;
+            selectedTopics.delete(oldest);
+        }
+    },
+    get: (source, topicId = 0) => {
+        const key = pageKey(source, topicId);
         const items = firstPages.get(key);
         if (items) {
             firstPages.delete(key);
@@ -85,8 +98,8 @@ export const recentChannelPages: ChannelPageMemory = {
         }
         return items;
     },
-    set: (source, items) => {
-        const key = pageKey(source);
+    set: (source, items, topicId = 0) => {
+        const key = pageKey(source, topicId);
         firstPages.delete(key);
         firstPages.set(key, items);
         while (firstPages.size > MAX_RECENT_SOURCE_PAGES) {
@@ -130,6 +143,7 @@ export function activateChannelSources(): () => void {
         allConnectedSources = [];
         photos.clear();
         firstPages.clear();
+        selectedTopics.clear();
         closeChannel();
         channelPickerOpen.set(false);
         channelSources.set(EMPTY_CHANNEL_SOURCES);
