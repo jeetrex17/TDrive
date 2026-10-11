@@ -24,6 +24,7 @@ expect_code v1.9.0 1009000
 expect_code v2.0.0 2000000
 expect_code v2.0.1 2000001
 expect_code v2.1.0 2001000
+expect_code v2.2.0 2002000
 expect_code v0.0.1 1
 
 reject_tag 2.0.0
