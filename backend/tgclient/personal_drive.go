@@ -141,7 +141,7 @@ func joinedChannel(channel *tg.Channel) JoinedBroadcastChannel {
 	joined := JoinedBroadcastChannel{
 		ID: channel.ID, AccessHash: channel.AccessHash,
 		Title: strings.TrimSpace(channel.Title), Username: channel.Username,
-		Protected:  channel.Noforwards,
+		Protected: channel.Noforwards, Forum: channel.Forum,
 		Restricted: channel.Restricted && restrictedHere(channel.RestrictionReason),
 	}
 	if photo, ok := channel.Photo.(*tg.ChatPhoto); ok {

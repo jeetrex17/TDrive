@@ -102,6 +102,7 @@ type HistoryMessage struct {
 	PeerKind           PeerKind // empty for channel-only drive history
 	ChannelID          int64    // optional in fakes; production history is scoped by the request peer
 	MsgID              int64
+	TopicID            int64 // non-General forum root; 0 for ordinary messages and General
 	Date               int64
 	FromID             int64
 	Outgoing           bool   // Telegram marks messages sent by the current account.
@@ -209,6 +210,7 @@ type JoinedBroadcastChannel struct {
 	Title      string
 	Username   string
 	Protected  bool
+	Forum      bool  // readable supergroup with topics enabled
 	Restricted bool  // Telegram withholds the channel on this platform
 	PhotoID    int64 // the current profile photo; 0 when the channel has none
 	Truncated  bool  // dialog picker reached its bounded scan budget

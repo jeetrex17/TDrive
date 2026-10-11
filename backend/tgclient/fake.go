@@ -40,6 +40,7 @@ type Fake struct {
 	channels        map[int64]fakeChannel
 	ownedBroadcast  []OwnedBroadcastChannel
 	joinedBroadcast []JoinedBroadcastChannel
+	forumTopics     map[int64][]ForumTopic
 	sourcePeers     []SourcePeer
 	publicChannels  map[string]SourcePeer
 	channelPhotos   map[int64][]byte // keyed by photo ID
@@ -126,6 +127,7 @@ func NewFake(selfID int64) *Fake {
 		pts:            1,
 		fileBodies:     make(map[int64][]byte),
 		sourceBodies:   make(map[sourceBodyKey][]byte),
+		forumTopics:    make(map[int64][]ForumTopic),
 		publicChannels: make(map[string]SourcePeer),
 		controlSends:   make(map[sendDedupeKey]int64),
 		fileSends:      make(map[sendDedupeKey]SendFileResult),

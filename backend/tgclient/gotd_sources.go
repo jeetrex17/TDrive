@@ -162,6 +162,7 @@ func sourceFromChannel(channel *tg.Channel) SourcePeer {
 	peer.Kind = PeerChannel
 	if channel.Megagroup {
 		peer.Kind = PeerSupergroup
+		peer.Forum = channel.Forum
 	}
 	return peer
 }
