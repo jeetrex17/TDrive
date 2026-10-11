@@ -37,7 +37,7 @@ import (
 // Services take this instead of *App on purpose. App still owns the mount, the
 // gallery and the in-flight transfers, and a service handed that whole struct
 // would sooner or later reach into all of it -- which is how App grew to 105
-// methods to begin with. With only these four calls in reach, a domain can be
+// methods to begin with. With only these narrow calls in reach, a domain can be
 // moved, tested or replaced without dragging the root's state behind it.
 type serviceHost interface {
 	// coreEngine is the running engine, or nil until ServiceStartup has built
@@ -45,6 +45,9 @@ type serviceHost interface {
 	// startup is still in flight, and after a failed startup it stays nil for
 	// the life of the process.
 	coreEngine() *core.Engine
+	// WaitForBackendReady lets startup-dependent calls await construction using
+	// their bridge-call context rather than mistake a pending engine for failure.
+	WaitForBackendReady(context.Context) error
 	// activeChannelID is the drive that channel-scoped calls run against, or 0
 	// when there is no engine yet.
 	activeChannelID() int64

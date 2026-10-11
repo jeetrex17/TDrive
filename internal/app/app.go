@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -46,6 +45,14 @@ type App struct {
 	backendLock     *processlock.Lock
 	galleryImagesMu sync.Mutex
 	galleryImages   *galleryimage.Server
+	// backendStartupDone publishes construction to bridge calls, including calls
+	// dispatched before ServiceStartup begins. Closing it also publishes engine
+	// and ctx; backendStartupMu protects completion errors and shutdown state.
+	backendStartupMu       sync.Mutex
+	backendStartupDone     chan struct{}
+	backendStartupComplete bool
+	backendStartupErr      error
+	backendStopped         bool
 
 	// mountMu protects lazy controller construction. A transient construction
 	// failure stays retryable for a later mount request.
@@ -117,12 +124,7 @@ func (s runtimeEventSink) Emit(name string, args ...any) {
 
 func (a *App) markAuthenticated() {
 	a.authReady.Store(true)
-	if a.engine != nil {
-		a.engine.ResumeLiveSync()
-	}
-	if runtime.GOOS != "ios" && runtime.GOOS != "android" {
-		go func() { _ = a.startPhotoBackup() }()
-	}
+	a.startAuthenticatedWork()
 }
 
 // emit forwards an event to the webview. It is a no-op until main has wired
@@ -611,7 +613,7 @@ func (a *App) GetStorageUsed() (int64, error) {
 // because only main knows it, and passing it in at construction keeps it from
 // being a mutable field anyone could rewrite later.
 func NewApp(version string) *App {
-	app := &App{}
+	app := &App{backendStartupDone: make(chan struct{})}
 	app.initServices(version)
 	return app
 }
@@ -656,6 +658,10 @@ func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, 
 // ServiceShutdown runs on app exit. Tear down the shared Telegram connection
 // so the background Run scope's goroutine exits cleanly.
 func (a *App) ServiceShutdown() error {
+	a.backendStartupMu.Lock()
+	a.backendStopped = true
+	a.backendStartupMu.Unlock()
+	a.finishBackendStartup(context.Canceled)
 	mountCtx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
 	if err := a.shutdownMountController(mountCtx); err != nil {
 		fmt.Printf("Warning: Failed to disconnect TDrive mount: %v\n", err)
@@ -716,12 +722,13 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 
 	lock, err := processlock.Acquire("gui")
 	if err != nil {
+		a.finishBackendStartup(fmt.Errorf("acquire backend lock: %w", err))
 		if errors.Is(err, processlock.ErrAlreadyRunning) {
 			fmt.Printf("TDrive backend is already running: %v\n", err)
 		} else {
 			fmt.Printf("Warning: Failed to acquire backend lock: %v\n", err)
 		}
-		a.wails.Quit()
+		a.quit()
 		return nil
 	}
 	a.backendLock = lock
@@ -742,13 +749,14 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 		Thumbs: newThumbnailCache(),
 	})
 	if err != nil {
+		a.finishBackendStartup(fmt.Errorf("initialize backend: %w", err))
 		fmt.Printf("Warning: Failed to init TDrive backend: %v\n", err)
 		applog.Close()
 		if releaseErr := a.backendLock.Release(); releaseErr != nil {
 			fmt.Printf("Warning: backend lock release failed: %v\n", releaseErr)
 		}
 		a.backendLock = nil
-		a.wails.Quit()
+		a.quit()
 		return nil
 	}
 	a.engine = engine
@@ -767,6 +775,7 @@ func (a *App) ServiceStartup(ctx context.Context, options application.ServiceOpt
 
 	fmt.Println("TDrive DB ready!")
 	a.updates.finishCleanup(mountInitErr)
+	a.finishBackendStartup(nil)
 	return nil
 }
 

@@ -25,11 +25,12 @@ const (
 
 var ErrInvalidFloodWaitRetryPolicy = errors.New("tgclient: invalid flood wait retry policy")
 
-// FloodWaitRetryPolicy bounds retries for long Telegram transfers. It covers
+// FloodWaitRetryPolicy controls retries for Telegram transfers. It covers
 // two failure classes:
 //
 //   - FLOOD_WAIT: Telegram rate limiting, retried after the server-requested
-//     wait under MaxRetries/MaxWait/MaxTotalWait budgets.
+//     wait under MaxRetries/MaxWait/MaxTotalWait budgets, or until cancellation
+//     when WaitUntilCanceled is enabled for an active upload.
 //   - Transient transport failures (IsTransientTransport): the shared
 //     connection scope died or the TCP link was reset mid-transfer, which
 //     fails every in-flight RPC with "engine forcibly closed" style errors.
@@ -41,10 +42,14 @@ var ErrInvalidFloodWaitRetryPolicy = errors.New("tgclient: invalid flood wait re
 // A zero-value policy performs one call and no retries; callers that want the
 // bounded production defaults should use DefaultWriteFloodWaitRetryPolicy.
 type FloodWaitRetryPolicy struct {
-	MaxRetries   int
-	MaxWait      time.Duration
-	MaxTotalWait time.Duration
-	Sleep        func(context.Context, time.Duration) error
+	// WaitUntilCanceled ignores the FLOOD_WAIT retry and duration budgets.
+	// Each server-requested wait remains interruptible by the caller's context.
+	// Transport retries still obey their independent budget.
+	WaitUntilCanceled bool
+	MaxRetries        int
+	MaxWait           time.Duration
+	MaxTotalWait      time.Duration
+	Sleep             func(context.Context, time.Duration) error
 
 	// MaxTransientRetries bounds transport-failure retries after the initial
 	// attempt. Zero disables them.
@@ -73,13 +78,24 @@ func DefaultWriteFloodWaitRetryPolicy() FloodWaitRetryPolicy {
 	}
 }
 
-// Validate reports whether p has bounded, non-negative retry settings.
+// DefaultUploadFloodWaitRetryPolicy waits through Telegram throttling for the
+// lifetime of a transfer while keeping transport failures bounded.
+func DefaultUploadFloodWaitRetryPolicy() FloodWaitRetryPolicy {
+	p := DefaultWriteFloodWaitRetryPolicy()
+	p.WaitUntilCanceled = true
+	p.MaxRetries = 0
+	p.MaxWait = 0
+	p.MaxTotalWait = 0
+	return p
+}
+
+// Validate reports whether p has valid, non-negative retry settings.
 func (p FloodWaitRetryPolicy) Validate() error {
 	if p.MaxRetries < 0 || p.MaxWait < 0 || p.MaxTotalWait < 0 ||
 		p.MaxTransientRetries < 0 || p.TransientBackoff < 0 || p.MaxTransientBackoff < 0 || p.TransientJitter < 0 {
 		return fmt.Errorf("%w: limits must be non-negative", ErrInvalidFloodWaitRetryPolicy)
 	}
-	if p.MaxRetries > 0 && (p.MaxWait == 0 || p.MaxTotalWait == 0) {
+	if !p.WaitUntilCanceled && p.MaxRetries > 0 && (p.MaxWait == 0 || p.MaxTotalWait == 0) {
 		return fmt.Errorf("%w: retrying requires per-wait and total-wait limits", ErrInvalidFloodWaitRetryPolicy)
 	}
 	if p.MaxTransientRetries > 0 && p.TransientBackoff == 0 {
@@ -115,9 +131,9 @@ func (p FloodWaitRetryPolicy) Do(ctx context.Context, action func() error) error
 		}
 		wait, floodWait := FloodWaitDuration(err)
 		if floodWait {
-			if floodRetries >= p.MaxRetries || wait < 0 ||
+			if wait < 0 || (!p.WaitUntilCanceled && (floodRetries >= p.MaxRetries ||
 				(p.MaxWait > 0 && wait > p.MaxWait) ||
-				(p.MaxTotalWait > 0 && wait > p.MaxTotalWait-totalWait) {
+				(p.MaxTotalWait > 0 && wait > p.MaxTotalWait-totalWait))) {
 				slog.Warn("tgclient: FLOOD_WAIT retry budget exhausted, giving up", "retries", floodRetries, "wait", wait, "max_retries", p.MaxRetries)
 				return err
 			}
@@ -125,7 +141,9 @@ func (p FloodWaitRetryPolicy) Do(ctx context.Context, action func() error) error
 			if err := sleep(ctx, wait); err != nil {
 				return err
 			}
-			totalWait += wait
+			if !p.WaitUntilCanceled {
+				totalWait += wait
+			}
 			floodRetries++
 			continue
 		}

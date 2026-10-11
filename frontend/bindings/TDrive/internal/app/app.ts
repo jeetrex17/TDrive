@@ -580,3 +580,11 @@ export function UploadToDriveFS(filePaths: string[] | null, parentIDs: string[] 
 export function UpsertPhotoBackupSource(value: $models.PhotoBackupSource): $CancellablePromise<$models.PhotoBackupSource> {
     return $Call.ByID(1576926270, value);
 }
+
+/**
+ * WaitForBackendReady waits for backend construction, not just availability of
+ * the Wails bridge or a Telegram login event. Wails supplies the call context.
+ */
+export function WaitForBackendReady(): $CancellablePromise<void> {
+    return $Call.ByID(3991527335);
+}

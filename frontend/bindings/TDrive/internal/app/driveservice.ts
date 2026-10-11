@@ -167,7 +167,7 @@ export function ListPendingJoins(): $CancellablePromise<$models.PendingJoinInfo[
 
 /**
  * PreparePersonalDrive activates the saved personal drive, or reports that
- * the user has to choose one. It never contacts Telegram.
+ * the user has to choose one. It waits for startup and never contacts Telegram.
  */
 export function PreparePersonalDrive(): $CancellablePromise<$models.PersonalDriveSetupState> {
     return $Call.ByID(2364275863);

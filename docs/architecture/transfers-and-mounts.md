@@ -61,6 +61,21 @@ idempotent sender. The ordinary single-document uploader's identity lasts for
 that call; it has no durable operation journal. Preserve the shared upload
 semaphore across GUI, import, backup and mount callers.
 
+Uploads wait for every server-directed `FLOOD_WAIT` while their transfer context
+is live, including repeated cooldowns and waits longer than 30 seconds. The
+shared Telegram write coordinator applies the longest observed cooldown across
+message sends and upload parts. Retrying a part retains its buffered bytes,
+file ID and part index; retrying final document publication after throttling
+retains the uploaded file handle and random ID, without uploading the body
+again. Cancellation interrupts these waits. Part-request slots are released
+between attempts, while the owning transfer keeps its upload slot until it ends.
+Transport failures still have bounded retries, and permanent errors fail
+immediately. Upload manifests, hidden bodies and visible file sends use this
+upload policy by default; downloads, deletes and other control writes keep their
+existing bounded policies. An explicitly configured file-service retry policy
+continues to override its defaults. Preserve unknown send outcomes across later
+cooldowns or cancellation so reconciliation can protect accepted remote bodies.
+
 ## Downloads publish completed output
 
 Interactive single-file downloads keep a private checkpoint in the

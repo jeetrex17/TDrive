@@ -1,6 +1,7 @@
 package app
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 
@@ -32,13 +33,16 @@ func (s *DriveService) requirePersonalDriveService() (*personaldriveservice.Serv
 }
 
 // PreparePersonalDrive activates the saved personal drive, or reports that
-// the user has to choose one. It never contacts Telegram.
-func (s *DriveService) PreparePersonalDrive() (PersonalDriveSetupState, error) {
+// the user has to choose one. It waits for startup and never contacts Telegram.
+func (s *DriveService) PreparePersonalDrive(ctx context.Context) (PersonalDriveSetupState, error) {
+	if err := s.host.WaitForBackendReady(ctx); err != nil {
+		return PersonalDriveSetupState{}, err
+	}
 	service, err := s.requirePersonalDriveService()
 	if err != nil {
 		return PersonalDriveSetupState{}, err
 	}
-	state, err := service.Prepare(s.host.appContext())
+	state, err := service.Prepare(ctx)
 	if err != nil {
 		return PersonalDriveSetupState{}, err
 	}
