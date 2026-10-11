@@ -37,8 +37,6 @@ vars:
   CODESIGN_IDENTITY: '{{.CODESIGN_IDENTITY | default "-"}}'
   # Optional path to a .mobileprovision embedded into device bundles
   PROVISIONING_PROFILE: '{{.PROVISIONING_PROFILE | default ""}}'
-  # Optional entitlements applied at codesign time (generated default below)
-  ENTITLEMENTS_FILE: '{{.ENTITLEMENTS_FILE | default "build/ios/entitlements.plist"}}'
   # SDK_PATH is computed lazily at task-level to avoid errors on non-macOS systems
 
 tasks:
@@ -140,6 +138,9 @@ tasks:
 
   create:app:bundle:
     summary: Creates an iOS `.app` bundle
+    vars:
+      # Includes share top-level defaults, so keep the iOS default out of macOS signing.
+      ENTITLEMENTS_FILE: '{{.ENTITLEMENTS_FILE | default "build/ios/entitlements.plist"}}'
     cmds:
       - rm -rf "{{.BIN_DIR}}/{{.APP_NAME}}.app"
       - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app"

@@ -600,6 +600,10 @@ jobs:
           go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0-beta.22
           echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
 
+      - name: Test macOS and iOS signing isolation
+        if: runner.os == 'macOS'
+        run: bash scripts/test-codesign-darwin-bundle.sh
+
       # macOS needs the .app bundle (`package`) since the media-bundle contract
       # check below looks for build/bin/TDrive.app. Linux/Windows only need the
       # bare binary (`build`); CI and release use the same AppImage packaging
