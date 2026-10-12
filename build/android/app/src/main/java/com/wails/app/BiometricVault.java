@@ -20,7 +20,6 @@ import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
 import java.lang.ref.WeakReference;
-import java.nio.charset.StandardCharsets;
 import java.security.GeneralSecurityException;
 import java.security.KeyStore;
 import java.security.SecureRandom;
@@ -216,7 +215,7 @@ final class BiometricVault {
         try {
             BiometricVaultRecord previous;
             byte[] keyID = null;
-            Cipher prepared;
+            BiometricVaultCrypto prepared;
             synchronized (storeLock) {
                 if (request.canceled.get() || closed || !foreground) return error(CANCELED);
                 previous = read(scope);
@@ -225,24 +224,23 @@ final class BiometricVault {
                     new SecureRandom().nextBytes(keyID);
                     temporaryAlias = alias(scope, BiometricVaultRecord.hex(keyID));
                     SecretKey key = createKey(temporaryAlias);
-                    prepared = cipher(Cipher.ENCRYPT_MODE, key, null);
+                    prepared = new BiometricVaultCrypto(cipher(Cipher.ENCRYPT_MODE, key, null), scope, config);
                 } else {
                     if (previous == null) return error(NOT_ENROLLED);
                     if (!config.equals(previous.configHash())) return error(INVALIDATED);
-                    prepared = cipher(Cipher.DECRYPT_MODE,
-                            key(scope, previous.keyID()), previous.iv());
+                    prepared = new BiometricVaultCrypto(cipher(Cipher.DECRYPT_MODE,
+                            key(scope, previous.keyID()), previous.iv()), scope, config);
                 }
-                prepared.updateAAD((scope + ":" + config).getBytes(StandardCharsets.US_ASCII));
             }
-            request.prompt(prepared, operation == 2);
+            request.prompt(prepared.cipher(), operation == 2);
             int code = request.await();
             if (code != OK) return error(code);
             synchronized (storeLock) {
                 if (request.canceled.get() || closed || !foreground || current != this) return error(CANCELED);
                 if (operation == 2) {
-                    byte[] ciphertext = prepared.doFinal(secret);
+                    byte[] ciphertext = prepared.finish(request.authenticatedCipher, secret);
                     BiometricVaultRecord record = new BiometricVaultRecord(
-                            BiometricVaultRecord.unhex(config), keyID, prepared.getIV(), ciphertext);
+                            BiometricVaultRecord.unhex(config), keyID, prepared.cipher().getIV(), ciphertext);
                     write(scope, record);
                     if (request.canceled.get() || closed || !foreground) {
                         deleteScope(scope);
@@ -257,7 +255,7 @@ final class BiometricVault {
                 BiometricVaultRecord latest = read(scope);
                 if (latest == null || !latest.keyID().equals(previous.keyID())
                         || !latest.configHash().equals(config)) return error(INVALIDATED);
-                plaintext = prepared.doFinal(previous.ciphertext());
+                plaintext = prepared.finish(request.authenticatedCipher, previous.ciphertext());
                 if (plaintext.length != 64) return error(INVALIDATED);
                 byte[] result = new byte[65];
                 System.arraycopy(plaintext, 0, result, 1, 64);
@@ -408,6 +406,7 @@ final class BiometricVault {
         final CountDownLatch done = new CountDownLatch(1);
         volatile int code = CANCELED;
         volatile BiometricPrompt biometric;
+        volatile Cipher authenticatedCipher;
 
         Request(long id, String scope, MainActivity host, BiometricVault owner) {
             this.id = id;
@@ -427,7 +426,10 @@ final class BiometricVault {
                             new BiometricPrompt.AuthenticationCallback() {
                         @Override public void onAuthenticationSucceeded(BiometricPrompt.AuthenticationResult result) {
                             BiometricPrompt.CryptoObject object = result.getCryptoObject();
-                            complete(object != null && object.getCipher() == cipher ? OK : FAILED);
+                            if (object != null && object.getCipher() == cipher) {
+                                authenticatedCipher = object.getCipher();
+                                complete(OK);
+                            } else complete(FAILED);
                         }
                         @Override public void onAuthenticationError(int errorCode, CharSequence message) {
                             if (errorCode == BiometricPrompt.ERROR_CANCELED

@@ -928,6 +928,10 @@ jobs:
       - name: Assemble the APK
         run: wails3 task android:assemble:apk
 
+      - name: Run Android biometric unit tests
+        working-directory: build/android
+        run: ./gradlew testReleaseUnitTest
+
       - name: Require a keystore for release signing
         working-directory: build/android
         run: |

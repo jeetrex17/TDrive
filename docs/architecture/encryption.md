@@ -92,6 +92,13 @@ availability can depend on Hello enrollment and package identity; unsupported
 desktop configurations report unavailable. Apple provisioning and platform build
 details are in the [build guide](../../build/README.md).
 
+Android prepares the cipher before showing the native prompt. After successful
+authentication and ownership checks, it supplies the account/configuration AAD
+and finishes encryption or decryption using that exact authenticated cipher.
+Supplying AAD before authentication can cache a Keystore failure that persists
+even after the fingerprint is accepted. The native crypto regression tests model
+this failure and verify authenticated completion and scope/configuration binding.
+
 [`internal/app/biometric.go`](../../internal/app/biometric.go) snapshots account,
 engine, scope and a cancellation epoch under the mount lifecycle gate. It releases
 the gate while native authentication is displayed. Before accepting the returned
