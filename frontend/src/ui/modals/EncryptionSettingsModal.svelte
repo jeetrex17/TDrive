@@ -126,7 +126,7 @@
     title="Encryption settings"
     titleId="encryption-settings-title"
     cardClass="encryption-settings-card"
-    subtitle="Manage your encryption password and optional unlock on this device. Keep your password for recovery."
+    subtitle="Manage your encryption password and optional unlock on this device."
     initialFocus="#encryption-current-password"
     restoreFocus="#profile-trigger"
     onClose={cancel}

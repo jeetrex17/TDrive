@@ -16,7 +16,7 @@ test('the gallery lightbox offers explicit Touch ID with password fallback and r
     const first = { ...FIRST_PHOTO, encrypted: true };
     const second = { ...SECOND_PHOTO, encrypted: true };
     const mock = await bootTDrive(page, {
-        ...galleryPlans([first, second]), EncryptionStatus: resolves(locked),
+        ...galleryPlans([first, second], true), EncryptionStatus: resolves(locked),
         BiometricStatus: resolves({ ...biometric, enrolled: true }), UseBiometricUnlock: resolves({ ok: true }),
     });
     await page.getByRole('button', { name: 'Photos', exact: true }).click();
@@ -25,12 +25,18 @@ test('the gallery lightbox offers explicit Touch ID with password fallback and r
     const card = photo.getByRole('group', { name: 'Locked photo' });
     await expect(card.getByRole('button', { name: 'Use Touch ID', exact: true })).toBeVisible();
     await expect(card.getByLabel('Encryption password', { exact: true })).toBeVisible();
+    await expect(page.locator('#preview-thumbnail')).toBeHidden();
+    await expect(page.locator('#preview-image')).toBeHidden();
     expect(await mock.calls('UseBiometricUnlock')).toHaveLength(0);
     expect(await mock.calls('OpenOriginalImage')).toHaveLength(0);
     await page.screenshot({ path: '/tmp/tdrive-biometric-gallery-desktop.png' });
     await mock.setPlan('EncryptionStatus', resolves({ ...locked, password_remembered: true }));
     await card.getByRole('button', { name: 'Use Touch ID', exact: true }).click();
+    // A real thumbnail still paints while the selected original is opening.
+    await expect(page.locator('#preview-thumbnail')).toBeVisible();
+    await expect.poll(() => page.locator('#preview-thumbnail').evaluate((image) => (image as HTMLImageElement).naturalWidth)).toBe(2);
     await expect.poll(() => previewImageContents(page)).toContain('#e11d48');
+    await expect(page.locator('#preview-image')).toBeVisible();
     expect(await mock.calls('UseBiometricUnlock')).toHaveLength(1);
     await page.keyboard.press('ArrowRight');
     await expect(page.locator('#preview-filename')).toHaveText(second.name);
@@ -55,6 +61,15 @@ for (const platform of ['desktop', 'android'] as const) {
         const card = page.getByRole('group', { name: 'Locked photo' });
         const native = card.getByRole('button', { name: platform === 'android' ? 'Use biometrics' : 'Use Touch ID', exact: true });
         await expect(native).toBeVisible();
+        await expect(page.locator('#preview-thumbnail')).toBeHidden();
+        await expect(page.locator('#preview-image')).toBeHidden();
+        if (platform === 'android') {
+            for (const control of [card.getByRole('button', { name: 'Show password', exact: true }), card.getByRole('button', { name: 'Unlock', exact: true })]) {
+                const bounds = (await control.boundingBox())!;
+                expect(bounds.width).toBeGreaterThanOrEqual(44);
+                expect(bounds.height).toBeGreaterThanOrEqual(44);
+            }
+        }
         const password = card.getByLabel('Encryption password', { exact: true });
         expect(await card.evaluate((element) => {
             const field = element.querySelector('#preview-locked-input')!.getBoundingClientRect();
@@ -105,6 +120,7 @@ for (const transition of ['close', 'navigation', 'scope reset'] as const) {
         await page.getByRole('button', { name: first.name, exact: true }).click();
         await page.getByRole('group', { name: 'Locked photo' }).getByRole('button', { name: 'Use Touch ID', exact: true }).click();
         await expect.poll(async () => (await mock.calls('UseBiometricUnlock')).length).toBe(1);
+        await expect(page.getByRole('group', { name: 'Locked photo' }).getByRole('button', { name: 'Waiting for authentication…', exact: true })).toBeDisabled();
         if (transition === 'close') await page.getByRole('button', { name: 'Close preview', exact: true }).click();
         else if (transition === 'navigation') {
             await page.getByRole('button', { name: 'Next image', exact: true }).click();
@@ -147,6 +163,67 @@ async function openBackup(page: Page) {
     await page.locator('#profile-trigger').click();
     await page.getByRole('menuitem', { name: 'Photo & video backup' }).click();
     return page.getByRole('region', { name: 'Photo and video backup' });
+}
+
+for (const state of [
+    { name: 'normal', error: false, top: 0 },
+    { name: 'error with a long hint', error: true, top: 0 },
+    { name: 'error with a long hint and a 48px top safe area', error: true, top: 48 },
+] as const) {
+    test(`the short Android unlock sheet keeps each control reachable above the keyboard in ${state.name}`, async ({ page, browserName }) => {
+        await page.setViewportSize({ width: 390, height: 568 });
+        const scale = await page.evaluate(() => devicePixelRatio);
+        const hint = !state.error ? locked.hint : 'The encryption password I saved when setting up my personal drive, which is different from my Telegram login and my device screen lock.';
+        const mock = await bootTDrive(page, {
+            SafeAreaInsets: resolves({ top: state.top * scale, right: 0, bottom: 0, left: 0 }),
+            EncryptionStatus: resolves({ ...locked, hint }),
+            BiometricStatus: resolves({ ...biometric, kind: 'biometric', enrolled: true }),
+            UseBiometricUnlock: resolves({ ok: false, error: { code: 'biometric_canceled', message: 'Private native diagnostic' } }),
+            GetPhotoBackupState: resolves({ ...backup, platform: 'android' }),
+        }, { url: '/?mobile=android' });
+        await expect.poll(() => page.evaluate(() => document.documentElement.style.getPropertyValue('--mobile-inset-top'))).toBe(`${state.top}px`);
+        await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Account', exact: true }).click();
+        await page.getByRole('button', { name: /Photo & video backup/ }).click();
+        await page.getByRole('button', { name: 'Unlock and back up', exact: true }).click();
+        const prompt = page.getByRole('dialog', { name: 'Unlock encrypted files' });
+        const native = prompt.getByRole('button', { name: 'Use biometrics', exact: true });
+        await expect(native).toBeVisible();
+        if (state.error) {
+            await native.click();
+            await expect(prompt.getByRole('alert')).toContainText('Enter your password or try again.');
+        }
+        const password = prompt.getByLabel('Encryption password', { exact: true });
+        await password.focus();
+        await mock.emit('common:keyboard', { visible: true, height: 280 * scale });
+        await expect.poll(() => page.evaluate(() => document.documentElement.style.getPropertyValue('--mobile-keyboard-inset'))).toBe('280px');
+        await expect.poll(async () => (await prompt.locator('.modal-sheet-body').boundingBox())!.height).toBeGreaterThanOrEqual(48);
+        for (const action of [prompt.locator('#encryption-password-confirm'), prompt.getByRole('button', { name: 'Cancel', exact: true })]) {
+            // WebKit can report a 48px target as 47.999984px after translation.
+            const height = (await action.boundingBox())!.height;
+            expect(Math.round(height * 1000) / 1000).toBeGreaterThanOrEqual(48);
+        }
+        for (const control of [password, native, prompt.locator('#encryption-password-confirm'), prompt.getByRole('button', { name: 'Cancel', exact: true })]) {
+            await control.evaluate((node) => node.scrollIntoView({ block: 'center', behavior: 'instant' }));
+            // DOM visibility alone misses clipping by a collapsed scroll body.
+            await expect.poll(() => control.evaluate((node, safeTop) => {
+                const bounds = node.getBoundingClientRect();
+                let top: number = safeTop;
+                let bottom = innerHeight - 280;
+                for (let ancestor = node.parentElement; ancestor; ancestor = ancestor.parentElement) {
+                    if (!/(auto|scroll|hidden|clip)/.test(getComputedStyle(ancestor).overflowY)) continue;
+                    const clip = ancestor.getBoundingClientRect();
+                    top = Math.max(top, clip.top);
+                    bottom = Math.min(bottom, clip.bottom);
+                }
+                return { visible: bounds.height > 0 && bounds.top >= top - 1 && bounds.bottom <= bottom + 1, top: bounds.top, bottom: bounds.bottom, clipTop: top, clipBottom: bottom };
+            }, state.top)).toMatchObject({ visible: true });
+        }
+        await password.evaluate((node) => node.scrollIntoView({ block: 'center', behavior: 'instant' }));
+        await page.screenshot({ path: `/tmp/tdrive-biometric-unlock-short-${browserName}-${state.top ? 'error-cutout' : state.error ? 'error' : 'normal'}.png` });
+        await prompt.getByRole('button', { name: 'Cancel', exact: true }).click();
+        await expect(prompt).toBeHidden();
+        expect(await mock.calls('RunPhotoBackup')).toHaveLength(0);
+    });
 }
 
 test('device enrollment is explicit and Touch ID unlock is reused for the current session', async ({ page }, testInfo) => {
@@ -319,7 +396,7 @@ for (const platform of ['desktop', 'android'] as const) {
         await page.screenshot({ path: `/tmp/tdrive-biometric-unlock-${platform}.png` });
         await prompt.getByLabel('Encryption password', { exact: true }).fill('fallback-password');
         await mock.setPlan('EncryptionStatus', resolves({ ...locked, password_remembered: true }));
-        await prompt.getByRole('button', { name: 'Unlock', exact: true }).click();
+        await prompt.getByRole('button', { name: 'Unlock with password', exact: true }).click();
         await expect(prompt).toBeHidden();
         await expect.poll(async () => (await mock.calls('RunPhotoBackup')).length).toBe(1);
         expect((await mock.calls('UseEncryptionPassword'))[0].args).toEqual(['fallback-password']);

@@ -143,6 +143,12 @@ html.mobile .modal-sheet {
     touch-action: pan-y;
 }
 html.mobile .modal-sheet.is-dragging { animation: none; transition: none; }
+/* The unlock form must still have a scrollable body above a tall keyboard.
+   Use the available height up to the top safe area, without changing other
+   sheets or taking space from their pinned actions. */
+html.mobile .encryption-unlock-card.modal-sheet {
+    max-height: calc(100dvh - var(--inset-top) - var(--inset-keyboard) - var(--space-2));
+}
 html.mobile .modal-sheet.is-closing {
     animation: none;
     transition: transform var(--motion-med) var(--ease-standard);
@@ -215,6 +221,21 @@ html.mobile .modal-sheet .modal-actions .secondary-btn {
     width: 100%;
     min-height: 48px;
     padding: 12px 16px;
+}
+
+/* Short windows need room for the form as well as the keyboard and cutout.
+   Keep both actions at the phone touch size, in one row like the desktop. */
+@media (max-height: 640px) {
+    html.mobile .encryption-unlock-card.modal-sheet .modal-actions {
+        flex-direction: row;
+    }
+    html.mobile .encryption-unlock-card.modal-sheet .modal-actions .primary-btn,
+    html.mobile .encryption-unlock-card.modal-sheet .modal-actions .secondary-btn {
+        width: auto;
+    }
+    html.mobile .encryption-unlock-card.modal-sheet .modal-actions .primary-btn {
+        flex: 1;
+    }
 }
 
 @media (prefers-reduced-motion: reduce) {

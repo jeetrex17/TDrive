@@ -105,8 +105,10 @@ describe('explicit biometric unlock', () => {
         const pending = card.submitBiometric(onUnlocked);
         expect(byId<HTMLInputElement>('input').value).toBe('');
         expect(byId<HTMLInputElement>('input').disabled).toBe(true);
+        expect(byId('biometric-label').textContent).toBe('Waiting for authentication…');
         await card.submitBiometric(onUnlocked);
         await pending;
+        expect(byId('biometric-label').textContent).toBe('Use Touch ID');
         expect(api.useBiometricUnlock).toHaveBeenCalledOnce();
         expect(api.useEncryptionPassword).not.toHaveBeenCalled();
         expect(encryption.loadEncryptionStatus).toHaveBeenCalledOnce();
@@ -114,11 +116,22 @@ describe('explicit biometric unlock', () => {
         expect(onUnlocked).toHaveBeenCalledOnce();
     });
 
-    it('keeps password recovery after biometric cancellation without automatically retrying', async () => {
-        api.useBiometricUnlock.mockResolvedValue({ ok: false, error: { code: 'biometric_canceled', message: 'Native diagnostic' } });
+    it.each([
+        ['biometric_canceled', 'Biometric unlock was canceled. Enter your password or try again.'],
+        ['biometric_failed', 'Biometric authentication failed. Try again or use your encryption password.'],
+    ])('restores the native action and password recovery after %s without automatically retrying', async (code, message) => {
+        const response = deferred<{ ok: false; error: { code: string; message: string } }>();
+        api.useBiometricUnlock.mockReturnValue(response.promise);
         await settle();
-        await card.submitBiometric(vi.fn());
-        expect(byId('error').textContent).toBe('Biometric unlock was canceled. Enter your password or try again.');
+        const pending = card.submitBiometric(vi.fn());
+        await settle();
+        expect(byId('biometric-label').textContent).toBe('Waiting for authentication…');
+        expect(byId<HTMLButtonElement>('biometric').disabled).toBe(true);
+        response.resolve({ ok: false, error: { code, message: 'Native diagnostic' } });
+        await pending;
+        expect(byId('error').textContent).toBe(message);
+        expect(byId('biometric-label').textContent).toBe('Use Touch ID');
+        expect(byId<HTMLButtonElement>('biometric').disabled).toBe(false);
         expect(byId<HTMLInputElement>('input').disabled).toBe(false);
         byId<HTMLInputElement>('input').value = 'fallback-password';
         const onUnlocked = vi.fn();
@@ -140,6 +153,7 @@ describe('explicit biometric unlock', () => {
         expect(api.cancelBiometricUnlock).toHaveBeenCalledOnce();
         card.show('new photo hint');
         await settle();
+        expect(byId('biometric-label').textContent).toBe('Use Touch ID');
         response.resolve({ ok: true });
         await pending;
         expect(onUnlocked).not.toHaveBeenCalled();

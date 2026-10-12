@@ -71,6 +71,9 @@ export function createUnlockCard(elements: UnlockCardElements): UnlockCard {
         if (input) input.disabled = value;
         if (eyeButton) eyeButton.disabled = value;
         if (biometricButton) biometricButton.disabled = value;
+        if (label) label.textContent = value && busy === 'biometric'
+            ? 'Waiting for authentication…'
+            : `Use ${biometricLabel(biometric?.kind ?? 'biometric')}`;
         card?.setAttribute('aria-busy', String(value));
     }
 

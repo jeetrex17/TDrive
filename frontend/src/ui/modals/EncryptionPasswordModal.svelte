@@ -67,7 +67,7 @@
     open={$view.open}
     title="Unlock encrypted files"
     titleId="encryption-password-title"
-    subtitle="Unlock encrypted files for this session, until you lock, sign out or close the app."
+    cardClass="encryption-unlock-card"
     initialFocus="#encryption-password-input"
     restoreFocus="#file-list"
     onClose={cancel}
@@ -97,20 +97,21 @@
             <FingerprintIcon size={18} aria-hidden="true" />
             {biometricBusy ? 'Waiting for authentication…' : `Use ${biometricLabel(biometric.kind)}`}
         </button>
-        <p class="field-help biometric-help">Both options unlock the current session.</p>
     {/if}
+    <p class="field-help unlock-session-help">Files stay unlocked until you lock, sign out or close the app.</p>
 
     {#snippet actions()}
         <button id="encryption-password-cancel" class="secondary-btn" type="button" disabled={$view.busy && !biometricBusy} onclick={cancel}>
             Cancel
         </button>
         <button id="encryption-password-confirm" class="primary-btn" type="button" disabled={$view.busy} onclick={submit}>
-            Unlock
+            Unlock with password
         </button>
     {/snippet}
 </ModalShell>
 
 <style>
     .biometric-unlock-btn { width: 100%; display: flex; justify-content: center; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
-    .biometric-help { margin-top: 0; }
+    .unlock-session-help { margin-top: 0; }
+    :global(.encryption-unlock-card .modal-title) { margin-bottom: var(--space-4); }
 </style>
