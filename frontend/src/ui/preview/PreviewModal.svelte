@@ -56,11 +56,6 @@
 
     <div id="preview-locked" class="preview-locked" style="display: none;" role="group" aria-label="Locked photo">
         <div class="preview-unlock">
-            <button id="preview-locked-biometric" class="preview-unlock-biometric" type="button" hidden>
-                <FingerprintIcon size={20} aria-hidden="true" />
-                <span id="preview-locked-biometric-label">Use biometrics</span>
-            </button>
-            <p class="preview-unlock-biometric-help">Unlock for this session, or use your password below.</p>
             <div class="preview-unlock-bar">
                 <LockIcon class="preview-unlock-lock" strokeWidth={1.7} aria-hidden="true" />
                 <input id="preview-locked-input" type="password" placeholder="Password" autocomplete="current-password" spellcheck="false" aria-label="Encryption password">
@@ -74,6 +69,11 @@
             </div>
             <div id="preview-locked-error" class="preview-unlock-error" style="display: none;" role="alert"></div>
             <div id="preview-locked-hint" class="preview-unlock-hint" style="display: none;">Hint: <span id="preview-locked-hint-text"></span></div>
+            <button id="preview-locked-biometric" class="preview-unlock-biometric" type="button" hidden>
+                <FingerprintIcon size={20} aria-hidden="true" />
+                <span id="preview-locked-biometric-label">Use biometrics</span>
+            </button>
+            <p class="preview-unlock-biometric-help">Both options unlock the current session.</p>
         </div>
     </div>
 </div>

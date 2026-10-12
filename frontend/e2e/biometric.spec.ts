@@ -40,7 +40,7 @@ test('the gallery lightbox offers explicit Touch ID with password fallback and r
 });
 
 for (const platform of ['desktop', 'android'] as const) {
-    test(`the gallery lightbox keeps password fallback after failed biometric authentication on ${platform}`, async ({ page }) => {
+    test(`the gallery lightbox keeps password fallback after failed biometric authentication on ${platform}`, async ({ page, browserName }) => {
         if (platform === 'android') await page.setViewportSize({ width: 390, height: 844 });
         await routeRenditions(page);
         const photo = { ...FIRST_PHOTO, encrypted: true };
@@ -54,6 +54,23 @@ for (const platform of ['desktop', 'android'] as const) {
         await page.getByRole('button', { name: photo.name, exact: true }).click();
         const card = page.getByRole('group', { name: 'Locked photo' });
         const native = card.getByRole('button', { name: platform === 'android' ? 'Use biometrics' : 'Use Touch ID', exact: true });
+        await expect(native).toBeVisible();
+        const password = card.getByLabel('Encryption password', { exact: true });
+        expect(await card.evaluate((element) => {
+            const field = element.querySelector('#preview-locked-input')!.getBoundingClientRect();
+            const action = element.querySelector('#preview-locked-biometric')!.getBoundingClientRect();
+            return action.y >= field.y + field.height;
+        })).toBe(true);
+        await password.focus();
+        // WebKit's macOS keyboard navigation includes buttons with Option+Tab.
+        const tab = browserName === 'webkit' ? 'Alt+Tab' : 'Tab';
+        await page.keyboard.press(tab);
+        await expect(card.getByRole('button', { name: 'Show password', exact: true })).toBeFocused();
+        await page.keyboard.press(tab);
+        await expect(card.getByRole('button', { name: 'Unlock', exact: true })).toBeFocused();
+        await page.keyboard.press(tab);
+        await expect(native).toBeFocused();
+        await page.screenshot({ path: `/tmp/tdrive-biometric-gallery-${platform}-password-first.png` });
         await native.click();
         await expect(card.getByRole('alert')).toHaveText('Biometric authentication failed. Try again or use your encryption password.');
         await expect(card).not.toContainText('Private native diagnostic');
@@ -121,6 +138,7 @@ test('the gallery lightbox discards late biometric capability from the previous 
     await mock.release('old-gallery-capability');
     await expect.poll(async () => (await mock.calls('BiometricStatus'))[0].state).toBe('fulfilled');
     await expect(page.getByRole('group', { name: 'Locked photo' }).getByRole('button', { name: 'Use Touch ID', exact: true })).toHaveCount(0);
+    await expect(page.locator('.preview-unlock-biometric-help')).toBeHidden();
     await expect(page.getByRole('group', { name: 'Locked photo' }).getByLabel('Encryption password', { exact: true })).toBeEnabled();
     expect(await mock.calls('UseBiometricUnlock')).toHaveLength(0);
 });
@@ -260,7 +278,7 @@ for (const platform of ['desktop', 'android'] as const) {
         await expect(settings).toBeHidden();
     });
 
-    test(`password fallback works after a canceled biometric prompt on ${platform}`, async ({ page }, testInfo) => {
+    test(`password fallback works after a canceled biometric prompt on ${platform}`, async ({ page, browserName }, testInfo) => {
         if (platform === 'android') await page.setViewportSize({ width: 390, height: 844 });
         const mock = await bootTDrive(page, {
             EncryptionStatus: resolves(locked),
@@ -277,7 +295,23 @@ for (const platform of ['desktop', 'android'] as const) {
         } else panel = await openBackup(page);
         await panel.getByRole('button', { name: 'Unlock and back up', exact: true }).click();
         const prompt = page.getByRole('dialog', { name: 'Unlock encrypted files' });
-        await prompt.getByRole('button', { name: platform === 'android' ? 'Use biometrics' : 'Use Windows Hello', exact: true }).click();
+        const native = prompt.getByRole('button', { name: platform === 'android' ? 'Use biometrics' : 'Use Windows Hello', exact: true });
+        await expect(native).toBeVisible();
+        const password = prompt.getByLabel('Encryption password', { exact: true });
+        expect(await prompt.evaluate((element) => {
+            const field = element.querySelector('#encryption-password-input')!.getBoundingClientRect();
+            const action = element.querySelector('#encryption-password-biometric')!.getBoundingClientRect();
+            return action.y >= field.y + field.height;
+        })).toBe(true);
+        await expect(password).toBeFocused();
+        await page.keyboard.press(browserName === 'webkit' ? 'Alt+Tab' : 'Tab');
+        await expect(native).toBeFocused();
+        await expect.poll(async () => {
+            const bounds = (await prompt.boundingBox())!;
+            return bounds.y + bounds.height;
+        }).toBeLessThanOrEqual(platform === 'android' ? 844 : 800);
+        await page.screenshot({ path: `/tmp/tdrive-biometric-unlock-${platform}-password-first.png` });
+        await native.click();
         await expect(prompt.getByRole('alert')).toHaveText('Biometric unlock was canceled. Enter your password or try again.');
         await expect(prompt).not.toContainText('Native details');
         expect(await mock.calls('RunPhotoBackup')).toHaveLength(0);

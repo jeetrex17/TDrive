@@ -108,6 +108,7 @@ describe('EncryptionPasswordModal secret lifecycle', () => {
             encryptionPasswordModal.open({ hint: '', biometric });
             flushSync();
             expect(host.querySelector('#encryption-password-biometric')).toBeNull();
+            expect(host.querySelector('.biometric-help')).toBeNull();
             expect(input(host, '#encryption-password-input').disabled).toBe(false);
         }
     });

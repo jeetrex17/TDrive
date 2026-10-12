@@ -72,18 +72,6 @@
     restoreFocus="#file-list"
     onClose={cancel}
 >
-    {#if biometric?.available && biometric.enrolled}
-        <button id="encryption-password-biometric" class="secondary-btn biometric-unlock-btn" type="button" disabled={$view.busy} onclick={unlockWithBiometric}>
-            <FingerprintIcon size={18} aria-hidden="true" />
-            {biometricBusy ? 'Waiting for authentication…' : `Use ${biometricLabel(biometric.kind)}`}
-        </button>
-        <p class="field-help biometric-help">You can always use your encryption password below.</p>
-    {/if}
-    {#if hint}
-        <p id="encryption-password-hint" class="modal-subtitle">
-            Hint: <span id="encryption-password-hint-text">{hint}</span>
-        </p>
-    {/if}
     <input
         id="encryption-password-input"
         type="password"
@@ -98,6 +86,18 @@
     />
     {#if $view.error}
         <div id="encryption-password-error" class="modal-error" role="alert">{$view.error}</div>
+    {/if}
+    {#if hint}
+        <p id="encryption-password-hint" class="modal-subtitle">
+            Hint: <span id="encryption-password-hint-text">{hint}</span>
+        </p>
+    {/if}
+    {#if biometric?.available && biometric.enrolled}
+        <button id="encryption-password-biometric" class="secondary-btn biometric-unlock-btn" type="button" disabled={$view.busy} onclick={unlockWithBiometric}>
+            <FingerprintIcon size={18} aria-hidden="true" />
+            {biometricBusy ? 'Waiting for authentication…' : `Use ${biometricLabel(biometric.kind)}`}
+        </button>
+        <p class="field-help biometric-help">Both options unlock the current session.</p>
     {/if}
 
     {#snippet actions()}

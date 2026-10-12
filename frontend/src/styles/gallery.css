@@ -378,6 +378,7 @@
     gap: var(--space-2);
     width: 100%;
     min-height: 44px;
+    margin-top: var(--space-4);
     padding: var(--space-3) var(--space-4);
     border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
     border-radius: var(--radius-xl);
@@ -391,7 +392,7 @@
 .preview-unlock-biometric:focus-visible { outline: 2px solid var(--viewer-accent); outline-offset: 3px; }
 .preview-unlock-biometric:disabled { opacity: 0.5; cursor: progress; }
 .preview-unlock-biometric-help {
-    margin: var(--space-2) 0 var(--space-4);
+    margin: var(--space-2) 0 0;
     color: var(--viewer-text-muted);
     font-size: var(--type-sm);
     text-align: center;
