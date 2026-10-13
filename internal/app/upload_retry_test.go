@@ -15,6 +15,9 @@ func TestFailedUploadRetryRejectsChangedDrive(t *testing.T) {
 	if result.Result.OK {
 		t.Fatal("retry accepted a different destination")
 	}
+	if len(result.Failures) != 1 || result.Failures[0].Code != "not_sent" || !result.Failures[0].Retryable {
+		t.Fatalf("failures = %+v, want the refused file reported as safe to retry", result.Failures)
+	}
 	var count int
 	if err := db.QueryRow(`SELECT COUNT(*) FROM files`).Scan(&count); err != nil {
 		t.Fatal(err)
@@ -33,6 +36,9 @@ func TestFailedUploadRetryDoesNotCancelExistingUpload(t *testing.T) {
 	result := a.RetryUploadToDriveFS([]string{"unused.txt"}, []string{""}, false, testEncryptionChannelID)
 	if !errors.Is(result.Result.Err(), errUploadBusy) {
 		t.Fatalf("retry error = %v, want upload busy", result.Result.Err())
+	}
+	if len(result.Failures) != 1 || result.Failures[0].Code != "not_sent" || !result.Failures[0].Retryable {
+		t.Fatalf("failures = %+v, want the deferred file reported as safe to retry", result.Failures)
 	}
 	if ctx.Err() != nil {
 		t.Fatal("retry canceled the existing upload")

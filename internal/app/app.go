@@ -271,30 +271,34 @@ func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bo
 // upload. Callers select only failures explicitly reported as safe to retry.
 func (a *App) RetryUploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool, expectedChannelID int64) UploadResult {
 	if expectedChannelID == 0 || a.ActiveChannelID() != expectedChannelID {
-		return UploadResult{Result: operationFailureMessage(errors.New("upload destination changed"), "Switch back to the original drive before retrying these files")}
+		err := errors.New("upload destination changed")
+		return UploadResult{Result: operationFailureMessage(err, "Switch back to the original drive before retrying these files"), Failures: fileservice.NotSentFailures(filePaths, err)}
 	}
 	return a.uploadToDriveFS(filePaths, parentIDs, encrypt, expectedChannelID, true)
 }
 
 func (a *App) uploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool, channelID int64, retry bool) UploadResult {
+	// Failures before the service call never sent anything: report them
+	// per file so the selection can be retried without a new picker round.
 	svc, err := a.requireFileService()
 	if err != nil {
-		return UploadResult{Result: operationFailure(err)}
+		return UploadResult{Result: operationFailure(err), Failures: fileservice.NotSentFailures(filePaths, err)}
 	}
 	var ctx context.Context
 	var finish func()
 	if retry {
 		ctx, finish, err = a.transfers.resumeUpload(a.ctx)
 		if err != nil {
-			return UploadResult{Result: operationFailure(err)}
+			return UploadResult{Result: operationFailure(err), Failures: fileservice.NotSentFailures(filePaths, err)}
 		}
 	} else {
 		ctx, finish = a.transfers.begin(a.ctx, uploadTransfer)
 	}
 	defer finish()
+	sources := filePaths
 	filePaths, staged, err := a.stageMobileUploadPaths(ctx, filePaths, encrypt)
 	if err != nil {
-		return UploadResult{Result: operationFailure(err)}
+		return UploadResult{Result: operationFailure(err), Failures: fileservice.NotSentFailures(sources, err)}
 	}
 	defer a.releaseUnreferencedUploadSources(svc, staged)
 	a.sweepOrphanParts(ctx)

@@ -140,16 +140,16 @@ func TestUploadWithFailuresKeepsDurableJobRecovery(t *testing.T) {
 	}
 }
 
-func TestUploadWithFailuresPreflightDoesNotPermitResend(t *testing.T) {
+func TestUploadWithFailuresPreflightReportsNothingSent(t *testing.T) {
 	svc, _, fake, _ := newTestService(t)
-	svc.ActorID = func(context.Context) (int64, error) { return 0, tgclient.ErrInjectedTransport }
+	svc.ActorID = func(context.Context) (int64, error) { return 0, errors.New("actor unavailable") }
 	_, failures, err := svc.UploadWithFailures(t.Context(), personalChannelID, []string{"first.txt", "second.txt"}, []string{"", ""}, false)
 	if err == nil || len(failures) != 2 || len(fake.SentFiles()) != 0 {
 		t.Fatalf("failures=%v error=%v, want all preflight outcomes and no sends", failures, err)
 	}
-	for _, failure := range failures {
-		if failure.Retryable {
-			t.Fatalf("preflight failure %+v inferred safe resend", failure)
+	for index, failure := range failures {
+		if failure.Index != index || failure.Code != "not_sent" || !failure.Retryable {
+			t.Fatalf("preflight failure %+v, want ordered safe not_sent", failure)
 		}
 	}
 }

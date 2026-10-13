@@ -25,21 +25,38 @@ var (
 	errUploadSource    = errors.New("upload source unavailable")
 )
 
+// NotSentFailures reports every input of a batch that failed before any send
+// began. Nothing reached Telegram, so a fresh upload is safe.
+func NotSentFailures(filePaths []string, err error) []UploadFailure {
+	failures := make([]UploadFailure, 0, len(filePaths))
+	for index, path := range filePaths {
+		failures = append(failures, notSentFailure(index, filepath.Base(path), err))
+	}
+	return failures
+}
+
+func notSentFailure(index int, name string, err error) UploadFailure {
+	return UploadFailure{Index: index, Name: name, Message: err.Error(), Code: "not_sent", Retryable: true}
+}
+
 // UploadWithFailures retains the ordinary upload contract and additionally
 // reports every failed input. Its outcome tracking belongs to this call only;
 // it does not create a durable ordinary-upload retry journal.
 func (s *Service) UploadWithFailures(ctx context.Context, channelID int64, filePaths, parentIDs []string, encrypt bool) ([]Metadata, []UploadFailure, error) {
-	observer := &failureUploadObserver{uploadObserver: detailedUploadObserver{service: s}, failures: make(map[int]UploadFailure), completed: make(map[int]bool), ctx: ctx}
+	observer := &failureUploadObserver{uploadObserver: detailedUploadObserver{service: s}, failures: make(map[int]UploadFailure), started: make(map[int]bool), completed: make(map[int]bool), ctx: ctx}
 	files, err := s.upload(ctx, channelID, filePaths, parentIDs, encrypt, uploadOptions{observer: observer, resumable: true})
 	failures := make([]UploadFailure, 0, len(observer.failures))
 	for index, path := range filePaths {
 		if failure, ok := observer.failures[index]; ok {
 			failures = append(failures, failure)
 		} else if err != nil && !observer.completed[index] {
-			// Preflight failures have no per-file event. Never infer permission to
-			// resend from a batch-wide error, even if it looks transient.
+			// Started precedes every send, so an input without it never left
+			// the machine. One that started and reported nothing stays closed.
 			failure := classifyUploadFailure(ctx, index, filepath.Base(path), err)
 			failure.Retryable = false
+			if !observer.started[index] {
+				failure = notSentFailure(index, filepath.Base(path), err)
+			}
 			failures = append(failures, failure)
 		}
 	}
@@ -51,7 +68,15 @@ type failureUploadObserver struct {
 	ctx       context.Context
 	mu        sync.Mutex
 	failures  map[int]UploadFailure
+	started   map[int]bool
 	completed map[int]bool
+}
+
+func (o *failureUploadObserver) Started(id int, name string, size int64, parentID string) {
+	o.mu.Lock()
+	o.started[id] = true
+	o.mu.Unlock()
+	o.uploadObserver.Started(id, name, size, parentID)
 }
 
 func (o *failureUploadObserver) Completed(id int, name string) {
