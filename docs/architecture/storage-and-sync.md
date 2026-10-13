@@ -121,8 +121,12 @@ available.
 History planning walks backwards to discover page boundaries, then reads and
 applies oldest first. Only an empty page proves exhaustion: short pages can occur
 because of deleted messages or service events. Pagination that makes no progress
-fails. Reads use bounded flood-wait retries, and the scan fixes an upper bound so
-new arrivals do not continually extend that pass.
+fails. History and channel-difference reads use bounded flood-wait retries and
+four transport retries with capped exponential backoff and jitter. The budgets
+remain independent across mixed failures. A gotd engine shutdown can wrap its
+own context cancellation while the scan's caller is still alive; that transport
+failure is retryable, while caller cancellation stops retries. The scan fixes
+an upper bound so new arrivals do not continually extend that pass.
 
 ## Full scans and local rebuilds
 
