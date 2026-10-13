@@ -30,6 +30,15 @@ GUI and daemon are alternative backend owners. Both acquire the same
 [`processlock`](../../backend/processlock) before using account state. The GUI
 quits if acquisition fails; daemon startup returns the error. A feature must use
 the owner's engine instead of constructing another connection and service graph.
+Backend ownership uses an OS-held exclusive lock on the persistent
+`backend.lock.guard` file. Process death releases it without trusting a recorded
+PID; `backend.lock` keeps versioned role/PID diagnostics for GUI and CLI callers.
+Neither file is removed on release, so contenders retain one guard inode.
+Live legacy PID-file owners remain protected during upgrades. Android can reject
+legacy ownership when readable process identity proves PID reuse; unreadable or
+unknown legacy metadata stays conservative. Desktop legacy records with live
+PIDs require their older owner to exit before migration.
+
 Photo backup belongs to the GUI application lifecycle and is assembled outside
 `core.Engine`; sharing the engine does not make the daemon a backup scheduler.
 
