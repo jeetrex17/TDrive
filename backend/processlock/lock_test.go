@@ -218,3 +218,69 @@ func TestAcquireReclaimsStaleLock(t *testing.T) {
 		t.Fatalf("lock role = %q, want gui", lock.Info().Role)
 	}
 }
+
+func TestUnknownMetadataBlocksStartupWithoutRetainingGuard(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		record string
+	}{
+		{"damaged record", `{"role":`},
+		{"future version", `{"role":"gui","pid":-1,"lock_version":2}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := withConfigHome(t)
+			path := filepath.Join(dir, "backend.lock")
+			if err := os.WriteFile(path, []byte(tc.record), fileMode); err != nil {
+				t.Fatal(err)
+			}
+			lock, err := Acquire("gui")
+			if lock != nil {
+				t.Cleanup(func() { _ = lock.Release() })
+			}
+			if !errors.Is(err, ErrAlreadyRunning) {
+				t.Fatalf("unknown ownership allowed startup: %v", err)
+			}
+			_, active, err := ReadActive()
+			if err != nil || !active {
+				t.Fatalf("unknown ownership active=%v error=%v", active, err)
+			}
+			record, err := os.ReadFile(path)
+			if err != nil || string(record) != tc.record {
+				t.Fatalf("ownership record changed: %q error=%v", record, err)
+			}
+			// Once the old record is removed, failed acquisition must not leave
+			// a guard held by this process and prevent recovery.
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			recovered, err := Acquire("daemon")
+			if err != nil {
+				t.Fatalf("refused startup retained ownership: %v", err)
+			}
+			t.Cleanup(func() {
+				if err := recovered.Release(); err != nil {
+					t.Error(err)
+				}
+			})
+		})
+	}
+}
+
+func TestMetadataPublicationFailurePreservesExistingRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backend.lock")
+	original := `{"role":"gui","pid":-1,"lock_version":2}`
+	if err := os.WriteFile(path, []byte(original), fileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeInfo(path, Info{Role: "daemon", PID: os.Getpid(), LockVersion: 1}); !errors.Is(err, ErrAlreadyRunning) {
+		t.Fatalf("publication replaced unknown owner: %v", err)
+	}
+	record, err := os.ReadFile(path)
+	if err != nil || string(record) != original {
+		t.Fatalf("existing record changed: %q error=%v", record, err)
+	}
+	leftovers, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".backend-lock-*"))
+	if err != nil || len(leftovers) != 0 {
+		t.Fatalf("temporary metadata leaked: %v error=%v", leftovers, err)
+	}
+}
