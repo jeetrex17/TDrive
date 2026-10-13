@@ -89,9 +89,8 @@ type Engine struct {
 	deletionsCurrent map[int64]bool
 }
 
-// getHistory wraps tg.GetHistory with bounded FLOOD_WAIT retries. Telegram
-// rate-limits history reads on large channels; without this a single
-// FLOOD_WAIT would abort the whole sync pass.
+// getHistory wraps tg.GetHistory with bounded read retries, so a rate limit
+// or dropped connection does not immediately abort the whole sync pass.
 func (e *Engine) getHistory(ctx context.Context, channelID int64, peer tgclient.InputPeer, minID, offsetID int64, limit int) ([]tgclient.HistoryMessage, error) {
 	var page []tgclient.HistoryMessage
 	err := e.retryFloodWait(ctx, channelID, "history read", func() error {
@@ -102,29 +101,42 @@ func (e *Engine) getHistory(ctx context.Context, channelID int64, peer tgclient.
 	return page, err
 }
 
-// retryFloodWait runs call, sleeping through bounded FLOOD_WAITs for as long
-// as Telegram asks (capped), so one rate limit does not abort a sync pass.
+// retryFloodWait retries read-only calls through rate limits and connection
+// failures. Flood and transport budgets are independent and span the whole
+// read, including mixed failures. Writes must use their own retry boundary.
 func (e *Engine) retryFloodWait(ctx context.Context, channelID int64, what string, call func() error) error {
-	for attempt := 0; ; attempt++ {
-		err := call()
-		if err == nil {
-			return nil
-		}
-		wait, ok := tgclient.FloodWaitDuration(err)
-		if !ok || attempt >= maxFloodWaitRetries {
-			return err
-		}
-		if wait > maxFloodWaitSleep {
-			wait = maxFloodWaitSleep
-		}
-		slog.Warn("sync: FLOOD_WAIT on "+what+", retrying", "channel_id", channelID, "attempt", attempt+1, "wait", wait)
-		e.report(Progress{ChannelID: channelID, Phase: ProgressWaiting, Wait: wait})
-		select {
-		case <-time.After(wait):
-		case <-ctx.Done():
-			return ctx.Err()
-		}
+	defaults := tgclient.DefaultWriteFloodWaitRetryPolicy()
+	transport := tgclient.FloodWaitRetryPolicy{
+		MaxTransientRetries: defaults.MaxTransientRetries,
+		TransientBackoff:    defaults.TransientBackoff,
+		MaxTransientBackoff: defaults.MaxTransientBackoff,
+		TransientJitter:     defaults.TransientJitter,
 	}
+	floodRetries := 0
+	return transport.Do(ctx, func() error {
+		for {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			err := call()
+			if err == nil {
+				return nil
+			}
+			wait, ok := tgclient.FloodWaitDuration(err)
+			if !ok || floodRetries >= maxFloodWaitRetries {
+				return err
+			}
+			wait = min(wait, maxFloodWaitSleep)
+			floodRetries++
+			slog.Warn("sync: FLOOD_WAIT on "+what+", retrying", "channel_id", channelID, "attempt", floodRetries, "wait", wait)
+			e.report(Progress{ChannelID: channelID, Phase: ProgressWaiting, Wait: wait})
+			select {
+			case <-time.After(wait):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+		}
+	})
 }
 
 // PeerResolver returns the InputPeer for a given channel id. Channels know
