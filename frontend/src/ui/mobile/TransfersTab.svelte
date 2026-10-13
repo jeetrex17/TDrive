@@ -113,7 +113,7 @@
             <p class="mobile-empty-body">Uploads and downloads show up here.</p>
         </div>
     {:else}
-        <FailedUploadReports reports={$failedUploadReports} onReview={reviewFailedUploads} onDismiss={dismissFailedUploadReport} />
+        <FailedUploadReports variant="mobile" reports={$failedUploadReports} onReview={reviewFailedUploads} onDismiss={dismissFailedUploadReport} />
         {#if hasActive}
             <div class="transfers-section-head">
                 <h2 class="mobile-section-label">Active</h2>

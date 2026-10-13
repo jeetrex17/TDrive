@@ -642,7 +642,7 @@ function finalizeUploadBatch(uploadThrew: boolean, failures?: UploadFailure[]): 
         id: UPLOAD_BATCH_TRANSFER_ID,
         direction: 'up',
         name: canceled ? 'Upload canceled' : failures?.length
-            ? `Uploaded ${confirmedSuccesses} ${confirmedSuccesses === 1 ? 'file' : 'files'} · ${failures.length} need attention`
+            ? `Uploaded ${confirmedSuccesses} ${confirmedSuccesses === 1 ? 'file' : 'files'} · ${failures.length} ${failures.length === 1 ? 'needs' : 'need'} attention`
             : formatUploadBatchLabel(batch),
     });
     // Failed-file recovery lives in its session report. Keep event-only reasons
@@ -1375,6 +1375,12 @@ export function reviewFailedUploads(payload: FailedUploadsPayload): void {
     } : payload);
 }
 
+function failedUploadBody(total: number, failed: number, reason = ''): string {
+    if (failed >= total && reason) return reason;
+    const attention = `${failed} ${failed === 1 ? 'needs' : 'need'} attention.`;
+    return failed < total ? `Uploaded ${total - failed} of ${total}. ${attention}` : attention;
+}
+
 function showFailedUploadNotice(payload: FailedUploadsPayload, body: string, generation: number): void {
     if (generation !== transferSurfaceGeneration) return;
     rememberFailedUploadReport(payload);
@@ -1451,11 +1457,13 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
         uploadThrew = true;
         console.error('Upload failed:', error);
         if (!state.cancelingUpload) {
+            // The backend reports every failed input; only an invocation that
+            // never returned leaves the outcome unknown.
             if (!failures.length) failures = paths.map((path, index) => ({
                 index, name: path.split(/[/\\]/).pop() || 'Untitled',
                 message: humanizeBackendError(error), code: 'outcome_unknown', retryable: false,
             }));
-            showFailedUploadNotice({ paths: [...paths], failures, parentId: parentID, encrypt, driveId, driveTitle }, humanizeBackendError(error), generation);
+            showFailedUploadNotice({ paths: [...paths], failures, parentId: parentID, encrypt, driveId, driveTitle }, failedUploadBody(paths.length, failures.length, humanizeBackendError(error)), generation);
         }
     } finally {
         setTransferDirectionActive('upload', false);
@@ -1478,7 +1486,7 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
             }
         }
         if (!uploadThrew && failures.length && !state.cancelingUpload) {
-            showFailedUploadNotice({ paths: [...paths], failures, parentId: parentID, encrypt, driveId, driveTitle }, `${failures.length} files need attention.`, generation);
+            showFailedUploadNotice({ paths: [...paths], failures, parentId: parentID, encrypt, driveId, driveTitle }, failedUploadBody(paths.length, failures.length), generation);
         }
         invalidateTransferCaches();
         state.uploadBatch = null;

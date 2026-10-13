@@ -36,8 +36,8 @@ describe('failed upload review', () => {
         flushSync();
         expect(host.querySelectorAll('li')).toHaveLength(2);
         expect(host.textContent).toContain('file-21.txt');
-        expect(host.textContent).toContain('error 21');
-        expect(host.textContent).toContain('check whether the file arrived');
+        expect(host.textContent).toContain('Ready to retry');
+        expect(host.textContent).toContain('Check the folder before uploading it again');
         const button = host.querySelector<HTMLButtonElement>('#retry-failed-uploads');
         expect(button?.textContent).toContain('(21)');
         button?.click();
