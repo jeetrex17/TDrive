@@ -4,8 +4,9 @@
 // A persistent guard file carries the OS-held exclusive lock. Process death
 // releases ownership; PID metadata is diagnostic for current-format owners.
 // The guard is never unlinked, so contenders always lock the same inode.
-// Legacy PID-file owners remain protected during upgrades. On Android, readable
-// process identity can disprove stale legacy ownership; uncertainty stays closed.
+// Legacy PID-file owners remain protected during upgrades while their process
+// is alive and could be ours; an app-private Android directory cannot belong to
+// a PID this process may not signal.
 package processlock
 
 import (
@@ -99,7 +100,11 @@ func legacyOwnerActive(path string) bool {
 	if info.LockVersion != 0 {
 		return true
 	}
-	return legacyOwnerRunning(info, path)
+	// A legacy record naming this process can only be a reused PID.
+	if info.PID == os.Getpid() {
+		return false
+	}
+	return legacyOwnerRunning(info)
 }
 
 func ownerError(path string) error {
@@ -143,13 +148,26 @@ func writeInfo(path string, info Info) error {
 	} else {
 		return fmt.Errorf("backend lock: metadata: %w", err)
 	}
-	if err := os.Rename(temporary, path); err != nil {
+	if err := replaceFile(temporary, path); err != nil {
 		if created {
 			_ = os.Remove(path)
 		}
 		return fmt.Errorf("backend lock: metadata: %w", err)
 	}
 	return nil
+}
+
+// Windows refuses to replace a file another process has open without
+// FILE_SHARE_DELETE, which the CLI's probe does briefly.
+func replaceFile(from, to string) error {
+	var err error
+	for range 20 {
+		if err = os.Rename(from, to); err == nil {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return err
 }
 
 func (l *Lock) Release() error {

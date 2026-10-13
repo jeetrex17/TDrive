@@ -2,6 +2,6 @@
 
 package processlock
 
-func legacyOwnerRunning(info Info, _ string) bool {
+func legacyOwnerRunning(info Info) bool {
 	return processRunning(info.PID)
 }

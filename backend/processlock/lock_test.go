@@ -3,6 +3,7 @@ package processlock
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sync"
@@ -181,6 +182,22 @@ func TestActiveGuardDoesNotDependOnReadableMetadata(t *testing.T) {
 			t.Fatalf("metadata change bypassed live guard: %v", err)
 		}
 	}
+}
+
+func TestAcquireReclaimsLegacyRecordNamingOwnPID(t *testing.T) {
+	dir := withConfigHome(t)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	record := fmt.Sprintf(`{"role":"gui","pid":%d,"started_at":1}`, os.Getpid())
+	if err := os.WriteFile(filepath.Join(dir, "backend.lock"), []byte(record), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := Acquire("daemon")
+	if err != nil {
+		t.Fatalf("legacy record reusing this PID blocked startup: %v", err)
+	}
+	defer func() { _ = lock.Release() }()
 }
 
 func TestAcquireReclaimsStaleLock(t *testing.T) {

@@ -34,10 +34,11 @@ Backend ownership uses an OS-held exclusive lock on the persistent
 `backend.lock.guard` file. Process death releases it without trusting a recorded
 PID; `backend.lock` keeps versioned role/PID diagnostics for GUI and CLI callers.
 Neither file is removed on release, so contenders retain one guard inode.
-Live legacy PID-file owners remain protected during upgrades. Android can reject
-legacy ownership when readable process identity proves PID reuse; unreadable or
-unknown legacy metadata stays conservative. Desktop legacy records with live
-PIDs require their older owner to exit before migration.
+Live legacy PID-file owners remain protected during upgrades; a legacy record
+naming the current process is a reused PID. On Android the data directory is
+app-private, so a PID this process cannot signal belongs to another UID and does
+not block startup. Desktop legacy records with live PIDs require their older
+owner to exit before migration.
 
 Photo backup belongs to the GUI application lifecycle and is assembled outside
 `core.Engine`; sharing the engine does not make the daemon a backup scheduler.
