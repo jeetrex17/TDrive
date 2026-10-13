@@ -44,13 +44,13 @@ func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, fi
 	plainFile, err := os.Open(filePath)
 	if err != nil {
 		slog.Error("file: upload open source failed", "channel_id", channelID, "name", filename, "error", err)
-		return Metadata{}, projection.Op{}, "", err
+		return Metadata{}, projection.Op{}, "", fmt.Errorf("%w: %w", errUploadSource, err)
 	}
 	defer plainFile.Close()
 
 	info, err := plainFile.Stat()
 	if err != nil {
-		return Metadata{}, projection.Op{}, "", err
+		return Metadata{}, projection.Op{}, "", fmt.Errorf("%w: %w", errUploadSource, err)
 	}
 	plaintextSize := info.Size()
 	// A photo's original and derivatives must use one immutable source. The

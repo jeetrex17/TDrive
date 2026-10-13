@@ -1,4 +1,7 @@
 <script lang="ts">
+    import FailedUploadReports from '../notifications/FailedUploadReports.svelte';
+    import { failedUploadReports, dismissFailedUploadReport } from '../modals/failed-uploads-store';
+    import { reviewFailedUploads } from '../../modules/transfers';
     import ArrowDownUpIcon from '@lucide/svelte/icons/arrow-down-up';
     import { activeTransfers, type TransferEvent } from '../notifications/notif-store';
     import EventRow from '../notifications/EventRow.svelte';
@@ -101,7 +104,7 @@
 </script>
 
 <div class="mobile-scroll transfers-tab">
-    {#if !hasActive && visibleRecent.length === 0}
+    {#if !hasActive && visibleRecent.length === 0 && $failedUploadReports.length === 0}
         <div class="mobile-empty">
             <span class="mobile-empty-glyph">
                 <ArrowDownUpIcon size={40} strokeWidth={1.6} aria-hidden="true" />
@@ -110,6 +113,7 @@
             <p class="mobile-empty-body">Uploads and downloads show up here.</p>
         </div>
     {:else}
+        <FailedUploadReports reports={$failedUploadReports} onReview={reviewFailedUploads} onDismiss={dismissFailedUploadReport} />
         {#if hasActive}
             <div class="transfers-section-head">
                 <h2 class="mobile-section-label">Active</h2>

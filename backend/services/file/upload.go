@@ -282,7 +282,7 @@ func (s *Service) projectUploaded(channelID, actorID int64, uploaded []uploadedR
 			_ = tx.Rollback()
 		}
 		if err != nil {
-			wrapped := fmt.Errorf("local index write failed: %w", err)
+			wrapped := fmt.Errorf("local index write failed: %w: %w", errUploadProjection, err)
 			for _, item := range pending[start:] {
 				observer.Failed(item.UploadID, item.Meta.Name, wrapped)
 			}

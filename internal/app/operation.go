@@ -76,8 +76,9 @@ func (r OperationResult) Err() error {
 
 // UploadResult adds uploaded file data to the common operation envelope.
 type UploadResult struct {
-	Result OperationResult        `json:"result"`
-	Files  []backend.FileMetaData `json:"files"`
+	Result   OperationResult             `json:"result"`
+	Files    []backend.FileMetaData      `json:"files"`
+	Failures []fileservice.UploadFailure `json:"failures"`
 }
 
 // DownloadResult adds the chosen destination to the common operation envelope.

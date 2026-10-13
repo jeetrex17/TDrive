@@ -475,6 +475,14 @@ export function RetryPhotoBackup(): $CancellablePromise<$models.OperationResult>
 }
 
 /**
+ * RetryUploadToDriveFS pins the original destination and never replaces another
+ * upload. Callers select only failures explicitly reported as safe to retry.
+ */
+export function RetryUploadToDriveFS(filePaths: string[] | null, parentIDs: string[] | null, encrypt: boolean, expectedChannelID: number): $CancellablePromise<$models.UploadResult> {
+    return $Call.ByID(3971702533, filePaths, parentIDs, encrypt, expectedChannelID);
+}
+
+/**
  * The backup controls answer with the common operation envelope so the
  * frontend can branch on a stable code — a locked vault opens the password
  * prompt, anything else is shown in the backend's own words — rather than

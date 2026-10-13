@@ -28,6 +28,7 @@ import {
     SetFileDropEnabled as rawSetFileDropEnabled,
     ShareFile as rawShareFile,
     UploadToDriveFS as rawUploadToDriveFs,
+    RetryUploadToDriveFS as rawRetryUploadToDriveFs,
 } from "../../bindings/TDrive/internal/app/app";
 import {
     ChangeEncryptionPassword as rawChangeEncryptionPassword,
@@ -227,13 +228,39 @@ export async function importPaths(paths: string[], parentId: string, encrypt: bo
     );
 }
 
-export async function uploadToDriveFs(paths: string[], parentIds: string[], encrypt: boolean): Promise<UploadResult> {
-    const raw = asRecord(await invokeBackend(rawUploadToDriveFs, paths, parentIds, encrypt));
+function normalizeUploadResult(value: unknown, pathCount: number): UploadResult {
+    const raw = asRecord(value);
     const files = Array.isArray(raw.files) ? raw.files as FileMetaData[] : [];
+    const failures = Array.isArray(raw.failures) ? raw.failures.map(asRecord) : [];
+    const indexes = new Set<number>();
+    const valid = failures.every((failure) => {
+        const index = failure.index;
+        if (typeof index !== 'number' || !Number.isInteger(index) || index < 0 || index >= pathCount || indexes.has(index)
+            || typeof failure.name !== 'string' || typeof failure.message !== 'string'
+            || typeof failure.code !== 'string' || typeof failure.retryable !== 'boolean') return false;
+        indexes.add(index);
+        return true;
+    });
     return {
         result: normalizeOperationResult(raw.result, "Could not upload selected files"),
         files: files.map(toFileItem),
+        // Malformed or ambiguous indexes cannot authorize a fresh send.
+        failures: valid ? failures.map((failure) => ({
+            index: failure.index as number,
+            name: failure.name as string,
+            message: failure.message as string,
+            code: failure.code as string,
+            retryable: failure.retryable === true,
+        })) : [],
     };
+}
+
+export async function uploadToDriveFs(paths: string[], parentIds: string[], encrypt: boolean): Promise<UploadResult> {
+    return normalizeUploadResult(await invokeBackend(rawUploadToDriveFs, paths, parentIds, encrypt), paths.length);
+}
+
+export async function retryUploadToDriveFs(paths: string[], parentIds: string[], encrypt: boolean, expectedChannelId: number): Promise<UploadResult> {
+    return normalizeUploadResult(await invokeBackend(rawRetryUploadToDriveFs, paths, parentIds, encrypt, expectedChannelId), paths.length);
 }
 
 export async function cancelDownload(): Promise<void> {

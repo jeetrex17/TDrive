@@ -6,9 +6,12 @@
 // Completed transfers stay in the bell's "Recent" panel until cleared.
 
 import { invalidateFolderIndex, state, setTransferDirectionActive, type DownloadQueueItem, type UploadTransfer } from '../state';
-import { createFolder, downloadFile, downloadFolder, importPaths, isAndroidPlatform, isMobilePlatform, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
+import { createFolder, downloadFile, downloadFolder, importPaths, isAndroidPlatform, isMobilePlatform, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs, retryUploadToDriveFs, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
 import { canSaveToDownloads, saveToDownloads } from './android-downloads';
 import { rememberDownloadSharePath } from '../ui/mobile/mobile-shell-store';
+import { get } from 'svelte/store';
+import { failedUploadsModal, failedUploadReports, rememberFailedUploadReport, type FailedUploadsPayload } from '../ui/modals/failed-uploads-store';
+import type { UploadFailure } from '../types';
 import type { ImportPlan, OperationError } from '../types';
 import type { TransferEvent } from '../ui/notifications/notif-store';
 import { dismissNotification, notify } from './notifications';
@@ -618,23 +621,32 @@ function settleUploadInBatch(uploadId: number, outcome: UploadOutcome): boolean 
  * same failure can land two hundred times, and two hundred toasts saying it
  * would bury the one thing the reader could do about it.
  */
-function finalizeUploadBatch(uploadThrew: boolean): void {
+function finalizeUploadBatch(uploadThrew: boolean, failures?: UploadFailure[]): void {
     const batch = uploadBatch;
     if (!batch) return;
     const canceled = state.cancelingUpload;
     batch.settleRemaining(canceled ? 'canceled' : uploadThrew ? 'failed' : 'done');
     refreshUploadBatchRow();
     uploadBatch = null;
+    const confirmedSuccesses = Math.max(0, batch.snapshot().itemsTotal - (failures?.length ?? 0));
+    if (!canceled && failures !== undefined) {
+        const snapshot = batch.snapshot();
+        updateTransferProgress({
+            id: UPLOAD_BATCH_TRANSFER_ID, direction: 'up', progress: 100,
+            bytes: snapshot.bytes, itemsDone: confirmedSuccesses,
+            itemsTotal: snapshot.itemsTotal, items: [], itemsActive: 0,
+        });
+    }
 
     updateTransferName({
         id: UPLOAD_BATCH_TRANSFER_ID,
         direction: 'up',
-        name: canceled ? 'Upload canceled' : formatUploadBatchLabel(batch),
+        name: canceled ? 'Upload canceled' : failures?.length
+            ? `Uploaded ${confirmedSuccesses} ${confirmedSuccesses === 1 ? 'file' : 'files'} · ${failures.length} need attention`
+            : formatUploadBatchLabel(batch),
     });
-    // A call that threw has already raised its own toast, with the Retry that
-    // restarts the whole batch; this is for the files that failed inside a
-    // call that otherwise succeeded, which nothing else would mention. The
-    // reasons stay on the row.
+    // Failed-file recovery lives in its session report. Keep event-only reasons
+    // on the row for callers that do not provide structured outcomes.
     const batchReasons = !canceled && !uploadThrew && batch.failures > 0
         ? uploadBatchFailureReasons.map(humanizeBackendError).join('\n') || 'The rest of the batch finished.'
         : '';
@@ -642,7 +654,7 @@ function finalizeUploadBatch(uploadThrew: boolean): void {
     markTransferDone({
         id: UPLOAD_BATCH_TRANSFER_ID,
         direction: 'up',
-        status: canceled ? 'canceled' : (uploadThrew || batch.failures > 0) ? 'failed' : 'done',
+        status: canceled ? 'canceled' : (uploadThrew || batch.failures > 0 || (failures?.length ?? 0) > 0) ? 'failed' : 'done',
     });
     appActions().refreshFiles();
 
@@ -1329,14 +1341,50 @@ async function importSelection(parentID: string, paths: string[]) {
     }
 }
 
-/**
- * The Retry behind a failed upload toast. It re-enters the same batch, so it
- * takes the same lock the picker and the drop target do: starting an upload
- * while another is running cancels that one on the backend, and a retry is no
- * more entitled to do that than any other trigger.
- */
-async function retryUploadBatch(paths: string[], parentID: string, encrypt: boolean): Promise<void> {
-    await withTransferFlow(() => uploadPathsBatch(paths, parentID, encrypt));
+export function closeFailedUploads(): void {
+    failedUploadsModal.close();
+}
+
+export async function retryFailedUploads(): Promise<void> {
+    await withTransferFlow(async () => {
+        const view = get(failedUploadsModal.state);
+        const payload = view.payload;
+        if (!view.open || view.busy || !payload) return;
+        if (payload.driveId === null || state.activeChannel?.id !== payload.driveId) {
+            failedUploadsModal.setError(`Open ${payload.driveTitle} before retrying these files.`);
+            return;
+        }
+        if (consumedFailedUploadBatches.has(payload)) return;
+        const paths = payload.failures.filter((failure) => failure.retryable).map((failure) => payload.paths[failure.index]);
+        if (!paths.length) return;
+        // Consume this action before awaiting. Repeated taps cannot resend it.
+        consumedFailedUploadBatches.add(payload);
+        failedUploadsModal.close();
+        activeTransferDriveId = payload.driveId;
+        await uploadPathsBatch(paths, payload.parentId, payload.encrypt, payload.driveId);
+    });
+}
+
+const consumedFailedUploadBatches = new WeakSet<FailedUploadsPayload>();
+
+export function reviewFailedUploads(payload: FailedUploadsPayload): void {
+    if (!get(failedUploadReports).includes(payload)) return;
+    failedUploadsModal.open(consumedFailedUploadBatches.has(payload) ? {
+        ...payload, failures: payload.failures.map((failure) => failure.retryable
+            ? { ...failure, retryable: false, code: 'retry_started' } : failure),
+    } : payload);
+}
+
+function showFailedUploadNotice(payload: FailedUploadsPayload, body: string, generation: number): void {
+    if (generation !== transferSurfaceGeneration) return;
+    rememberFailedUploadReport(payload);
+    notify({
+        level: 'error', title: 'Upload failed', body,
+        action: { label: 'Review failed files', run: () => {
+            if (generation !== transferSurfaceGeneration) return;
+            reviewFailedUploads(payload);
+        } },
+    });
 }
 
 /**
@@ -1347,7 +1395,11 @@ async function retryUploadBatch(paths: string[], parentID: string, encrypt: bool
  * aggregate row with the files currently moving listed under it, so the reader
  * can see both how far the batch has got and what it is working on.
  */
-async function uploadPathsBatch(paths: string[], parentID: string, encrypt: boolean) {
+async function uploadPathsBatch(paths: string[], parentID: string, encrypt: boolean, retryDriveId?: number) {
+    const generation = transferSurfaceGeneration;
+    const driveId = state.activeChannel?.id ?? null;
+    const driveTitle = state.activeChannel?.title || 'the original drive';
+    let failures: UploadFailure[] = [];
     if (activeTransferDriveId === null) activeTransferDriveId = state.activeChannel?.id ?? null;
     setTransferDirectionActive('upload', true);
     state.uploadBatch = { total: paths.length, done: 0, failed: 0 };
@@ -1387,7 +1439,10 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
     let uploadThrew = false;
     try {
         const parentIDs = paths.map(() => parentID);
-        const upload = await uploadToDriveFs(paths, parentIDs, encrypt);
+        const upload = retryDriveId === undefined
+            ? await uploadToDriveFs(paths, parentIDs, encrypt)
+            : await retryUploadToDriveFs(paths, parentIDs, encrypt, retryDriveId);
+        failures = upload.failures ?? [];
         if (!upload.result.ok) {
             if (upload.result.error.code === 'canceled') state.cancelingUpload = true;
             throw upload.result.error;
@@ -1396,30 +1451,11 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
         uploadThrew = true;
         console.error('Upload failed:', error);
         if (!state.cancelingUpload) {
-            // An error the user can only read is a dead end: the whole reason
-            // they are looking at it is that they still want the files up. The
-            // retry re-runs the same batch with the same destination, so the
-            // recovery is one tap rather than re-finding the files in a picker.
-            const toastId = `upload-retry:${Date.now()}`;
-            notify({
-                id: toastId,
-                level: 'error',
-                title: 'Upload failed',
-                body: humanizeBackendError(error),
-                action: {
-                    label: 'Retry',
-                    // One shot, and gone from the screen the moment it is
-                    // taken. The toast is sticky, so a second tap would start a
-                    // second batch over the first: the backend keeps one cancel
-                    // handle per direction, so beginning again cancels the
-                    // retry already running, and the fresh uploadBatch counters
-                    // would be counting the wrong files.
-                    run: oneShot(() => {
-                        dismissNotification(toastId);
-                        void retryUploadBatch(paths, parentID, encrypt);
-                    }),
-                },
-            });
+            if (!failures.length) failures = paths.map((path, index) => ({
+                index, name: path.split(/[/\\]/).pop() || 'Untitled',
+                message: humanizeBackendError(error), code: 'outcome_unknown', retryable: false,
+            }));
+            showFailedUploadNotice({ paths: [...paths], failures, parentId: parentID, encrypt, driveId, driveTitle }, humanizeBackendError(error), generation);
         }
     } finally {
         setTransferDirectionActive('upload', false);
@@ -1428,7 +1464,7 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
         // an entry may still be stuck 'active' at 100% in the bell.
         // markTransferDone is idempotent against terminal entries.
         if (uploadBatch) {
-            finalizeUploadBatch(uploadThrew);
+            finalizeUploadBatch(uploadThrew, failures);
         } else {
             for (const [uploadId, item] of state.uploadTransfers) {
                 if (state.cancelingUpload) {
@@ -1440,6 +1476,9 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
                     markTransferDone({ id: uploadId, direction: 'up', status: 'done' });
                 }
             }
+        }
+        if (!uploadThrew && failures.length && !state.cancelingUpload) {
+            showFailedUploadNotice({ paths: [...paths], failures, parentId: parentID, encrypt, driveId, driveTitle }, `${failures.length} files need attention.`, generation);
         }
         invalidateTransferCaches();
         state.uploadBatch = null;
@@ -1502,7 +1541,12 @@ export function activateTransferSurfaces(): () => void {
     return teardownTransferSurfaces;
 }
 
+let transferSurfaceGeneration = 0;
+
 export function teardownTransferSurfaces(): void {
+    transferSurfaceGeneration += 1;
+    closeFailedUploads();
+    failedUploadReports.set([]);
     const unsubscribers = transferUnsubscribers;
     transferUnsubscribers = [];
     for (const unsubscribe of unsubscribers) unsubscribe();

@@ -65,6 +65,9 @@ func (s *Service) startResumableUpload(ctx context.Context, uploadID int, source
 	}
 	s.emitUploadJob(ctx, job, &uploadID)
 	meta, err := s.runResumableUpload(ctx, job, sourcePath, peer, observer, &uploadID)
+	if err != nil {
+		err = errors.Join(errUploadResumable, err)
+	}
 	if meta.MsgID > 0 && err != nil {
 		op := uploadJobManifest(job)
 		return meta, op, projection.Format(op), err
