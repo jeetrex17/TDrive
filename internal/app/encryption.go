@@ -3,7 +3,9 @@ package app
 import (
 	"context"
 	"fmt"
+	"sync"
 
+	"TDrive/backend/biometric"
 	encservice "TDrive/backend/services/encryption"
 )
 
@@ -24,7 +26,12 @@ type EncryptionService struct {
 	// override replaces the engine's encryption service in tests that need to
 	// park a key write mid-flight and prove a concurrent lock or logout waits
 	// for it. Production always leaves this nil.
-	override appEncryptionService
+	override                  appEncryptionService
+	biometricMu               sync.Mutex
+	biometricProviderOverride biometric.Provider
+	biometricProvider         biometric.Provider
+	biometricPending          *biometricAttempt
+	biometricEpoch            uint64
 }
 
 func newEncryptionService(host serviceHost, mount vaultMountGate) *EncryptionService {
@@ -129,6 +136,7 @@ func (s *EncryptionService) CreateEncryptionPassword(password string, hint strin
 // UseEncryptionPassword verifies an existing encryption password and keeps
 // the master key in memory for the rest of the app session.
 func (s *EncryptionService) UseEncryptionPassword(password string) OperationResult {
+	s.cancelBiometricAttempt()
 	service := s.service()
 	if service == nil {
 		return operationFailure(errBackendUnavailable)
@@ -147,6 +155,7 @@ func (s *EncryptionService) UseEncryptionPassword(password string) OperationResu
 // the same master key with the new password. Existing encrypted files stay
 // decryptable; file contents are not re-encrypted.
 func (s *EncryptionService) ChangeEncryptionPassword(currentPassword string, newPassword string, hint string) OperationResult {
+	s.cancelBiometricAttempt()
 	service := s.service()
 	if service == nil {
 		return operationFailure(errBackendUnavailable)
@@ -158,5 +167,10 @@ func (s *EncryptionService) ChangeEncryptionPassword(currentPassword string, new
 		return operationFailure(fmt.Errorf("change encryption password: %w", err))
 	}
 	defer release()
+	// Native enrollment is removed first. A failed deletion must not leave a
+	// password change reporting success while a local alternative remains live.
+	if err := s.removeBiometricEnrollment(ctx, currentPassword, newPassword, true); err != nil {
+		return biometricOperationFailure(err)
+	}
 	return operationFailure(service.ChangePassword(currentPassword, newPassword, hint))
 }

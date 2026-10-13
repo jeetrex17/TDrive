@@ -109,7 +109,31 @@ tasks:
       - cp build/darwin/icons.icns "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/Resources"
       - cp "{{.BIN_DIR}}/{{.APP_NAME}}" "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents/MacOS"
       - cp build/darwin/Info.plist "{{.BIN_DIR}}/{{.APP_NAME}}.app/Contents"
-      - task: codesign:adhoc
+      - task: codesign:bundle
+
+  codesign:bundle:
+    summary: Signs the app bundle, optionally with provisioned Keychain access
+    internal: true
+    env:
+      TDRIVE_MAC_SIGNING_IDENTITY: '{{.CODESIGN_IDENTITY | default "-"}}'
+      TDRIVE_MAC_ENTITLEMENTS_FILE: '{{.ENTITLEMENTS_FILE | default ""}}'
+      TDRIVE_MAC_PROVISIONING_PROFILE: '{{.PROVISIONING_PROFILE | default ""}}'
+    cmds:
+      - |
+        APP_BUNDLE="{{.BIN_DIR}}/{{.APP_NAME}}.app"
+        if [ -n "$TDRIVE_MAC_ENTITLEMENTS_FILE" ] || [ -n "$TDRIVE_MAC_PROVISIONING_PROFILE" ]; then
+          if [ "$TDRIVE_MAC_SIGNING_IDENTITY" = "-" ] ||
+             [ ! -f "$TDRIVE_MAC_ENTITLEMENTS_FILE" ] ||
+             [ ! -f "$TDRIVE_MAC_PROVISIONING_PROFILE" ]; then
+            echo "Provisioned Keychain signing requires CODESIGN_IDENTITY, ENTITLEMENTS_FILE and PROVISIONING_PROFILE."
+            exit 1
+          fi
+          cp "$TDRIVE_MAC_PROVISIONING_PROFILE" "$APP_BUNDLE/Contents/embedded.provisionprofile"
+          codesign --force --deep --timestamp \
+            --sign "$TDRIVE_MAC_SIGNING_IDENTITY" --entitlements "$TDRIVE_MAC_ENTITLEMENTS_FILE" "$APP_BUNDLE"
+        else
+          codesign --force --deep --sign "$TDRIVE_MAC_SIGNING_IDENTITY" "$APP_BUNDLE"
+        fi
 
   codesign:adhoc:
     summary: Ad-hoc signs the app bundle
@@ -133,6 +157,8 @@ tasks:
       Signs the .app bundle for distribution.
       Uses signing identity from `wails3 setup` (stored in ~/.config/wails/defaults.yaml).
       Override with: task darwin:sign -- --identity "Developer ID Application: ..."
+      Biometric-enabled bundles also need ENTITLEMENTS_FILE and PROVISIONING_PROFILE
+      at package time, and --entitlements with the same file at signing time.
     deps:
       - task: package
     cmds:
@@ -146,6 +172,8 @@ tasks:
 
       First-time setup:
         wails3 setup
+      Preserve biometric Keychain access by supplying ENTITLEMENTS_FILE and
+      PROVISIONING_PROFILE at package time, and --entitlements when signing.
     deps:
       - task: package
     cmds:

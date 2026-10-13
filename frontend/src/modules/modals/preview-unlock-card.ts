@@ -1,21 +1,19 @@
 /**
  * The unlock card the preview shows in place of an encrypted photo.
  *
- * It is a password field, a reveal toggle, an error line and a hint, and it
- * knows exactly one thing about the preview: that something should reload once
- * the drive is unlocked. Keeping it here rather than in the preview controller
- * is what stops its six elements from being six more nullable module variables
- * in a file that already had twenty-five, and it is why its rules -- the field
- * clears on every reopen, the reveal toggle starts hidden, both controls are
- * disabled while the password is in flight -- can be tested without standing up
- * a preview, a rendition broker and a gallery first.
+ * Password fallback and optional native biometrics share the current-session
+ * unlock path. The card owns capability discovery and each visible request so
+ * hiding, paging or closing cannot let old work change the next photo's card.
  *
  * The card deliberately does not take focus when it appears. While browsing,
  * the arrow keys should skip past a locked photo rather than be swallowed as
  * typing; the reader clicks the field when they actually want to unlock.
  */
 
-import { requireOperationSuccess, useEncryptionPassword } from '../../api';
+import { getBiometricStatus, requireOperationSuccess, useBiometricUnlock, useEncryptionPassword, type OperationResult } from '../../api';
+import type { BiometricStatusView } from '../../types';
+import { biometricLabel } from '../../ui/modals/biometric-labels';
+import { cancelBiometricAuthentication, waitForBiometricCancellation } from '../biometric';
 import { humanizeBackendError } from '../errors';
 import { loadEncryptionStatus } from '../encryption';
 
@@ -27,6 +25,8 @@ export interface UnlockCardElements {
     readonly error: HTMLElement | null;
     readonly hint: HTMLElement | null;
     readonly hintText: HTMLElement | null;
+    readonly biometricButton?: HTMLButtonElement | null;
+    readonly biometricLabel?: HTMLElement | null;
 }
 
 export interface UnlockCard {
@@ -51,10 +51,31 @@ export interface UnlockCard {
      * they had left.
      */
     submit(onUnlocked: () => void): Promise<void>;
+    /** Authenticate only after the reader explicitly chooses the native action. */
+    submitBiometric(onUnlocked: () => void): Promise<void>;
 }
 
 export function createUnlockCard(elements: UnlockCardElements): UnlockCard {
-    const { card, input, unlockButton, eyeButton, error, hint, hintText } = elements;
+    const { card, input, unlockButton, eyeButton, error, hint, hintText, biometricButton, biometricLabel: label } = elements;
+    let generation = 0;
+    let visible = false;
+    let busy: 'password' | 'biometric' | null = null;
+    let biometric: BiometricStatusView | null = null;
+
+    function isCurrent(request: number): boolean {
+        return visible && generation === request && Boolean(card?.isConnected);
+    }
+
+    function setBusy(value: boolean): void {
+        if (unlockButton) unlockButton.disabled = value;
+        if (input) input.disabled = value;
+        if (eyeButton) eyeButton.disabled = value;
+        if (biometricButton) biometricButton.disabled = value;
+        if (label) label.textContent = value && busy === 'biometric'
+            ? 'Waiting for authentication…'
+            : `Use ${biometricLabel(biometric?.kind ?? 'biometric')}`;
+        card?.setAttribute('aria-busy', String(value));
+    }
 
     function showError(message: string): void {
         if (!error) return;
@@ -75,29 +96,90 @@ export function createUnlockCard(elements: UnlockCardElements): UnlockCard {
         eyeButton.setAttribute('aria-label', 'Show password');
     }
 
+    function clearInput(): void {
+        if (input) input.value = '';
+        resetReveal();
+    }
+
+    function invalidate(): void {
+        generation += 1;
+        if (busy === 'biometric') cancelBiometricAuthentication();
+        busy = null;
+        biometric = null;
+        setBusy(false);
+        clearInput();
+        if (biometricButton) biometricButton.hidden = true;
+    }
+
+    async function refreshBiometric(request: number): Promise<void> {
+        if (!biometricButton) return;
+        try {
+            const status = await getBiometricStatus();
+            if (!isCurrent(request)) return;
+            biometric = status;
+            biometricButton.hidden = !status.available || !status.enrolled;
+            if (label) label.textContent = `Use ${biometricLabel(status.kind)}`;
+        } catch {
+            // Missing native capability leaves the password fallback usable.
+            if (isCurrent(request)) biometricButton.hidden = true;
+        }
+    }
+
+    async function unlock(mode: 'password' | 'biometric', call: () => Promise<OperationResult>, onUnlocked: () => void): Promise<void> {
+        const request = generation;
+        if (!isCurrent(request) || busy) return;
+        busy = mode;
+        clearInput();
+        clearError();
+        setBusy(true);
+        try {
+            if (mode === 'biometric') {
+                await waitForBiometricCancellation();
+                if (!isCurrent(request)) return;
+            }
+            const result = await call();
+            if (!isCurrent(request)) return;
+            requireOperationSuccess(result);
+            await loadEncryptionStatus();
+            if (!isCurrent(request)) return;
+            busy = null;
+            setBusy(false);
+            window.dispatchEvent(new Event('tdrive:unlocked'));
+            onUnlocked();
+        } catch (err) {
+            if (isCurrent(request)) showError(humanizeBackendError(err));
+        } finally {
+            if (isCurrent(request)) {
+                busy = null;
+                setBusy(false);
+            }
+        }
+    }
+
     return {
         show(hintValue: string): void {
             if (!card) return;
+            invalidate();
+            visible = true;
             clearError();
-            if (input) input.value = '';
-            resetReveal();
             if (hint && hintText) {
                 hintText.textContent = hintValue;
                 hint.style.display = hintValue ? 'block' : 'none';
             }
             card.style.display = 'flex';
+            void refreshBiometric(generation);
         },
 
         hide(): void {
+            visible = false;
+            invalidate();
             if (card) card.style.display = 'none';
         },
 
-        clearInput(): void {
-            if (input) input.value = '';
-        },
+        clearInput,
 
         toggleReveal(): void {
-            if (!input || !eyeButton) return;
+            if (!input || !eyeButton || busy) return;
             const reveal = input.type === 'password';
             input.type = reveal ? 'text' : 'password';
             eyeButton.setAttribute('aria-pressed', reveal ? 'true' : 'false');
@@ -108,33 +190,18 @@ export function createUnlockCard(elements: UnlockCardElements): UnlockCard {
         },
 
         async submit(onUnlocked: () => void): Promise<void> {
+            if (!isCurrent(generation) || busy) return;
             const value = String(input?.value || '');
             if (!value) {
                 showError('Enter your encryption password.');
                 return;
             }
-            // Both controls go dead for the round trip, because a second
-            // submission would race the first and report its failure over the
-            // success of the one that worked.
-            if (unlockButton) unlockButton.disabled = true;
-            if (input) input.disabled = true;
-            try {
-                // A wrong password comes back as an unsuccessful result rather
-                // than a rejection, so without this the card would report the
-                // unlock as done and the photo would stay locked.
-                requireOperationSuccess(await useEncryptionPassword(value));
-                await loadEncryptionStatus();
-                if (input) input.value = '';
-                // The gallery's locked thumbnail cells are someone else's
-                // problem, and they are listening for this.
-                window.dispatchEvent(new Event('tdrive:unlocked'));
-                onUnlocked();
-            } catch (err) {
-                showError(humanizeBackendError(err));
-            } finally {
-                if (unlockButton) unlockButton.disabled = false;
-                if (input) input.disabled = false;
-            }
+            await unlock('password', () => useEncryptionPassword(value), onUnlocked);
+        },
+
+        async submitBiometric(onUnlocked: () => void): Promise<void> {
+            if (!biometric?.available || !biometric.enrolled) return;
+            await unlock('biometric', useBiometricUnlock, onUnlocked);
         },
     };
 }

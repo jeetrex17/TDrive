@@ -28,6 +28,7 @@ export default defineConfig({
                 // Thin Wails forwarding stays outside the percentage gate: testing
                 // mock echoes would inflate coverage without defending a contract.
                 'src/modules/errors.ts',
+                'src/modules/biometric.ts',
                 'src/modules/media-types.ts',
                 'src/modules/gallery.ts',
                 'src/modules/gallery-policy.ts',
@@ -40,6 +41,8 @@ export default defineConfig({
                 'src/ui/gallery/gallery-layout.ts',
                 'src/ui/gallery/gallery-source.ts',
                 'src/modules/modals/preview.ts',
+                'src/modules/modals/encryption-password.ts',
+                'src/modules/modals/encryption-settings.ts',
                 'src/modules/modals/preview-info.ts',
                 'src/modules/modals/video.ts',
                 'src/modules/video/media-tracks.ts',

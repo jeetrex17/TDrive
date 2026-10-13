@@ -57,6 +57,7 @@ func (a *App) mobileEnterBackground() {
 	if a == nil || a.engine == nil {
 		return
 	}
+	a.encryption.cancelBiometricAttempt()
 	a.engine.PauseLiveSync()
 	a.engine.CloseMediaSessions()
 	a.revokeGalleryImages()

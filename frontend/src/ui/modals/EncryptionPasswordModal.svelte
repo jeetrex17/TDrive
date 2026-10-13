@@ -1,19 +1,24 @@
 <script lang="ts">
     import ModalShell from './ModalShell.svelte';
     import { encryptionPasswordModal } from './encryption-password-modal-store';
+    import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
+    import { biometricLabel } from './biometric-labels';
 
     interface Props {
         onCancel: () => void;
         onSubmit: (password: string) => void | Promise<void>;
+        onBiometric?: () => void | Promise<void>;
     }
 
-    let { onCancel, onSubmit }: Props = $props();
+    let { onCancel, onSubmit, onBiometric = () => {} }: Props = $props();
     let password = $state('');
     let passwordInput = $state<HTMLInputElement | null>(null);
     let wasOpen = false;
 
     const view = encryptionPasswordModal.state;
     const hint = $derived(($view.payload?.hint ?? '').trim());
+    const biometric = $derived($view.payload?.biometric);
+    const biometricBusy = $derived(Boolean($view.payload?.biometricBusy));
 
     function clearPassword(): void {
         password = '';
@@ -21,7 +26,7 @@
     }
 
     function cancel(): void {
-        if ($view.busy) return;
+        if ($view.busy && !biometricBusy) return;
         clearPassword();
         onCancel();
     }
@@ -31,6 +36,12 @@
         const submittedPassword = password;
         clearPassword();
         void onSubmit(submittedPassword);
+    }
+
+    function unlockWithBiometric(): void {
+        if ($view.busy) return;
+        clearPassword();
+        void onBiometric();
     }
 
     function onInputKeydown(event: KeyboardEvent): void {
@@ -54,18 +65,13 @@
 <ModalShell
     hostId="encryption-password-modal"
     open={$view.open}
-    title="Enter encryption password"
+    title="Unlock encrypted files"
     titleId="encryption-password-title"
-    subtitle="Needed to mount and access encrypted files. TDrive remembers it until you close the app."
+    cardClass="encryption-unlock-card"
     initialFocus="#encryption-password-input"
     restoreFocus="#file-list"
     onClose={cancel}
 >
-    {#if hint}
-        <p id="encryption-password-hint" class="modal-subtitle">
-            Hint: <span id="encryption-password-hint-text">{hint}</span>
-        </p>
-    {/if}
     <input
         id="encryption-password-input"
         type="password"
@@ -81,13 +87,31 @@
     {#if $view.error}
         <div id="encryption-password-error" class="modal-error" role="alert">{$view.error}</div>
     {/if}
+    {#if hint}
+        <p id="encryption-password-hint" class="modal-subtitle">
+            Hint: <span id="encryption-password-hint-text">{hint}</span>
+        </p>
+    {/if}
+    {#if biometric?.available && biometric.enrolled}
+        <button id="encryption-password-biometric" class="secondary-btn biometric-unlock-btn" type="button" disabled={$view.busy} onclick={unlockWithBiometric}>
+            <FingerprintIcon size={18} aria-hidden="true" />
+            {biometricBusy ? 'Waiting for authentication…' : `Use ${biometricLabel(biometric.kind)}`}
+        </button>
+    {/if}
+    <p class="field-help unlock-session-help">Files stay unlocked until you lock, sign out or close the app.</p>
 
     {#snippet actions()}
-        <button id="encryption-password-cancel" class="secondary-btn" type="button" disabled={$view.busy} onclick={cancel}>
+        <button id="encryption-password-cancel" class="secondary-btn" type="button" disabled={$view.busy && !biometricBusy} onclick={cancel}>
             Cancel
         </button>
         <button id="encryption-password-confirm" class="primary-btn" type="button" disabled={$view.busy} onclick={submit}>
-            Unlock
+            Unlock with password
         </button>
     {/snippet}
 </ModalShell>
+
+<style>
+    .biometric-unlock-btn { width: 100%; display: flex; justify-content: center; align-items: center; gap: var(--space-2); margin-bottom: var(--space-3); }
+    .unlock-session-help { margin-top: 0; }
+    :global(.encryption-unlock-card .modal-title) { margin-bottom: var(--space-4); }
+</style>

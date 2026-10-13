@@ -30,10 +30,13 @@
     import { confirmTrashAction } from '../../modules/trash/controller';
     import {
         cancelEncryptionPassword,
+        submitEncryptionBiometric,
         submitEncryptionPassword,
     } from '../../modules/modals/encryption-password';
     import {
         cancelEncryptionSettings,
+        removeBiometricEnrollment,
+        submitBiometricEnrollment,
         submitEncryptionSettings,
     } from '../../modules/modals/encryption-settings';
     import {
@@ -126,6 +129,8 @@
         void ensureProfileLoaded();
 
         return () => {
+            cancelEncryptionPassword();
+            cancelEncryptionSettings();
             previewActivationCancelled = true;
             deactivatePreview();
             for (let index = disposers.length - 1; index >= 0; index -= 1) {
@@ -194,10 +199,10 @@
         <EncryptionSetupModal onCancel={cancelEncryptionSetup} onSubmit={submitEncryptionSetup} />
     </div>
     <div id="encryption-password-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
-        <EncryptionPasswordModal onCancel={cancelEncryptionPassword} onSubmit={submitEncryptionPassword} />
+        <EncryptionPasswordModal onCancel={cancelEncryptionPassword} onSubmit={submitEncryptionPassword} onBiometric={submitEncryptionBiometric} />
     </div>
     <div id="encryption-settings-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
-        <EncryptionSettingsModal onCancel={cancelEncryptionSettings} onSubmit={submitEncryptionSettings} />
+        <EncryptionSettingsModal onCancel={cancelEncryptionSettings} onSubmit={submitEncryptionSettings} onEnableBiometric={submitBiometricEnrollment} onDisableBiometric={removeBiometricEnrollment} />
     </div>
     <div id="upload-options-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <UploadOptionsModal onCancel={cancelUploadOptions} onConfirm={confirmUploadOptions} />

@@ -35,6 +35,8 @@
 	<string>© 2026, Jeetraj</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>TDrive needs access to the photos and videos you choose to back up.</string>
+	<key>NSFaceIDUsageDescription</key>
+	<string>Use Face ID to unlock your encrypted files for this session.</string>
 	<key>UIFileSharingEnabled</key>
 	<true/>
 	<key>UILaunchStoryboardName</key>

@@ -37,8 +37,6 @@ vars:
   CODESIGN_IDENTITY: '{{.CODESIGN_IDENTITY | default "-"}}'
   # Optional path to a .mobileprovision embedded into device bundles
   PROVISIONING_PROFILE: '{{.PROVISIONING_PROFILE | default ""}}'
-  # Optional entitlements applied at codesign time (generated default below)
-  ENTITLEMENTS_FILE: '{{.ENTITLEMENTS_FILE | default "build/ios/entitlements.plist"}}'
   # SDK_PATH is computed lazily at task-level to avoid errors on non-macOS systems
 
 tasks:
@@ -140,6 +138,9 @@ tasks:
 
   create:app:bundle:
     summary: Creates an iOS `.app` bundle
+    vars:
+      # Includes share top-level defaults, so keep the iOS default out of macOS signing.
+      ENTITLEMENTS_FILE: '{{.ENTITLEMENTS_FILE | default "build/ios/entitlements.plist"}}'
     cmds:
       - rm -rf "{{.BIN_DIR}}/{{.APP_NAME}}.app"
       - mkdir -p "{{.BIN_DIR}}/{{.APP_NAME}}.app"
@@ -359,9 +360,11 @@ tasks:
           /usr/libexec/PlistBuddy -c "Set :$key $value" build/ios/xcode/main/Info.plist 2>/dev/null ||
             /usr/libexec/PlistBuddy -c "Add :$key bool $value" build/ios/xcode/main/Info.plist
         done
-        description=$(/usr/libexec/PlistBuddy -c "Print :NSPhotoLibraryUsageDescription" build/ios/Info.plist)
-        /usr/libexec/PlistBuddy -c "Set :NSPhotoLibraryUsageDescription $description" build/ios/xcode/main/Info.plist 2>/dev/null ||
-          /usr/libexec/PlistBuddy -c "Add :NSPhotoLibraryUsageDescription string $description" build/ios/xcode/main/Info.plist
+        for key in NSPhotoLibraryUsageDescription NSFaceIDUsageDescription; do
+          description=$(/usr/libexec/PlistBuddy -c "Print :$key" build/ios/Info.plist)
+          /usr/libexec/PlistBuddy -c "Set :$key $description" build/ios/xcode/main/Info.plist 2>/dev/null ||
+            /usr/libexec/PlistBuddy -c "Add :$key string $description" build/ios/xcode/main/Info.plist
+        done
         /usr/libexec/PlistBuddy -c 'Set :CFBundleExecutable $(EXECUTABLE_NAME)' build/ios/xcode/main/Info.plist
         /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString $(MARKETING_VERSION)' build/ios/xcode/main/Info.plist
         /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion $(CURRENT_PROJECT_VERSION)' build/ios/xcode/main/Info.plist

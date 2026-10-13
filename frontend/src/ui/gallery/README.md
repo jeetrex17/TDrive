@@ -349,6 +349,12 @@ file service with the original file ID and retains original quality. Image-sessi
 failure can leave the thumbnail visible with an error
 and download action.
 
+Encrypted photos show an [inline unlock card](../../modules/modals/preview-unlock-card.ts)
+with password fallback and an explicit biometric action for an available,
+enrolled device. Authentication unlocks the current session and reloads the
+selected photo; paging itself never launches a native prompt. The card cancels
+native work and invalidates late results when it hides or the viewer scope resets.
+
 [`OpenImage`](../../../../backend/media/service.go) checks revision before and
 after open. Originals are admitted up to 256 MiB and 32 million pixels, with a
 bounded header read, and use an 8 MiB byte cache without read-ahead. Explicit

@@ -61,7 +61,7 @@ for (const platform of ['desktop', 'android'] as const) {
         const panel = await openPanel(page, platform);
         await expect(panel).toContainText('Unlock to continue');
         await panel.getByRole('button', { name: 'Unlock and back up', exact: true }).click();
-        const dialog = page.getByRole('dialog', { name: 'Enter encryption password' });
+        const dialog = page.getByRole('dialog', { name: 'Unlock encrypted files' });
         await expect(dialog).toBeVisible();
         expect(await mock.calls('RunPhotoBackup')).toHaveLength(0);
         await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
@@ -88,7 +88,7 @@ test("a refused start repeats the backend's reason instead of a generic failure"
     await panel.getByRole('button', { name: 'Back up now', exact: true }).click();
     await expect.poll(async () => (await mock.calls('RunPhotoBackup')).length).toBe(1);
     await expect(panel.getByRole('alert')).toHaveText('Waiting for Wi-Fi.');
-    await expect(page.getByRole('dialog', { name: 'Enter encryption password' })).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: 'Unlock encrypted files' })).toHaveCount(0);
 });
 
 test('empty backup settings fit the desktop viewport and guide source selection', async ({ page }, testInfo) => {

@@ -28,14 +28,12 @@ export default defineConfig({
                 viewport: { width: 1280, height: 800 },
             },
         },
-        // WebKit is the engine iOS actually runs, and the media path is the
-        // one place the difference is load-bearing: it picks a source format
-        // per platform and hands it to an element whose codec support is the
-        // browser's, not ours. Scoped to that spec -- running the whole suite
-        // twice would buy repetition rather than coverage.
+        // WebKit covers platform media selection and the biometric dialog's
+        // cancellation/password-fallback journey in the engine Apple apps use.
+        // Keep this focused instead of repeating every browser contract.
         {
             name: 'webkit-media',
-            testMatch: /video\.spec\.ts/,
+            testMatch: /(video|biometric)\.spec\.ts/,
             use: {
                 ...devices['Desktop Safari'],
                 viewport: { width: 1280, height: 800 },

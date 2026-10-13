@@ -53,6 +53,77 @@ The personal encryption drive is distinct from the currently browsed drive.
 `RequireMasterKeyForChannel` rejects encrypted shared-drive reads before cache
 access; a cached rendition must not bypass this check.
 
+## Device-local biometric unlock
+
+The GUI can enroll a device-local alternative to typing the encryption password.
+Enrollment requires fresh password verification and native authentication. Both
+password and biometric unlock load the same random master key for the current
+session; file encryption and the synced password-wrapped vault configuration
+keep their existing formats. The password remains mandatory for setup, recovery,
+password changes and enrollment on another device. The CLI and daemon use the
+password flow.
+
+The encrypted photo lightbox uses the same session unlock through its inline
+card. It offers a native biometric action only after fresh capability discovery
+reports an available, enrolled device, and always keeps password fallback.
+Browsing onto a locked photo does not launch authentication. Hiding the card on
+close, navigation or scope reset cancels pending native work and ignores late
+capability and authentication results.
+
+[`backend/biometric`](../../backend/biometric/biometric.go) owns the native provider
+contract. Each enrollment is scoped to the authenticated Telegram account, its
+personal channel and a canonical digest of the cryptographic vault configuration.
+The stable native item identifier excludes that digest so an outdated binding
+can still be removed. A protected 64-byte payload contains a digest of the complete
+scope and the 32-byte master key. Passwords, keys and native signatures never enter
+the frontend bindings or runtime events.
+
+| Platform | Protected storage and authentication |
+| --- | --- |
+| Android 6+ | AES-256-GCM wrapping with a non-exportable Android Keystore key requiring strong biometric authentication for each wrapping/unwrapping operation through `BiometricPrompt.CryptoObject`. Native enrollment ciphertext lives in `noBackupFilesDir`; it is excluded from backup and device transfer. |
+| macOS and iOS | Device-only, non-synchronizing data protection Keychain items restricted with `biometryCurrentSet`. Touch ID/Face ID authorizes item access; changes to enrolled biometrics invalidate access. macOS requires provisioned Keychain signing entitlements; ad-hoc builds report unavailable. |
+| Windows | A dedicated Windows Hello RSA-2048 credential signs a domain-separated, random enrollment challenge after a fresh native user gesture. The private, deterministic RSA/SHA256/PKCS1v1.5 signature is verified, used as HKDF input for AES-256-GCM wrapping, then cleared. Only challenge, salt, nonce and ciphertext are persisted locally. Windows Hello can offer its OS PIN; hardware backing follows OS policy. |
+| Other platforms or unavailable native support | Password unlock remains available; native enrollment fails closed. |
+
+The Windows signing credential is exclusively for local key wrapping. Its
+signature must never be published as a login signature, logged, cached or exposed
+to JavaScript: disclosure would disclose the derived wrapping key. Windows API
+availability can depend on Hello enrollment and package identity; unsupported
+desktop configurations report unavailable. Apple provisioning and platform build
+details are in the [build guide](../../build/README.md).
+
+Android prepares the cipher before showing the native prompt. After successful
+authentication and ownership checks, it supplies the account/configuration AAD
+and finishes encryption or decryption using that exact authenticated cipher.
+Supplying AAD before authentication can cache a Keystore failure that persists
+even after the fingerprint is accepted. The native crypto regression tests model
+this failure and verify authenticated completion and scope/configuration binding.
+
+[`internal/app/biometric.go`](../../internal/app/biometric.go) snapshots account,
+engine, scope and a cancellation epoch under the mount lifecycle gate. It releases
+the gate while native authentication is displayed. Before accepting the returned
+key, it reacquires the gate, checks the request and scope again, and verifies the
+existing key-check marker through the encryption service. Lock, logout, shutdown,
+password unlock/change, disable and mobile backgrounding cancel pending prompts.
+Late callbacks cannot reopen a locked or logged-out vault. New prompts wait for
+the preceding request's cleanup; the frontend also waits for cancellation to be
+acknowledged before dispatching another native request.
+
+Locking clears the session key and retains device enrollment. Disabling biometric
+unlock or logging out removes the native enrollment. Failed deletion prevents
+logout from discarding the account state, leaving cleanup retryable and the vault
+locked. Password changes validate both passwords before deleting enrollment;
+native deletion must succeed before the password change proceeds. A changed
+configuration or invalidated native key requires password fallback and re-enrollment.
+Changing the password does not rotate the content master key and cannot immediately
+revoke a device that remains offline with its old configuration.
+
+Tests cover scope/payload ownership, existing-file decryption, wrong and stale
+keys, native-provider failures, cancellation races, deletion retry, frontend
+enrollment and password fallback. Cross-compilation, native mocks and browser
+journeys do not prove physical biometric authentication or signed-package behavior;
+those need real devices and the appropriate signing identity.
+
 ## Exact TDE1 layout
 
 [`stream.go`](../../backend/crypto/stream.go) is the format authority. Offsets

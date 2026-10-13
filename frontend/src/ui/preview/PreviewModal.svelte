@@ -5,6 +5,7 @@
     import DownloadIcon from '@lucide/svelte/icons/download';
     import EyeIcon from '@lucide/svelte/icons/eye';
     import EyeOffIcon from '@lucide/svelte/icons/eye-off';
+    import FingerprintIcon from '@lucide/svelte/icons/fingerprint';
     import InfoIcon from '@lucide/svelte/icons/info';
     import LockIcon from '@lucide/svelte/icons/lock';
     import XIcon from '@lucide/svelte/icons/x';
@@ -68,6 +69,11 @@
             </div>
             <div id="preview-locked-error" class="preview-unlock-error" style="display: none;" role="alert"></div>
             <div id="preview-locked-hint" class="preview-unlock-hint" style="display: none;">Hint: <span id="preview-locked-hint-text"></span></div>
+            <button id="preview-locked-biometric" class="preview-unlock-biometric" type="button" hidden>
+                <FingerprintIcon size={20} aria-hidden="true" />
+                <span id="preview-locked-biometric-label">Use biometrics</span>
+            </button>
+            <p class="preview-unlock-biometric-help">Both options unlock the current session.</p>
         </div>
     </div>
 </div>
