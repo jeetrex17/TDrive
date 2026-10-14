@@ -30,6 +30,7 @@ const app = vi.hoisted(() => ({
     SelectFiles: vi.fn(),
     SelectFolder: vi.fn(),
     UploadToDriveFS: vi.fn(),
+    RetryUploadToDriveFS: vi.fn(),
     ListResumableUploads: vi.fn(),
     ResumeResumableUpload: vi.fn(),
     PauseResumableUpload: vi.fn(),
@@ -497,26 +498,16 @@ describe('the picker window', () => {
         }));
     });
 
-    it('offers a failed flat upload retry once for the same destination', async () => {
+    it('does not offer a new upload after an unclassified invocation failure', async () => {
         app.SelectFiles.mockResolvedValue(['/tmp/retry.pdf']);
-        app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0, limitExceeded: false });
-        app.UploadToDriveFS
-            .mockRejectedValueOnce(new Error('network down'))
-            .mockResolvedValue({ result: { ok: true }, files: [{ name: 'retry.pdf' }] });
-
+        app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0 });
+        app.UploadToDriveFS.mockRejectedValue(new Error('lost receipt'));
         await uploadWithParentID('folder-1');
-
-        const failure = mocks.notify.mock.calls
-            .map(([notice]) => notice as { level?: string; action?: { run: () => void } })
-            .find((notice) => notice.level === 'error' && notice.action);
-        expect(failure?.action).toBeDefined();
-        failure?.action?.run();
-        failure?.action?.run();
-
-        await vi.waitFor(() => expect(app.UploadToDriveFS).toHaveBeenCalledTimes(2));
-        expect(app.UploadToDriveFS).toHaveBeenLastCalledWith(['/tmp/retry.pdf'], ['folder-1'], false);
-        expect(mocks.dismissNotification).toHaveBeenCalledTimes(1);
+        expect(app.RetryUploadToDriveFS).not.toHaveBeenCalled();
+        const failure = mocks.notify.mock.calls.map(([notice]) => notice).find((notice) => notice.title === 'Upload failed');
+        expect(failure?.action?.label).toBe('Review failed files');
     });
+
 });
 
 describe('automatic large upload recovery', () => {
@@ -664,37 +655,77 @@ describe('automatic large upload recovery', () => {
     });
 });
 
-describe('upload retry', () => {
-    it('takes its own toast down and refuses a second tap on the same failure', async () => {
-        app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0, limitExceeded: false });
-        app.SelectFiles.mockResolvedValue(['/tmp/report.pdf']);
+describe('safe failed-file retry', () => {
+    async function partialBatch() {
+        app.PlanImport.mockResolvedValue({ files: 3, folders: 0, archives: 0 });
+        app.SelectFiles.mockResolvedValue(['/tmp/a/same.txt', '/tmp/b/same.txt', '/tmp/unsafe.txt']);
         app.UploadToDriveFS.mockResolvedValue({
-            result: { ok: false, error: { code: 'io', message: 'connection reset' } },
-            files: [],
+            result: { ok: false, error: { code: 'io', message: 'partial failure' } },
+            files: [{ name: 'same.txt' }],
+            failures: [
+                { index: 1, name: 'same.txt', message: 'body transfer failed', code: 'transfer_failed', retryable: true },
+                { index: 2, name: 'unsafe.txt', message: 'receipt lost', code: 'outcome_unknown', retryable: false },
+            ],
         });
+        app.RetryUploadToDriveFS.mockResolvedValue({ result: { ok: true }, files: [], failures: [] });
+        await uploadWithParentID('folder-1');
+        const notice = mocks.notify.mock.calls.map(([value]) => value).find((value) => value.title === 'Upload failed');
+        notice.action.run();
+    }
 
-        await uploadWithParentID('');
+    it('retries only confirmed safe failures by index, preserving destination and drive', async () => {
+        await partialBatch();
+        expect(mocks.updateTransferName).toHaveBeenCalledWith(expect.objectContaining({ name: 'Uploaded 1 file · 2 need attention' }));
+        expect(mocks.updateTransferProgress).toHaveBeenCalledWith(expect.objectContaining({ itemsDone: 1, itemsTotal: 3, itemsActive: 0 }));
+        const { retryFailedUploads } = await import('./transfers');
+        await retryFailedUploads();
+        await retryFailedUploads();
+        expect(app.RetryUploadToDriveFS).toHaveBeenCalledExactlyOnceWith(['/tmp/b/same.txt'], ['folder-1'], false, 1);
         expect(app.UploadToDriveFS).toHaveBeenCalledTimes(1);
+    });
 
-        const failure = mocks.notify.mock.calls
-            .map(([notice]) => notice as TestNotice & { action?: { label: string; run: () => void } })
-            .find((notice) => notice?.title === 'Upload failed');
-        expect(failure?.action?.label).toBe('Retry');
+    it('does not resend after reopening a consumed review notification', async () => {
+        await partialBatch();
+        const notice = mocks.notify.mock.calls.map(([value]) => value).find((value) => value.title === 'Upload failed');
+        const { retryFailedUploads } = await import('./transfers');
+        await retryFailedUploads();
+        notice.action.run();
+        await retryFailedUploads();
+        expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(1);
+    });
 
-        failure?.action?.run();
-        failure?.action?.run();
-        await vi.waitFor(() => expect(app.UploadToDriveFS).toHaveBeenCalledTimes(2));
-        await new Promise((resolve) => setTimeout(resolve, 0));
+    it('invalidates retained review notifications at teardown', async () => {
+        await partialBatch();
+        const notice = mocks.notify.mock.calls.map(([value]) => value).find((value) => value.title === 'Upload failed');
+        deactivateTransfers();
+        const { get } = await import('svelte/store');
+        const { failedUploadReports } = await import('../ui/modals/failed-uploads-store');
+        expect(get(failedUploadReports)).toEqual([]);
+        notice.action.run();
+        const { retryFailedUploads } = await import('./transfers');
+        await retryFailedUploads();
+        expect(app.RetryUploadToDriveFS).not.toHaveBeenCalled();
+    });
 
-        // A second batch over the first would cancel it on the backend, which
-        // keeps one cancel handle per direction.
-        expect(app.UploadToDriveFS).toHaveBeenCalledTimes(2);
-        expect(mocks.dismissNotification).toHaveBeenCalledTimes(1);
-        // The second tap is inert, not rebuffed: a double-tap on a button that
-        // has already been taken should not answer back with a second toast.
-        expect(mocks.notify).not.toHaveBeenCalledWith(
-            expect.objectContaining({ title: 'A transfer is already in progress' }),
-        );
+    it('does not publish a late failure from a previous dashboard lifetime', async () => {
+        app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0 });
+        app.SelectFiles.mockResolvedValue(['/tmp/old.txt']);
+        let reject = (_error: Error) => {};
+        app.UploadToDriveFS.mockImplementation(() => new Promise((_resolve, rejectUpload) => { reject = rejectUpload; }));
+        const upload = uploadWithParentID('');
+        await vi.waitFor(() => expect(app.UploadToDriveFS).toHaveBeenCalled());
+        deactivateTransfers();
+        reject(new Error('old account lost receipt'));
+        await upload;
+        expect(mocks.notify).not.toHaveBeenCalledWith(expect.objectContaining({ title: 'Upload failed' }));
+    });
+
+    it('rejects recovery into a different drive', async () => {
+        await partialBatch();
+        state.activeChannel = { id: 2, title: 'Other', kind: 'shared' };
+        const { retryFailedUploads } = await import('./transfers');
+        await retryFailedUploads();
+        expect(app.RetryUploadToDriveFS).not.toHaveBeenCalled();
     });
 });
 

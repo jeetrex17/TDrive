@@ -1,9 +1,12 @@
 package processlock
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -19,6 +22,116 @@ func withConfigHome(t *testing.T) string {
 	return filepath.Dir(path)
 }
 
+func TestAcquireIgnoresReleasedOwnerMetadata(t *testing.T) {
+	dir := withConfigHome(t)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	metadata, err := json.Marshal(map[string]any{"role": "gui", "pid": os.Getpid(), "started_at": 1, "lock_version": 1})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "backend.lock"), metadata, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	_, active, err := ReadActive()
+	if err != nil || active {
+		t.Fatalf("stale owner active=%v error=%v", active, err)
+	}
+	lock, err := Acquire("gui")
+	if err != nil {
+		t.Fatalf("stale live PID blocked startup: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := lock.Release(); err != nil {
+			t.Error(err)
+		}
+	})
+	info, active, err := ReadActive()
+	if err != nil || !active || info.PID != os.Getpid() || info.Role != "gui" {
+		t.Fatalf("active owner=%+v active=%v error=%v", info, active, err)
+	}
+}
+
+func TestReleaseKeepsGuardInodeAndCannotReleaseSuccessor(t *testing.T) {
+	withConfigHome(t)
+	first, err := Acquire("gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	path, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.Stat(path + ".guard")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Release(); err != nil {
+		t.Fatal(err)
+	}
+	second, err := Acquire("daemon")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := second.Release(); err != nil {
+			t.Error(err)
+		}
+	})
+	if err := first.Release(); err != nil {
+		t.Fatal(err)
+	}
+	after, err := os.Stat(path + ".guard")
+	if err != nil || !os.SameFile(before, after) {
+		t.Fatalf("guard inode was replaced: %v", err)
+	}
+	if lock, err := Acquire("gui"); !errors.Is(err, ErrAlreadyRunning) {
+		if lock != nil {
+			_ = lock.Release()
+		}
+		t.Fatalf("old release unlocked successor: %v", err)
+	}
+}
+
+func TestConcurrentAcquisitionsHaveOneOwner(t *testing.T) {
+	withConfigHome(t)
+	start := make(chan struct{})
+	results := make(chan *Lock, 16)
+	failures := make(chan error, 16)
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Go(func() {
+			<-start
+			lock, err := Acquire("gui")
+			if err != nil {
+				failures <- err
+				return
+			}
+			results <- lock
+		})
+	}
+	close(start)
+	wg.Wait()
+	close(results)
+	close(failures)
+	winners := 0
+	for lock := range results {
+		winners++
+		if err := lock.Release(); err != nil {
+			t.Error(err)
+		}
+	}
+	if winners != 1 {
+		t.Fatalf("owners=%d, want exactly one", winners)
+	}
+	for err := range failures {
+		if !errors.Is(err, ErrAlreadyRunning) {
+			t.Errorf("contender error=%v", err)
+		}
+	}
+}
+
 func TestAcquireRejectsSecondBackend(t *testing.T) {
 	withConfigHome(t)
 
@@ -32,6 +145,59 @@ func TestAcquireRejectsSecondBackend(t *testing.T) {
 	if !errors.Is(err, ErrAlreadyRunning) {
 		t.Fatalf("second acquire err = %v, want ErrAlreadyRunning", err)
 	}
+}
+
+func TestActiveGuardDoesNotDependOnReadableMetadata(t *testing.T) {
+	withConfigHome(t)
+	lock, err := Acquire("gui")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := lock.Release(); err != nil {
+			t.Error(err)
+		}
+	})
+	path, err := Path()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, remove := range []bool{false, true} {
+		if remove {
+			err = os.Remove(path)
+		} else {
+			err = os.WriteFile(path, []byte("broken metadata"), fileMode)
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		info, active, err := ReadActive()
+		if err != nil || !active || info.Role != "unknown" {
+			t.Fatalf("unreadable metadata owner=%+v active=%v error=%v", info, active, err)
+		}
+		if second, err := Acquire("daemon"); !errors.Is(err, ErrAlreadyRunning) {
+			if second != nil {
+				_ = second.Release()
+			}
+			t.Fatalf("metadata change bypassed live guard: %v", err)
+		}
+	}
+}
+
+func TestAcquireReclaimsLegacyRecordNamingOwnPID(t *testing.T) {
+	dir := withConfigHome(t)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	record := fmt.Sprintf(`{"role":"gui","pid":%d,"started_at":1}`, os.Getpid())
+	if err := os.WriteFile(filepath.Join(dir, "backend.lock"), []byte(record), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lock, err := Acquire("daemon")
+	if err != nil {
+		t.Fatalf("legacy record reusing this PID blocked startup: %v", err)
+	}
+	defer func() { _ = lock.Release() }()
 }
 
 func TestAcquireReclaimsStaleLock(t *testing.T) {
@@ -50,5 +216,71 @@ func TestAcquireReclaimsStaleLock(t *testing.T) {
 	defer func() { _ = lock.Release() }()
 	if lock.Info().Role != "gui" {
 		t.Fatalf("lock role = %q, want gui", lock.Info().Role)
+	}
+}
+
+func TestUnknownMetadataBlocksStartupWithoutRetainingGuard(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		record string
+	}{
+		{"damaged record", `{"role":`},
+		{"future version", `{"role":"gui","pid":-1,"lock_version":2}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := withConfigHome(t)
+			path := filepath.Join(dir, "backend.lock")
+			if err := os.WriteFile(path, []byte(tc.record), fileMode); err != nil {
+				t.Fatal(err)
+			}
+			lock, err := Acquire("gui")
+			if lock != nil {
+				t.Cleanup(func() { _ = lock.Release() })
+			}
+			if !errors.Is(err, ErrAlreadyRunning) {
+				t.Fatalf("unknown ownership allowed startup: %v", err)
+			}
+			_, active, err := ReadActive()
+			if err != nil || !active {
+				t.Fatalf("unknown ownership active=%v error=%v", active, err)
+			}
+			record, err := os.ReadFile(path)
+			if err != nil || string(record) != tc.record {
+				t.Fatalf("ownership record changed: %q error=%v", record, err)
+			}
+			// Once the old record is removed, failed acquisition must not leave
+			// a guard held by this process and prevent recovery.
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			recovered, err := Acquire("daemon")
+			if err != nil {
+				t.Fatalf("refused startup retained ownership: %v", err)
+			}
+			t.Cleanup(func() {
+				if err := recovered.Release(); err != nil {
+					t.Error(err)
+				}
+			})
+		})
+	}
+}
+
+func TestMetadataPublicationFailurePreservesExistingRecord(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "backend.lock")
+	original := `{"role":"gui","pid":-1,"lock_version":2}`
+	if err := os.WriteFile(path, []byte(original), fileMode); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeInfo(path, Info{Role: "daemon", PID: os.Getpid(), LockVersion: 1}); !errors.Is(err, ErrAlreadyRunning) {
+		t.Fatalf("publication replaced unknown owner: %v", err)
+	}
+	record, err := os.ReadFile(path)
+	if err != nil || string(record) != original {
+		t.Fatalf("existing record changed: %q error=%v", record, err)
+	}
+	leftovers, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".backend-lock-*"))
+	if err != nil || len(leftovers) != 0 {
+		t.Fatalf("temporary metadata leaked: %v error=%v", leftovers, err)
 	}
 }

@@ -20,7 +20,7 @@
 /* Hover effects only where a pointer can hover: on touch the lift sticks after
    a tap until the next interaction clears it. */
 @media (hover: hover) {
-    .primary-btn:hover { background: var(--accent-hover); transform: translateY(-1px); }
+    .primary-btn:hover:not(:disabled) { background: var(--accent-hover); transform: translateY(-1px); }
 }
 .primary-btn:active { transform: translateY(0); }
 
@@ -43,9 +43,11 @@
     gap: var(--space-2);
 }
 @media (hover: hover) {
-    .secondary-btn:hover { background: var(--bg-panel); }
+    .secondary-btn:hover:not(:disabled) { background: var(--bg-panel); }
 }
 .secondary-btn:active { transform: translateY(0.5px); }
+.primary-btn:disabled,
+.secondary-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
 .danger-btn { background: var(--danger); color: var(--color-on-danger); }
 @media (hover: hover) {

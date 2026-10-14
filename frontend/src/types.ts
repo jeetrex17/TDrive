@@ -176,9 +176,18 @@ export interface PreviewResult {
     payload: PreviewPayload;
 }
 
+export interface UploadFailure {
+    index: number;
+    name: string;
+    message: string;
+    code: string;
+    retryable: boolean;
+}
+
 export interface UploadResult {
     result: OperationResult;
     files: FileItem[];
+    failures?: UploadFailure[];
 }
 
 export interface DownloadResult {

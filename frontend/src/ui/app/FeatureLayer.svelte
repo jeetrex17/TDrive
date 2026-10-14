@@ -22,7 +22,7 @@
     import { activateSearchBar } from '../../modules/search';
     import { activateSelectionBar } from '../../modules/selection';
     import { activateSidebar } from '../../modules/sidebar';
-    import { activateTransferSurfaces } from '../../modules/transfers';
+    import { activateTransferSurfaces, closeFailedUploads, retryFailedUploads } from '../../modules/transfers';
     import { activateResumableUploads } from '../../modules/resumable-uploads';
     import { activateResumableDownloads } from '../../modules/resumable-downloads';
     import { activateUpdates } from '../../modules/updates';
@@ -81,6 +81,7 @@
     import NewDriveModal from '../modals/NewDriveModal.svelte';
     import RenameModal from '../modals/RenameModal.svelte';
     import ShareDriveModal from '../modals/ShareDriveModal.svelte';
+    import FailedUploadsModal from '../modals/FailedUploadsModal.svelte';
     import UploadOptionsModal from '../modals/UploadOptionsModal.svelte';
     import TrashConfirmModal from '../trash/TrashConfirmModal.svelte';
     import MountSelectionModal from '../mount/MountSelectionModal.svelte';
@@ -159,6 +160,9 @@
         <ContextMenu />
     </div>
     <DropOverlay />
+    <div id="failed-uploads-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
+        <FailedUploadsModal onClose={closeFailedUploads} onRetry={() => { void retryFailedUploads(); }} />
+    </div>
     <div id="mount-selection-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <MountSelectionModal />
     </div>

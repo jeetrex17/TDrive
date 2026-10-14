@@ -1,20 +1,12 @@
 // Package processlock enforces one TDrive backend per user data directory: the
 // GUI and the CLI daemon cannot run at the same time.
 //
-// The lock is a self-describing PID file, not an OS advisory lock. Exclusion
-// comes from creating the file exclusively; its contents record which role
-// holds it and which process, so the caller that loses can say "close the GUI
-// first" rather than merely failing. It locks nothing else — not the database,
-// not the daemon socket, not mounts, all of which have their own guards.
-//
-// A lock whose process is gone is reclaimed once and then re-created
-// exclusively, so the loser of a reclaim race still fails cleanly. A lock file
-// that exists but cannot be parsed is never reclaimed: startup fails until
-// someone removes it, which is the conservative choice when the alternative is
-// two backends writing one database. Liveness is a signal-0 probe on Unix and a
-// process handle wait on Windows, both treating access-denied as alive. Neither
-// consults the recorded start time, so PID reuse can still produce a false
-// "already running".
+// A persistent guard file carries the OS-held exclusive lock. Process death
+// releases ownership; PID metadata is diagnostic for current-format owners.
+// The guard is never unlinked, so contenders always lock the same inode.
+// Legacy PID-file owners remain protected during upgrades while their process
+// is alive and could be ours; an app-private Android directory cannot belong to
+// a PID this process may not signal.
 package processlock
 
 import (
@@ -23,6 +15,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"TDrive/backend/datadir"
@@ -35,13 +28,14 @@ const (
 var ErrAlreadyRunning = errors.New("tdrive backend already running")
 
 type Info struct {
-	Role      string `json:"role"`
-	PID       int    `json:"pid"`
-	StartedAt int64  `json:"started_at"`
+	Role        string `json:"role"`
+	PID         int    `json:"pid"`
+	StartedAt   int64  `json:"started_at"`
+	LockVersion int    `json:"lock_version,omitzero"`
 }
 
 type Lock struct {
-	path string
+	mu   sync.Mutex
 	file *os.File
 	info Info
 }
@@ -61,68 +55,133 @@ func Acquire(role string) (*Lock, error) {
 	}
 
 	info := Info{
-		Role:      role,
-		PID:       os.Getpid(),
-		StartedAt: time.Now().Unix(),
+		Role:        role,
+		PID:         os.Getpid(),
+		StartedAt:   time.Now().Unix(),
+		LockVersion: 1,
 	}
-	if err := json.NewEncoder(f).Encode(info); err != nil {
+	if err := writeInfo(path, info); err != nil {
 		_ = f.Close()
-		_ = os.Remove(path)
-		return nil, fmt.Errorf("backend lock: write: %w", err)
+		return nil, err
 	}
-	if err := f.Chmod(fileMode); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-		return nil, fmt.Errorf("backend lock: chmod: %w", err)
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
-		return nil, fmt.Errorf("backend lock: sync: %w", err)
-	}
-	return &Lock{path: path, file: f, info: info}, nil
+	return &Lock{file: f, info: info}, nil
 }
 
 func createLockFile(path string) (*os.File, error) {
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, fileMode)
-	if err == nil {
-		return f, nil
-	}
-	if !errors.Is(err, os.ErrExist) {
+	f, err := os.OpenFile(path+".guard", os.O_RDWR|os.O_CREATE, fileMode)
+	if err != nil {
 		return nil, fmt.Errorf("backend lock: acquire: %w", err)
 	}
-
-	info, readErr := Read()
-	if readErr == nil && !processRunning(info.PID) {
-		_ = os.Remove(path)
-		f, err = os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_EXCL, fileMode)
-		if err == nil {
-			return f, nil
+	if err := tryLockFile(f); err != nil {
+		_ = f.Close()
+		if errors.Is(err, ErrAlreadyRunning) {
+			return nil, ownerError(path)
 		}
+		return nil, fmt.Errorf("backend lock: acquire: %w", err)
 	}
-	if readErr == nil && info.Role != "" {
-		return nil, fmt.Errorf("%w as %s (pid %d)", ErrAlreadyRunning, info.Role, info.PID)
+	if legacyOwnerActive(path) {
+		_ = f.Close()
+		return nil, ownerError(path)
 	}
-	return nil, ErrAlreadyRunning
+	return f, nil
+}
+
+func legacyOwnerActive(path string) bool {
+	info, err := readInfo(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	if err != nil {
+		return true
+	}
+	if info.LockVersion == 1 {
+		return false
+	}
+	if info.LockVersion != 0 {
+		return true
+	}
+	// A legacy record naming this process can only be a reused PID.
+	if info.PID == os.Getpid() {
+		return false
+	}
+	return legacyOwnerRunning(info)
+}
+
+func ownerError(path string) error {
+	info, err := readInfo(path)
+	if err == nil && info.Role != "" {
+		return fmt.Errorf("%w as %s (pid %d)", ErrAlreadyRunning, info.Role, info.PID)
+	}
+	return ErrAlreadyRunning
+}
+
+func writeInfo(path string, info Info) error {
+	f, err := os.CreateTemp(filepath.Dir(path), ".backend-lock-*")
+	if err != nil {
+		return fmt.Errorf("backend lock: metadata: %w", err)
+	}
+	temporary := f.Name()
+	defer os.Remove(temporary)
+	writeErr := json.NewEncoder(f).Encode(info)
+	if writeErr == nil {
+		writeErr = f.Chmod(fileMode)
+	}
+	if writeErr == nil {
+		writeErr = f.Sync()
+	}
+	if err := errors.Join(writeErr, f.Close()); err != nil {
+		return fmt.Errorf("backend lock: metadata: %w", err)
+	}
+	// Older builds do not use the guard. Reserve a missing metadata path with
+	// O_EXCL and recheck an existing legacy owner before publishing atomically.
+	reserved, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, fileMode)
+	created := err == nil
+	if created {
+		if err := reserved.Close(); err != nil {
+			_ = os.Remove(path)
+			return err
+		}
+	} else if errors.Is(err, os.ErrExist) {
+		if legacyOwnerActive(path) {
+			return ownerError(path)
+		}
+	} else {
+		return fmt.Errorf("backend lock: metadata: %w", err)
+	}
+	if err := replaceFile(temporary, path); err != nil {
+		if created {
+			_ = os.Remove(path)
+		}
+		return fmt.Errorf("backend lock: metadata: %w", err)
+	}
+	return nil
+}
+
+// Windows refuses to replace a file another process has open without
+// FILE_SHARE_DELETE, which the CLI's probe does briefly.
+func replaceFile(from, to string) error {
+	var err error
+	for range 20 {
+		if err = os.Rename(from, to); err == nil {
+			return nil
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	return err
 }
 
 func (l *Lock) Release() error {
 	if l == nil {
 		return nil
 	}
-	var closeErr error
-	if l.file != nil {
-		closeErr = l.file.Close()
-		l.file = nil
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.file == nil {
+		return nil
 	}
-	removeErr := os.Remove(l.path)
-	if errors.Is(removeErr, os.ErrNotExist) {
-		removeErr = nil
-	}
-	if closeErr != nil {
-		return closeErr
-	}
-	return removeErr
+	err := l.file.Close()
+	l.file = nil
+	return err
 }
 
 func (l *Lock) Info() Info {
@@ -145,6 +204,10 @@ func Read() (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
+	return readInfo(path)
+}
+
+func readInfo(path string) (Info, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
 		return Info{}, err
@@ -157,11 +220,25 @@ func Read() (Info, error) {
 }
 
 func ReadActive() (Info, bool, error) {
-	info, err := Read()
+	path, err := Path()
 	if err != nil {
 		return Info{}, false, err
 	}
-	return info, processRunning(info.PID), nil
+	f, err := createLockFile(path)
+	info, readErr := readInfo(path)
+	if errors.Is(err, ErrAlreadyRunning) {
+		if readErr != nil {
+			info = Info{Role: "unknown"}
+		}
+		return info, true, nil
+	}
+	if err != nil {
+		return Info{}, false, err
+	}
+	if err := f.Close(); err != nil {
+		return Info{}, false, err
+	}
+	return info, false, nil
 }
 
 // ProcessRunning reports whether a process with pid is still alive. The

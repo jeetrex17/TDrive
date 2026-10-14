@@ -264,28 +264,53 @@ func (a *App) CancelDownload() {
 // UploadToDriveFS uploads the selected batch. Encryption is chosen per batch;
 // encrypted uploads require an already unlocked vault.
 func (a *App) UploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool) UploadResult {
-	channelID := a.ActiveChannelID()
+	return a.uploadToDriveFS(filePaths, parentIDs, encrypt, a.ActiveChannelID(), false)
+}
+
+// RetryUploadToDriveFS pins the original destination and never replaces another
+// upload. Callers select only failures explicitly reported as safe to retry.
+func (a *App) RetryUploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool, expectedChannelID int64) UploadResult {
+	if expectedChannelID == 0 || a.ActiveChannelID() != expectedChannelID {
+		err := errors.New("upload destination changed")
+		return UploadResult{Result: operationFailureMessage(err, "Switch back to the original drive before retrying these files"), Failures: fileservice.NotSentFailures(filePaths, err)}
+	}
+	return a.uploadToDriveFS(filePaths, parentIDs, encrypt, expectedChannelID, true)
+}
+
+func (a *App) uploadToDriveFS(filePaths []string, parentIDs []string, encrypt bool, channelID int64, retry bool) UploadResult {
+	// Failures before the service call never sent anything: report them
+	// per file so the selection can be retried without a new picker round.
 	svc, err := a.requireFileService()
 	if err != nil {
-		return UploadResult{Result: operationFailure(err)}
+		return UploadResult{Result: operationFailure(err), Failures: fileservice.NotSentFailures(filePaths, err)}
 	}
-	ctx, finish := a.transfers.begin(a.ctx, uploadTransfer)
+	var ctx context.Context
+	var finish func()
+	if retry {
+		ctx, finish, err = a.transfers.resumeUpload(a.ctx)
+		if err != nil {
+			return UploadResult{Result: operationFailure(err), Failures: fileservice.NotSentFailures(filePaths, err)}
+		}
+	} else {
+		ctx, finish = a.transfers.begin(a.ctx, uploadTransfer)
+	}
 	defer finish()
+	sources := filePaths
 	filePaths, staged, err := a.stageMobileUploadPaths(ctx, filePaths, encrypt)
 	if err != nil {
-		return UploadResult{Result: operationFailure(err)}
+		return UploadResult{Result: operationFailure(err), Failures: fileservice.NotSentFailures(sources, err)}
 	}
 	defer a.releaseUnreferencedUploadSources(svc, staged)
 	a.sweepOrphanParts(ctx)
-	files, err := svc.Upload(ctx, channelID, filePaths, parentIDs, encrypt)
+	files, failures, err := svc.UploadWithFailures(ctx, channelID, filePaths, parentIDs, encrypt)
 	out := make([]backend.FileMetaData, 0, len(files))
 	for _, f := range files {
 		out = append(out, uploadMetaToBackend(f))
 	}
 	if err != nil {
-		return UploadResult{Result: operationFailure(err), Files: out}
+		return UploadResult{Result: operationFailure(err), Files: out, Failures: failures}
 	}
-	return UploadResult{Result: operationSuccess(), Files: out}
+	return UploadResult{Result: operationSuccess(), Files: out, Failures: failures}
 }
 
 // ListResumableUploads returns backend-confirmed multipart upload checkpoints

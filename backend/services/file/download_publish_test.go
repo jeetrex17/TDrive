@@ -62,3 +62,23 @@ func TestPublishFolderDownloadPreservesExistingDestination(t *testing.T) {
 		t.Fatalf("staging was lost after rejected publish: %v", err)
 	}
 }
+
+func TestReplaceDownloadedFileRestoresDestinationWhenStagedFileDisappears(t *testing.T) {
+	dir := t.TempDir()
+	destination := filepath.Join(dir, "saved.txt")
+	if err := os.WriteFile(destination, []byte("original user data"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	missingStage := filepath.Join(dir, "download.partial")
+	if err := replaceDownloadedFile(missingStage, destination); !os.IsNotExist(err) {
+		t.Fatalf("publication error = %v, want missing staged file", err)
+	}
+	got, err := os.ReadFile(destination)
+	if err != nil || string(got) != "original user data" {
+		t.Fatalf("existing destination after failed publication = %q, error %v", got, err)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "saved.txt" {
+		t.Fatalf("files after rollback = %v, error %v, want only the restored destination", entries, err)
+	}
+}

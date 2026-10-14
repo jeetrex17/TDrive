@@ -35,6 +35,7 @@ env:
     ./backend/mountfs
     ./backend/mountwrite
     ./backend/photobackup
+    ./backend/processlock
     ./backend/projection
     ./backend/services/...
     ./backend/sync

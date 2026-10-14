@@ -61,6 +61,22 @@ idempotent sender. The ordinary single-document uploader's identity lasts for
 that call; it has no durable operation journal. Preserve the shared upload
 semaphore across GUI, import, backup and mount callers.
 
+Interactive batch uploads expose every failed input through
+`UploadWithFailures`, keyed by its original request index rather than filename.
+The returned failures distinguish inputs that never started a send (preflight
+and app-level failures, temporary prepublication errors, missing or inaccessible
+sources) from cancellation, uncertain acceptance, pending local indexing and
+existing resumable jobs. Only the former permit a fresh manual upload: the
+observer's start event precedes every send, so an input without one never left
+the machine. Source access must be restored before retrying a source failure.
+Accepted files needing indexing must not be resent; unknown outcomes remain for
+reconciliation, and durable large-upload jobs use their own recovery controls.
+The ordinary failed-file list belongs to the current app session and retains the
+original destination and encryption choice. It does not journal ordinary upload
+identity across restarts or enable additional automatic retries. Consuming a
+retry invalidates its original report so reviewing it cannot resend files that
+have since succeeded.
+
 Uploads wait for every server-directed `FLOOD_WAIT` while their transfer context
 is live, including repeated cooldowns and waits longer than 30 seconds. The
 shared Telegram write coordinator applies the longest observed cooldown across

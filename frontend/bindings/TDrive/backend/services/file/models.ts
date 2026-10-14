@@ -91,3 +91,15 @@ export interface ResumableUpload {
     "error": string;
     "upload_id"?: number | null;
 }
+
+/**
+ * UploadFailure identifies one input in a batch, even when names repeat.
+ * Retryable permits a new upload only when no visible send remains unresolved.
+ */
+export interface UploadFailure {
+    "index": number;
+    "name": string;
+    "message": string;
+    "code": string;
+    "retryable": boolean;
+}

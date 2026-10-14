@@ -467,4 +467,5 @@ export interface TrashEntry {
 export interface UploadResult {
     "result": OperationResult;
     "files": backend$0.FileMetaData[] | null;
+    "failures": file$0.UploadFailure[] | null;
 }

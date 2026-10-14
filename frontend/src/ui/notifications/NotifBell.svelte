@@ -1,6 +1,9 @@
 <script lang="ts">
     import { onDestroy, tick } from 'svelte';
     import BellIcon from '@lucide/svelte/icons/bell';
+    import FailedUploadReports from './FailedUploadReports.svelte';
+    import { failedUploadReports, dismissFailedUploadReport } from '../modals/failed-uploads-store';
+    import { reviewFailedUploads } from '../../modules/transfers';
     import EventRow from './EventRow.svelte';
     import TransferRow from './TransferRow.svelte';
     import ResumableUploadRow from './ResumableUploadRow.svelte';
@@ -261,6 +264,7 @@
             </div>
         </div>
         <div class="notif-panel-body">
+            <FailedUploadReports reports={$failedUploadReports} onReview={reviewFailedUploads} onDismiss={dismissFailedUploadReport} />
             {#if activeCount > 0}
                 <h3 id="notif-section-active" class="notif-section-label">{$resumableUploads.length + $resumableDownloads.length > 0 ? 'Transfers' : 'Active'}</h3>
                 <div class="notif-section" role="list" aria-labelledby="notif-section-active">
@@ -291,7 +295,7 @@
                         {/if}
                     {/each}
                 </div>
-            {:else if activeCount === 0}
+            {:else if activeCount === 0 && $failedUploadReports.length === 0}
                 <div class="notif-empty">
                     <div class="notif-empty-glyph">
                         <BellIcon size={48} strokeWidth={1.8} aria-hidden="true" />
