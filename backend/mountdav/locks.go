@@ -32,9 +32,11 @@ const (
 var errLockCapacity = errors.New("mountdav: active lock limit reached")
 
 type trackedLock struct {
-	internalToken string
-	details       webdav.LockDetails
-	expires       time.Time
+	internalToken  string
+	details        webdav.LockDetails
+	expires        time.Time
+	held           bool
+	refreshPending bool
 }
 
 // boundedLockSystem gives x/net/webdav's mature hierarchy semantics a bounded
@@ -59,9 +61,10 @@ func newBoundedLockSystem(maximum int) *boundedLockSystem {
 }
 
 func (locks *boundedLockSystem) Confirm(now time.Time, name0, name1 string, conditions ...webdav.Condition) (func(), error) {
-	translated := make([]webdav.Condition, len(conditions))
 	locks.mu.Lock()
+	defer locks.mu.Unlock()
 	locks.collectExpired(now)
+	translated := make([]webdav.Condition, len(conditions))
 	for index, condition := range conditions {
 		translated[index] = condition
 		if condition.Token == "" {
@@ -74,8 +77,62 @@ func (locks *boundedLockSystem) Confirm(now time.Time, name0, name1 string, cond
 		}
 		translated[index] = lockCondition(tracked.internalToken)
 	}
-	locks.mu.Unlock()
-	return locks.delegate.Confirm(now, name0, name1, translated...)
+	release, err := locks.delegate.Confirm(now, name0, name1, translated...)
+	if err != nil {
+		return nil, err
+	}
+	tokens := locks.claimedTokens(name0, name1, conditions)
+	for _, token := range tokens {
+		tracked := locks.byToken[token]
+		tracked.held = true
+		locks.byToken[token] = tracked
+	}
+	return sync.OnceFunc(func() { locks.releaseClaim(now, tokens, release) }), nil
+}
+
+// The delegate claims the first matching condition for each resource and holds
+// an infinite-depth parent only once when both resources share that parent.
+func (locks *boundedLockSystem) claimedTokens(name0, name1 string, conditions []webdav.Condition) []string {
+	var tokens []string
+	for _, name := range []string{name0, name1} {
+		if name == "" {
+			continue
+		}
+		for _, condition := range conditions {
+			tracked, exists := locks.byToken[condition.Token]
+			if !exists || tracked.held || !lockCoversPath(tracked.details, name) {
+				continue
+			}
+			if !slices.Contains(tokens, condition.Token) {
+				tokens = append(tokens, condition.Token)
+			}
+			break
+		}
+	}
+	return tokens
+}
+
+func (locks *boundedLockSystem) releaseClaim(claimTime time.Time, tokens []string, release func()) {
+	locks.mu.Lock()
+	defer locks.mu.Unlock()
+	release()
+	for _, token := range tokens {
+		tracked := locks.byToken[token]
+		if tracked.refreshPending {
+			duration := time.Duration(-1)
+			if !tracked.expires.IsZero() {
+				duration = tracked.expires.Sub(claimTime)
+			}
+			// memLS resumes its old expiry on release. Reconcile from the claim time,
+			// before that expiry, so refreshing cannot accidentally delete the lock.
+			if _, err := locks.delegate.Refresh(claimTime, tracked.internalToken, duration); err != nil {
+				slog.Error("mountdav: reconcile held lock refresh", "path", tracked.details.Root, "error", err)
+			}
+		}
+		tracked.held = false
+		tracked.refreshPending = false
+		locks.byToken[token] = tracked
+	}
 }
 
 func (locks *boundedLockSystem) Create(now time.Time, details webdav.LockDetails) (string, error) {
@@ -117,9 +174,16 @@ func (locks *boundedLockSystem) refreshPath(now time.Time, path, token string, d
 	if path != "" && tracked.details.Root != path {
 		return webdav.LockDetails{}, webdav.ErrNoSuchLock
 	}
-	details, err := locks.delegate.Refresh(now, tracked.internalToken, duration)
-	if err != nil {
-		return webdav.LockDetails{}, err
+	details := tracked.details
+	if tracked.held {
+		details.Duration = duration
+		tracked.refreshPending = true
+	} else {
+		var err error
+		details, err = locks.delegate.Refresh(now, tracked.internalToken, duration)
+		if err != nil {
+			return webdav.LockDetails{}, err
+		}
 	}
 	tracked.details = details
 	tracked.expires = lockExpiry(now, duration)
@@ -157,17 +221,20 @@ func (locks *boundedLockSystem) tokenApplies(now time.Time, token, path string) 
 	if !exists {
 		return false
 	}
-	root := tracked.details.Root
-	return path == root ||
-		(!tracked.details.ZeroDepth && (root == "/" || strings.HasPrefix(path, root+"/")))
+	return lockCoversPath(tracked.details, path)
 }
 
 func (locks *boundedLockSystem) collectExpired(now time.Time) {
 	for token, tracked := range locks.byToken {
-		if !tracked.expires.IsZero() && !now.Before(tracked.expires) {
+		if !tracked.held && !tracked.expires.IsZero() && !now.Before(tracked.expires) {
 			delete(locks.byToken, token)
 		}
 	}
+}
+
+func lockCoversPath(details webdav.LockDetails, path string) bool {
+	root := details.Root
+	return path == root || (!details.ZeroDepth && (root == "/" || strings.HasPrefix(path, root+"/")))
 }
 
 func lockExpiry(now time.Time, duration time.Duration) time.Time {
@@ -598,6 +665,11 @@ func (application *readApplication) holdTemporaryLock(path string, hasIfHeader b
 	})
 	if err == nil {
 		hold.temporaryTokens = append(hold.temporaryTokens, token)
+		release, confirmErr := application.lockSystem.Confirm(time.Now(), path, "", lockCondition(token))
+		if confirmErr != nil {
+			return http.StatusInternalServerError
+		}
+		hold.releases = append(hold.releases, release)
 		return 0
 	}
 	switch {
