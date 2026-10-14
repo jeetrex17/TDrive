@@ -214,6 +214,22 @@ while [hidden receipt recovery](../../backend/services/file/hidden_upload.go)
 reconstructs exact cleanup ownership. Deleting whatever messages happen to look
 like unused parts is not a valid recovery strategy.
 
+### WebDAV lock lifetime during uploads
+
+The WebDAV adapter keeps each mutation's lock held while receiving its body and
+waiting for the mounted coordinator. A client can refresh its own explicit lock
+during that interval without releasing the mutation's exclusive access. A refresh
+changes the lease deadline; competing writes and UNLOCK remain blocked until the
+mutation returns, including on failure or cancellation.
+
+Held public tokens remain available for refresh even when an upload outlasts the
+previous deadline. On release, the delegate receives the latest deadline rather
+than a fresh full timeout. An expired, unrefreshed lease therefore cannot be
+revived by completion. Temporary locks for writes without a client token are also
+held through completion, so their timeout cannot admit a competing write midway
+through an upload. This behavior is shared by desktop WebDAV clients; native
+Windows Explorer copy behavior still needs Windows runtime validation.
+
 ## Recovery and hard deletion
 
 Adapter construction runs [`Coordinator.Recover`](../../backend/mountwrite/recovery.go).
