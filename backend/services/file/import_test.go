@@ -425,3 +425,50 @@ func TestRunImportArchiveSkipsOversizeEntry(t *testing.T) {
 		t.Error("small.txt should have been imported")
 	}
 }
+
+func TestImportSkipsEmptyPlaintextFilesWithoutSending(t *testing.T) {
+	svc, db, fakeTG, _ := newTestService(t)
+	svc.CreateFolder = testFolderCreator(db)
+	events := &importTestEventRecorder{}
+	svc.Events = events
+
+	root := filepath.Join(t.TempDir(), "Library")
+	mkfile(t, filepath.Join(root, "notes.txt"), "hello")
+	mkfile(t, filepath.Join(root, "journalAttr_1.toc"), "")
+
+	if plan := svc.PlanImport([]string{root}, false, false); plan.Files != 1 || plan.Empty != 1 {
+		t.Fatalf("plan files/empty = %d/%d, want 1/1", plan.Files, plan.Empty)
+	}
+	// Encryption gives an empty file a header, so it has something to store.
+	if plan := svc.PlanImport([]string{root}, true, false); plan.Files != 2 || plan.Empty != 0 {
+		t.Fatalf("encrypted plan files/empty = %d/%d, want 2/0", plan.Files, plan.Empty)
+	}
+	if err := svc.RunImport(t.Context(), personalChannelID, []string{root}, "", false, false); err != nil {
+		t.Fatalf("RunImport: %v", err)
+	}
+	if sent := fakeTG.SentFiles(); len(sent) != 1 || sent[0].Size == 0 {
+		t.Fatalf("sent files = %+v, want only the non-empty file", sent)
+	}
+	payload, ok := events.lastPayload("import_complete")
+	if !ok || payload["status"] != "done" || payload["failed"] != 0 || payload["empty"] != 1 {
+		t.Fatalf("import completion = %+v, want done with one empty file skipped", payload)
+	}
+}
+
+func TestRunImportArchiveSkipsEmptyEntry(t *testing.T) {
+	svc, db, fakeTG, _ := newTestService(t)
+	svc.CreateFolder = testFolderCreator(db)
+	events := &importTestEventRecorder{}
+	svc.Events = events
+
+	zip := buildZip(t, map[string]string{"doc.txt": "x", "meCardFirstTimeChecked": ""}, nil, nil)
+	if err := svc.RunImport(t.Context(), personalChannelID, []string{zip}, "", false, true); err != nil {
+		t.Fatalf("RunImport: %v", err)
+	}
+	if sent := fakeTG.SentFiles(); len(sent) != 1 {
+		t.Fatalf("sent files = %d, want 1 (empty archive entry skipped)", len(sent))
+	}
+	if payload, ok := events.lastPayload("import_complete"); !ok || payload["status"] != "done" || payload["empty"] != 1 {
+		t.Fatalf("import completion = %+v, want done with one empty entry skipped", payload)
+	}
+}

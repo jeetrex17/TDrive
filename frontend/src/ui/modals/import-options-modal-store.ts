@@ -5,6 +5,7 @@ export interface ImportOptionsPlan {
     folders: number;
     bytes: number;
     oversize: number;
+    empty?: number;
     archives: number;
     ignored: number;
     maxItems: number;

@@ -245,6 +245,16 @@ describe('ImportOptionsModal', () => {
         expect(body).toContain('import-options-encrypt-row');
     });
 
+    it('says how many empty files will be skipped', () => {
+        importOptionsModal.open({ plan: makePlan({ empty: 5 }), personal: false, hasArchives: false });
+
+        const { body } = render(ImportOptionsModal, {
+            props: { onCancel: noop, onConfirm: noop, onToggle: noop },
+        });
+
+        expect(body).toContain("5 empty files will be skipped (empty files can't be uploaded)");
+    });
+
     it('explains when generated and cache entries will be skipped', () => {
         importOptionsModal.open({
             plan: makePlan({ ignored: 137 }),

@@ -47,6 +47,7 @@ type ImportPlan struct {
 	Folders  int   `json:"folders"`  // folders that would be created
 	Bytes    int64 `json:"bytes"`    // total plaintext bytes of the uploadable files
 	Oversize int   `json:"oversize"` // files skipped for exceeding the per-file limit
+	Empty    int   `json:"empty"`    // plaintext files with no bytes, which Telegram cannot store
 	Archives int   `json:"archives"` // archive items in the selection
 	Ignored  int   `json:"ignored"`  // generated/cache roots pruned from the selection
 	MaxBytes int64 `json:"maxBytes"` // active per-file limit, for messaging
@@ -62,6 +63,7 @@ type archiveExtractStats struct {
 	files    int
 	bytes    int64
 	oversize int
+	empty    int
 	ignored  int
 }
 
@@ -187,7 +189,12 @@ func (p *ImportPlan) addFolder() error {
 }
 
 func (s *Service) planFile(size int64, encrypt bool, plan *ImportPlan) (bool, error) {
-	if uploadByteSize(size, encrypt) > s.largeFileMaxBytes() {
+	stored := uploadByteSize(size, encrypt)
+	if stored == 0 {
+		plan.Empty++
+		return false, nil
+	}
+	if stored > s.largeFileMaxBytes() {
 		plan.Oversize++
 		return false, nil
 	}
@@ -352,6 +359,7 @@ type importTasks struct {
 	remoteItems  int
 	folders      int
 	oversize     int
+	empty        int
 	ignored      int
 	errorCount   int
 	errors       []string
@@ -529,6 +537,7 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 			}
 			dir, stats, err := s.extractArchiveToTemp(ctx, p, root, encrypt)
 			tasks.oversize += stats.oversize
+			tasks.empty += stats.empty
 			tasks.ignored += stats.ignored
 			if err != nil {
 				if isFatalImportError(err) {
@@ -590,6 +599,7 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 		"scheduled":  tasks.files,
 		"folders":    tasks.folders,
 		"oversize":   tasks.oversize,
+		"empty":      tasks.empty,
 		"ignored":    tasks.ignored,
 		"errorCount": tasks.errorCount,
 		"errors":     errorsOut,
@@ -603,9 +613,14 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 }
 
 // addFileTask queues a single file for upload, skipping (and counting) it if it
-// exceeds the per-file limit.
+// exceeds the per-file limit or has nothing Telegram can store.
 func (s *Service) addFileTask(srcPath string, size int64, parentID string, encrypt bool, tasks *importTasks) error {
-	if uploadByteSize(size, encrypt) > s.largeFileMaxBytes() {
+	stored := uploadByteSize(size, encrypt)
+	if stored == 0 {
+		tasks.empty++
+		return nil
+	}
+	if stored > s.largeFileMaxBytes() {
 		tasks.oversize++
 		return nil
 	}
@@ -761,8 +776,12 @@ func (s *Service) extractArchiveToTemp(ctx context.Context, archivePath, tmpRoot
 			_ = os.Remove(actualDest)
 			return fmt.Errorf("archive expands past %s", humanByteSize(totalLimit))
 		}
-		if uploadByteSize(written, encrypt) > limit {
-			stats.oversize++
+		if stored := uploadByteSize(written, encrypt); stored == 0 || stored > limit {
+			if stored == 0 {
+				stats.empty++
+			} else {
+				stats.oversize++
+			}
 			_ = os.Remove(actualDest)
 			return nil
 		}

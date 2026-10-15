@@ -112,6 +112,7 @@ export function normalizeImportPlan(value: unknown): ImportPlan {
         folders: nonNegativeNumber(raw.folders),
         bytes: nonNegativeNumber(raw.bytes),
         oversize: nonNegativeNumber(raw.oversize),
+        empty: nonNegativeNumber(raw.empty),
         archives: nonNegativeNumber(raw.archives),
         ignored: nonNegativeNumber(raw.ignored),
         maxBytes: nonNegativeNumber(raw.maxBytes),

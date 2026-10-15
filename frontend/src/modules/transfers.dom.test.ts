@@ -228,6 +228,21 @@ describe('aggregate import completion', () => {
         }));
     });
 
+    it('says empty files were skipped, and puts repeated RPC failures into one readable line', () => {
+        const rpc = 'tgclient: send outcome unknown: send media: rpcDoRequest: rpc error code 400: FILE_PART_LENGTH_INVALID';
+        handlers.get('import_start')?.();
+        for (const name of ['skg_events_1.toc', 'meCardFirstTimeChecked', 'other.toc']) handlers.get('upload_error')?.(0, name, rpc);
+        handlers.get('import_complete')?.({
+            status: 'failed', uploaded: 4, failed: 3, empty: 2,
+            error: `3 uploads failed: ${rpc}`, errors: [`skg_events_1.toc: ${rpc}`],
+        });
+
+        const notice = mocks.notify.mock.calls.map(([value]) => value as TestNotice).find((value) => value.title === 'Import failed');
+        expect(notice?.body).toContain('2 empty files skipped');
+        expect(notice?.body).not.toContain('rpc error');
+        expect(notice?.body?.match(/Empty files can't be uploaded\./g)).toHaveLength(1);
+    });
+
     it('summarizes skipped and reported import errors when no live row exists', () => {
         handlers.get('import_complete')?.({
             status: 'done',

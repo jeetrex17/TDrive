@@ -55,6 +55,9 @@
         if (plan.oversize > 0) {
             notes.push(`${plural(plan.oversize, 'file', 'files')} over ${humanBytes(plan.maxBytes)} will be skipped (Telegram's per-file limit).`);
         }
+        if (plan.empty) {
+            notes.push(`${plural(plan.empty, 'empty file', 'empty files')} will be skipped (empty files can't be uploaded).`);
+        }
         if (plan.ignored > 0) {
             notes.push(`${plural(plan.ignored, 'generated/cache entry', 'generated/cache entries')} will be skipped.`);
         }

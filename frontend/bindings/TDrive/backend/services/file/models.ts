@@ -26,6 +26,11 @@ export interface ImportPlan {
     "oversize": number;
 
     /**
+     * plaintext files with no bytes, which Telegram cannot store
+     */
+    "empty": number;
+
+    /**
      * archive items in the selection
      */
     "archives": number;

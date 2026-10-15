@@ -605,14 +605,44 @@ const importFailureReasons: string[] = [];
 const uploadBatchFailureReasons: string[] = [];
 let importCompleteReceived = false;
 
-/** Keeps the first few distinct reasons and drops the rest, so the log is bounded. */
-function recordFailureReason(into: string[], name: unknown, message: unknown) {
+/**
+ * Puts a raw Telegram RPC failure into words. Other backend text is already a
+ * sentence, and the general humanizer would read any mention of Telegram in it
+ * as an outage.
+ */
+function readableBackendText(raw: string): string {
+    return /rpc error code \d+/i.test(raw) ? humanizeBackendError(new Error(raw)) : raw;
+}
+
+/**
+ * Keeps the first few distinct causes, in words, and drops the rest so the log
+ * is bounded. Five files failing the same way read as one line, not five copies
+ * of the same RPC error.
+ */
+function recordFailureReason(into: string[], name: unknown, message: unknown, readable: (raw: string) => string = readableBackendText) {
     if (into.length >= MAX_IMPORT_FAILURE_REASONS) return;
-    const reason = String(message ?? '').trim();
-    if (!reason) return;
+    const raw = String(message ?? '').trim();
+    if (!raw) return;
+    const reason = readable(raw);
+    if (into.some((entry) => entry === reason || entry.endsWith(`: ${reason}`))) return;
     const fname = String(name ?? '').trim();
-    const entry = fname ? `${fname}: ${reason}` : reason;
-    if (!into.includes(entry)) into.push(entry);
+    into.push(fname ? `${fname}: ${reason}` : reason);
+}
+
+/**
+ * The summary's reasons: the fatal one first, then the per-file ones already
+ * put into words, then the backend's own list. Readable text is never fed back
+ * through again.
+ */
+function readableReasons(fatal: string, recorded: readonly string[], raw: readonly string[] = []): string[] {
+    const reasons: string[] = [];
+    recordFailureReason(reasons, '', fatal);
+    for (const entry of recorded) {
+        if (reasons.length >= MAX_IMPORT_FAILURE_REASONS) break;
+        if (!reasons.some((reason) => entry === reason || entry.endsWith(`: ${reason}`))) reasons.push(entry);
+    }
+    for (const text of raw) recordFailureReason(reasons, '', text);
+    return reasons;
 }
 
 function formatImportResultLabel(uploaded: number, failedUploads = 0) {
@@ -847,7 +877,8 @@ function activateUploadProgressEvents(): void {
 
         if (uploadBatch) {
             settleUploadInBatch(uploadId, canceled ? 'canceled' : 'failed');
-            if (!canceled) recordFailureReason(uploadBatchFailureReasons, filename, message);
+            // Kept raw: the batch summary humanizes each entry once when it is shown.
+            if (!canceled) recordFailureReason(uploadBatchFailureReasons, filename, message, (raw) => raw);
             if (state.uploadBatch) state.uploadBatch.failed += 1;
             return;
         }
@@ -944,6 +975,7 @@ function activateUploadProgressEvents(): void {
         const failedUploads = Math.max(Number(payload.failed) || 0, state.importBatch?.failed || 0);
         const uploaded = Number(payload.uploaded) || 0;
         const oversize = Number(payload.oversize) || 0;
+        const empty = Number(payload.empty) || 0;
         const backendStatus = String(payload.status ?? '').toLowerCase();
         const fatalError = String(payload.error ?? '').trim();
         const reportedErrors = Number(payload.errorCount);
@@ -955,7 +987,7 @@ function activateUploadProgressEvents(): void {
         const status = canceled
             ? 'canceled'
             : (fatal || failedUploads > 0 ? 'failed' : 'done');
-        if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, status, [], fatalError || (failedUploads ? `${failedUploads} files failed` : undefined));
+        if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, status, [], fatalError ? readableBackendText(fatalError) : (failedUploads ? `${failedUploads} files failed` : undefined));
         const resultLabel = formatImportResultLabel(uploaded, failedUploads);
         if (!state.importBatch) {
             pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import completed', total: uploaded + failedUploads });
@@ -975,27 +1007,17 @@ function activateUploadProgressEvents(): void {
         invalidateTransferCaches();
         appActions().refreshFiles();
 
-        if (!canceled && (status === 'failed' || failedUploads > 0 || oversize > 0 || errorCount > 0)) {
+        if (!canceled && (status === 'failed' || failedUploads > 0 || oversize > 0 || empty > 0 || errorCount > 0)) {
             const bits: string[] = [];
             if (failedUploads > 0) bits.push(`${failedUploads} failed`);
             if (oversize > 0) bits.push(`${oversize} skipped (too large)`);
+            if (empty > 0) bits.push(`${empty} empty ${empty === 1 ? 'file' : 'files'} skipped`);
             if (errorCount > 0) bits.push(`${errorCount} ${errorCount === 1 ? 'item' : 'items'} had errors`);
             // Include the first few concrete reasons (per-file upload errors,
             // then backend scan errors) so the summary is actionable, not just
             // counts.
-            const reasons: string[] = [];
-            if (fatalError) reasons.push(fatalError);
-            for (const reason of importFailureReasons) {
-                if (reasons.length >= MAX_IMPORT_FAILURE_REASONS) break;
-                if (!reasons.includes(reason)) reasons.push(reason);
-            }
-            if (Array.isArray(payload.errors)) {
-                for (const raw of payload.errors) {
-                    if (reasons.length >= MAX_IMPORT_FAILURE_REASONS) break;
-                    const text = String(raw ?? '').trim();
-                    if (text && !reasons.includes(text)) reasons.push(text);
-                }
-            }
+            const reasons = readableReasons(fatalError, importFailureReasons,
+                Array.isArray(payload.errors) ? payload.errors.map((raw) => String(raw ?? '')) : []);
             notify({
                 level: status === 'failed' ? 'error' : 'info',
                 title: fatal
@@ -1055,13 +1077,17 @@ async function importAndroidFolder(parentID: string, destination: UploadDestinat
     try {
         const manifest = await pickAndroidFolder();
         if (!manifest || !isCurrentDestination(destination)) return;
-        const plan: ImportPlan = { files: manifest.files.length, folders: folderPathsFor(manifest).length,
-            bytes: manifest.files.reduce((sum, file) => sum + file.size, 0), oversize: 0, archives: 0, ignored: 0,
-            maxBytes: 0, maxItems: 10_000, limitExceeded: manifest.files.length > 10_000, errorCount: 0, errors: [] };
+        // Telegram can't store an empty plaintext file; encryption gives it a header.
+        const emptyFiles = manifest.files.filter((file) => file.size === 0).length;
+        const planFor = (encrypt: boolean): ImportPlan => ({ files: manifest.files.length - (encrypt ? 0 : emptyFiles),
+            folders: folderPathsFor(manifest).length, bytes: manifest.files.reduce((sum, file) => sum + file.size, 0),
+            oversize: 0, empty: encrypt ? 0 : emptyFiles, archives: 0, ignored: 0,
+            maxBytes: 0, maxItems: 10_000, limitExceeded: manifest.files.length > 10_000, errorCount: 0, errors: [] });
+        const plan = planFor(false);
         if (destination.personal) await loadEncryptionStatus();
         if (!isCurrentDestination(destination)) return;
         const choice = await openImportOptionsModal({ plan, personal: destination.personal, hasArchives: false,
-            queued: selectionIsQueued(), destination: destination.destination, names: [manifest.root], replan: async () => plan });
+            queued: selectionIsQueued(), destination: destination.destination, names: [manifest.root], replan: async (encrypt) => planFor(encrypt) });
         if (!choice || !isCurrentDestination(destination)) return;
         if (choice.encrypt && !state.encryption.passwordRemembered) {
             const ok = state.encryption.passwordSet ? await openEncryptionPasswordModal() : await openEncryptionSetupModal();
@@ -1082,8 +1108,10 @@ async function importAndroidFolder(parentID: string, destination: UploadDestinat
 async function runAndroidImport(parentID: string, manifest: AndroidFolderManifest, encrypt: boolean, destination: UploadDestination) {
     const generation = transferSurfaceGeneration;
     const folderPaths = folderPathsFor(manifest);
-    const totalFiles = manifest.files.length;
-    const totalBytes = manifest.files.reduce((sum, file) => sum + file.size, 0);
+    const files = encrypt ? manifest.files : manifest.files.filter((file) => file.size > 0);
+    const empty = manifest.files.length - files.length;
+    const totalFiles = files.length;
+    const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
     activeTransferDriveId = destination.driveId;
     pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Creating folders…', total: totalBytes });
     importFailureReasons.length = 0;
@@ -1132,7 +1160,7 @@ async function runAndroidImport(parentID: string, manifest: AndroidFolderManifes
         for (let start = 0; start < totalFiles && !state.cancelingUpload; start += ANDROID_UPLOAD_WINDOW) {
             if (!isCurrentDestination(destination)) return;
             if (state.activeChannel?.id !== destination.driveId) throw new Error(`Open ${destination.driveTitle} before continuing this folder import.`);
-            const batch = manifest.files.slice(start, start + ANDROID_UPLOAD_WINDOW);
+            const batch = files.slice(start, start + ANDROID_UPLOAD_WINDOW);
             const outcome = await uploadAndroidWindow(batch, manifest.root, folderIds, parentID, encrypt, destination);
             if (!isCurrentDestination(destination)) return;
             done += outcome.done;
@@ -1148,7 +1176,7 @@ async function runAndroidImport(parentID: string, manifest: AndroidFolderManifes
     } finally {
         if (generation === transferSurfaceGeneration) {
             setTransferDirectionActive('upload', false);
-            finishAndroidImport(done, failed, fatalError);
+            finishAndroidImport(done, failed, fatalError, empty);
             if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, state.cancelingUpload ? 'canceled' : fatalError || failed ? 'failed' : 'done', [], fatalError || undefined);
             state.cancelingUpload = false;
         }
@@ -1219,7 +1247,7 @@ async function uploadAndroidWindow(
     }
 }
 
-function finishAndroidImport(done: number, failed: number, fatalError: string) {
+function finishAndroidImport(done: number, failed: number, fatalError: string, empty = 0) {
     const canceled = state.cancelingUpload;
     const resultLabel = formatImportResultLabel(done, failed);
     updateTransferName({
@@ -1236,15 +1264,17 @@ function finishAndroidImport(done: number, failed: number, fatalError: string) {
     invalidateTransferCaches();
     appActions().refreshFiles();
 
-    if (!canceled && (fatalError || failed > 0)) {
+    if (!canceled && (fatalError || failed > 0 || empty > 0)) {
         // The row carries only a status, so the reasons the backend gave for
         // individual files are the only actionable thing the user gets.
-        const reasons = fatalError ? [fatalError, ...importFailureReasons] : [...importFailureReasons];
+        // The Android runner already put its fatal error into words.
+        const reasons = readableReasons('', fatalError ? [fatalError, ...importFailureReasons] : importFailureReasons);
         const bits = failed > 0 ? [`${failed} failed`] : [];
+        if (empty > 0) bits.push(`${empty} empty ${empty === 1 ? 'file' : 'files'} skipped`);
         notify({
-            level: 'error',
+            level: fatalError || failed > 0 ? 'error' : 'info',
             title: fatalError ? 'Import failed' : resultLabel,
-            body: [...bits, ...reasons.slice(0, MAX_IMPORT_FAILURE_REASONS)].join('  ·  ')
+            body: [...bits, ...reasons].join('  ·  ')
                 || 'The import stopped before it could finish.',
         });
     }
@@ -1481,7 +1511,7 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
     } finally {
         if (generation === transferSurfaceGeneration) {
             if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, state.cancelingUpload ? 'canceled' : uploadThrew || failures.length || (uploadBatch?.failures ?? 0) > 0 ? 'failed' : 'done',
-                failures.map((failure) => ({ ...failure, message: humanizeBackendError(failure.message) })));
+                failures.map((failure) => ({ ...failure, message: failure.code === 'empty_file' ? "Empty files can't be uploaded." : humanizeBackendError(failure.message) })));
             setTransferDirectionActive('upload', false);
             // Safety sweep: by the time UploadToDriveFS resolves, every upload in
             // the batch has terminated on the backend. If a Wails event was dropped,

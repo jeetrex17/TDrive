@@ -22,6 +22,10 @@ The current [limits](../../backend/services/file/limits.go) are 1900 MiB per
 stored part, 40 GiB per stored logical file and a defensive maximum of 32 parts.
 These are application limits, applied uniformly; an encrypted file can cross a
 part boundary because its stored size exceeds its plaintext size.
+A stored size of zero is the other bound: Telegram rejects an empty document, so
+imports count and skip empty plaintext files the way they skip oversize ones, and
+a direct upload reports one as a non-retryable `empty_file` failure before any
+send. Encrypted empty files still upload, because the header gives them a body.
 
 The diagram below describes the ordinary upload path. Eligible unencrypted
 uploads use the durable recovery path described below instead of aborting their

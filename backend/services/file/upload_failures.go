@@ -97,6 +97,8 @@ func (o *failureUploadObserver) Failed(id int, name string, err error) {
 func classifyUploadFailure(ctx context.Context, index int, name string, err error) UploadFailure {
 	failure := UploadFailure{Index: index, Name: name, Message: err.Error(), Code: "upload_failed"}
 	switch {
+	case errors.Is(err, ErrEmptyFile):
+		failure.Code = "empty_file"
 	case errors.Is(err, errUploadProjection):
 		failure.Code = "projection_pending"
 	case errors.Is(err, errUploadResumable):
