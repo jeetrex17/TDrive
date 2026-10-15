@@ -9,7 +9,7 @@ const transfer: TransferEvent = { kind: 'transfer', id: 'xfer:up:1', name: 'file
 afterEach(() => { historyEvents.set([]); uploadActivities.set([]); resumableUploads.set([]); resumableDownloads.set([]); });
 
 describe('shared activity history', () => {
-    it('hides journal and batch counterparts without losing unrelated activity', () => {
+    it('hides journal counterparts and keeps batch progress rows', () => {
         historyEvents.set([
             { ...transfer, resumableJobId: 'journal' },
             { ...transfer, id: 'xfer:down:file:3:7', direction: 'down' },
@@ -21,12 +21,11 @@ describe('shared activity history', () => {
         resumableUploads.set([{ jobId: 'journal', channelId: 3, name: 'file.bin', status: 'paused', size: 100, confirmedBytes: 20, error: '' }]);
         resumableDownloads.set([{ jobId: 'download', channelId: 3, logicalMsgId: 7, name: 'file.bin', status: 'paused', totalBytes: 100, verifiedBytes: 20, speed: 0, savedPath: '', error: '' }]);
         uploadActivities.set([{ id: 'batch', name: 'Selection', driveId: 3, driveTitle: 'Personal', destination: '/', encrypt: false, addedAt: 1, startedAt: 1, finishedAt: 0, status: 'active', files: [], fileCount: 5, transferId: 'batch-transfer', resumableJobIds: ['journal'] }]);
-        expect(get(visibleHistory).map((entry) => entry.id)).toEqual(['ordinary-active', 'ordinary-done', 'notice']);
-        expect(get(visibleActiveTransfers).map((entry) => entry.id)).toEqual(['ordinary-active']);
+        expect(get(visibleHistory).map((entry) => entry.id)).toEqual(['batch-transfer', 'ordinary-active', 'ordinary-done', 'notice']);
+        expect(get(visibleActiveTransfers).map((entry) => entry.id)).toEqual(['batch-transfer', 'ordinary-active']);
         expect(get(visibleRecentEvents).map((entry) => entry.id)).toEqual(['ordinary-done', 'notice']);
         expect(get(standaloneResumableUploads)).toEqual([]);
         uploadActivities.set([]);
         expect(get(standaloneResumableUploads).map((job) => job.jobId)).toEqual(['journal']);
-        expect(get(visibleHistory).map((entry) => entry.id)).toContain('batch-transfer');
     });
 });

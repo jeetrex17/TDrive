@@ -90,9 +90,7 @@
     restoreFocus="#file-list"
     onClose={onCancel}
 >
-    {#if $view.payload?.destination}<p>Destination: {$view.payload.destination}</p>{/if}
-    <SelectedUploadFiles names={$view.payload?.names ?? []} label="Selected items" />
-    {#if $view.payload?.queued}<p>Waiting imports stay in this session. Keep TDrive open until they finish.</p>{/if}
+    <SelectedUploadFiles names={$view.payload?.names ?? []} destination={$view.payload?.destination} queued={$view.payload?.queued} label="Selected items" />
     {#if $view.payload?.hasArchives}
         <label id="import-options-extract-row" class="modal-choice-row">
             <input id="import-options-extract" type="checkbox" bind:checked={extract} onchange={toggled} />

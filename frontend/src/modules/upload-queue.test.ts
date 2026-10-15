@@ -26,17 +26,21 @@ describe('interactive upload queue', () => {
         queue.dispose();
     });
 
-    it('waits for the original destination and never skips ahead', async () => {
+    it('runs the open drive in order while another drive waits', async () => {
         let driveId = 2;
-        const run = vi.fn(async () => {});
+        const run = vi.fn(async (_id: string) => {});
         const queue = createUploadQueue({ canRun: (entry) => entry.driveId === driveId });
-        await queue.add({ activity: metadata('one', 1), run });
-        await queue.add({ activity: metadata('two', 2), run });
-        expect(run).not.toHaveBeenCalled();
+        await queue.add({ activity: metadata('one', 1), run: () => run('one') });
+        await queue.add({ activity: metadata('two', 2), run: () => run('two') });
+        await queue.add({ activity: metadata('three', 2), run: () => run('three') });
+        expect(run.mock.calls).toEqual([['two'], ['three']]);
+        expect(get(uploadActivities).find(({ id }) => id === 'one')).toMatchObject({ status: 'queued' });
+        expect(get(uploadActivities).find(({ id }) => id === 'one')?.error).toBeUndefined();
+        expect(queue.waitingFor(1)).toBe(true);
+        expect(queue.waitingFor(2)).toBe(false);
         driveId = 1;
         await queue.wake();
-        expect(run).toHaveBeenCalledOnce();
-        expect(get(uploadActivities).find(({ id }) => id === 'two')?.status).toBe('queued');
+        expect(run.mock.calls).toEqual([['two'], ['three'], ['one']]);
         queue.dispose();
     });
 

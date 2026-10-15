@@ -7,10 +7,14 @@ import { historyEvents, notifPanelOpen } from './notif-store';
 import { uploadActivities, type UploadActivity } from './upload-activity-store';
 import { resumableUploads } from '../../modules/resumable-uploads';
 import { resumableDownloads } from '../../modules/resumable-downloads';
+import { failedUploadReports, type FailedUploadsPayload } from '../modals/failed-uploads-store';
+import { sidebarState } from '../sidebar/sidebar-store';
 
 const queue = vi.hoisted(() => ({ removeQueuedUpload: vi.fn() }));
+const actions = vi.hoisted(() => ({ reviewFailedUploads: vi.fn(), switchActiveChannel: vi.fn() }));
 vi.mock('../../modules/upload-queue', () => queue);
-vi.mock('../../modules/transfers', () => ({ downloadRetryFor: () => undefined, reviewFailedUploads: vi.fn() }));
+vi.mock('../../modules/transfers', () => ({ downloadRetryFor: () => undefined, reviewFailedUploads: actions.reviewFailedUploads }));
+vi.mock('../../modules/channels', () => ({ switchActiveChannel: actions.switchActiveChannel }));
 
 Object.defineProperty(HTMLElement.prototype, 'offsetParent', { configurable: true, get() { return this.parentElement; } });
 
@@ -34,7 +38,8 @@ beforeEach(() => {
 });
 afterEach(async () => {
     closeActivity(); flushSync(); await unmount(app); host.remove();
-    historyEvents.set([]); uploadActivities.set([]); resumableUploads.set([]); resumableDownloads.set([]);
+    historyEvents.set([]); uploadActivities.set([]); resumableUploads.set([]); resumableDownloads.set([]); failedUploadReports.set([]);
+    sidebarState.update((state) => ({ ...state, activeChannelId: null }));
     vi.clearAllMocks();
 });
 
@@ -66,7 +71,7 @@ describe('full activity view', () => {
         expect(details?.textContent).toContain('Family');
         expect(details?.textContent).toContain('Summer');
         expect(details?.textContent).toContain('Encrypted');
-        expect(details?.textContent).toContain('Waiting its turn');
+        expect(details?.textContent).toContain('Queued · Starting soon');
         expect(details?.querySelectorAll('[data-activity-file]')).toHaveLength(50);
         expect(details?.textContent).toContain('photo-50.jpg');
         expect(details?.textContent).not.toContain('photo-51.jpg');
@@ -109,6 +114,51 @@ describe('full activity view', () => {
         button('Copy details').click(); await settle();
         expect(host.textContent).toContain('Could not copy');
         expect(host.textContent).not.toContain('Details copied');
+    });
+
+    it('says a batch for a closed drive is paused and offers to open that drive', async () => {
+        sidebarState.update((state) => ({ ...state, activeChannelId: 1 }));
+        uploadActivities.set([batch()]); openActivity({ selectedId: 'session-1' }); await settle();
+        const details = host.querySelector('[aria-label="Details for Photo selection"]');
+        expect(details?.textContent).toContain('Paused until Family is open');
+        expect(host.querySelector('.activity-item .item-summary')?.textContent).toBe('Paused until Family is open · 121 files');
+        button('Open Family').click();
+        expect(actions.switchActiveChannel).toHaveBeenCalledWith(8);
+    });
+
+    it('counts the open drive queue ahead of a waiting batch', async () => {
+        uploadActivities.set([{ ...batch(), id: 'earlier', name: 'Earlier', addedAt: 1 }, batch(), { ...batch('active'), id: 'running', name: 'Running' }]);
+        openActivity({ selectedId: 'session-1' }); await settle();
+        expect(host.querySelector('[aria-label="Details for Photo selection"]')?.textContent).toContain('Queued · 1 upload ahead');
+        expect(Array.from(host.querySelectorAll('.activity-item .item-title')).map((title) => title.textContent)).toEqual(['Running', 'Earlier', 'Photo selection']);
+    });
+
+    it('moves a batch failure review into its detail and keeps unrelated reports listed', async () => {
+        const report = (activityId?: string): FailedUploadsPayload => ({ paths: ['/a'], failures: [{ index: 0, name: 'a', message: 'x', code: 'not_sent', retryable: true }], parentId: '', encrypt: false, driveId: 8, driveTitle: 'Family', activityId });
+        const linked = report('failed');
+        failedUploadReports.set([linked, report()]);
+        uploadActivities.set([{ ...batch('failed'), id: 'failed', name: 'Documents' }]);
+        openActivity({ selectedId: 'failed' }); await settle();
+        expect(host.querySelectorAll('.failed-upload-report')).toHaveLength(1);
+        button('Review failed files').click();
+        expect(actions.reviewFailedUploads).toHaveBeenCalledWith(linked);
+    });
+
+    it('confirms before clearing history', async () => {
+        historyEvents.set([{ kind: 'event', id: 'notice-1', title: 'Done', body: '', level: 'info', ts: 1 }]);
+        openActivity(); await settle();
+        button('Clear history').click(); await settle();
+        expect(get(historyEvents)).toHaveLength(1);
+        button('Cancel').click(); await settle();
+        button('Clear history').click(); await settle();
+        button('Clear').click(); await settle();
+        expect(get(historyEvents)).toEqual([]);
+    });
+
+    it('opens a batch from the bell by its aggregate row id', async () => {
+        uploadActivities.set([{ ...batch('active'), transferId: 'xfer:up:session-1' }, { ...batch('done'), id: 'other', name: 'Other' }]);
+        openActivity({ selectedId: 'xfer:up:session-1' }); await settle();
+        expect(host.querySelector('[aria-label="Details for Photo selection"]')).not.toBeNull();
     });
 
     it('keeps the session batch authoritative over its compact legacy row', async () => {

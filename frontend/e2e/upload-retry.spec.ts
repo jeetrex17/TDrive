@@ -30,17 +30,21 @@ for (const platform of ['desktop', 'android']) {
         await page.getByRole('button', { name: 'Dismiss', exact: true }).click();
         if (platform === 'android') {
             await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: /^Transfers/ }).click();
+            await page.getByRole('region', { name: 'Upload failures' }).getByRole('button', { name: 'Review failed files', exact: true }).click();
         } else {
             await page.locator('#notif-bell').click();
+            await page.getByRole('dialog', { name: 'Notifications', exact: true }).getByRole('button', { name: 'View all activity', exact: true }).click();
             const activity = page.getByRole('dialog', { name: 'Activity', exact: true });
-            await activity.getByRole('button', { name: 'View 3 files', exact: true }).click();
+            await activity.getByRole('button', { name: 'View accepted.txt and 2 more', exact: true }).click();
             const files = activity.getByRole('region', { name: 'Files in upload', exact: true });
             await expect(files.locator('li').filter({ hasText: 'accepted.txt' })).toContainText('Completed');
             await expect(files.locator('li').filter({ hasText: 'retry.txt' })).toContainText('Failed');
             await expect(files.locator('li').filter({ hasText: 'uncertain.txt' })).toContainText('Receipt was lost');
+            // The batch owns its review, so the list carries no second failure card.
+            await expect(activity.getByRole('region', { name: 'Upload failures' })).toHaveCount(0);
             await activity.screenshot({ path: test.info().outputPath('activity-partial-batch-desktop.png') });
+            await activity.getByRole('button', { name: 'Review failed files', exact: true }).click();
         }
-        await page.getByRole('region', { name: 'Upload failures' }).getByRole('button', { name: 'Review failed files', exact: true }).click();
         const dialog = page.getByRole('dialog', { name: 'Failed uploads' });
         await expect(dialog).toBeVisible();
         await expect(dialog.getByRole('list', { name: 'Failed files' })).toContainText('retry.txt');

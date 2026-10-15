@@ -1,6 +1,6 @@
 import { bootTDrive, expect, test } from './wails-mock';
 
-test('clicking a hover-open notification preview opens Activity and preserves the failure detail', async ({ page }) => {
+test('a row in the bell panel opens its Activity detail and preserves the failure', async ({ page }) => {
     const mock = await bootTDrive(page);
     await expect(page.locator('#success-screen')).toBeVisible();
     await mock.emit('upload_start', 41, 'broken.bin', 1024, '');
@@ -12,13 +12,12 @@ test('clicking a hover-open notification preview opens Activity and preserves th
     const preview = page.getByRole('dialog', { name: 'Notifications', exact: true });
     await expect(preview).toBeVisible();
     await expect(bell).toBeFocused();
-    await bell.click();
+    await preview.getByRole('button', { name: 'broken.bin', exact: true }).click();
 
     const activity = page.getByRole('dialog', { name: 'Activity', exact: true });
     await expect(activity).toBeVisible();
     await expect(preview).toBeHidden();
     await expect(activity.getByRole('searchbox', { name: 'Search activity' })).toBeFocused();
-    await activity.getByRole('button', { name: 'View broken.bin', exact: true }).click();
     const details = activity.getByRole('region', { name: 'Details for broken.bin', exact: true });
     await expect(details).toContainText('Failed');
     await expect(details).toContainText(/fresh reference/);
@@ -29,7 +28,7 @@ test('clicking a hover-open notification preview opens Activity and preserves th
     await expect(page.locator('#file-list')).toBeVisible();
 });
 
-test('Activity shows the full restored notice and supports keyboard activation', async ({ page }) => {
+test('Activity shows the full restored notice and the bell stays a quick panel', async ({ page }) => {
     const body = 'The destination drive is temporarily unavailable. Your files remain on this device. Reconnect to the drive, then review the failed files before retrying. No successful files need to be uploaded again.';
     await page.addInitScript((message) => {
         localStorage.setItem('tdrive.transfers.v1', JSON.stringify({
@@ -43,6 +42,9 @@ test('Activity shows the full restored notice and supports keyboard activation',
     await expect(bell).toBeVisible();
     await bell.focus();
     await page.keyboard.press('Enter');
+    const preview = page.getByRole('dialog', { name: 'Notifications', exact: true });
+    await expect(preview).toBeVisible();
+    await preview.getByRole('button', { name: 'View all activity', exact: true }).click();
     const activity = page.getByRole('dialog', { name: 'Activity', exact: true });
     await expect(activity).toBeVisible();
     await activity.getByRole('tab', { name: 'Notifications', exact: true }).click();
@@ -54,5 +56,9 @@ test('Activity shows the full restored notice and supports keyboard activation',
     await activity.getByRole('button', { name: 'Close activity', exact: true }).click();
     await expect(bell).toBeFocused();
     await page.keyboard.press('Space');
-    await expect(activity).toBeVisible();
+    await expect(preview).toBeVisible();
+    await expect(activity).toBeHidden();
+    await page.keyboard.press('Escape');
+    await expect(preview).toBeHidden();
+    await expect(bell).toBeFocused();
 });

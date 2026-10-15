@@ -192,7 +192,7 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
         if (platform === 'desktop') {
             // The bell's name carries its state ("Notifications, 1 transfer in
             // progress"), so match the stable prefix rather than a snapshot of it.
-            await page.getByRole('button', { name: /^Notifications/ }).hover();
+            await page.getByRole('button', { name: /^Notifications/ }).click();
         } else {
             await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Transfers', exact: true }).click();
         }

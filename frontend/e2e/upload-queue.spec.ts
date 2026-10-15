@@ -10,6 +10,11 @@ async function chooseUpload(page: Page, mobile = false): Promise<void> {
     await page.locator('#upload-menu-files').click();
 }
 
+async function openActivity(page: Page): Promise<void> {
+    await page.locator('#notif-bell').click();
+    await page.getByRole('dialog', { name: 'Notifications', exact: true }).getByRole('button', { name: 'View all activity', exact: true }).click();
+}
+
 for (const platform of ['desktop', 'android'] as const) {
     test(`${platform}: a confirmed upload waits behind the active batch`, async ({ page }) => {
         if (platform === 'android') await page.setViewportSize({ width: 390, height: 844 });
@@ -42,7 +47,7 @@ for (const platform of ['desktop', 'android'] as const) {
         await expect(review).toBeHidden();
         if (platform === 'desktop') await page.locator('#breadcrumb-back').click();
 
-        if (platform === 'desktop') await page.locator('#notif-bell').click();
+        if (platform === 'desktop') await openActivity(page);
         else {
             await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: /^Transfers/ }).click();
             await page.getByRole('button', { name: 'View all activity', exact: true }).click();
@@ -50,7 +55,7 @@ for (const platform of ['desktop', 'android'] as const) {
         const activity = page.getByRole('dialog', { name: 'Activity', exact: true });
         await activity.getByRole('button', { name: 'View queued.txt', exact: true }).click();
         const details = activity.getByRole('region', { name: 'Details for queued.txt', exact: true });
-        await expect(details).toContainText('Waiting its turn');
+        await expect(details).toContainText('Queued · Starts after the current upload');
         await expect(details).toContainText('Personal');
         if (platform === 'desktop') await expect(details).toContainText('Reports');
         await expect(details).toContainText('Not encrypted');
@@ -70,6 +75,48 @@ for (const platform of ['desktop', 'android'] as const) {
         await expect.poll(async () => (await mock.calls('RetryUploadToDriveFS')).map(({ state }) => state)).toEqual(['fulfilled', 'fulfilled']);
     });
 }
+
+test('a batch for a closed drive pauses without holding back the open drive', async ({ page }) => {
+    const mock = await bootTDrive(page, {
+        ListChannels: resolves([
+            { id: 1, title: 'Personal', kind: 'personal', is_active: true, invite_link: '' },
+            { id: 2, title: 'Team', kind: 'shared', is_active: false, invite_link: 'https://example.test/invite' },
+        ]),
+        SetActiveChannel: resolves(null),
+        SelectFiles: resolves(['/tmp/first.txt']),
+        PlanImport: resolves({ files: 1, folders: 0, archives: 0, limitExceeded: false }),
+        RetryUploadToDriveFS: deferred('first', { result: { ok: true }, files: [{ name: 'first.txt', msg_id: 41 }], failures: [] }),
+        ReleaseUploadSources: resolves(null),
+    });
+    await expect(page.locator('#success-screen')).toBeVisible();
+    await chooseUpload(page);
+    await page.getByRole('button', { name: 'Continue', exact: true }).click();
+    await expect.poll(async () => (await mock.calls('RetryUploadToDriveFS')).length).toBe(1);
+
+    await mock.setPlan('SelectFiles', resolves(['/tmp/holiday.mov']));
+    await mock.setPlan('RetryUploadToDriveFS', resolves({ result: { ok: true }, files: [], failures: [] }));
+    await chooseUpload(page);
+    await page.getByRole('button', { name: 'Add to queue', exact: true }).click();
+    await page.getByRole('button', { name: 'Team', exact: true }).click();
+    await mock.release('first');
+    await mock.setPlan('SelectFiles', resolves(['/tmp/team-notes.pdf']));
+    await chooseUpload(page);
+    await page.getByRole('button', { name: /Add to queue|Continue/ }).click();
+    await expect.poll(async () => (await mock.calls('RetryUploadToDriveFS')).map(({ args }) => args[0])).toEqual([
+        ['/tmp/first.txt'], ['/tmp/team-notes.pdf'],
+    ]);
+
+    await openActivity(page);
+    const activity = page.getByRole('dialog', { name: 'Activity', exact: true });
+    await activity.getByRole('button', { name: 'View holiday.mov', exact: true }).click();
+    const details = activity.getByRole('region', { name: 'Details for holiday.mov', exact: true });
+    await expect(details).toContainText('Paused until Personal is open');
+    await activity.screenshot({ path: test.info().outputPath('paused-batch-desktop.png') });
+    await details.getByRole('button', { name: 'Open Personal', exact: true }).click();
+    await expect.poll(async () => (await mock.calls('RetryUploadToDriveFS')).map(({ args }) => args[0])).toEqual([
+        ['/tmp/first.txt'], ['/tmp/team-notes.pdf'], ['/tmp/holiday.mov'],
+    ]);
+});
 
 test('large selections keep the confirmation controls on screen', async ({ page }) => {
     await page.setViewportSize({ width: 1100, height: 700 });
@@ -101,7 +148,7 @@ test('removing a waiting upload leaves the active batch running', async ({ page 
     await mock.setPlan('SelectFiles', resolves(['/tmp/removed.txt']));
     await chooseUpload(page);
     await page.getByRole('button', { name: 'Add to queue', exact: true }).click();
-    await page.locator('#notif-bell').click();
+    await openActivity(page);
     const activity = page.getByRole('dialog', { name: 'Activity', exact: true });
     await activity.getByRole('button', { name: 'View removed.txt', exact: true }).click();
     const details = activity.getByRole('region', { name: 'Details for removed.txt', exact: true });

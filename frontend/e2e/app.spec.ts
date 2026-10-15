@@ -657,7 +657,7 @@ test('a failed upload counts once and keeps its reason on the row', async ({ pag
     await mock.emit('upload_start', 41, 'broken.bin', 1024, '');
     await mock.emit('upload_error', 41, 'broken.bin', 'upload part: rpc error code 400: FILE_REFERENCE_EXPIRED');
     await expect(page.getByRole('button', { name: /^Notifications/ })).toHaveAttribute('aria-label', /1 error/);
-    await page.getByRole('button', { name: /^Notifications/ }).hover();
+    await page.getByRole('button', { name: /^Notifications/ }).click();
     const panel = page.getByRole('dialog', { name: 'Notifications', exact: true });
     await expect(panel.locator('.notif-row-transfer')).toHaveCount(1);
     await expect(panel.locator('.notif-row-transfer .notif-row-note')).toContainText(/fresh reference/);

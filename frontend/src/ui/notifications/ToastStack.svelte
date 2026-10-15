@@ -8,6 +8,7 @@
     import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
     import XIcon from '@lucide/svelte/icons/x';
     import { toasts } from './toast-store';
+    import { activityView } from './activity-store';
     import { swipeDismiss } from './swipe-dismiss';
     import { prefersReducedMotion } from '../mobile/motion';
 
@@ -71,7 +72,8 @@
     onfocusin={() => { focusInside = true; syncPause(); }}
     onfocusout={onFocusOut}
 >
-    {#each $toasts as toast (toast.id)}
+    <!-- Activity is the full notification list, so banners would only cover its controls. -->
+    {#each $activityView.open ? [] : $toasts as toast (toast.id)}
         <div
             class={`toast toast-${toast.level}${toast.action ? ' toast-with-action' : ''}`}
             data-id={toast.id}

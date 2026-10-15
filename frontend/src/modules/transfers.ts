@@ -575,7 +575,7 @@ export async function withTransferFlow(run: () => Promise<void>): Promise<void> 
 }
 /** Recovery never replaces an active upload or a pending user selection. */
 export async function tryWithTransferFlow(run: () => Promise<void>): Promise<boolean> {
-    const waitingForThisDrive = sessionUploadQueue.pending && sessionUploadQueue.nextDriveId === state.activeChannel?.id;
+    const waitingForThisDrive = sessionUploadQueue.waitingFor(state.activeChannel?.id);
     if (flowBusy || selectionBusy || waitingForThisDrive) return false;
     const generation = transferSurfaceGeneration;
     flowBusy = true;
@@ -589,7 +589,8 @@ export async function tryWithTransferFlow(run: () => Promise<void>): Promise<boo
 }
 function uploadActivity(destination: UploadDestination, paths: string[], encrypt: boolean, fileCount = paths.length, detailNote?: string): NewUploadActivity {
     const id = nextUploadActivityId();
-    return { id, name: paths.length === 1 ? paths[0].split(/[/\\]/).pop() || 'Upload' : `${fileCount} files`,
+    const first = paths[0]?.split(/[/\\]/).pop() || 'Upload';
+    return { id, name: paths.length > 1 ? `${first} and ${paths.length - 1} more` : first,
         driveId: destination.driveId, driveTitle: destination.driveTitle, destination: destination.destination,
         encrypt, fileCount, detailNote, transferId: `xfer:up:${id}`,
         files: detailNote ? [] : paths.map((path, index) => ({ index, name: path.split(/[/\\]/).pop() || 'Untitled', status: 'queued' })) };
@@ -719,7 +720,7 @@ function finalizeUploadBatch(uploadThrew: boolean, failures?: UploadFailure[]): 
     });
     appActions().refreshFiles();
 
-    if (batchReasons) {
+    if (batchReasons && !failures?.length) {
         notify({
             level: 'error',
             title: batch.failures === 1 ? "Couldn't upload 1 file" : `Couldn't upload ${batch.failures} files`,
@@ -1067,7 +1068,7 @@ async function importAndroidFolder(parentID: string, destination: UploadDestinat
             if (!ok || !isCurrentDestination(destination)) return;
         }
         const activity = uploadActivity(destination, [manifest.root], choice.encrypt, manifest.files.length,
-            'Folder imports report aggregate progress. Per-file outcomes are unavailable for this import.');
+            'Folder imports report overall progress, not each file.');
         enqueueUpload(activity, destination, () => runAndroidImport(parentID, manifest, choice.encrypt, destination), release);
         enqueued = true;
     } catch (error) {
@@ -1296,7 +1297,7 @@ async function importSelection(parentID: string, paths: string[], destination: U
             if (!ok || !isCurrentDestination(destination)) return;
         }
         const activity = uploadActivity(destination, paths, encrypt, plan.files || paths.length,
-            complex ? 'Folder and archive imports report aggregate progress. Per-file outcomes are unavailable for this import.' : undefined);
+            complex ? 'Folder and archive imports report overall progress, not each file.' : undefined);
         enqueueUpload(activity, destination,
             () => complex ? runDesktopImport(paths, parentID, encrypt, extract, destination) : uploadPathsBatch(paths, parentID, encrypt, destination.driveId, destination.driveTitle),
             (reason) => { if (reason !== 'completed') void releasePickedSources(paths); });
@@ -1392,7 +1393,8 @@ function showFailedUploadNotice(payload: FailedUploadsPayload, body: string, gen
     if (generation !== transferSurfaceGeneration) return;
     rememberFailedUploadReport(payload);
     notify({
-        level: 'error', title: 'Upload failed', body,
+        // The failed batch row and its report keep this; history needs no third copy.
+        level: 'error', title: 'Upload failed', body, history: false,
         action: { label: 'Review failed files', run: () => {
             if (generation !== transferSurfaceGeneration) return;
             reviewFailedUploads(payload);
@@ -1412,7 +1414,8 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
     const generation = transferSurfaceGeneration;
     const driveId = retryDriveId ?? state.activeChannel?.id ?? null;
     const driveTitle = originalDriveTitle || state.activeChannel?.title || 'the original drive';
-    const destination = get(uploadActivities).find((entry) => entry.id === activeUploadActivityId)?.destination;
+    const activityId = activeUploadActivityId ?? undefined;
+    const destination = get(uploadActivities).find((entry) => entry.id === activityId)?.destination;
     let failures: UploadFailure[] = [];
     if (activeTransferDriveId === null) activeTransferDriveId = state.activeChannel?.id ?? null;
     setTransferDirectionActive('upload', true);
@@ -1473,11 +1476,12 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
                 index, name: path.split(/[/\\]/).pop() || 'Untitled',
                 message: humanizeBackendError(error), code: 'outcome_unknown', retryable: false,
             }));
-            showFailedUploadNotice({ paths: [...paths], failures, parentId: parentID, encrypt, driveId, driveTitle, destination }, failedUploadBody(paths.length, failures.length, humanizeBackendError(error)), generation);
+            showFailedUploadNotice({ paths: [...paths], failures, parentId: parentID, encrypt, driveId, driveTitle, destination, activityId }, failedUploadBody(paths.length, failures.length, humanizeBackendError(error)), generation);
         }
     } finally {
         if (generation === transferSurfaceGeneration) {
-            if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, state.cancelingUpload ? 'canceled' : uploadThrew || failures.length || (uploadBatch?.failures ?? 0) > 0 ? 'failed' : 'done', failures);
+            if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, state.cancelingUpload ? 'canceled' : uploadThrew || failures.length || (uploadBatch?.failures ?? 0) > 0 ? 'failed' : 'done',
+                failures.map((failure) => ({ ...failure, message: humanizeBackendError(failure.message) })));
             setTransferDirectionActive('upload', false);
             // Safety sweep: by the time UploadToDriveFS resolves, every upload in
             // the batch has terminated on the backend. If a Wails event was dropped,
@@ -1498,7 +1502,7 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
                 }
             }
             if (!uploadThrew && failures.length && !state.cancelingUpload) {
-                showFailedUploadNotice({ paths: [...paths], failures, parentId: parentID, encrypt, driveId, driveTitle, destination }, failedUploadBody(paths.length, failures.length), generation);
+                showFailedUploadNotice({ paths: [...paths], failures, parentId: parentID, encrypt, driveId, driveTitle, destination, activityId }, failedUploadBody(paths.length, failures.length), generation);
             }
             invalidateTransferCaches();
             state.uploadBatch = null;

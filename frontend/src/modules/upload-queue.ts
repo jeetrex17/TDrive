@@ -1,4 +1,4 @@
-import { addUploadActivity, finishUploadActivity, startUploadActivity, updateUploadActivity, type NewUploadActivity } from '../ui/notifications/upload-activity-store';
+import { addUploadActivity, finishUploadActivity, startUploadActivity, type NewUploadActivity } from '../ui/notifications/upload-activity-store';
 
 export interface QueuedUpload {
     activity: NewUploadActivity;
@@ -25,13 +25,12 @@ export function createUploadQueue(options: { canRun: (activity: NewUploadActivit
         void wake();
     };
     const wake = async (): Promise<void> => {
-        if (disposed || running || !waiting.length) return;
-        const entry = waiting[0];
-        if (!options.canRun(entry.activity)) {
-            updateUploadActivity(entry.activity.id, { error: `Waiting for ${entry.activity.driveTitle} and the current upload to finish.` });
-            return;
-        }
-        waiting = waiting.slice(1);
+        if (disposed || running) return;
+        // Order holds per drive. A batch for a drive that is not open waits
+        // without holding back the open drive's batches.
+        const entry = waiting.find((item) => options.canRun(item.activity));
+        if (!entry) return;
+        waiting = waiting.filter((item) => item !== entry);
         running = true;
         startUploadActivity(entry.activity.id);
         try {
@@ -55,7 +54,7 @@ export function createUploadQueue(options: { canRun: (activity: NewUploadActivit
         wake,
         remove,
         get pending(): boolean { return running || waiting.length > 0; },
-        get nextDriveId(): number | undefined { return waiting[0]?.activity.driveId; },
+        waitingFor(driveId: number | undefined): boolean { return waiting.some((item) => item.activity.driveId === driveId); },
         register(): void { removeWaiting = remove; },
         dispose(): void {
             disposed = true;

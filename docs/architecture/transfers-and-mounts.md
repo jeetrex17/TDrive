@@ -106,9 +106,12 @@ Older completed detail can be evicted to admit a new selection, while pending
 and active detail is retained.
 
 Queued work is session-only. Original source paths and retry actions do not
-enter persisted notification history. The queue must yield while its original
-drive is not selected and must invalidate pending selections and callbacks on
-logout or transfer-surface teardown. Native picker sources retain their platform
+enter persisted notification history. The backend only accepts a batch for the
+active drive, so a batch waits while its original drive is not selected. Order
+holds per drive: a batch for a closed drive is shown as paused with a way to
+open that drive, and does not hold back batches for the open one. The queue
+must invalidate pending selections and callbacks on logout or transfer-surface
+teardown. Native picker sources retain their platform
 ownership rules; a queued selection does not establish durable source access or
 promise background execution after suspension or process death.
 Abandoned selections release only picker copies whose ownership the backend
@@ -122,9 +125,13 @@ folder pick cannot invalidate its URI grant or reuse its file IDs. Flat file
 selections can still join the queue. Teardown does not release an active tree
 lease until its outstanding native materialization has settled.
 
-The bell's hover preview remains compact; deliberate activation opens the full
-Activity view. Activity combines notifications, ordinary transfer summaries,
-session upload batches and journal-backed recovery jobs. Existing journal rows
+The bell opens a compact panel on hover or click; its rows and View all
+activity open the full Activity view. The panel and the phone Transfers tab
+keep a running batch on its aggregate row, which carries progress and cancel,
+and list waiting batches separately. Activity combines notifications, ordinary
+transfer summaries, session upload batches and journal-backed recovery jobs; it
+folds a batch's aggregate row into the batch and owns that batch's failed-file
+review. Toasts stay hidden while Activity is open. Existing journal rows
 supersede their matching legacy progress rows. Display progress is not a remote
 receipt, and ordinary uploads do not gain pause/resume or broader retry
 eligibility merely because they appear in Activity.

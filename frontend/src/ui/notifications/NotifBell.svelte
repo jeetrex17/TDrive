@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onDestroy } from 'svelte';
+    import { onDestroy, tick } from 'svelte';
     import BellIcon from '@lucide/svelte/icons/bell';
     import FailedUploadReports from './FailedUploadReports.svelte';
     import { failedUploadReports, dismissFailedUploadReport } from '../modals/failed-uploads-store';
@@ -14,8 +14,8 @@
     import { activityView, openActivity } from './activity-store';
     import { visibleActiveTransfers, visibleRecentEvents, standaloneResumableUploads as resumableUploads } from './visible-history';
     import { uploadActivities, clearUploadActivityHistory } from './upload-activity-store';
-    import { batchActivityFilter, batchLabel } from './activity-model';
-    import { resumableUploads as allResumableUploads } from '../../modules/resumable-upload-store';
+    import QueuedUploadRow from './QueuedUploadRow.svelte';
+    import { sidebarState } from '../sidebar/sidebar-store';
     import {
         bellMode,
         notifPanelOpen,
@@ -56,6 +56,9 @@
     // One timer for both directions: the pointer is only ever arriving or
     // leaving, and a single slot makes the second intent cancel the first.
     let hoverTimer: ReturnType<typeof setTimeout> | null = null;
+    // Opened on purpose (click or key) rather than by hover, so the pointer
+    // leaving the bell must not take it away.
+    let pinned = false;
 
     /**
      * What the bell is about, not just that it exists. Colour alone carried
@@ -64,9 +67,10 @@
      */
     const visibleActive = visibleActiveTransfers;
     const visibleRecent = visibleRecentEvents;
-    const sessionActive = $derived($uploadActivities.filter((entry) => ['Active', 'Queued'].includes(batchActivityFilter(entry, $allResumableUploads))));
-    const sessionRecent = $derived($uploadActivities.filter((entry) => !['Active', 'Queued'].includes(batchActivityFilter(entry, $allResumableUploads))));
-    const activeCount = $derived($visibleActive.length + $resumableUploads.length + $resumableDownloads.length + sessionActive.length);
+    // A running batch shows through its own aggregate row; only waiting ones need a row of their own.
+    const queued = $derived($uploadActivities.filter((entry) => entry.status === 'queued').sort((a, b) => a.addedAt - b.addedAt));
+    const finishedBatches = $derived($uploadActivities.some((entry) => entry.status !== 'queued' && entry.status !== 'active'));
+    const activeCount = $derived($visibleActive.length + $resumableUploads.length + $resumableDownloads.length + queued.length);
     const bellLabel = $derived(
         $bellMode === 'error'
             ? `Notifications, ${$notifUnreadErrors} ${$notifUnreadErrors === 1 ? 'error' : 'errors'}`
@@ -92,12 +96,33 @@
         hoverTimer = null;
     }
 
-    function openPanel(): void {
+    /**
+     * Opens the panel. `focusPanel` is for deliberate activation only -- a
+     * click or a key -- because hover must never pull focus away from whatever
+     * the reader is actually typing into.
+     */
+    async function openPanel({ focusPanel = false }: { focusPanel?: boolean } = {}): Promise<void> {
         clearHoverTimer();
         if ($activityView.open || hasActiveModal()) return;
         reanchor();
         notifPanelOpen.set(true);
         notifUnreadErrors.set(0);
+        if (!focusPanel) return;
+        pinned = true;
+        await tick();
+        // The container, not its first button: a pointer-opened panel shows no
+        // focus ring this way, while Tab still steps into the controls.
+        panelEl?.focus({ preventScroll: true });
+    }
+
+    /**
+     * Activation toggles; aria-expanded would otherwise be a standing lie. A
+     * click on a panel that hover opened keeps it, rather than closing what the
+     * reader just reached for.
+     */
+    function togglePanel(): void {
+        if ($notifPanelOpen && pinned) closePanel({ restoreFocus: true });
+        else void openPanel({ focusPanel: true });
     }
 
     function openFullActivity(selectedId: string | null = null, tab: 'transfers' | 'notifications' = 'transfers'): void {
@@ -111,6 +136,7 @@
         // <body>. The bell takes it back whenever it was inside, not only when
         // the caller asked -- otherwise Tab restarts from the top of the page.
         const heldFocus = panelEl?.contains(document.activeElement) ?? false;
+        pinned = false;
         notifPanelOpen.set(false);
         if (restoreFocus || heldFocus) bellEl?.focus({ preventScroll: true });
     }
@@ -128,6 +154,7 @@
         // Also drops a pending open, so a pointer that only passes over the
         // bell leaves nothing behind.
         clearHoverTimer();
+        if (pinned) return;
         hoverTimer = setTimeout(() => {
             hoverTimer = null;
             closePanel();
@@ -138,7 +165,7 @@
         if (event.key !== 'Enter' && event.key !== ' ') return;
         // Swallowed here so the synthesised click cannot toggle a second time.
         event.preventDefault();
-        openFullActivity();
+        togglePanel();
     }
 
     function panelFocusables(): HTMLElement[] {
@@ -191,6 +218,9 @@
         closePanel();
     }
 
+    // Anything else that closes the panel (opening Activity, a modal) ends the pin too.
+    $effect(() => { if (!$notifPanelOpen) pinned = false; });
+
     onDestroy(clearHoverTimer);
 </script>
 
@@ -204,12 +234,12 @@
     type="button"
     data-mode={$bellMode}
     aria-haspopup="dialog"
-    aria-controls={$notifPanelOpen ? 'notif-panel' : 'activity-modal'}
-    aria-expanded={$notifPanelOpen || $activityView.open ? 'true' : 'false'}
+    aria-controls="notif-panel"
+    aria-expanded={$notifPanelOpen ? 'true' : 'false'}
     aria-label={bellLabel}
     onclick={(event) => {
         event.stopPropagation();
-        openFullActivity();
+        togglePanel();
     }}
     onkeydown={onBellKeydown}
     onmouseenter={scheduleOpenPanel}
@@ -244,7 +274,7 @@
                 <button
                     class="notif-panel-clear"
                     type="button"
-                    disabled={$visibleRecent.length === 0 && sessionRecent.length === 0}
+                    disabled={$visibleRecent.length === 0 && !finishedBatches}
                     onclick={() => { onClearHistory(); clearUploadActivityHistory(); }}
                 >
                     Clear
@@ -253,14 +283,7 @@
         </div>
         <div class="notif-panel-body">
             <FailedUploadReports reports={$failedUploadReports} onReview={reviewFailedUploads} onDismiss={dismissFailedUploadReport} />
-            {#if sessionActive.length > 0 || sessionRecent.length > 0}
-                <div class="session-previews" role="list" aria-label="Upload batches">
-                    {#each [...sessionActive, ...sessionRecent].slice(0, 5) as batch (batch.id)}
-                        <div role="listitem"><button class="session-preview" type="button" aria-label={`View ${batch.name}`} onclick={() => openFullActivity(batch.id)}><span>{batch.name}</span><small>{batchLabel(batch, $allResumableUploads)} · {batch.fileCount} {batch.fileCount === 1 ? 'file' : 'files'}</small></button></div>
-                    {/each}
-                </div>
-            {/if}
-            {#if activeCount > sessionActive.length}
+            {#if activeCount > 0}
                 <h3 id="notif-section-active" class="notif-section-label">{$resumableUploads.length + $resumableDownloads.length > 0 ? 'Transfers' : 'Active'}</h3>
                 <div class="notif-section" role="list" aria-labelledby="notif-section-active">
                     {#each $resumableUploads as job (job.jobId)}
@@ -277,6 +300,9 @@
                             <TransferRow {transfer} onOpen={() => openFullActivity(transfer.id)} onCancel={onCancelDirection} {onCancelFile} />
                         </div>
                     {/each}
+                    {#each queued as batch (batch.id)}
+                        <QueuedUploadRow {batch} activeDriveId={$sidebarState.activeChannelId} onOpen={() => openFullActivity(batch.id)} />
+                    {/each}
                 </div>
             {/if}
             {#if $visibleRecent.length > 0}
@@ -290,7 +316,7 @@
                         {/if}
                     {/each}
                 </div>
-            {:else if activeCount === 0 && $failedUploadReports.length === 0 && sessionRecent.length === 0}
+            {:else if activeCount === 0 && $failedUploadReports.length === 0}
                 <div class="notif-empty">
                     <div class="notif-empty-glyph">
                         <BellIcon size={48} strokeWidth={1.8} aria-hidden="true" />
@@ -306,9 +332,6 @@
 
 <style>
     .view-all-activity { flex-shrink: 0; width: 100%; padding: var(--space-3); border: 0; border-top: 1px solid var(--color-border-soft); background: transparent; color: var(--color-accent-text); font: inherit; font-size: var(--type-sm); cursor: pointer; }
-    .view-all-activity:focus-visible, .session-preview:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -3px; }
-    .session-previews { display: grid; gap: var(--space-2); margin-bottom: var(--space-3); }
-    .session-preview { display: grid; gap: var(--space-1); width: 100%; padding: var(--space-3); border: 1px solid var(--color-border-soft); border-radius: var(--radius-md); background: var(--overlay-neutral-1); color: var(--color-text-soft); text-align: left; font: inherit; cursor: pointer; }
-    .session-preview span { font-size: var(--type-sm); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-    .session-preview small { color: var(--color-text-muted); font-size: var(--type-xs); }
+    .view-all-activity:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -3px; }
+    @media (hover: hover) { .view-all-activity:hover { background: var(--overlay-neutral-1); } }
 </style>

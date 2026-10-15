@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { activityEntries, activityTimestamp, batchLabel, batchActivityFilter, matchesActivity } from './activity-model';
+import { activityEntries, activityTimestamp, batchLabel, batchActivityFilter, isBatchPaused, matchesActivity } from './activity-model';
 import type { TransferEvent } from './notif-store';
 import type { UploadActivity, UploadActivityStatus } from './upload-activity-store';
 import type { ResumableUpload } from '../../api/resumable-uploads';
@@ -16,12 +16,13 @@ const download: ResumableDownload = { jobId: 'download', channelId: 3, logicalMs
 
 describe('activity view model', () => {
     it.each([
-        ['queued', 'Queued', 'Waiting its turn'], ['active', 'Active', 'Uploading'],
-        ['done', 'History', 'Completed'], ['failed', 'Needs attention', 'Needs attention'], ['canceled', 'History', 'Canceled'],
-    ] as const)('keeps %s batches in the matching filter', (status, category, label) => {
+        ['queued', 'Queued', 'Queued', 'Queued · 2 files'], ['active', 'Active', 'Uploading', 'Uploading · 2 files'],
+        ['done', 'History', 'Completed', 'Completed · 2 files'], ['failed', 'Needs attention', 'Needs attention', 'Needs attention · 2 of 2 files failed'],
+        ['canceled', 'History', 'Canceled', 'Canceled · 2 files'],
+    ] as const)('keeps %s batches in the matching filter', (status, category, label, summary) => {
         const source = batch(status);
         const [entry] = activityEntries([source], [], [], []);
-        expect(entry).toMatchObject({ id: 'batch-1', status: category, summary: `${label} · 2 files` });
+        expect(entry).toMatchObject({ id: 'batch-1', status: category, summary });
         expect(batchLabel(source)).toBe(label);
         expect(source.status).toBe(status);
     });
@@ -29,8 +30,34 @@ describe('activity view model', () => {
     it('links aggregate progress without replacing full file records', () => {
         const source = { ...batch('active'), fileCount: 1, transferId: 'xfer:down:1' };
         const aggregate = transfer('active');
-        const [entry] = activityEntries([source], [], [], [], [aggregate]);
-        expect(entry).toMatchObject({ kind: 'batch', summary: 'Uploading · 1 file', transfer: aggregate, batch: { files: [{ name: 'Venice.jpg' }, { name: 'Rome.jpg' }] } });
+        const entries = activityEntries([source], [aggregate], [], []);
+        expect(entries).toHaveLength(1);
+        expect(entries[0]).toMatchObject({ kind: 'batch', summary: 'Uploading · 25%', transfer: aggregate, batch: { files: [{ name: 'Venice.jpg' }, { name: 'Rome.jpg' }] } });
+    });
+
+    it('pauses a queued batch while another drive is open', () => {
+        const source = batch();
+        expect(isBatchPaused(source, 3)).toBe(false);
+        expect(isBatchPaused(source, 4)).toBe(true);
+        expect(isBatchPaused(source, undefined)).toBe(false);
+        expect(isBatchPaused(source, null)).toBe(false);
+        expect(isBatchPaused({ ...source, status: 'active' }, 4)).toBe(false);
+        expect(batchLabel(source, [], 4)).toBe('Paused until Family is open');
+        expect(activityEntries([source], [], [], [], { activeDriveId: 4 })[0].summary).toBe('Paused until Family is open · 2 files');
+    });
+
+    it('lists running work, then the queue in run order, then attention and newest history', () => {
+        const now = 10_000_000;
+        const entries = activityEntries([
+            { ...batch('done'), id: 'old-done', finishedAt: now - 120_000 },
+            { ...batch('queued'), id: 'second-queued', addedAt: 20 },
+            { ...batch('failed'), id: 'failed', finishedAt: now - 3_600_000 },
+            { ...batch('queued'), id: 'first-queued', addedAt: 10 },
+            { ...batch('done'), id: 'new-done', finishedAt: now - 1_000 },
+            { ...batch('active'), id: 'running' },
+        ], [], [], [], { now });
+        expect(entries.map((entry) => entry.id)).toEqual(['running', 'first-queued', 'second-queued', 'failed', 'new-done', 'old-done']);
+        expect(entries.find((entry) => entry.id === 'old-done')?.summary).toBe('Completed · 2 files · 2 min ago');
     });
 
     it.each([
@@ -74,7 +101,7 @@ describe('activity view model', () => {
 
     it('searches names, statuses, destinations and file names beyond the visible page', () => {
         const [entry] = activityEntries([batch()], [], [], []);
-        for (const query of ['', '  ', 'SUMMER', 'Waiting', 'family', 'ITALY', ' Rome.jpg ']) expect(matchesActivity(entry, query), query).toBe(true);
+        for (const query of ['', '  ', 'SUMMER', 'queued', 'family', 'ITALY', ' Rome.jpg ']) expect(matchesActivity(entry, query), query).toBe(true);
         expect(matchesActivity(entry, 'missing.pdf')).toBe(false);
         const [legacy] = activityEntries([], [transfer('active')], [], []);
         expect(matchesActivity(legacy, 'VIDEO')).toBe(true);
@@ -86,5 +113,6 @@ describe('activity view model', () => {
         expect(activityTimestamp(0)).toBe('Not recorded');
         expect(activityTimestamp(-1)).toBe('Not recorded');
         expect(activityTimestamp(1_700_000_000_000)).toContain('2023');
+        expect(activityTimestamp(1_700_000_000_000)).not.toMatch(/\d:\d\d:\d\d/);
     });
 });

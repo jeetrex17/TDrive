@@ -3,12 +3,14 @@
     import { failedUploadReports, dismissFailedUploadReport } from '../modals/failed-uploads-store';
     import { reviewFailedUploads } from '../../modules/transfers';
     import ArrowDownUpIcon from '@lucide/svelte/icons/arrow-down-up';
+    import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
     import { type TransferEvent } from '../notifications/notif-store';
     import { visibleActiveTransfers, visibleRecentEvents, standaloneResumableUploads as resumableUploads } from '../notifications/visible-history';
     import { openActivity } from '../notifications/activity-store';
-    import { uploadActivities } from '../notifications/upload-activity-store';
-    import { batchLabel } from '../notifications/activity-model';
-    import { resumableUploads as allResumableUploads } from '../../modules/resumable-upload-store';
+    import { uploadActivities, clearUploadActivityHistory } from '../notifications/upload-activity-store';
+    import QueuedUploadRow from '../notifications/QueuedUploadRow.svelte';
+    import { removeQueuedUpload } from '../../modules/upload-queue';
+    import { sidebarState } from '../sidebar/sidebar-store';
     import EventRow from '../notifications/EventRow.svelte';
     import MobileTransferRow from './MobileTransferRow.svelte';
     import MobileResumableUploadRow from './MobileResumableUploadRow.svelte';
@@ -26,8 +28,9 @@
     /** How many transfers are in flight; more than one earns a way to stop the lot. */
     const visibleActive = visibleActiveTransfers;
     const visibleRecent = $derived($visibleRecentEvents.filter((entry) => entry.kind === 'transfer' || entry.level === 'error' || entry.level === 'warning'));
-    const hasActive = $derived($resumableUploads.length + $resumableDownloads.length > 0 || $visibleActive.length > 0);
-    const inFlight = $derived($visibleActive.length + $resumableUploads.filter((job) => job.status === 'uploading').length + $resumableDownloads.filter((job) => job.status === 'downloading').length);
+    const queued = $derived($uploadActivities.filter((entry) => entry.status === 'queued').sort((a, b) => a.addedAt - b.addedAt));
+    const hasActive = $derived($resumableUploads.length + $resumableDownloads.length + queued.length > 0 || $visibleActive.length > 0);
+    const inFlight = $derived($visibleActive.length + queued.length + $resumableUploads.filter((job) => job.status === 'uploading').length + $resumableDownloads.filter((job) => job.status === 'downloading').length);
 
     /**
      * Stopping one row, where the backend can do that.
@@ -61,6 +64,8 @@
      * batch, and of a download queue whose waiting rows cannot be stopped alone.
      */
     function cancelEverything(): void {
+        // Waiting batches go first, or stopping the running one starts the next.
+        for (const batch of queued) removeQueuedUpload(batch.id);
         if ($visibleActive.some((transfer) => transfer.direction === 'up')) cancelTransfersInDirection('up');
         if ($visibleActive.some((transfer) => transfer.direction === 'down')) cancelTransfersInDirection('down');
         for (const job of $resumableUploads) {
@@ -103,15 +108,7 @@
 </script>
 
 <div class="mobile-scroll transfers-tab">
-    <div class="transfers-section-head"><h2 class="mobile-section-label">Activity overview</h2><button id="mobile-view-activity" type="button" class="transfers-activity-link" onclick={() => openActivity({ restoreFocus: '#mobile-view-activity' })}>View all activity</button></div>
-    {#if $uploadActivities.length > 0}
-        <div class="transfers-group" role="list" aria-label="Upload batches">
-            {#each $uploadActivities.slice(0, 50) as batch (batch.id)}
-                <div role="listitem"><button class="mobile-session-upload" type="button" aria-label={`View ${batch.name}`} onclick={() => openActivity({ selectedId: batch.id, restoreFocus: '#mobile-view-activity' })}><span>{batch.name}</span><small>{batchLabel(batch, $allResumableUploads)} · {batch.fileCount} {batch.fileCount === 1 ? 'file' : 'files'}</small></button></div>
-            {/each}
-        </div>
-    {/if}
-    {#if !hasActive && visibleRecent.length === 0 && $failedUploadReports.length === 0 && $uploadActivities.length === 0}
+    {#if !hasActive && visibleRecent.length === 0 && $failedUploadReports.length === 0}
         <div class="mobile-empty">
             <span class="mobile-empty-glyph">
                 <ArrowDownUpIcon size={40} strokeWidth={1.6} aria-hidden="true" />
@@ -138,12 +135,15 @@
                 {#each $visibleActive as transfer (transfer.id)}
                     <MobileTransferRow {transfer} onCancel={cancelFor(transfer)} onCancelFile={cancelUploadFile} />
                 {/each}
+                {#each queued as batch (batch.id)}
+                    <QueuedUploadRow {batch} mobile activeDriveId={$sidebarState.activeChannelId} onOpen={() => openActivity({ selectedId: batch.id, restoreFocus: '#mobile-view-activity' })} />
+                {/each}
             </div>
         {/if}
         {#if visibleRecent.length > 0}
             <div class="transfers-section-head">
                 <h2 class="mobile-section-label">Recent</h2>
-                <button type="button" class="transfers-clear" onclick={clearHistory}>Clear</button>
+                <button type="button" class="transfers-clear" onclick={() => { clearHistory(); clearUploadActivityHistory(); }}>Clear</button>
             </div>
             <div class="transfers-group" role="list">
                 {#each visibleRecent.slice(0, 50) as entry (entry.id)}
@@ -160,14 +160,15 @@
             </div>
         {/if}
     {/if}
+    <button id="mobile-view-activity" type="button" class="transfers-activity-link" onclick={() => openActivity({ restoreFocus: '#mobile-view-activity' })}>
+        <span>View all activity</span><ChevronRightIcon size={18} strokeWidth={2} aria-hidden="true" />
+    </button>
 </div>
 
 <style>
-    .transfers-activity-link { min-height: var(--touch-target); border: 0; padding: var(--space-1-5) var(--space-2); background: transparent; color: var(--color-accent-text); font: inherit; font-size: var(--type-sm); font-weight: var(--weight-semibold); cursor: pointer; }
+    .transfers-activity-link { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: var(--touch-target); margin-top: var(--space-5); padding: var(--space-3) var(--space-4); border: 0; border-radius: var(--radius-lg); background: var(--color-surface-1); color: var(--color-text-soft); font: inherit; font-size: var(--type-sm); text-align: left; cursor: pointer; }
+    .transfers-activity-link :global(svg) { color: var(--color-text-muted); }
     .transfers-activity-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
-    .mobile-session-upload { display: grid; gap: var(--space-1); width: 100%; padding: var(--space-4); border: 0; background: transparent; text-align: left; color: var(--color-text-soft); font: inherit; cursor: pointer; }
-    .mobile-session-upload small { color: var(--color-text-muted); }
-    .mobile-session-upload:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
     /* The card separates its own rows. A row cannot see its siblings -- each one
        is its own component -- and the separation is a property of the stack
        rather than of anything in it. */

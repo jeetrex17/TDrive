@@ -685,6 +685,31 @@ describe('safe failed-file retry', () => {
         expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(2);
     });
 
+    it('reports a structured failure once, in plain words, linked to its batch', async () => {
+        app.PlanImport.mockResolvedValue({ files: 2, folders: 0, archives: 0 });
+        app.SelectFiles.mockResolvedValue(['/tmp/ok.txt', '/tmp/stale.txt']);
+        app.RetryUploadToDriveFS.mockImplementationOnce(async () => {
+            handlers.get('upload_start')?.(1, 'stale.txt', 10, '');
+            handlers.get('upload_error')?.(1, 'stale.txt', 'upload part: rpc error code 400: FILE_REFERENCE_EXPIRED');
+            return {
+                result: { ok: true }, files: [{ name: 'ok.txt' }],
+                failures: [{ index: 1, name: 'stale.txt', message: 'upload part: rpc error code 400: FILE_REFERENCE_EXPIRED', code: 'not_sent', retryable: true }],
+            };
+        });
+        await uploadWithParentID('');
+        const errors = mocks.notify.mock.calls.map(([value]) => value).filter((value) => value.level === 'error');
+        expect(errors.map((value) => value.title)).toEqual(['Upload failed']);
+        expect(errors[0].history).toBe(false);
+        const { get } = await import('svelte/store');
+        const { uploadActivities } = await import('../ui/notifications/upload-activity-store');
+        const { failedUploadReports } = await import('../ui/modals/failed-uploads-store');
+        const [batch] = get(uploadActivities);
+        expect(batch.name).toBe('ok.txt and 1 more');
+        expect(batch.files[1]).toMatchObject({ status: 'failed' });
+        expect(batch.files[1].message).not.toContain('FILE_REFERENCE_EXPIRED');
+        expect(get(failedUploadReports)[0].activityId).toBe(batch.id);
+    });
+
     it('does not resend after reopening a consumed review notification', async () => {
         await partialBatch();
         const notice = mocks.notify.mock.calls.map(([value]) => value).find((value) => value.title === 'Upload failed');

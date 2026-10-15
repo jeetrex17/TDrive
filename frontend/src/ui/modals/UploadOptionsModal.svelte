@@ -40,28 +40,23 @@
     restoreFocus="#file-list"
     onClose={onCancel}
 >
-    {#if $view.payload?.destination}
-        <p>Destination: {$view.payload.destination}</p>
-    {/if}
-    <SelectedUploadFiles names={$view.payload?.names ?? []} />
+    <SelectedUploadFiles names={$view.payload?.names ?? []} destination={$view.payload?.destination} queued={$view.payload?.queued} />
     {#if $view.payload?.personal !== false}
-    <label class="modal-choice-row">
-        <input type="radio" name="upload-mode" value="plain" bind:group={uploadMode} />
-        <span>
-            <strong>Upload</strong>
-            <small>Files are stored on Telegram as-is.</small>
-        </span>
-    </label>
-    <label class="modal-choice-row">
-        <input type="radio" name="upload-mode" value="encrypt" bind:group={uploadMode} />
-        <span>
-            <strong>Encrypt before upload</strong>
-            <small>TDrive encrypts file contents before sending them to Telegram. Names and folders stay visible.</small>
-        </span>
-    </label>
-
+        <label class="modal-choice-row">
+            <input type="radio" name="upload-mode" value="plain" bind:group={uploadMode} />
+            <span>
+                <strong>Upload</strong>
+                <small>Files are stored on Telegram as-is.</small>
+            </span>
+        </label>
+        <label class="modal-choice-row">
+            <input type="radio" name="upload-mode" value="encrypt" bind:group={uploadMode} />
+            <span>
+                <strong>Encrypt before upload</strong>
+                <small>TDrive encrypts file contents before sending them to Telegram. Names and folders stay visible.</small>
+            </span>
+        </label>
     {/if}
-    {#if $view.payload?.queued}<p>Waiting uploads stay in this session. Keep TDrive open until they finish.</p>{/if}
 
     {#snippet actions()}
         <button id="upload-options-cancel" class="secondary-btn" type="button" onclick={onCancel}>Cancel</button>
