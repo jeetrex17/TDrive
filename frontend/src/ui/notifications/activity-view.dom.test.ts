@@ -4,16 +4,16 @@ import { get } from 'svelte/store';
 import ActivityView from './ActivityView.svelte';
 import { activityView, closeActivity, openActivity } from './activity-store';
 import { historyEvents, notifPanelOpen } from './notif-store';
-import { uploadActivities, type UploadActivity } from './upload-activity-store';
+import { uploadActivities, uploadsPaused, type UploadActivity } from './upload-activity-store';
 import { resumableUploads } from '../../modules/resumable-uploads';
 import { resumableDownloads } from '../../modules/resumable-downloads';
 import { failedUploadReports, type FailedUploadsPayload } from '../modals/failed-uploads-store';
 import { sidebarState } from '../sidebar/sidebar-store';
 
 const queue = vi.hoisted(() => ({ removeQueuedUpload: vi.fn() }));
-const actions = vi.hoisted(() => ({ reviewFailedUploads: vi.fn(), switchActiveChannel: vi.fn() }));
+const actions = vi.hoisted(() => ({ reviewFailedUploads: vi.fn(), switchActiveChannel: vi.fn(), setUploadsPaused: vi.fn(), cancelActivityFile: vi.fn() }));
 vi.mock('../../modules/upload-queue', () => queue);
-vi.mock('../../modules/transfers', () => ({ downloadRetryFor: () => undefined, reviewFailedUploads: actions.reviewFailedUploads }));
+vi.mock('../../modules/transfers', () => ({ downloadRetryFor: () => undefined, reviewFailedUploads: actions.reviewFailedUploads, setUploadsPaused: actions.setUploadsPaused, cancelActivityFile: actions.cancelActivityFile }));
 vi.mock('../../modules/channels', () => ({ switchActiveChannel: actions.switchActiveChannel }));
 
 Object.defineProperty(HTMLElement.prototype, 'offsetParent', { configurable: true, get() { return this.parentElement; } });
@@ -183,6 +183,35 @@ describe('full activity view', () => {
         expect(folder?.getAttribute('aria-expanded')).toBe('true');
         folder?.click(); await settle();
         expect(list()).toEqual(['cover.jpg', '[Album / 2024: 2 files · 1 done · 1 failed]', '[Album: 1 file · 1 uploading]', 'c.jpg']);
+    });
+
+    it('offers pause and cancel for the running upload and for each file that has not finished', async () => {
+        uploadActivities.set([{ ...batch('active'), fileCount: 4, files: [
+            { index: 0, name: 'sending.jpg', status: 'active', progress: 40 },
+            { index: 1, name: 'saving.jpg', status: 'active', progress: 100 },
+            { index: 2, name: 'waiting.jpg', status: 'queued' },
+            { index: 3, name: 'done.jpg', status: 'done' },
+        ] }]);
+        openActivity({ selectedId: 'session-1' }); await settle();
+        const row = (name: string) => Array.from(host.querySelectorAll('[data-activity-file]')).find((item) => item.querySelector('.file-name')?.textContent === name);
+        expect(row('sending.jpg')?.querySelector('.file-status')?.textContent).toBe('Uploading · 40%');
+        expect(row('saving.jpg')?.querySelector('.file-status')?.textContent).toBe('Saving…');
+        expect(row('waiting.jpg')?.querySelector('.file-status')?.textContent).toBe('Waiting');
+        expect(host.querySelector('.file-summary')?.textContent).toBe('1 completed · 1 saving · 1 uploading · 1 waiting');
+        // Only files that can still be stopped carry a cancel control.
+        expect(Array.from(host.querySelectorAll('.file-cancel')).map((control) => control.getAttribute('aria-label'))).toEqual(['Cancel sending.jpg', 'Cancel waiting.jpg']);
+        (row('waiting.jpg')?.querySelector('.file-cancel') as HTMLButtonElement).click();
+        expect(actions.cancelActivityFile).toHaveBeenCalledWith('session-1', expect.objectContaining({ index: 2 }));
+
+        button('Pause').click();
+        expect(actions.setUploadsPaused).toHaveBeenCalledWith(true);
+        uploadsPaused.set(true); await settle();
+        expect(host.querySelector('.detail-status')?.textContent).toBe('Paused · Files already sending will finish');
+        expect(row('waiting.jpg')?.querySelector('.file-status')?.textContent).toBe('Paused');
+        expect(host.querySelector('.activity-item .item-summary')?.textContent).toContain('Paused');
+        button('Resume').click();
+        expect(actions.setUploadsPaused).toHaveBeenCalledWith(false);
+        uploadsPaused.set(false);
     });
 
     it('keeps the session batch authoritative over its compact legacy row', async () => {

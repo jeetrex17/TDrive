@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
     updateTransferProgress: vi.fn(),
     refreshFiles: vi.fn(),
     wasUploadCanceled: vi.fn(() => false),
+    cancelSingleUpload: vi.fn(),
 }));
 
 // Go always emits an event's payload as a JSON array of its original args
@@ -36,6 +37,8 @@ const app = vi.hoisted(() => ({
     ResumeResumableUpload: vi.fn(),
     PauseResumableUpload: vi.fn(),
     CancelResumableUpload: vi.fn(),
+    PauseUploads: vi.fn(),
+    ResumeUploads: vi.fn(),
 }));
 
 vi.mock('../../bindings/TDrive/internal/app/app', () => app);
@@ -50,6 +53,7 @@ vi.mock('./notif-bell', () => ({
     updateTransferName: mocks.updateTransferName,
     updateTransferProgress: mocks.updateTransferProgress,
     wasUploadCanceled: mocks.wasUploadCanceled,
+    cancelSingleUpload: mocks.cancelSingleUpload,
 }));
 vi.mock('./encryption', () => ({ loadEncryptionStatus: vi.fn() }));
 vi.mock('./modals/import-options', () => ({
@@ -884,6 +888,63 @@ describe('a multi-file upload reports as one transfer', () => {
             expect.objectContaining({ id: expect.stringMatching(/^upload-/), direction: 'up', name: 'only.bin' }),
         );
         expect(mocks.pushTransferStart).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('pausing and cancelling single files', () => {
+    it('cancels a waiting file by its id, pauses and resumes, and drops the pause when the batch ends', async () => {
+        let finish = (_result: unknown) => {};
+        app.PlanImport.mockResolvedValue({ files: 3, folders: 0, archives: 0 });
+        app.SelectFiles.mockResolvedValue(['/tmp/a.txt', '/tmp/b.txt', '/tmp/c.txt']);
+        app.RetryUploadToDriveFS.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+        const run = uploadWithParentID('');
+        await vi.waitFor(() => expect(app.RetryUploadToDriveFS).toHaveBeenCalled());
+        const { get } = await import('svelte/store');
+        const store = await import('../ui/notifications/upload-activity-store');
+        const { cancelActivityFile, setUploadsPaused } = await import('./transfers');
+        const [batch] = get(store.uploadActivities);
+
+        await setUploadsPaused(true);
+        expect(app.PauseUploads).toHaveBeenCalledOnce();
+        expect(get(store.uploadsPaused)).toBe(true);
+        app.ResumeUploads.mockClear();
+
+        cancelActivityFile(batch.id, batch.files[2]);
+        expect(mocks.cancelSingleUpload).toHaveBeenCalledWith(2);
+        expect(get(store.uploadActivities)[0].files[2].status).toBe('canceled');
+        cancelActivityFile('another-batch', batch.files[1]);
+        expect(mocks.cancelSingleUpload).toHaveBeenCalledOnce();
+
+        finish({ result: { ok: true }, files: [], failures: [] });
+        await run;
+        await vi.waitFor(() => expect(get(store.uploadsPaused)).toBe(false));
+        expect(app.ResumeUploads).toHaveBeenCalledOnce();
+    });
+
+    it('keeps the pause unchanged and says so when the backend refuses it', async () => {
+        app.PauseUploads.mockRejectedValueOnce(new Error('file service not ready'));
+        const { get } = await import('svelte/store');
+        const store = await import('../ui/notifications/upload-activity-store');
+        const { setUploadsPaused } = await import('./transfers');
+        await setUploadsPaused(true);
+        expect(get(store.uploadsPaused)).toBe(false);
+        expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ level: 'error', title: 'Could not pause uploads' }));
+    });
+
+    it('marks a file Telegram accepted as saving, not uploading', async () => {
+        let finish = (_result: unknown) => {};
+        app.PlanImport.mockResolvedValue({ files: 2, folders: 0, archives: 0 });
+        app.SelectFiles.mockResolvedValue(['/tmp/a.txt', '/tmp/b.txt']);
+        app.RetryUploadToDriveFS.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+        const run = uploadWithParentID('');
+        await vi.waitFor(() => expect(app.RetryUploadToDriveFS).toHaveBeenCalled());
+        handlers.get('upload_start')?.(0, 'a.txt', 10, '');
+        handlers.get('upload_accepted')?.(0);
+        const { get } = await import('svelte/store');
+        const { uploadActivities } = await import('../ui/notifications/upload-activity-store');
+        expect(get(uploadActivities)[0].files[0]).toMatchObject({ status: 'active', progress: 100 });
+        finish({ result: { ok: true }, files: [], failures: [] });
+        await run;
     });
 });
 

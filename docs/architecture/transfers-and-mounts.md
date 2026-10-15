@@ -140,6 +140,17 @@ supersede their matching legacy progress rows. Display progress is not a remote
 receipt, and ordinary uploads do not gain pause/resume or broader retry
 eligibility merely because they appear in Activity.
 
+Interactive uploads can be paused. Pausing holds back files that have not
+started; files already sending finish, because an ordinary upload cannot stop
+part way and continue later (only journal-backed large uploads can). A pause
+belongs to its batch: the frontend lifts it when the batch ends and whenever the
+transfer surfaces start or tear down. A cancel can reach a file of a running
+batch before it starts; that file is skipped and reported canceled without a
+send. A file Telegram has accepted while its window's index entries are still
+pending is reported as accepted (`upload_accepted`, or `accepted` in import
+payloads) and shows as saving rather than uploading; it already exists and must
+not be sent again.
+
 Session batch details use stable identities and bounded retention. File details
 are paged in the UI rather than expanded into one notification per file. Import
 progress payloads carry aggregate counts, a bounded active-file sample and each

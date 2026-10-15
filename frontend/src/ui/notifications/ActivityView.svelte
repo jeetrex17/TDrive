@@ -21,7 +21,7 @@
     import { sidebarState } from '../sidebar/sidebar-store';
     import { historyEvents, type NoticeEvent } from './notif-store';
     import { visibleHistory } from './visible-history';
-    import { uploadActivities, clearUploadActivityHistory } from './upload-activity-store';
+    import { uploadActivities, uploadsPaused, clearUploadActivityHistory } from './upload-activity-store';
     import { activityView, closeActivity, type ActivityTab } from './activity-store';
     import { ACTIVITY_FILTERS, activityEntries, activityTimestamp, isBatchPaused, matchesActivity, type ActivityEntry, type ActivityFilter } from './activity-model';
     import { formatAge, transferPercent } from './transfer-view';
@@ -42,7 +42,7 @@
     });
     const activeDriveId = $derived($sidebarState.activeChannelId);
     const entries = $derived(activityEntries($uploadActivities, $visibleHistory, $resumableUploads, $resumableDownloads,
-        { allEvents: $historyEvents, activeDriveId, now: $clock }));
+        { allEvents: $historyEvents, activeDriveId, now: $clock, uploadsPaused: $uploadsPaused }));
     const transfers = $derived(entries.filter((entry) => (filter === 'All' || entry.status === filter) && matchesActivity(entry, query)));
     const notices = $derived($historyEvents.filter((entry): entry is NoticeEvent => entry.kind === 'event' && `${entry.title} ${entry.body}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())));
     // The bell's rows open a batch by its aggregate transfer id.

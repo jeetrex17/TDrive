@@ -6,7 +6,7 @@
 // Completed transfers stay in the bell's "Recent" panel until cleared.
 
 import { invalidateFolderIndex, state, setTransferDirectionActive, type DownloadQueueItem, type UploadTransfer } from '../state';
-import { createFolderForDrive, downloadFile, downloadFolder, isAndroidPlatform, isMobilePlatform, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs, retryUploadToDriveFs, importPathsForDrive, releaseUploadSources, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
+import { createFolderForDrive, downloadFile, downloadFolder, isAndroidPlatform, isMobilePlatform, onRuntimeEvent, planImport, pauseUploads, resumeUploads, selectFiles, selectFolder, uploadToDriveFs, retryUploadToDriveFs, importPathsForDrive, releaseUploadSources, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
 import { canSaveToDownloads, saveToDownloads } from './android-downloads';
 import { rememberDownloadSharePath } from '../ui/mobile/mobile-shell-store';
 import { get } from 'svelte/store';
@@ -50,12 +50,13 @@ import {
     setTransferNote,
     transferKey,
     wasUploadCanceled,
+    cancelSingleUpload,
 } from './notif-bell';
 
 
 import { sidebarState } from '../ui/sidebar/sidebar-store';
 import { createUploadQueue, nextUploadActivityId } from './upload-queue';
-import { clearUploadActivities, finishUploadActivity, mergeUploadActivityFiles, updateUploadActivity, uploadActivities, updateUploadActivityFile, type NewUploadActivity, type UploadActivityFile } from '../ui/notifications/upload-activity-store';
+import { clearUploadActivities, finishUploadActivity, mergeUploadActivityFiles, updateUploadActivity, uploadActivities, uploadsPaused, updateUploadActivityFile, type NewUploadActivity, type UploadActivityFile } from '../ui/notifications/upload-activity-store';
 
 let transferUnsubscribers: RuntimeUnsubscribe[] = [];
 let stopTransferPersistence: (() => void) | null = null;
@@ -566,6 +567,8 @@ function enqueueUpload(activity: NewUploadActivity, destination: UploadDestinati
             if (generation === transferSurfaceGeneration) {
                 flowBusy = false;
                 activeUploadActivityId = null;
+                // A pause belongs to the batch it was given to, never the next one.
+                if (get(uploadsPaused)) await setUploadsPaused(false);
             }
         }
     } });
@@ -587,6 +590,38 @@ export async function tryWithTransferFlow(run: () => Promise<void>): Promise<boo
         }
     }
 }
+/**
+ * Pauses or resumes the running upload. Pausing holds back files that have not
+ * started; files already sending finish, because an ordinary upload cannot stop
+ * part way and continue later.
+ */
+export async function setUploadsPaused(paused: boolean): Promise<void> {
+    try {
+        await (paused ? pauseUploads() : resumeUploads());
+        uploadsPaused.set(paused);
+    } catch (error) {
+        notify({ level: 'error', title: paused ? 'Could not pause uploads' : 'Could not resume uploads', body: humanizeBackendError(error) });
+    }
+}
+
+// The Android folder runner uploads a window at a time and numbers that
+// window's files from zero, so it maps rows to the window's upload ids and
+// remembers rows the user cancelled, sending or still waiting.
+let androidRun: { activityId: string; uploadIds: Map<number, number>; canceled: Set<number> } | null = null;
+
+/** Stops one file of the running batch, whether it is sending or still waiting. */
+export function cancelActivityFile(activityId: string, file: UploadActivityFile): void {
+    if (activityId !== activeUploadActivityId || (file.status !== 'active' && file.status !== 'queued')) return;
+    if (androidRun?.activityId === activityId) {
+        androidRun.canceled.add(file.index);
+        const uploadId = androidRun.uploadIds.get(file.index);
+        if (uploadId !== undefined) cancelSingleUpload(uploadId);
+    } else {
+        cancelSingleUpload(file.index);
+    }
+    if (file.status === 'queued') updateUploadActivityFile(activityId, file.index, { status: 'canceled' });
+}
+
 function uploadActivity(destination: UploadDestination, paths: string[], encrypt: boolean, fileCount = paths.length,
     files: UploadActivityFile[] = paths.map((path, index) => ({ index, name: path.split(/[/\\]/).pop() || 'Untitled', status: 'queued' }))): NewUploadActivity {
     const id = nextUploadActivityId();
@@ -646,12 +681,16 @@ function readableReasons(fatal: string, recorded: readonly string[], raw: readon
 }
 
 /** The files an import payload names: the ones moving, then the ones that just settled. */
-function importFileUpdates(payload: Record<string, unknown>): UploadActivityFile[] {
-    const updates: UploadActivityFile[] = [];
+function importFileUpdates(payload: Record<string, unknown>): Array<Pick<UploadActivityFile, 'index'> & Partial<UploadActivityFile>> {
+    const updates: Array<Pick<UploadActivityFile, 'index'> & Partial<UploadActivityFile>> = [];
     const list = (value: unknown) => Array.isArray(value) ? value.map(asObjectRecord) : [];
     for (const file of list(payload.active)) {
         const index = Number(file.id);
         if (Number.isInteger(index)) updates.push({ index, name: String(file.name ?? ''), ...(file.path ? { path: String(file.path) } : {}), status: 'active', size: Number(file.size) || 0, progress: Number(file.percent) || 0 });
+    }
+    for (const id of Array.isArray(payload.accepted) ? payload.accepted : []) {
+        const index = Number(id);
+        if (Number.isInteger(index)) updates.push({ index, status: 'active', progress: 100 });
     }
     for (const file of list(payload.settled)) {
         const index = Number(file.id);
@@ -850,10 +889,12 @@ function activateUploadProgressEvents(): void {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
         forgetResumableUpload(uploadId);
-        if (activeUploadActivityId) updateUploadActivityFile(activeUploadActivityId, uploadId, { status: 'done', progress: 100 });
+        // An Android folder window numbers its files from zero; that runner
+        // settles its own rows, so these ids must not touch the batch.
         if (state.importBatch) {
             return;
         }
+        if (activeUploadActivityId) updateUploadActivityFile(activeUploadActivityId, uploadId, { status: 'done', progress: 100 });
         if (!settleUploadInBatch(uploadId, 'done')) {
             const item = state.uploadTransfers.get(uploadId);
             if (!item) {
@@ -880,6 +921,13 @@ function activateUploadProgressEvents(): void {
             invalidateTransferCaches();
             appActions().refreshFiles();
         }
+    });
+
+    // Telegram holds the file; only its local index entry waits for the batch.
+    subscribeTransferEvent("upload_accepted", (id) => {
+        const uploadId = Number(id);
+        if (state.importBatch || !activeUploadActivityId || !Number.isFinite(uploadId)) return;
+        updateUploadActivityFile(activeUploadActivityId, uploadId, { progress: 100 });
     });
 
     subscribeTransferEvent("upload_error", (id, name, message) => {
@@ -1146,7 +1194,10 @@ async function runAndroidImport(parentID: string, manifest: AndroidFolderManifes
     const folderPaths = folderPathsFor(manifest);
     const files = androidUploadFiles(manifest, encrypt);
     const empty = manifest.files.length - files.length;
-    const totalFiles = files.length;
+    // Rows cancelled before their window leave the total, so the bar can still finish.
+    let totalFiles = files.length;
+    const run = activeUploadActivityId ? { activityId: activeUploadActivityId, uploadIds: new Map<number, number>(), canceled: new Set<number>() } : null;
+    androidRun = run;
     const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
     activeTransferDriveId = destination.driveId;
     pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Creating folders…', total: totalBytes });
@@ -1196,25 +1247,33 @@ async function runAndroidImport(parentID: string, manifest: AndroidFolderManifes
         for (let start = 0; start < totalFiles && !state.cancelingUpload; start += ANDROID_UPLOAD_WINDOW) {
             if (!isCurrentDestination(destination)) return;
             if (state.activeChannel?.id !== destination.driveId) throw new Error(`Open ${destination.driveTitle} before continuing this folder import.`);
-            const batch = files.slice(start, start + ANDROID_UPLOAD_WINDOW);
+            const slice = files.slice(start, start + ANDROID_UPLOAD_WINDOW);
             const activityId = activeUploadActivityId;
-            if (activityId) mergeUploadActivityFiles(activityId, batch.map((file, offset) => ({ ...androidActivityFile(manifest, file, start + offset), status: 'active' })));
-            const outcome = await uploadAndroidWindow(batch, manifest.root, folderIds, parentID, encrypt, destination);
+            // Rows the user cancelled while they waited never reach the bridge.
+            const window = slice.map((file, offset) => ({ file, index: start + offset })).filter(({ index }) => !run?.canceled.has(index));
+            totalFiles -= slice.length - window.length;
+            const batch = window.map(({ file }) => file);
+            if (activityId) mergeUploadActivityFiles(activityId, window.map(({ file, index }) => ({ ...androidActivityFile(manifest, file, index), status: 'active' })));
+            const outcome = batch.length
+                ? await uploadAndroidWindow(batch, manifest.root, folderIds, parentID, encrypt, destination,
+                    (position, uploadId) => run?.uploadIds.set(window[position].index, uploadId))
+                : { done: 0, failed: 0, failures: new Map<number, string>() };
+            run?.uploadIds.clear();
             if (!isCurrentDestination(destination)) return;
             if (activityId) {
-                mergeUploadActivityFiles(activityId, batch.map((file, offset): UploadActivityFile => {
-                    const message = outcome.failures.get(offset);
-                    const row = androidActivityFile(manifest, file, start + offset);
+                mergeUploadActivityFiles(activityId, window.map(({ file, index }, position): UploadActivityFile => {
+                    const message = outcome.failures.get(position);
+                    const row = androidActivityFile(manifest, file, index);
                     return message === undefined
                         ? { ...row, status: 'done', progress: 100 }
-                        : { ...row, status: state.cancelingUpload ? 'canceled' : 'failed', message };
+                        : { ...row, status: state.cancelingUpload || run?.canceled.has(index) ? 'canceled' : 'failed', message };
                 }));
             }
             done += outcome.done;
             failed += outcome.failed;
             // Count the window's bytes however it ended: the bar tracks work
             // gone through, and the failure count carries the outcome.
-            bytesDone += batch.reduce((sum, file) => sum + file.size, 0);
+            bytesDone += slice.reduce((sum, file) => sum + file.size, 0);
             report();
         }
     } catch (err) {
@@ -1223,6 +1282,7 @@ async function runAndroidImport(parentID: string, manifest: AndroidFolderManifes
     } finally {
         if (generation === transferSurfaceGeneration) {
             setTransferDirectionActive('upload', false);
+            if (androidRun === run) androidRun = null;
             finishAndroidImport(done, failed, fatalError, empty);
             if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, state.cancelingUpload ? 'canceled' : fatalError || failed ? 'failed' : 'done', [], fatalError || undefined);
             state.cancelingUpload = false;
@@ -1256,6 +1316,7 @@ async function uploadAndroidWindow(
     parentID: string,
     encrypt: boolean,
     destination: UploadDestination,
+    onUploadId?: (position: number, uploadId: number) => void,
 ): Promise<{ done: number; failed: number; failures: Map<number, string> }> {
     const ids = files.map((file) => file.id);
     // Why each file of the window failed, keyed by its position in the window.
@@ -1276,6 +1337,7 @@ async function uploadAndroidWindow(
                 recordFailureReason(importFailureReasons, file.rel, 'could not be read from the folder');
                 return;
             }
+            onUploadId?.(position, paths.length);
             paths.push(path);
             pathFiles.push(position);
             parentIDs.push(folderIds.get(folderPathFor(root, file.rel)) ?? parentID);
@@ -1640,6 +1702,9 @@ function activateFileDropEvents(): void {
 
 export function activateTransferSurfaces(): () => void {
     teardownTransferSurfaces();
+    // A pause never outlives the page that set it: a reload drops the queue it
+    // belonged to, and a held-back backend would stall the next upload unseen.
+    void resumeUploads().catch(() => {});
     sessionUploadQueue.register();
     transferUnsubscribers.push(sidebarState.subscribe(() => { void sessionUploadQueue.wake(); }));
     activateDownloadProgressEvents();
@@ -1673,6 +1738,9 @@ export function teardownTransferSurfaces(): void {
     transferSurfaceGeneration += 1;
     sessionUploadQueue.dispose();
     sessionUploadQueue = createSessionUploadQueue();
+    if (get(uploadsPaused)) void resumeUploads().catch(() => {});
+    uploadsPaused.set(false);
+    androidRun = null;
     clearUploadActivities();
     flowBusy = false;
     selectionBusy = false;

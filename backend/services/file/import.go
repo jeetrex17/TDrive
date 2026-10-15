@@ -518,6 +518,7 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 			observer: observer,
 			peer:     &peer,
 			idOffset: idOffset,
+			pausable: true,
 		})
 		return err
 	}

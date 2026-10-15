@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     updateTransferName: vi.fn(),
     updateTransferProgress: vi.fn(),
     refreshFiles: vi.fn(),
+    cancelSingleUpload: vi.fn(),
 }));
 
 const eventListeners = vi.hoisted(() => new Map<string, (...args: unknown[]) => void>());
@@ -24,6 +25,7 @@ const app = vi.hoisted(() => ({
     SelectFiles: vi.fn(),
     SelectFolder: vi.fn(),
     RetryUploadToDriveFS: vi.fn(),
+    ResumeUploads: vi.fn(),
 }));
 
 vi.mock('../../bindings/TDrive/internal/app/app', () => app);
@@ -37,6 +39,7 @@ vi.mock('./notif-bell', () => ({
     updateTransferName: mocks.updateTransferName,
     updateTransferProgress: mocks.updateTransferProgress,
     wasUploadCanceled: () => false,
+    cancelSingleUpload: mocks.cancelSingleUpload,
 }));
 vi.mock('./encryption', () => ({ loadEncryptionStatus: vi.fn() }));
 vi.mock('./modals/import-options', () => ({ openImportOptionsModal: mocks.openImportOptionsModal, cancelImportOptions: vi.fn() }));
@@ -238,6 +241,28 @@ describe('uploading an Android folder a window at a time', () => {
             { name: 'b.jpg', path: 'Holiday/trip/b.jpg', status: 'failed', message: 'Could not be read from the folder.' },
             { name: 'c.jpg', path: 'Holiday/c.jpg', status: 'done', message: undefined },
         ]);
+    });
+
+    it('never copies or sends a row cancelled while it waited, and stops a sending row by its window id', async () => {
+        manifestJson = manifestOf('Holiday', ['a', 'b', 'c', 'd', 'e', 'f']);
+        let finishFirst = () => {};
+        app.RetryUploadToDriveFS.mockImplementationOnce((paths: string[]) => new Promise((resolve) => {
+            finishFirst = () => resolve({ result: { ok: true }, files: paths.map((path) => ({ name: path })) });
+        }));
+        const run = importFolderWithParentID('root');
+        await vi.waitFor(() => expect(app.RetryUploadToDriveFS).toHaveBeenCalledOnce());
+        const { cancelActivityFile } = await import('./transfers');
+        const [batch] = get(uploadActivities);
+        cancelActivityFile(batch.id, batch.files[1]);
+        expect(mocks.cancelSingleUpload).toHaveBeenCalledWith(1);
+        cancelActivityFile(batch.id, batch.files[5]);
+        finishFirst();
+        await run;
+
+        expect(materialized).toEqual([['doc:0', 'doc:1', 'doc:2', 'doc:3'], ['doc:4']]);
+        const files = get(uploadActivities)[0].files;
+        expect(files[5].status).toBe('canceled');
+        expect(files[4].status).toBe('done');
     });
 
     it('releases a window whose files all failed to copy', async () => {

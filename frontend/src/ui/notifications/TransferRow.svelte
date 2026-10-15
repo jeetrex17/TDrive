@@ -65,7 +65,8 @@
     const progressLabel = $derived(`${dirLabel} ${transfer.name || 'transfer'}`);
 
     const canCancel = $derived(
-        isUnfinishedTransfer(transfer.status)
+        onCancel !== undefined
+        && isUnfinishedTransfer(transfer.status)
         && transfer.status !== 'canceling'
         // The backup queue is the backend's to schedule, so a stop control here
         // would stop nothing.

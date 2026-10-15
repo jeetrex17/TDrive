@@ -47,6 +47,7 @@ export interface RuntimeEventMap {
     upload_start: [id: unknown, name: unknown, size: unknown, parentId: unknown];
     upload_progress: [id: unknown, percent: unknown];
     upload_complete: [id: unknown, name: unknown];
+    upload_accepted: [id: unknown];
     upload_error: [id: unknown, name: unknown, message: unknown];
     resumable_upload_changed: [payload: unknown];
     import_start: [];

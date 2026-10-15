@@ -2,6 +2,8 @@ import {
     CancelDownload as rawCancelDownload,
     CancelUpload as rawCancelUpload,
     CancelUploadByID as rawCancelUploadById,
+    PauseUploads as rawPauseUploads,
+    ResumeUploads as rawResumeUploads,
     CreateFolder as rawCreateFolder,
     CreateFolderForDrive as rawCreateFolderForDrive,
     DeleteFile as rawDeleteFile,
@@ -297,6 +299,15 @@ export async function cancelUpload(): Promise<void> {
 // is the one the backend puts on that upload's progress events.
 export async function cancelUploadById(uploadId: number): Promise<void> {
     await invokeBackend(rawCancelUploadById, uploadId);
+}
+
+// Pausing holds back files that have not started; files already sending finish.
+export async function pauseUploads(): Promise<void> {
+    await invokeBackend(rawPauseUploads);
+}
+
+export async function resumeUploads(): Promise<void> {
+    await invokeBackend(rawResumeUploads);
 }
 
 export async function getPreviewFile(messageId: number): Promise<PreviewPayload> {

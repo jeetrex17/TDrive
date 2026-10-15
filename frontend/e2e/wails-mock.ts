@@ -86,6 +86,8 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
     GetGalleryStorage: resolves({ cache_bytes: 1024, cache_limit: 268435456, cache_entries: 1, catalog_bytes: 2048 }),
     ClearGalleryCache: resolves({ cache_bytes: 0, cache_limit: 268435456, cache_entries: 0, catalog_bytes: 2048 }),
     GetUpdateState: resolves({ phase: 'idle', current_version: '0.0.0-test' }),
+    PauseUploads: resolves(null),
+    ResumeUploads: resolves(null),
     ListChannels: resolves([
         {
             id: 1,

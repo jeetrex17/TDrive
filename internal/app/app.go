@@ -276,6 +276,22 @@ func (a *App) CancelUploadByID(uploadID int) {
 	}
 }
 
+// PauseUploads holds back the files of the running upload that have not
+// started. Files already sending finish: an ordinary upload cannot stop part
+// way and continue later.
+func (a *App) PauseUploads() {
+	if svc := a.fileService(); svc != nil {
+		svc.PauseUploads()
+	}
+}
+
+// ResumeUploads lets held-back files start again.
+func (a *App) ResumeUploads() {
+	if svc := a.fileService(); svc != nil {
+		svc.ResumeUploads()
+	}
+}
+
 // CancelDownload cancels the active download.
 func (a *App) CancelDownload() {
 	a.transfers.cancel(downloadTransfer)

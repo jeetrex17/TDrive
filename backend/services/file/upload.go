@@ -24,15 +24,17 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 	})
 }
 
-// CancelUpload stops the single running upload with this ID — the one carried
-// by its progress events — and leaves the rest of the batch to finish. Reports
-// whether an upload with that ID was still running.
+// CancelUpload stops the single upload with this ID — the one carried by its
+// progress events — and leaves the rest of the batch to finish. A file of a
+// running batch that has not started yet is skipped when its turn comes.
+// Reports whether a running or waiting upload with that ID was found.
 func (s *Service) CancelUpload(uploadID int) bool {
 	s.uploadCancelMu.Lock()
 	cancel := s.uploadCancels[uploadID]
+	skipped := cancel == nil && s.skipWaitingUploadLocked(uploadID)
 	s.uploadCancelMu.Unlock()
 	if cancel == nil {
-		return false
+		return skipped
 	}
 	cancel()
 	return true
@@ -62,6 +64,8 @@ type uploadOptions struct {
 	peer      *tgclient.InputPeer
 	idOffset  int
 	resumable bool
+	// pausable files wait while the user has paused interactive uploads.
+	pausable bool
 }
 
 type uploadedResult struct {
@@ -131,11 +135,32 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 	uploaded := make([]uploadedResult, 0, len(filePaths))
 	failed := 0
 	var firstErr error
+	window, closeWindow := s.openUploadWindow(options.idOffset, len(filePaths))
+	defer closeWindow()
+	failBeforeStart := func(uploadID int, path string, err error) {
+		mu.Lock()
+		failed++
+		if firstErr == nil {
+			firstErr = err
+		}
+		mu.Unlock()
+		observer.Failed(uploadID, filepath.Base(path), err)
+	}
 
 	for i := range len(filePaths) {
 		path := filePaths[i]
 		pid := parentIDs[i]
 		uploadID := options.idOffset + i
+		if options.pausable {
+			if err := s.waitWhileUploadsPaused(ctx); err != nil {
+				failBeforeStart(uploadID, path, err)
+				continue
+			}
+		}
+		if !s.claimUploadStart(window, uploadID) {
+			failBeforeStart(uploadID, path, errUploadSkipped)
+			continue
+		}
 		slotStarted := time.Now()
 		release, slotErr := s.acquireUploadSlot(ctx)
 		reportUploadTiming(ctx, "slot_wait", slotStarted)
@@ -198,6 +223,9 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 			}
 
 			projected := op.Type == ""
+			if accepted, ok := observer.(uploadAcceptedObserver); ok && !projected {
+				accepted.Accepted(uploadID)
+			}
 			mu.Lock()
 			uploaded = append(uploaded, uploadedResult{
 				UploadID:          uploadID,

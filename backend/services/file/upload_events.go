@@ -26,6 +26,12 @@ func (o detailedUploadObserver) Progress(id int, percent float64) {
 	o.service.emitEvent("upload_progress", id, percent)
 }
 
+// Accepted tells the row its file is on Telegram and only the local index
+// entry is pending, so it reads as saving rather than stuck at 100%.
+func (o detailedUploadObserver) Accepted(id int) {
+	o.service.emitEvent("upload_accepted", id)
+}
+
 func (o detailedUploadObserver) Completed(id int, name string) {
 	o.service.emitEvent("upload_complete", id, name)
 }
@@ -37,10 +43,10 @@ func (o detailedUploadObserver) Failed(id int, name string, err error) {
 const (
 	maxImportUploadFailureReasons = 3
 
-	// How many in-flight files one payload names. Upload concurrency is capped
-	// at maxUploadConcurrency, so this bounds the payload rather than the
-	// observer's state; activeCount reports the ones left out.
-	maxImportUploadActiveFiles = 4
+	// How many in-flight files one payload names. Files Telegram has accepted
+	// leave the in-flight set, so it is bounded by upload concurrency and every
+	// sending file can be named; activeCount reports any left out.
+	maxImportUploadActiveFiles = maxUploadConcurrency
 
 	// Floor between two payloads that only report a change in *which* files are
 	// moving. Percent-driven payloads are self-limiting -- at most one per whole
@@ -83,6 +89,11 @@ type importUploadObserver struct {
 	// Display path per upload id for the window in flight; an entry leaves when
 	// its file settles, so this never outgrows one window.
 	labels map[int]string
+	// Files Telegram holds whose index entry waits for the rest of their
+	// window, and those accepted since the last payload. Both are bounded by
+	// one window.
+	accepted    map[int]*importUploadFile
+	acceptedNew []int
 }
 
 func newImportUploadObserver(service *Service, total int) *importUploadObserver {
@@ -92,6 +103,7 @@ func newImportUploadObserver(service *Service, total int) *importUploadObserver 
 		now:         time.Now,
 		active:      make(map[int]*importUploadFile, maxUploadConcurrency),
 		labels:      make(map[int]string, importUploadBatchSize),
+		accepted:    make(map[int]*importUploadFile, importUploadBatchSize),
 		lastPercent: -1,
 	}
 }
@@ -127,9 +139,31 @@ func (o *importUploadObserver) Progress(id int, percent float64) {
 	}
 }
 
+// Accepted moves a file from sending to saving: it counts as fully moved, and
+// stops crowding the in-flight list while its window finishes.
+func (o *importUploadObserver) Accepted(id int) {
+	o.mu.Lock()
+	o.accepted[id] = o.removeActiveLocked(id) // nil when its start was never seen
+	o.acceptedNew = append(o.acceptedNew, id)
+	payload, emit := o.progressPayloadLocked(false, true)
+	o.mu.Unlock()
+	if emit {
+		o.service.emitEvent("import_upload_progress", payload)
+	}
+}
+
+// settledFileLocked takes a file out of whichever set holds it.
+func (o *importUploadObserver) settledFileLocked(id int) *importUploadFile {
+	if file, ok := o.accepted[id]; ok {
+		delete(o.accepted, id)
+		return file
+	}
+	return o.removeActiveLocked(id)
+}
+
 func (o *importUploadObserver) Completed(id int, name string) {
 	o.mu.Lock()
-	file := o.removeActiveLocked(id)
+	file := o.settledFileLocked(id)
 	if file != nil {
 		o.doneBytes += file.size
 	}
@@ -144,7 +178,7 @@ func (o *importUploadObserver) Completed(id int, name string) {
 
 func (o *importUploadObserver) Failed(id int, name string, err error) {
 	o.mu.Lock()
-	o.settleLocked(id, name, o.removeActiveLocked(id), "failed", err.Error())
+	o.settleLocked(id, name, o.settledFileLocked(id), "failed", err.Error())
 	o.failed++
 	if len(o.failureReasons) < maxImportUploadFailureReasons {
 		if name == "" {
@@ -180,11 +214,11 @@ func (o *importUploadObserver) LabelWindow(idOffset int, labels []string) {
 	}
 }
 
-// Flush sends any settled files no throttled payload has carried yet, so the
-// last few outcomes reach the reader before import_complete does.
+// Flush sends any settled or accepted files no throttled payload has carried
+// yet, so the last few outcomes reach the reader before import_complete does.
 func (o *importUploadObserver) Flush() {
 	o.mu.Lock()
-	if len(o.settled) == 0 {
+	if len(o.settled) == 0 && len(o.acceptedNew) == 0 {
 		o.mu.Unlock()
 		return
 	}
@@ -261,7 +295,7 @@ func (o *importUploadObserver) activeFilesLocked() (files []map[string]any, part
 func (o *importUploadObserver) progressPayloadLocked(force, allowEmit bool) (map[string]any, bool) {
 	progress := 100.0
 	if o.total > 0 {
-		progress = (float64(o.done+o.failed) + o.activeProgress) / float64(o.total) * 100
+		progress = (float64(o.done+o.failed+len(o.accepted)) + o.activeProgress) / float64(o.total) * 100
 		progress = math.Max(0, math.Min(100, progress))
 	}
 	wholePercent := int(math.Floor(progress))
@@ -283,14 +317,24 @@ func (o *importUploadObserver) progressPayloadLocked(force, allowEmit bool) (map
 	active, partialBytes := o.activeFilesLocked()
 	settled := o.settled
 	o.settled = nil
+	acceptedNew := o.acceptedNew
+	o.acceptedNew = nil
+	var acceptedBytes int64
+	for _, file := range o.accepted {
+		if file != nil {
+			acceptedBytes += file.size
+		}
+	}
 	return map[string]any{
 		"total":       o.total,
 		"done":        o.done,
 		"failed":      o.failed,
 		"progress":    progress,
-		"bytes":       o.doneBytes + int64(partialBytes),
+		"bytes":       o.doneBytes + acceptedBytes + int64(partialBytes),
 		"active":      active,
 		"activeCount": len(o.active),
 		"settled":     settled,
+		"accepted":    acceptedNew,
+		"saving":      len(o.accepted),
 	}, true
 }

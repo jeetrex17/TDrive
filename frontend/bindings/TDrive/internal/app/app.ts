@@ -402,6 +402,15 @@ export function PauseResumableUpload(jobID: string): $CancellablePromise<$models
 }
 
 /**
+ * PauseUploads holds back the files of the running upload that have not
+ * started. Files already sending finish: an ordinary upload cannot stop part
+ * way and continue later.
+ */
+export function PauseUploads(): $CancellablePromise<void> {
+    return $Call.ByID(806745944);
+}
+
+/**
  * PlanImport scans the selected paths and returns the counts shown in the
  * import dialog (files, folders, total size, archives, oversize-skipped). It
  * mutates nothing.
@@ -492,6 +501,13 @@ export function ResumePhotoBackup(): $CancellablePromise<$models.OperationResult
  */
 export function ResumeResumableUpload(jobID: string, sourcePath: string): $CancellablePromise<$models.UploadResult> {
     return $Call.ByID(1946634256, jobID, sourcePath);
+}
+
+/**
+ * ResumeUploads lets held-back files start again.
+ */
+export function ResumeUploads(): $CancellablePromise<void> {
+    return $Call.ByID(1051441747);
 }
 
 export function RetryPhotoBackup(): $CancellablePromise<$models.OperationResult> {

@@ -34,6 +34,8 @@ const MAX_UPLOAD_ACTIVITIES = 100;
 // Source paths and document capabilities belong to the queue, never this
 // session display model or the persisted transfer history.
 export const uploadActivities = writable<UploadActivity[]>([]);
+/** Whether the user has paused the running upload; files already sending finish. */
+export const uploadsPaused = writable(false);
 
 export function addUploadActivity(activity: NewUploadActivity): void {
     if (activity.files.length > MAX_UPLOAD_ACTIVITY_FILES) throw new Error('Keep queued selections under 10,000 files.');
@@ -58,13 +60,17 @@ const isFinished = (entry: UploadActivity) => entry.status !== 'active' && entry
  * import does. When the session budget is full, older finished batches give up
  * their detail first; a running batch is never trimmed.
  */
-export function mergeUploadActivityFiles(id: string, updates: readonly UploadActivityFile[]): void {
+export function mergeUploadActivityFiles(id: string, updates: ReadonlyArray<Pick<UploadActivityFile, 'index'> & Partial<UploadActivityFile>>): void {
     if (!updates.length) return;
     uploadActivities.update((current) => {
         const target = current.find((entry) => entry.id === id);
         if (!target) return current;
         const byIndex = new Map(target.files.map((file) => [file.index, file]));
-        for (const update of updates) byIndex.set(update.index, { ...byIndex.get(update.index), ...update });
+        for (const update of updates) {
+            const known = byIndex.get(update.index);
+            // An update for a file never named before cannot make a row of its own.
+            if (known || update.name !== undefined) byIndex.set(update.index, { ...known, ...update } as UploadActivityFile);
+        }
         const files = [...byIndex.values()];
         let kept = current.filter((entry) => entry !== target);
         const total = () => kept.reduce((sum, entry) => sum + entry.files.length, files.length);

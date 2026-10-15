@@ -3,14 +3,15 @@
     import { resumableUploads } from '../../modules/resumable-upload-store';
     import { removeQueuedUpload } from '../../modules/upload-queue';
     import { cancelTransfersInDirection, cancelUploadFile } from '../../modules/notif-bell';
-    import { downloadRetryFor, reviewFailedUploads } from '../../modules/transfers';
+    import { cancelActivityFile, downloadRetryFor, reviewFailedUploads, setUploadsPaused } from '../../modules/transfers';
     import { switchActiveChannel } from '../../modules/channels';
     import { formatBytes } from '../../utils';
     import { failedUploadReports } from '../modals/failed-uploads-store';
     import { sidebarState } from '../sidebar/sidebar-store';
     import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+    import XIcon from '@lucide/svelte/icons/x';
     import FolderIcon from '@lucide/svelte/icons/folder';
-    import type { UploadActivityFile } from './upload-activity-store';
+    import { uploadsPaused, type UploadActivityFile } from './upload-activity-store';
     import type { ActivityEntry } from './activity-model';
     import { activityTimestamp, batchLabel, fileCountLabel, groupFilesByFolder, isBatchPaused } from './activity-model';
     import { formatSizePair } from './transfer-view';
@@ -31,7 +32,7 @@
     // Loose files as they are, then one heading per folder with its files under
     // it. A folded folder keeps its heading and counts.
     type FileRow =
-        | { kind: 'folder'; folder: string; total: number; done: number; failed: number; active: number; open: boolean }
+        | { kind: 'folder'; folder: string; total: number; done: number; failed: number; active: number; saving: number; open: boolean }
         | { kind: 'file'; file: UploadActivityFile; nested: boolean };
     const rows = $derived.by(() => {
         const out: FileRow[] = [];
@@ -39,7 +40,8 @@
             const open = !collapsed.includes(folder);
             if (folder) {
                 const count = (status: UploadActivityFile['status']) => files.filter((file) => file.status === status).length;
-                out.push({ kind: 'folder', folder, total: files.length, done: count('done'), failed: count('failed'), active: count('active'), open });
+                const saving = files.filter(isSaving).length;
+                out.push({ kind: 'folder', folder, total: files.length, done: count('done'), failed: count('failed'), active: count('active') - saving, saving, open });
             }
             if (open) for (const file of files) out.push({ kind: 'file', file, nested: Boolean(folder) });
         }
@@ -59,33 +61,51 @@
         const timer = setInterval(() => set(Date.now()), 1000);
         return () => clearInterval(timer);
     });
+    // Telegram has these; only their local index entries are still being written.
+    const isSaving = (file: UploadActivityFile) => file.status === 'active' && (file.progress ?? 0) >= 100;
     const fileSummary = $derived.by(() => {
         if (!batch?.files.length) return '';
         const count = (status: keyof typeof FILE_STATUS) => batch.files.filter((file) => file.status === status).length;
+        const saving = batch.files.filter(isSaving).length;
         // An import names its files as it reaches them; the rest still count as waiting.
         const unlisted = batch.status === 'active' || batch.status === 'queued' ? Math.max(0, batch.fileCount - batch.files.length) : 0;
         return [
             [count('done'), 'completed'], [count('failed'), 'failed'], [count('canceled'), 'canceled'],
-            [count('active'), 'uploading'], [count('queued') + unlisted, 'waiting'],
+            [saving, 'saving'], [count('active') - saving, 'uploading'], [count('queued') + unlisted, 'waiting'],
         ].filter(([value]) => value).map(([value, label]) => `${value.toLocaleString()} ${label}`).join(' · ');
     });
     const startedAt = $derived(batch?.startedAt || transfer?.startedAt || 0);
     const finishedAt = $derived(batch?.finishedAt || transfer?.finishedAt || 0);
     const elapsed = $derived(startedAt > 0 && (finishedAt || batch?.status === 'active' || transfer?.status === 'active')
         ? Math.max(0, Math.round(((finishedAt || $clock) - startedAt) / 1000)) : null);
+    const running = $derived(batch?.status === 'active');
+    // Imports list their files below, so the card keeps only the totals.
+    const cardTransfer = $derived(transfer && batch?.files.length ? { ...transfer, items: undefined, itemsActive: 0 } : transfer);
     const status = $derived.by(() => {
         if (!batch) return entry.summary;
+        if (running && $uploadsPaused) return 'Paused · Files already sending will finish';
         if (batch.status !== 'queued' || paused) return batchLabel(batch, $resumableUploads, activeDriveId);
         if (queuedAhead > 0) return `Queued · ${queuedAhead} ${queuedAhead === 1 ? 'upload' : 'uploads'} ahead`;
         return uploadRunning ? 'Queued · Starts after the current upload' : 'Queued · Starting soon';
     });
     const retry = $derived(entry.kind === 'transfer' ? downloadRetryFor(entry.transfer) : undefined);
 
+    function fileStatus(file: UploadActivityFile): string {
+        if (file.status === 'active') {
+            const percent = activeFiles.get(String(file.index))?.progress ?? file.progress;
+            // Telegram has it; only the local index entry is still being written.
+            if (percent !== undefined && percent >= 100) return 'Saving…';
+            return percent ? `Uploading · ${Math.round(percent)}%` : 'Uploading';
+        }
+        if (file.status === 'queued') return running && $uploadsPaused ? 'Paused' : 'Waiting';
+        return FILE_STATUS[file.status];
+    }
+
     function toggleFolder(folder: string): void {
         collapsed = collapsed.includes(folder) ? collapsed.filter((entry) => entry !== folder) : [...collapsed, folder];
     }
     function folderCounts(row: Extract<FileRow, { kind: 'folder' }>): string {
-        return [fileCountLabel(row.total), row.done ? `${row.done} done` : '', row.active ? `${row.active} uploading` : '']
+        return [fileCountLabel(row.total), row.done ? `${row.done} done` : '', row.saving ? `${row.saving} saving` : '', row.active ? `${row.active} uploading` : '']
             .filter(Boolean).join(' · ');
     }
 
@@ -102,8 +122,12 @@
         <span class="detail-eyebrow">{entry.kind === 'download' || (transfer?.direction === 'down') ? 'Download' : 'Upload'}</span>
         <h3>{entry.name}</h3>
         <p class="detail-status" data-tone={paused ? 'warning' : entry.status === 'Needs attention' ? 'danger' : undefined}>{status}</p>
-        {#if batch?.status === 'queued' || report}
+        {#if batch?.status === 'queued' || report || running}
             <div class="detail-actions">
+                {#if running}
+                    <button type="button" class="detail-action primary" onclick={() => void setUploadsPaused(!$uploadsPaused)}>{$uploadsPaused ? 'Resume' : 'Pause'}</button>
+                    <button type="button" class="detail-action danger" onclick={() => cancelTransfersInDirection('up')}>Cancel upload</button>
+                {/if}
                 {#if paused && batch}<button type="button" class="detail-action primary" onclick={() => void switchActiveChannel(batch.driveId)}>Open {batch.driveTitle}</button>{/if}
                 {#if report}<button type="button" class="detail-action primary" onclick={() => reviewFailedUploads(report)}>Review failed files</button>{/if}
                 {#if batch?.status === 'queued'}<button type="button" class="detail-action danger" onclick={() => removeQueuedUpload(batch.id)}>Remove from queue</button>{/if}
@@ -129,7 +153,7 @@
         <ActivityMessage title={entry.name} message={entry.job.error} />
     {:else}
         {#if showTransfer && transfer}
-            <TransferRow {transfer} onCancel={cancelTransfersInDirection} onCancelFile={cancelUploadFile} />
+            <TransferRow transfer={cardTransfer ?? transfer} onCancel={batch ? undefined : cancelTransfersInDirection} onCancelFile={cancelUploadFile} />
         {/if}
         {#if batch}
             <section class="files-section" aria-label="Files in upload">
@@ -149,10 +173,12 @@
                                 </li>
                             {:else}
                                 {@const file = row.file}
-                                {@const percent = activeFiles.get(String(file.index))?.progress ?? file.progress}
                                 <li data-activity-file class:nested={row.nested}>
                                     <span class="file-name">{file.name}</span>
-                                    <span class="file-status" class:failed={file.status === 'failed'}>{FILE_STATUS[file.status]}{file.status === 'active' && percent ? ` · ${Math.round(percent)}%` : ''}</span>
+                                    <span class="file-status" class:failed={file.status === 'failed'}>{fileStatus(file)}</span>
+                                    {#if running && (file.status === 'queued' || (file.status === 'active' && fileStatus(file) !== 'Saving…'))}
+                                        <button type="button" class="file-cancel" aria-label={`Cancel ${file.name}`} onclick={() => batch && cancelActivityFile(batch.id, file)}><XIcon size={14} aria-hidden="true" /></button>
+                                    {/if}
                                     {#if file.size}<span class="file-size">{formatBytes(file.size)}</span>{/if}
                                     {#if file.message}<p class="file-message">{file.message}</p>{/if}
                                 </li>
@@ -174,9 +200,6 @@
                 <div><dt>Destination</dt><dd>{batch.driveTitle}{#if destinationPath}<span class="destination-path">{destinationPath}</span>{/if}</dd></div>
                 <div><dt>Encryption</dt><dd>{batch.encrypt ? 'Encrypted' : 'Not encrypted'}</dd></div>
             </dl>
-            {#if batch.status === 'active' && !transfer}
-                <button type="button" class="detail-action danger" onclick={() => cancelTransfersInDirection('up')}>Cancel upload</button>
-            {/if}
             <ActivityMessage title={entry.name} message={batch.error || ''} />
             {#if linkedJobs.length > 0}
                 <section class="files-section" aria-label="Upload recovery"><h4>Upload recovery</h4><p class="detail-note">Resume or discard the saved upload. The file list shows the first attempt.</p>{#each linkedJobs as job (job.jobId)}<ResumableUploadRow {job} />{/each}</section>
@@ -220,7 +243,12 @@
     .file-summary { margin: 0; }
     .timeline dl { margin-bottom: 0; }
     .file-list { margin: var(--space-3) 0; padding: 0; list-style: none; }
-    .file-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: var(--space-1) var(--space-3); padding: var(--space-3) 0; border-bottom: 1px solid var(--color-border-soft); }
+    .file-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto 28px; gap: var(--space-1) var(--space-3); align-items: center; padding: var(--space-2-5) 0; border-bottom: 1px solid var(--color-border-soft); }
+    .file-name { grid-column: 1; }
+    .file-status { grid-column: 2; text-align: right; }
+    .file-size { grid-column: 1; }
+    .file-cancel { grid-column: 3; grid-row: 1; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-muted); cursor: pointer; }
+    @media (hover: hover) { .file-cancel:hover { background: var(--overlay-neutral-1); color: var(--color-danger); } }
     .file-list li:last-child { border-bottom: 0; }
     .file-list li.nested { padding-left: calc(var(--space-6) + var(--space-1)); }
     .file-list li.file-folder { display: block; padding: 0; }
@@ -242,5 +270,5 @@
     button:disabled { opacity: .45; cursor: default; }
     @media (hover: hover) { .detail-action:hover, .file-pagination button:not(:disabled):hover { background: var(--overlay-neutral-1); } .detail-action.primary:hover { background: var(--overlay-accent-2); } }
     .file-pagination { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); font-size: var(--type-xs); color: var(--color-text-muted); }
-    @media (max-width: 700px) { .activity-details { padding: var(--space-2) var(--space-4) var(--space-6); } dl > div { grid-template-columns: 100px minmax(0, 1fr); } button { min-height: var(--touch-target); } .activity-details :global(.actions button) { min-height: var(--touch-target); } .activity-details :global(.notif-row-cancel) { min-width: var(--touch-target); min-height: var(--touch-target); } .file-pagination { flex-wrap: wrap; } }
+    @media (max-width: 700px) { .activity-details { padding: var(--space-2) var(--space-4) var(--space-6); } dl > div { grid-template-columns: 100px minmax(0, 1fr); } button { min-height: var(--touch-target); } .activity-details :global(.actions button) { min-height: var(--touch-target); } .activity-details :global(.notif-row-cancel) { min-width: var(--touch-target); min-height: var(--touch-target); } .file-pagination { flex-wrap: wrap; } .file-list li { grid-template-columns: minmax(0, 1fr) auto var(--touch-target); } .file-cancel { width: var(--touch-target); height: var(--touch-target); } }
 </style>

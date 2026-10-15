@@ -22,7 +22,7 @@ export function isBatchPaused(batch: UploadActivity, activeDriveId: number | nul
     return batch.status === 'queued' && typeof activeDriveId === 'number' && batch.driveId !== activeDriveId;
 }
 
-export function batchLabel(batch: UploadActivity, jobs: readonly ResumableUpload[] = [], activeDriveId?: number | null): string {
+export function batchLabel(batch: UploadActivity, jobs: readonly ResumableUpload[] = [], activeDriveId?: number | null, paused = false): string {
     const linked = jobs.filter((job) => batch.resumableJobIds?.includes(job.jobId));
     if (batch.status !== 'active' && batch.status !== 'queued' && linked.length > 0) {
         if (linked.some((job) => job.status === 'uploading')) return 'Resuming upload';
@@ -31,14 +31,14 @@ export function batchLabel(batch: UploadActivity, jobs: readonly ResumableUpload
     }
     if (isBatchPaused(batch, activeDriveId)) return `Paused until ${batch.driveTitle} is open`;
     return batch.status === 'queued' ? 'Queued'
-        : batch.status === 'active' ? 'Uploading'
+        : batch.status === 'active' ? (paused ? 'Paused' : 'Uploading')
         : batch.status === 'done' ? 'Completed'
         : batch.status === 'failed' ? 'Needs attention' : 'Canceled';
 }
 
 /** The list line: the state first, then the one figure worth reading beside it. */
-export function batchSummary(batch: UploadActivity, jobs: readonly ResumableUpload[] = [], activeDriveId?: number | null, transfer?: TransferEvent, now = Date.now()): string {
-    const label = batchLabel(batch, jobs, activeDriveId);
+export function batchSummary(batch: UploadActivity, jobs: readonly ResumableUpload[] = [], activeDriveId?: number | null, transfer?: TransferEvent, now = Date.now(), paused = false): string {
+    const label = batchLabel(batch, jobs, activeDriveId, paused);
     const failed = batch.files.filter((file) => file.status === 'failed').length;
     const percent = batch.status === 'active' && transfer ? transferPercent(transfer) : null;
     const figure = percent !== null ? `${Math.round(percent)}%`
@@ -69,14 +69,14 @@ function compareEntries(a: ActivityEntry, b: ActivityEntry): number {
     return a.status === 'Queued' ? a.at - b.at : b.at - a.at;
 }
 
-export function activityEntries(batches: readonly UploadActivity[], events: readonly HistoryEvent[], uploads: readonly ResumableUpload[], downloads: readonly ResumableDownload[], options: { allEvents?: readonly HistoryEvent[]; activeDriveId?: number | null; now?: number } = {}): ActivityEntry[] {
-    const { allEvents = events, activeDriveId, now = Date.now() } = options;
+export function activityEntries(batches: readonly UploadActivity[], events: readonly HistoryEvent[], uploads: readonly ResumableUpload[], downloads: readonly ResumableDownload[], options: { allEvents?: readonly HistoryEvent[]; activeDriveId?: number | null; now?: number; uploadsPaused?: boolean } = {}): ActivityEntry[] {
+    const { allEvents = events, activeDriveId, now = Date.now(), uploadsPaused = false } = options;
     const entries: ActivityEntry[] = batches.map((batch) => {
         const transfer = allEvents.find((event): event is TransferEvent => event.kind === 'transfer' && event.id === batch.transferId);
         return {
             kind: 'batch', id: batch.id, name: batch.name,
             status: batchActivityFilter(batch, uploads),
-            summary: batchSummary(batch, uploads, activeDriveId, transfer, now),
+            summary: batchSummary(batch, uploads, activeDriveId, transfer, now, uploadsPaused),
             at: batch.status === 'queued' ? batch.addedAt : batch.finishedAt || batch.startedAt || batch.addedAt,
             batch, transfer,
         };
