@@ -228,6 +228,32 @@ describe('aggregate import completion', () => {
         }));
     });
 
+    it('lists each imported file as it moves and settles, with failures in plain words', async () => {
+        app.PlanImport.mockResolvedValue({ files: 3, folders: 1, archives: 0 });
+        app.SelectFolder.mockResolvedValue('/tmp/Album');
+        let finish = () => {};
+        app.ImportPathsForDrive.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ ok: true }); }));
+        const run = importFolderWithParentID('');
+        await vi.waitFor(() => expect(app.ImportPathsForDrive).toHaveBeenCalled());
+        handlers.get('import_start')?.();
+        handlers.get('import_upload_progress')?.({ total: 3, active: [{ id: 0, name: 'a.jpg', size: 10, percent: 50 }] });
+        handlers.get('import_upload_progress')?.({ total: 3, active: [], settled: [
+            { id: 0, name: 'a.jpg', size: 10, status: 'done' },
+            { id: 1, name: 'b.jpg', status: 'failed', message: 'upload part: rpc error code 400: FILE_REFERENCE_EXPIRED' },
+        ] });
+        const { get } = await import('svelte/store');
+        const { uploadActivities } = await import('../ui/notifications/upload-activity-store');
+        const [batch] = get(uploadActivities);
+        expect(batch.files).toEqual([
+            expect.objectContaining({ index: 0, name: 'a.jpg', status: 'done', size: 10 }),
+            expect.objectContaining({ index: 1, name: 'b.jpg', status: 'failed', message: expect.stringContaining('fresh reference') }),
+        ]);
+        expect(batch.fileCount).toBe(3);
+        handlers.get('import_complete')?.({ status: 'done', uploaded: 1, failed: 1 });
+        finish();
+        await run;
+    });
+
     it('says empty files were skipped, and puts repeated RPC failures into one readable line', () => {
         const rpc = 'tgclient: send outcome unknown: send media: rpcDoRequest: rpc error code 400: FILE_PART_LENGTH_INVALID';
         handlers.get('import_start')?.();

@@ -55,7 +55,7 @@ import {
 
 import { sidebarState } from '../ui/sidebar/sidebar-store';
 import { createUploadQueue, nextUploadActivityId } from './upload-queue';
-import { clearUploadActivities, finishUploadActivity, updateUploadActivity, uploadActivities, updateUploadActivityFile, type NewUploadActivity } from '../ui/notifications/upload-activity-store';
+import { clearUploadActivities, finishUploadActivity, mergeUploadActivityFiles, updateUploadActivity, uploadActivities, updateUploadActivityFile, type NewUploadActivity, type UploadActivityFile } from '../ui/notifications/upload-activity-store';
 
 let transferUnsubscribers: RuntimeUnsubscribe[] = [];
 let stopTransferPersistence: (() => void) | null = null;
@@ -587,13 +587,13 @@ export async function tryWithTransferFlow(run: () => Promise<void>): Promise<boo
         }
     }
 }
-function uploadActivity(destination: UploadDestination, paths: string[], encrypt: boolean, fileCount = paths.length, detailNote?: string): NewUploadActivity {
+function uploadActivity(destination: UploadDestination, paths: string[], encrypt: boolean, fileCount = paths.length,
+    files: UploadActivityFile[] = paths.map((path, index) => ({ index, name: path.split(/[/\\]/).pop() || 'Untitled', status: 'queued' }))): NewUploadActivity {
     const id = nextUploadActivityId();
     const first = paths[0]?.split(/[/\\]/).pop() || 'Upload';
     return { id, name: paths.length > 1 ? `${first} and ${paths.length - 1} more` : first,
         driveId: destination.driveId, driveTitle: destination.driveTitle, destination: destination.destination,
-        encrypt, fileCount, detailNote, transferId: `xfer:up:${id}`,
-        files: detailNote ? [] : paths.map((path, index) => ({ index, name: path.split(/[/\\]/).pop() || 'Untitled', status: 'queued' })) };
+        encrypt, fileCount, transferId: `xfer:up:${id}`, files };
 }
 // First few distinct per-file failure reasons, folded into the aggregate
 // import summary toast. Imports report one toast for the whole batch, so this
@@ -643,6 +643,27 @@ function readableReasons(fatal: string, recorded: readonly string[], raw: readon
     }
     for (const text of raw) recordFailureReason(reasons, '', text);
     return reasons;
+}
+
+/** The files an import payload names: the ones moving, then the ones that just settled. */
+function importFileUpdates(payload: Record<string, unknown>): UploadActivityFile[] {
+    const updates: UploadActivityFile[] = [];
+    const list = (value: unknown) => Array.isArray(value) ? value.map(asObjectRecord) : [];
+    for (const file of list(payload.active)) {
+        const index = Number(file.id);
+        if (Number.isInteger(index)) updates.push({ index, name: String(file.name ?? ''), status: 'active', size: Number(file.size) || 0, progress: Number(file.percent) || 0 });
+    }
+    for (const file of list(payload.settled)) {
+        const index = Number(file.id);
+        if (!Number.isInteger(index)) continue;
+        const failed = file.status === 'failed';
+        updates.push({
+            index, name: String(file.name ?? ''), status: failed ? 'failed' : 'done', progress: failed ? undefined : 100,
+            ...(Number(file.size) > 0 ? { size: Number(file.size) } : {}),
+            ...(failed && file.message ? { message: humanizeBackendError(String(file.message)) } : {}),
+        });
+    }
+    return updates;
 }
 
 function formatImportResultLabel(uploaded: number, failedUploads = 0) {
@@ -964,6 +985,7 @@ function activateUploadProgressEvents(): void {
     });
 
     subscribeTransferEvent("import_upload_progress", (info) => {
+        if (activeUploadActivityId) mergeUploadActivityFiles(activeUploadActivityId, importFileUpdates(asObjectRecord(info)));
         if (!state.importBatch) return;
         state.importBatch = reduceImportProgress(state.importBatch, asObjectRecord(info));
         refreshImportRow();
@@ -1093,8 +1115,11 @@ async function importAndroidFolder(parentID: string, destination: UploadDestinat
             const ok = state.encryption.passwordSet ? await openEncryptionPasswordModal() : await openEncryptionSetupModal();
             if (!ok || !isCurrentDestination(destination)) return;
         }
-        const activity = uploadActivity(destination, [manifest.root], choice.encrypt, manifest.files.length,
-            'Folder imports report overall progress, not each file.');
+        // The manifest already names every file, so the batch can list each one
+        // from the start; empty plaintext files are skipped as the runner does.
+        const files = androidUploadFiles(manifest, choice.encrypt)
+            .map((file, index): UploadActivityFile => ({ index, name: file.rel, size: file.size, status: 'queued' }));
+        const activity = uploadActivity(destination, [manifest.root], choice.encrypt, files.length, files);
         enqueueUpload(activity, destination, () => runAndroidImport(parentID, manifest, choice.encrypt, destination), release);
         enqueued = true;
     } catch (error) {
@@ -1104,11 +1129,16 @@ async function importAndroidFolder(parentID: string, destination: UploadDestinat
     }
 }
 
+/** Telegram can't store an empty plaintext file; encryption gives it a header. */
+function androidUploadFiles(manifest: AndroidFolderManifest, encrypt: boolean): AndroidFolderFile[] {
+    return encrypt ? manifest.files : manifest.files.filter((file) => file.size > 0);
+}
+
 // Only this runner materializes sources; waiting manifests keep no copied tree.
 async function runAndroidImport(parentID: string, manifest: AndroidFolderManifest, encrypt: boolean, destination: UploadDestination) {
     const generation = transferSurfaceGeneration;
     const folderPaths = folderPathsFor(manifest);
-    const files = encrypt ? manifest.files : manifest.files.filter((file) => file.size > 0);
+    const files = androidUploadFiles(manifest, encrypt);
     const empty = manifest.files.length - files.length;
     const totalFiles = files.length;
     const totalBytes = files.reduce((sum, file) => sum + file.size, 0);
@@ -1161,8 +1191,18 @@ async function runAndroidImport(parentID: string, manifest: AndroidFolderManifes
             if (!isCurrentDestination(destination)) return;
             if (state.activeChannel?.id !== destination.driveId) throw new Error(`Open ${destination.driveTitle} before continuing this folder import.`);
             const batch = files.slice(start, start + ANDROID_UPLOAD_WINDOW);
+            const activityId = activeUploadActivityId;
+            if (activityId) mergeUploadActivityFiles(activityId, batch.map((file, offset) => ({ index: start + offset, name: file.rel, status: 'active' })));
             const outcome = await uploadAndroidWindow(batch, manifest.root, folderIds, parentID, encrypt, destination);
             if (!isCurrentDestination(destination)) return;
+            if (activityId) {
+                mergeUploadActivityFiles(activityId, batch.map((file, offset): UploadActivityFile => {
+                    const message = outcome.failures.get(offset);
+                    return message === undefined
+                        ? { index: start + offset, name: file.rel, status: 'done', progress: 100 }
+                        : { index: start + offset, name: file.rel, status: state.cancelingUpload ? 'canceled' : 'failed', message };
+                }));
+            }
             done += outcome.done;
             failed += outcome.failed;
             // Count the window's bytes however it ended: the bar tracks work
@@ -1209,32 +1249,45 @@ async function uploadAndroidWindow(
     parentID: string,
     encrypt: boolean,
     destination: UploadDestination,
-): Promise<{ done: number; failed: number }> {
+): Promise<{ done: number; failed: number; failures: Map<number, string> }> {
     const ids = files.map((file) => file.id);
+    // Why each file of the window failed, keyed by its position in the window.
+    const failures = new Map<number, string>();
     try {
         const materialized = await materializeAndroidFiles(ids);
-        if (!isCurrentDestination(destination)) return { done: 0, failed: 0 };
+        if (!isCurrentDestination(destination)) return { done: 0, failed: 0, failures };
         const paths: string[] = [];
         const parentIDs: string[] = [];
+        const pathFiles: number[] = [];
         let unreadable = 0;
-        for (const file of files) {
+        files.forEach((file, position) => {
             const path = materialized.get(file.id);
             if (!path) {
                 // One file the bridge could not read does not stop the window.
                 unreadable += 1;
+                failures.set(position, 'Could not be read from the folder.');
                 recordFailureReason(importFailureReasons, file.rel, 'could not be read from the folder');
-                continue;
+                return;
             }
             paths.push(path);
+            pathFiles.push(position);
             parentIDs.push(folderIds.get(folderPathFor(root, file.rel)) ?? parentID);
-        }
-        if (!paths.length) return { done: 0, failed: unreadable };
+        });
+        if (!paths.length) return { done: 0, failed: unreadable, failures };
 
         if (!isCurrentDestination(destination) || state.activeChannel?.id !== destination.driveId) throw new Error('The upload destination changed.');
         const upload = await retryUploadToDriveFs(paths, parentIDs, encrypt, destination.driveId);
-        if (!isCurrentDestination(destination)) return { done: 0, failed: 0 };
+        if (!isCurrentDestination(destination)) return { done: 0, failed: 0, failures };
         if (!upload.result.ok && upload.result.error.code === 'canceled') state.cancelingUpload = true;
-        return { done: upload.files.length, failed: unreadable + paths.length - upload.files.length };
+        const named = upload.failures ?? [];
+        for (const failure of named) {
+            failures.set(pathFiles[failure.index], failure.code === 'empty_file' ? "Empty files can't be uploaded." : humanizeBackendError(failure.message));
+        }
+        // A failed call that named no file leaves every file in doubt.
+        if (!upload.result.ok && !named.length) {
+            for (const position of pathFiles) failures.set(position, humanizeBackendError(upload.result.error));
+        }
+        return { done: upload.files.length, failed: unreadable + paths.length - upload.files.length, failures };
     } finally {
         // Cache stays bounded only if every window is released, including the
         // one that threw or was cancelled part way through. A release that
@@ -1326,8 +1379,8 @@ async function importSelection(parentID: string, paths: string[], destination: U
             const ok = state.encryption.passwordSet ? await openEncryptionPasswordModal() : await openEncryptionSetupModal();
             if (!ok || !isCurrentDestination(destination)) return;
         }
-        const activity = uploadActivity(destination, paths, encrypt, plan.files || paths.length,
-            complex ? 'Folder and archive imports report overall progress, not each file.' : undefined);
+        // An import learns its files while it walks them; they join the batch as they settle.
+        const activity = uploadActivity(destination, paths, encrypt, plan.files || paths.length, complex ? [] : undefined);
         enqueueUpload(activity, destination,
             () => complex ? runDesktopImport(paths, parentID, encrypt, extract, destination) : uploadPathsBatch(paths, parentID, encrypt, destination.driveId, destination.driveTitle),
             (reason) => { if (reason !== 'completed') void releasePickedSources(paths); });

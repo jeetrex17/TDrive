@@ -77,6 +77,9 @@ type importUploadObserver struct {
 	activeDirty    bool
 	lastEmit       time.Time
 	failureReasons []string
+	// Files settled since the last payload. Each file is reported once, so the
+	// list a reader assembles is bounded by the import itself.
+	settled []map[string]any
 }
 
 func newImportUploadObserver(service *Service, total int) *importUploadObserver {
@@ -120,11 +123,13 @@ func (o *importUploadObserver) Progress(id int, percent float64) {
 	}
 }
 
-func (o *importUploadObserver) Completed(id int, _ string) {
+func (o *importUploadObserver) Completed(id int, name string) {
 	o.mu.Lock()
-	if file := o.removeActiveLocked(id); file != nil {
+	file := o.removeActiveLocked(id)
+	if file != nil {
 		o.doneBytes += file.size
 	}
+	o.settleLocked(id, name, file, "done", "")
 	o.done++
 	payload, emit := o.progressPayloadLocked(false, true)
 	o.mu.Unlock()
@@ -135,7 +140,7 @@ func (o *importUploadObserver) Completed(id int, _ string) {
 
 func (o *importUploadObserver) Failed(id int, name string, err error) {
 	o.mu.Lock()
-	o.removeActiveLocked(id)
+	o.settleLocked(id, name, o.removeActiveLocked(id), "failed", err.Error())
 	o.failed++
 	if len(o.failureReasons) < maxImportUploadFailureReasons {
 		if name == "" {
@@ -158,6 +163,33 @@ func (o *importUploadObserver) EmitInitial() {
 	if emit {
 		o.service.emitEvent("import_upload_progress", payload)
 	}
+}
+
+// Flush sends any settled files no throttled payload has carried yet, so the
+// last few outcomes reach the reader before import_complete does.
+func (o *importUploadObserver) Flush() {
+	o.mu.Lock()
+	if len(o.settled) == 0 {
+		o.mu.Unlock()
+		return
+	}
+	payload, _ := o.progressPayloadLocked(true, true)
+	o.mu.Unlock()
+	o.service.emitEvent("import_upload_progress", payload)
+}
+
+func (o *importUploadObserver) settleLocked(id int, name string, file *importUploadFile, status, message string) {
+	entry := map[string]any{"id": id, "name": name, "status": status}
+	if file != nil {
+		entry["size"] = file.size
+		if name == "" {
+			entry["name"] = file.name
+		}
+	}
+	if message != "" {
+		entry["message"] = message
+	}
+	o.settled = append(o.settled, entry)
 }
 
 func (o *importUploadObserver) Summary() (done, failed int, failureReasons []string) {
@@ -226,6 +258,8 @@ func (o *importUploadObserver) progressPayloadLocked(force, allowEmit bool) (map
 	o.activeDirty = false
 	o.lastEmit = now
 	active, partialBytes := o.activeFilesLocked()
+	settled := o.settled
+	o.settled = nil
 	return map[string]any{
 		"total":       o.total,
 		"done":        o.done,
@@ -234,5 +268,6 @@ func (o *importUploadObserver) progressPayloadLocked(force, allowEmit bool) (map
 		"bytes":       o.doneBytes + int64(partialBytes),
 		"active":      active,
 		"activeCount": len(o.active),
+		"settled":     settled,
 	}, true
 }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { get } from 'svelte/store';
-import { addUploadActivity, clearUploadActivityHistory, clearUploadActivities, finishUploadActivity, startUploadActivity, updateUploadActivityFile, uploadActivities, uploadActivityFilesPage } from './upload-activity-store';
+import { addUploadActivity, clearUploadActivityHistory, clearUploadActivities, finishUploadActivity, mergeUploadActivityFiles, startUploadActivity, updateUploadActivityFile, uploadActivities, uploadActivityFilesPage } from './upload-activity-store';
 
 afterEach(clearUploadActivities);
 
@@ -21,6 +21,28 @@ describe('session upload details', () => {
             expect.objectContaining({ index: 1, name: 'same.jpg', status: 'failed', message: 'Needs indexing' }),
         ]);
         expect(uploadActivityFilesPage('one', 1, 1)).toEqual([expect.objectContaining({ index: 1 })]);
+    });
+
+    it('adds files a running import reaches and updates them in place', () => {
+        addUploadActivity({ ...activity('import', 0), fileCount: 3 });
+        startUploadActivity('import');
+        mergeUploadActivityFiles('import', [{ index: 0, name: 'a.jpg', status: 'active', progress: 40 }]);
+        mergeUploadActivityFiles('import', [{ index: 0, name: 'a.jpg', status: 'done', progress: 100, size: 9 }, { index: 1, name: 'b.jpg', status: 'failed', message: 'Lost' }]);
+        mergeUploadActivityFiles('missing', [{ index: 0, name: 'x', status: 'done' }]);
+        expect(get(uploadActivities)[0].files).toEqual([
+            { index: 0, name: 'a.jpg', status: 'done', progress: 100, size: 9 },
+            { index: 1, name: 'b.jpg', status: 'failed', message: 'Lost' },
+        ]);
+    });
+
+    it('lets older finished batches give up their detail to a growing import', () => {
+        addUploadActivity(activity('old', 6000));
+        finishUploadActivity('old', 'done');
+        addUploadActivity({ ...activity('import', 0), fileCount: 6000 });
+        startUploadActivity('import');
+        mergeUploadActivityFiles('import', Array.from({ length: 6000 }, (_, index) => ({ index, name: `${index}.jpg`, status: 'done' as const })));
+        expect(get(uploadActivities).map(({ id }) => id)).toEqual(['import']);
+        expect(get(uploadActivities)[0].files).toHaveLength(6000);
     });
 
     it('bounds retained file records and rejects a batch too large to retain safely', () => {

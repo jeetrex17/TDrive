@@ -161,6 +161,19 @@ describe('full activity view', () => {
         expect(host.querySelector('[aria-label="Details for Photo selection"]')).not.toBeNull();
     });
 
+    it('lists moving and failed files first and counts files an import has not reached as waiting', async () => {
+        uploadActivities.set([{ ...batch('active'), fileCount: 5, files: [
+            { index: 0, name: 'done.jpg', status: 'done' },
+            { index: 1, name: 'moving.jpg', status: 'active', progress: 40 },
+            { index: 2, name: 'broken.jpg', status: 'failed', message: 'Lost' },
+        ] }]);
+        openActivity({ selectedId: 'session-1' }); await settle();
+        const rows = Array.from(host.querySelectorAll('[data-activity-file] .file-name')).map((row) => row.textContent);
+        expect(rows).toEqual(['moving.jpg', 'broken.jpg', 'done.jpg']);
+        expect(host.querySelector('[data-activity-file]')?.textContent).toContain('Uploading · 40%');
+        expect(host.querySelector('.file-summary')?.textContent).toBe('1 completed · 1 failed · 1 uploading · 2 waiting');
+    });
+
     it('keeps the session batch authoritative over its compact legacy row', async () => {
         uploadActivities.set([{ ...batch('active'), transferId: 'xfer:up:session-1' }]);
         historyEvents.set([{ kind: 'transfer', id: 'xfer:up:session-1', name: 'Photo selection', direction: 'up', status: 'active', progress: 30, bytes: 300, total: 1000, speed: 10, startedAt: 1, finishedAt: 0 }]);

@@ -24,7 +24,6 @@ export interface UploadActivity {
     fileCount: number;
     transferId?: string;
     error?: string;
-    detailNote?: string;
     resumableJobIds?: readonly string[];
 }
 export type NewUploadActivity = Omit<UploadActivity, 'addedAt' | 'startedAt' | 'finishedAt' | 'status'>;
@@ -47,6 +46,33 @@ export function addUploadActivity(activity: NewUploadActivity): void {
             retained = retained.filter((_, position) => position !== index);
         }
         return [{ ...activity, files: activity.files.map((file) => ({ ...file })), addedAt: Date.now(), startedAt: 0, finishedAt: 0, status: 'queued' }, ...retained];
+    });
+}
+
+const isFinished = (entry: UploadActivity) => entry.status !== 'active' && entry.status !== 'queued';
+
+/**
+ * Adds or updates files a batch only learns about while it runs, as a folder
+ * import does. When the session budget is full, older finished batches give up
+ * their detail first; a running batch is never trimmed.
+ */
+export function mergeUploadActivityFiles(id: string, updates: readonly UploadActivityFile[]): void {
+    if (!updates.length) return;
+    uploadActivities.update((current) => {
+        const target = current.find((entry) => entry.id === id);
+        if (!target) return current;
+        const byIndex = new Map(target.files.map((file) => [file.index, file]));
+        for (const update of updates) byIndex.set(update.index, { ...byIndex.get(update.index), ...update });
+        const files = [...byIndex.values()];
+        let kept = current.filter((entry) => entry !== target);
+        const total = () => kept.reduce((sum, entry) => sum + entry.files.length, files.length);
+        while (total() > MAX_UPLOAD_ACTIVITY_FILES) {
+            const oldest = kept.map(isFinished).lastIndexOf(true);
+            if (oldest < 0) break;
+            kept = kept.filter((_, position) => position !== oldest);
+        }
+        return current.filter((entry) => entry === target || kept.includes(entry))
+            .map((entry) => entry === target ? { ...entry, files } : entry);
     });
 }
 

@@ -141,10 +141,13 @@ receipt, and ordinary uploads do not gain pause/resume or broader retry
 eligibility merely because they appear in Activity.
 
 Session batch details use stable identities and bounded retention. File details
-are paged in the UI rather than expanded into one notification per file. The
-current import event stream contains aggregate counts and a bounded active-file
-sample, so folder/archive imports retain summary detail rather than claiming a
-complete per-file history. Clearing completed display history must preserve
+are paged in the UI rather than expanded into one notification per file. Import
+progress payloads carry aggregate counts, a bounded active-file sample and each
+file that settled since the previous payload, reported exactly once, plus a final
+flush before `import_complete`. A folder or archive batch therefore lists files
+as the import reaches them and counts the rest as waiting; Android folder imports
+list every manifest file from the start. Older finished batches give up their
+detail first when a growing import needs the session's file budget. Clearing completed display history must preserve
 pending batches, active work and backend recovery journals.
 
 ## Downloads publish completed output

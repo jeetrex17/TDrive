@@ -575,6 +575,7 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 			}
 		}
 	}
+	observer.Flush()
 	uploaded, observerFailed, uploadReasons := observer.Summary()
 	failed := max(0, tasks.files-uploaded, observerFailed)
 	errorsOut := append([]string(nil), tasks.errors...)

@@ -47,6 +47,8 @@ vi.mock('../ui/chrome/UploadMenu.svelte', () => ({ default: {} }));
 vi.mock('../ui/mount', () => ({ mountSvelte: vi.fn() }));
 
 import { activateTransferSurfaces, importFolderWithParentID } from './transfers';
+import { get } from 'svelte/store';
+import { uploadActivities } from '../ui/notifications/upload-activity-store';
 
 interface BridgeWindow {
     wails?: {
@@ -217,6 +219,25 @@ describe('uploading an Android folder a window at a time', () => {
             direction: 'up',
             name: 'Imported 2 files · 1 failed',
         });
+    });
+
+    it('lists every file of the folder with its own outcome', async () => {
+        manifestJson = JSON.stringify({ root: 'Holiday', files: [
+            { id: 'doc:0', rel: 'trip/a.jpg', size: 100 }, { id: 'doc:1', rel: 'trip/b.jpg', size: 100 },
+            { id: 'doc:2', rel: 'notes/empty.txt', size: 0 }, { id: 'doc:3', rel: 'c.jpg', size: 100 },
+        ] });
+        unreadable = new Set(['doc:1']);
+
+        await importFolderWithParentID('root');
+
+        const [batch] = get(uploadActivities);
+        // The empty file is skipped rather than listed as a failure.
+        expect(batch.fileCount).toBe(3);
+        expect(batch.files.map(({ name, status, message }) => ({ name, status, message }))).toEqual([
+            { name: 'trip/a.jpg', status: 'done', message: undefined },
+            { name: 'trip/b.jpg', status: 'failed', message: 'Could not be read from the folder.' },
+            { name: 'c.jpg', status: 'done', message: undefined },
+        ]);
     });
 
     it('releases a window whose files all failed to copy', async () => {

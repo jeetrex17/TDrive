@@ -26,7 +26,10 @@
     const pageCount = $derived(batch ? Math.max(1, Math.ceil(batch.files.length / PAGE_SIZE)) : 1);
     const currentPage = $derived(Math.min(filePage, pageCount - 1));
     const activeFiles = $derived(new Map((transfer?.items ?? []).map((item) => [item.key, item])));
-    const files = $derived(batch?.files.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE) ?? []);
+    // What is moving and what went wrong first, then what is left, then what is done.
+    const FILE_ORDER = { active: 0, failed: 1, queued: 2, done: 3, canceled: 4 } as const;
+    const sortedFiles = $derived(batch ? [...batch.files].sort((a, b) => FILE_ORDER[a.status] - FILE_ORDER[b.status] || a.index - b.index) : []);
+    const files = $derived(sortedFiles.slice(currentPage * PAGE_SIZE, (currentPage + 1) * PAGE_SIZE));
     const linkedJobs = $derived(batch ? $resumableUploads.filter((job) => batch.resumableJobIds?.includes(job.jobId)) : []);
     const showTransfer = $derived(transfer && (linkedJobs.length === 0 || batch?.status === 'active'));
     const destinationPath = $derived(batch && batch.destination !== batch.driveTitle ? batch.destination.replace(`${batch.driveTitle} / `, '') : '');
@@ -41,9 +44,11 @@
     const fileSummary = $derived.by(() => {
         if (!batch?.files.length) return '';
         const count = (status: keyof typeof FILE_STATUS) => batch.files.filter((file) => file.status === status).length;
+        // An import names its files as it reaches them; the rest still count as waiting.
+        const unlisted = batch.status === 'active' || batch.status === 'queued' ? Math.max(0, batch.fileCount - batch.files.length) : 0;
         return [
             [count('done'), 'completed'], [count('failed'), 'failed'], [count('canceled'), 'canceled'],
-            [count('active'), 'uploading'], [count('queued'), 'waiting'],
+            [count('active'), 'uploading'], [count('queued') + unlisted, 'waiting'],
         ].filter(([value]) => value).map(([value, label]) => `${value.toLocaleString()} ${label}`).join(' · ');
     });
     const startedAt = $derived(batch?.startedAt || transfer?.startedAt || 0);
@@ -118,10 +123,10 @@
                     <p class="file-summary">{fileSummary}</p>
                     <ul class="file-list">
                         {#each files as file (file.index)}
-                            {@const activeFile = activeFiles.get(String(file.index))}
+                            {@const percent = activeFiles.get(String(file.index))?.progress ?? file.progress}
                             <li data-activity-file>
                                 <span class="file-name">{file.name}</span>
-                                <span class="file-status" class:failed={file.status === 'failed'}>{FILE_STATUS[file.status]}{file.status === 'active' && activeFile ? ` · ${Math.round(activeFile.progress)}%` : ''}</span>
+                                <span class="file-status" class:failed={file.status === 'failed'}>{FILE_STATUS[file.status]}{file.status === 'active' && percent ? ` · ${Math.round(percent)}%` : ''}</span>
                                 {#if file.size}<span class="file-size">{formatBytes(file.size)}</span>{/if}
                                 {#if file.message}<p class="file-message">{file.message}</p>{/if}
                             </li>
@@ -135,7 +140,7 @@
                         </div>
                     {/if}
                 {:else}
-                    <p class="detail-note">{batch.detailNote || `${fileCountLabel(batch.fileCount)} in this upload.`}</p>
+                    <p class="detail-note">{batch.status === 'active' || batch.status === 'queued' ? 'Each file appears here once it starts uploading.' : `${fileCountLabel(batch.fileCount)} in this upload.`}</p>
                 {/if}
             </section>
         {:else if transfer}
