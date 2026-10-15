@@ -25,7 +25,8 @@ const eventsOn = vi.hoisted(() => vi.fn((eventName: string, callback: (event: { 
 }));
 const app = vi.hoisted(() => ({
     DownloadFile: vi.fn(),
-    ImportPaths: vi.fn(),
+    ImportPathsForDrive: vi.fn(),
+    ReleaseUploadSources: vi.fn(),
     PlanImport: vi.fn(),
     SelectFiles: vi.fn(),
     SelectFolder: vi.fn(),
@@ -52,9 +53,9 @@ vi.mock('./notif-bell', () => ({
 }));
 vi.mock('./encryption', () => ({ loadEncryptionStatus: vi.fn() }));
 vi.mock('./modals/import-options', () => ({
-    openImportOptionsModal: mocks.openImportOptionsModal,
+    openImportOptionsModal: mocks.openImportOptionsModal, cancelImportOptions: vi.fn(),
 }));
-vi.mock('./modals/upload-options', () => ({ openUploadOptionsModal: vi.fn() }));
+vi.mock('./modals/upload-options', () => ({ openUploadOptionsModal: vi.fn().mockResolvedValue({ encrypt: false }), cancelUploadOptions: vi.fn() }));
 vi.mock('./modals/encryption-setup', () => ({ openEncryptionSetupModal: vi.fn() }));
 vi.mock('./modals/encryption-password', () => ({ openEncryptionPasswordModal: vi.fn() }));
 vi.mock('../ui/chrome/UploadMenu.svelte', () => ({ default: {} }));
@@ -91,7 +92,7 @@ beforeEach(() => {
         archives: 0,
         limitExceeded: false,
     });
-    app.ImportPaths.mockImplementation(async () => {
+    app.ImportPathsForDrive.mockImplementation(async () => {
         handlers.get('import_start')?.();
         handlers.get('import_complete')?.({
             status: 'failed',
@@ -123,7 +124,7 @@ describe('aggregate import completion', () => {
         await importFolderWithParentID('');
 
         expect(mocks.markTransferDone).toHaveBeenCalledWith({
-            id: 'import',
+            id: expect.stringMatching(/^(import|upload-)/),
             direction: 'up',
             status: 'failed',
         });
@@ -131,7 +132,7 @@ describe('aggregate import completion', () => {
         expect(mocks.markTransferDone).not.toHaveBeenCalledWith(expect.objectContaining({ status: 'done' }));
         expect(mocks.pushTransferStart).not.toHaveBeenCalledWith(expect.objectContaining({ name: 'Import failed' }));
         expect(mocks.updateTransferName).toHaveBeenLastCalledWith({
-            id: 'import',
+            id: expect.stringMatching(/^(import|upload-)/),
             direction: 'up',
             name: 'Import failed',
         });
@@ -157,7 +158,7 @@ describe('aggregate import completion', () => {
         });
 
         expect(mocks.markTransferDone).toHaveBeenCalledWith({
-            id: 'import',
+            id: expect.stringMatching(/^(import|upload-)/),
             direction: 'up',
             status: 'canceled',
         });
@@ -175,12 +176,12 @@ describe('aggregate import completion', () => {
         });
 
         expect(mocks.updateTransferName).toHaveBeenLastCalledWith({
-            id: 'import',
+            id: expect.stringMatching(/^(import|upload-)/),
             direction: 'up',
             name: 'Imported 999 files · 1 failed',
         });
         expect(mocks.markTransferDone).toHaveBeenCalledWith({
-            id: 'import',
+            id: expect.stringMatching(/^(import|upload-)/),
             direction: 'up',
             status: 'failed',
         });
@@ -209,17 +210,17 @@ describe('aggregate import completion', () => {
         });
 
         expect(mocks.updateTransferName).toHaveBeenCalledWith({
-            id: 'import',
+            id: expect.stringMatching(/^(import|upload-)/),
             direction: 'up',
             name: 'Extracting backup.zip',
         });
         expect(mocks.updateTransferName).toHaveBeenCalledWith({
-            id: 'import',
+            id: expect.stringMatching(/^(import|upload-)/),
             direction: 'up',
             name: 'Importing 1 file',
         });
         expect(mocks.updateTransferProgress).toHaveBeenLastCalledWith(expect.objectContaining({
-            id: 'import',
+            id: expect.stringMatching(/^(import|upload-)/),
             direction: 'up',
             progress: 100,
             itemsDone: 1,
@@ -237,13 +238,13 @@ describe('aggregate import completion', () => {
         });
 
         expect(mocks.pushTransferStart).toHaveBeenCalledWith({
-            id: 'import',
+            id: expect.stringMatching(/^(import|upload-)/),
             direction: 'up',
             name: 'Import completed',
             total: 2,
         });
         expect(mocks.markTransferDone).toHaveBeenCalledWith({
-            id: 'import',
+            id: expect.stringMatching(/^(import|upload-)/),
             direction: 'up',
             status: 'done',
         });
@@ -267,7 +268,7 @@ describe('upload runtime events', () => {
         handlers.get('upload_complete')?.(9, 'stray.mov');
 
         expect(mocks.pushTransferStart).toHaveBeenCalledWith({
-            id: 'import',
+            id: expect.stringMatching(/^(import|upload-)/),
             direction: 'up',
             name: 'Preparing import…',
             total: 0,
@@ -369,7 +370,7 @@ describe('the picker window', () => {
             releasePicker = resolve;
         }));
         app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0, limitExceeded: false });
-        app.UploadToDriveFS.mockResolvedValue({ result: { ok: true }, files: [] });
+        app.RetryUploadToDriveFS.mockResolvedValue({ result: { ok: true }, files: [] });
 
         const first = uploadWithParentID('');
         await Promise.resolve();
@@ -387,7 +388,7 @@ describe('the picker window', () => {
 
         releasePicker(['/tmp/report.pdf']);
         await first;
-        expect(app.UploadToDriveFS).toHaveBeenCalledTimes(1);
+        expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(1);
 
         // And the lock is released with it, so the next upload is not rejected.
         app.SelectFiles.mockResolvedValue(['/tmp/second.pdf']);
@@ -399,7 +400,7 @@ describe('the picker window', () => {
         let releasePicker = (_paths: string[]) => {};
         app.SelectFiles.mockReturnValue(new Promise<string[]>((resolve) => { releasePicker = resolve; }));
         app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0, limitExceeded: false });
-        app.UploadToDriveFS.mockResolvedValue({ result: { ok: true }, files: [] });
+        app.RetryUploadToDriveFS.mockResolvedValue({ result: { ok: true }, files: [] });
         app.ResumeResumableUpload.mockResolvedValue({ result: { ok: true }, files: [] });
 
         const first = uploadWithParentID('');
@@ -449,7 +450,7 @@ describe('the picker window', () => {
 
         await uploadWithParentID('folder-1');
 
-        expect(app.UploadToDriveFS).not.toHaveBeenCalled();
+        expect(app.RetryUploadToDriveFS).not.toHaveBeenCalled();
         expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({
             level: 'error',
             title: 'Could not read the selection',
@@ -468,8 +469,8 @@ describe('the picker window', () => {
 
         await uploadWithParentID('folder-1');
 
-        expect(app.ImportPaths).not.toHaveBeenCalled();
-        expect(app.UploadToDriveFS).not.toHaveBeenCalled();
+        expect(app.ImportPathsForDrive).not.toHaveBeenCalled();
+        expect(app.RetryUploadToDriveFS).not.toHaveBeenCalled();
         expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({
             level: 'info',
             title: 'Selection is too large',
@@ -480,7 +481,7 @@ describe('the picker window', () => {
     it('marks a canceled flat upload without raising a failure toast', async () => {
         app.SelectFiles.mockResolvedValue(['/tmp/cancel-me.pdf']);
         app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0, limitExceeded: false });
-        app.UploadToDriveFS.mockResolvedValue({
+        app.RetryUploadToDriveFS.mockResolvedValue({
             result: { ok: false, error: { code: 'canceled', message: 'user canceled' } },
             files: [],
         });
@@ -488,7 +489,7 @@ describe('the picker window', () => {
         await uploadWithParentID('folder-1');
 
         expect(mocks.markTransferDone).toHaveBeenCalledWith({
-            id: 0,
+            id: expect.stringMatching(/^upload-/),
             direction: 'up',
             status: 'canceled',
         });
@@ -501,9 +502,9 @@ describe('the picker window', () => {
     it('does not offer a new upload after an unclassified invocation failure', async () => {
         app.SelectFiles.mockResolvedValue(['/tmp/retry.pdf']);
         app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0 });
-        app.UploadToDriveFS.mockRejectedValue(new Error('lost receipt'));
+        app.RetryUploadToDriveFS.mockRejectedValue(new Error('lost receipt'));
         await uploadWithParentID('folder-1');
-        expect(app.RetryUploadToDriveFS).not.toHaveBeenCalled();
+        expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(1);
         const failure = mocks.notify.mock.calls.map(([notice]) => notice).find((notice) => notice.title === 'Upload failed');
         expect(failure?.action?.label).toBe('Review failed files');
     });
@@ -594,7 +595,7 @@ describe('automatic large upload recovery', () => {
         let releasePicker = (_paths: string[]) => {};
         app.SelectFiles.mockReturnValue(new Promise<string[]>((resolve) => { releasePicker = resolve; }));
         app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0, limitExceeded: false });
-        app.UploadToDriveFS.mockResolvedValue({ result: { ok: true }, files: [] });
+        app.RetryUploadToDriveFS.mockResolvedValue({ result: { ok: true }, files: [] });
         const first = uploadWithParentID('');
         await Promise.resolve();
 
@@ -659,7 +660,7 @@ describe('safe failed-file retry', () => {
     async function partialBatch() {
         app.PlanImport.mockResolvedValue({ files: 3, folders: 0, archives: 0 });
         app.SelectFiles.mockResolvedValue(['/tmp/a/same.txt', '/tmp/b/same.txt', '/tmp/unsafe.txt']);
-        app.UploadToDriveFS.mockResolvedValue({
+        app.RetryUploadToDriveFS.mockResolvedValueOnce({
             result: { ok: false, error: { code: 'io', message: 'partial failure' } },
             files: [{ name: 'same.txt' }],
             failures: [
@@ -680,8 +681,8 @@ describe('safe failed-file retry', () => {
         const { retryFailedUploads } = await import('./transfers');
         await retryFailedUploads();
         await retryFailedUploads();
-        expect(app.RetryUploadToDriveFS).toHaveBeenCalledExactlyOnceWith(['/tmp/b/same.txt'], ['folder-1'], false, 1);
-        expect(app.UploadToDriveFS).toHaveBeenCalledTimes(1);
+        expect(app.RetryUploadToDriveFS).toHaveBeenNthCalledWith(2, ['/tmp/b/same.txt'], ['folder-1'], false, 1);
+        expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(2);
     });
 
     it('does not resend after reopening a consumed review notification', async () => {
@@ -691,7 +692,7 @@ describe('safe failed-file retry', () => {
         await retryFailedUploads();
         notice.action.run();
         await retryFailedUploads();
-        expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(1);
+        expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(2);
     });
 
     it('invalidates retained review notifications at teardown', async () => {
@@ -704,16 +705,16 @@ describe('safe failed-file retry', () => {
         notice.action.run();
         const { retryFailedUploads } = await import('./transfers');
         await retryFailedUploads();
-        expect(app.RetryUploadToDriveFS).not.toHaveBeenCalled();
+        expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(1);
     });
 
     it('does not publish a late failure from a previous dashboard lifetime', async () => {
         app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0 });
         app.SelectFiles.mockResolvedValue(['/tmp/old.txt']);
         let reject = (_error: Error) => {};
-        app.UploadToDriveFS.mockImplementation(() => new Promise((_resolve, rejectUpload) => { reject = rejectUpload; }));
+        app.RetryUploadToDriveFS.mockImplementation(() => new Promise((_resolve, rejectUpload) => { reject = rejectUpload; }));
         const upload = uploadWithParentID('');
-        await vi.waitFor(() => expect(app.UploadToDriveFS).toHaveBeenCalled());
+        await vi.waitFor(() => expect(app.RetryUploadToDriveFS).toHaveBeenCalled());
         deactivateTransfers();
         reject(new Error('old account lost receipt'));
         await upload;
@@ -725,7 +726,7 @@ describe('safe failed-file retry', () => {
         state.activeChannel = { id: 2, title: 'Other', kind: 'shared' };
         const { retryFailedUploads } = await import('./transfers');
         await retryFailedUploads();
-        expect(app.RetryUploadToDriveFS).not.toHaveBeenCalled();
+        expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(1);
     });
 });
 
@@ -752,7 +753,7 @@ describe('a multi-file upload reports as one transfer', () => {
     async function runBatch(paths: string[], run: () => void = () => {}): Promise<void> {
         app.SelectFiles.mockResolvedValue(paths);
         app.PlanImport.mockResolvedValue({ files: paths.length, folders: 0, archives: 0, limitExceeded: false });
-        app.UploadToDriveFS.mockImplementation(async () => {
+        app.RetryUploadToDriveFS.mockImplementation(async () => {
             run();
             return { result: { ok: true } };
         });
@@ -770,22 +771,22 @@ describe('a multi-file upload reports as one transfer', () => {
         // about the batch and would push the rest of the bell past its cap.
         const started = mocks.pushTransferStart.mock.calls.map(([call]) => call);
         expect(started).toHaveLength(1);
-        expect(started[0]).toMatchObject({ id: 'upload-batch', direction: 'up', name: 'Uploading 200 files' });
+        expect(started[0]).toMatchObject({ id: expect.stringMatching(/^upload-/), direction: 'up', name: 'Uploading 200 files' });
 
         const midFlight = mocks.updateTransferProgress.mock.calls
             .map(([call]) => call)
             .filter((call) => call.itemsActive === 2)
             .pop();
-        expect(midFlight).toMatchObject({ id: 'upload-batch', itemsDone: 1, itemsTotal: 200 });
+        expect(midFlight).toMatchObject({ id: expect.stringMatching(/^upload-/), itemsDone: 1, itemsTotal: 200 });
         expect(midFlight?.items?.map((item: TransferItem) => item.name)).toEqual(['file-0.bin', 'file-2.bin']);
 
         // Every file is accounted for once the call returns, whether or not its
         // own event arrived, and the row ends saying what happened.
         expect(mocks.updateTransferName).toHaveBeenLastCalledWith({
-            id: 'upload-batch', direction: 'up', name: 'Uploaded 200 files',
+            id: expect.stringMatching(/^upload-/), direction: 'up', name: 'Uploaded 200 files',
         });
         expect(mocks.markTransferDone).toHaveBeenCalledWith({
-            id: 'upload-batch', direction: 'up', status: 'done',
+            id: expect.stringMatching(/^upload-/), direction: 'up', status: 'done',
         });
     });
 
@@ -803,21 +804,78 @@ describe('a multi-file upload reports as one transfer', () => {
         expect(errors).toHaveLength(1);
         expect(errors[0].title).toBe("Couldn't upload 50 files");
         expect(mocks.markTransferDone).toHaveBeenCalledWith({
-            id: 'upload-batch', direction: 'up', status: 'failed',
+            id: expect.stringMatching(/^upload-/), direction: 'up', status: 'failed',
         });
     });
 
-    it('leaves a single file its own row, where the file is the transfer', async () => {
+    it('keeps a single file name on its stable batch row', async () => {
         await runBatch(['/tmp/only.bin'], () => {
             handlers.get('upload_start')?.(0, 'only.bin', 1_000, '');
             handlers.get('upload_complete')?.(0, 'only.bin');
         });
 
         expect(mocks.pushTransferStart).toHaveBeenCalledWith(
-            expect.objectContaining({ id: 0, direction: 'up', name: 'only.bin' }),
+            expect.objectContaining({ id: expect.stringMatching(/^upload-/), direction: 'up', name: 'only.bin' }),
         );
-        expect(mocks.pushTransferStart).not.toHaveBeenCalledWith(
-            expect.objectContaining({ id: 'upload-batch' }),
-        );
+        expect(mocks.pushTransferStart).toHaveBeenCalledTimes(1);
+    });
+});
+
+describe('interactive upload FIFO ownership', () => {
+    it('accepts another selection while sending and preserves its original folder and encryption', async () => {
+        let finishFirst = (_result: unknown) => {};
+        app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0 });
+        app.SelectFiles.mockResolvedValueOnce(['/tmp/first.txt']).mockResolvedValueOnce(['/tmp/queued.txt']);
+        app.RetryUploadToDriveFS.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+            .mockResolvedValue({ result: { ok: true }, files: [], failures: [] });
+        const first = uploadWithParentID('first-folder');
+        await vi.waitFor(() => expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(1));
+        const second = uploadWithParentID('original-folder');
+        await second;
+        state.currentFolderId = 'elsewhere';
+        expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(1);
+        const { get } = await import('svelte/store');
+        const { uploadActivities } = await import('../ui/notifications/upload-activity-store');
+        expect(get(uploadActivities).find((entry) => entry.name === 'queued.txt')?.status).toBe('queued');
+        finishFirst({ result: { ok: true }, files: [], failures: [] });
+        await first;
+        expect(app.RetryUploadToDriveFS).toHaveBeenNthCalledWith(2, ['/tmp/queued.txt'], ['original-folder'], false, 1);
+        expect(new Set(get(uploadActivities).map(({ id }) => id)).size).toBe(2);
+        state.currentFolderId = '';
+    });
+
+    it('waits for the selected drive instead of retargeting a queued batch', async () => {
+        let finishFirst = (_result: unknown) => {};
+        app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0 });
+        app.SelectFiles.mockResolvedValueOnce(['/tmp/first.txt']).mockResolvedValueOnce(['/tmp/queued.txt']);
+        app.RetryUploadToDriveFS.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+            .mockResolvedValue({ result: { ok: true }, files: [], failures: [] });
+        const first = uploadWithParentID('');
+        await vi.waitFor(() => expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(1));
+        await uploadWithParentID('original');
+        state.activeChannel = { id: 2, title: 'Other', kind: 'shared' };
+        finishFirst({ result: { ok: true }, files: [] });
+        await first;
+        expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(1);
+        const { tryWithTransferFlow } = await import('./transfers');
+        const recoverOtherDrive = vi.fn(async () => {});
+        await expect(tryWithTransferFlow(recoverOtherDrive)).resolves.toBe(true);
+        expect(recoverOtherDrive).toHaveBeenCalledOnce();
+        state.activeChannel = { id: 1, title: 'Test drive', kind: 'shared' };
+        sidebarState.update((current) => ({ ...current, activeChannelId: 1 }));
+        await vi.waitFor(() => expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(2));
+        expect(app.RetryUploadToDriveFS).toHaveBeenLastCalledWith(['/tmp/queued.txt'], ['original'], false, 1);
+    });
+
+    it('releases a late native selection after teardown without opening a modal or sending files', async () => {
+        let finishPicker = (_paths: string[]) => {};
+        app.SelectFiles.mockImplementation(() => new Promise((resolve) => { finishPicker = resolve; }));
+        const selection = uploadWithParentID('original');
+        deactivateTransfers();
+        finishPicker(['/cache/selected.txt']);
+        await selection;
+        expect(app.ReleaseUploadSources).toHaveBeenCalledWith(['/cache/selected.txt']);
+        expect(app.PlanImport).not.toHaveBeenCalled();
+        expect(app.RetryUploadToDriveFS).not.toHaveBeenCalled();
     });
 });

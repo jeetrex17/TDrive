@@ -92,6 +92,50 @@ existing bounded policies. An explicitly configured file-service retry policy
 continues to override its defaults. Preserve unknown send outcomes across later
 cooldowns or cancellation so reconciliation can protect accepted remote bodies.
 
+## Interactive upload queue and Activity
+
+The frontend's [upload queue](../../frontend/src/modules/upload-queue.ts)
+serializes confirmed interactive batches. Selecting files is separate from
+executing a batch, so another selection can be reviewed while an upload is
+running. Confirmation captures the drive, destination folder and encryption
+choice. Queue admission does not start another backend upload or replace its
+cancellation context. Waiting entries can be removed independently of the
+current transfer. Admission is bounded to ten waiting batches; session file
+detail retention is bounded separately to 10,000 files across retained batches.
+Older completed detail can be evicted to admit a new selection, while pending
+and active detail is retained.
+
+Queued work is session-only. Original source paths and retry actions do not
+enter persisted notification history. The queue must yield while its original
+drive is not selected and must invalidate pending selections and callbacks on
+logout or transfer-surface teardown. Native picker sources retain their platform
+ownership rules; a queued selection does not establish durable source access or
+promise background execution after suspension or process death.
+Abandoned selections release only picker copies whose ownership the backend
+recorded. A new selection adds to that ownership set instead of replacing it.
+Completing an upload drops pending picker ownership without deleting sources
+that a failed-file report may still need. Durable resumable sources keep their
+existing journal-based cleanup rules.
+Android's native folder picker owns one document tree at a time. Its selection
+lease stays held while that folder batch is waiting or running, so another
+folder pick cannot invalidate its URI grant or reuse its file IDs. Flat file
+selections can still join the queue. Teardown does not release an active tree
+lease until its outstanding native materialization has settled.
+
+The bell's hover preview remains compact; deliberate activation opens the full
+Activity view. Activity combines notifications, ordinary transfer summaries,
+session upload batches and journal-backed recovery jobs. Existing journal rows
+supersede their matching legacy progress rows. Display progress is not a remote
+receipt, and ordinary uploads do not gain pause/resume or broader retry
+eligibility merely because they appear in Activity.
+
+Session batch details use stable identities and bounded retention. File details
+are paged in the UI rather than expanded into one notification per file. The
+current import event stream contains aggregate counts and a bounded active-file
+sample, so folder/archive imports retain summary detail rather than claiming a
+complete per-file history. Clearing completed display history must preserve
+pending batches, active work and backend recovery journals.
+
 ## Downloads publish completed output
 
 Interactive single-file downloads keep a private checkpoint in the

@@ -1,5 +1,6 @@
 <script lang="ts">
     import ModalShell from './ModalShell.svelte';
+    import SelectedUploadFiles from './SelectedUploadFiles.svelte';
     import { importOptionsModal } from './import-options-modal-store';
 
     interface Props {
@@ -82,13 +83,16 @@
 <ModalShell
     hostId="import-options-modal"
     open={$view.open}
-    title="Import"
+    title={$view.payload?.queued ? 'Add import to queue' : 'Import'}
     titleId="import-options-title"
     subtitle={summary}
     initialFocus="#import-options-extract"
     restoreFocus="#file-list"
     onClose={onCancel}
 >
+    {#if $view.payload?.destination}<p>Destination: {$view.payload.destination}</p>{/if}
+    <SelectedUploadFiles names={$view.payload?.names ?? []} label="Selected items" />
+    {#if $view.payload?.queued}<p>Waiting imports stay in this session. Keep TDrive open until they finish.</p>{/if}
     {#if $view.payload?.hasArchives}
         <label id="import-options-extract-row" class="modal-choice-row">
             <input id="import-options-extract" type="checkbox" bind:checked={extract} onchange={toggled} />
@@ -121,7 +125,7 @@
             aria-busy={$view.payload?.replanning}
             onclick={() => onConfirm({ encrypt, extract })}
         >
-            {$view.payload?.replanning ? 'Checking…' : 'Import'}
+            {$view.payload?.replanning ? 'Checking…' : $view.payload?.queued ? 'Add to queue' : 'Import'}
         </button>
     {/snippet}
 </ModalShell>

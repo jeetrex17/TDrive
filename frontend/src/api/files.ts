@@ -3,6 +3,7 @@ import {
     CancelUpload as rawCancelUpload,
     CancelUploadByID as rawCancelUploadById,
     CreateFolder as rawCreateFolder,
+    CreateFolderForDrive as rawCreateFolderForDrive,
     DeleteFile as rawDeleteFile,
     DeleteFolder as rawDeleteFolder,
     DownloadFile as rawDownloadFile,
@@ -14,6 +15,7 @@ import {
     GetFolderStats as rawGetFolderStats,
     GetStorageUsed as rawGetStorageUsed,
     ImportPaths as rawImportPaths,
+    ImportPathsForDrive as rawImportPathsForDrive,
     MoveFile as rawMoveFile,
     MoveFolder as rawMoveFolder,
     MsgToTdriveSystem as rawMsgToTdriveSystem,
@@ -22,6 +24,7 @@ import {
     PreviewThumbnail as rawPreviewThumbnail,
     RenameFile as rawRenameFile,
     RenameFolder as rawRenameFolder,
+    ReleaseUploadSources as rawReleaseUploadSources,
     Search as rawSearch,
     SelectFiles as rawSelectFiles,
     SelectFolder as rawSelectFolder,
@@ -121,6 +124,10 @@ export function normalizeImportPlan(value: unknown): ImportPlan {
 
 export async function createFolder(name: string, parentId: string): Promise<FolderItem> {
     return toFolderItem(await invokeBackend(rawCreateFolder, name, parentId));
+}
+
+export async function createFolderForDrive(name: string, parentId: string, expectedChannelId: number): Promise<FolderItem> {
+    return toFolderItem(await invokeBackend(rawCreateFolderForDrive, name, parentId, expectedChannelId));
 }
 
 export async function deleteFile(messageId: number): Promise<OperationResult> {
@@ -225,6 +232,20 @@ export async function importPaths(paths: string[], parentId: string, encrypt: bo
     return normalizeOperationResult(
         await invokeBackend(rawImportPaths, paths, parentId, encrypt, extract),
         "Could not import selected paths",
+    );
+}
+
+export async function importPathsForDrive(paths: string[], parentId: string, encrypt: boolean, extract: boolean, expectedChannelId: number): Promise<OperationResult> {
+    return normalizeOperationResult(
+        await invokeBackend(rawImportPathsForDrive, paths, parentId, encrypt, extract, expectedChannelId),
+        "Could not start the queued import",
+    );
+}
+
+export async function releaseUploadSources(paths: string[]): Promise<OperationResult> {
+    return normalizeOperationResult(
+        await invokeBackend(rawReleaseUploadSources, paths),
+        "Could not release selected upload sources",
     );
 }
 

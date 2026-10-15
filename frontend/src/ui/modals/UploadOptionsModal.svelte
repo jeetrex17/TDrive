@@ -1,5 +1,6 @@
 <script lang="ts">
     import ModalShell from './ModalShell.svelte';
+    import SelectedUploadFiles from './SelectedUploadFiles.svelte';
     import { uploadOptionsModal } from './upload-options-modal-store';
 
     interface Props {
@@ -32,13 +33,18 @@
 <ModalShell
     hostId="upload-options-modal"
     open={$view.open}
-    title="How would you like to upload?"
+    title={$view.payload?.queued ? 'Add uploads to queue' : 'How would you like to upload?'}
     titleId="upload-options-title"
     subtitle={summary}
     initialFocus='input[name="upload-mode"]:checked'
     restoreFocus="#file-list"
     onClose={onCancel}
 >
+    {#if $view.payload?.destination}
+        <p>Destination: {$view.payload.destination}</p>
+    {/if}
+    <SelectedUploadFiles names={$view.payload?.names ?? []} />
+    {#if $view.payload?.personal !== false}
     <label class="modal-choice-row">
         <input type="radio" name="upload-mode" value="plain" bind:group={uploadMode} />
         <span>
@@ -54,8 +60,11 @@
         </span>
     </label>
 
+    {/if}
+    {#if $view.payload?.queued}<p>Waiting uploads stay in this session. Keep TDrive open until they finish.</p>{/if}
+
     {#snippet actions()}
         <button id="upload-options-cancel" class="secondary-btn" type="button" onclick={onCancel}>Cancel</button>
-        <button id="upload-options-confirm" class="primary-btn" type="button" onclick={confirm}>Continue</button>
+        <button id="upload-options-confirm" class="primary-btn" type="button" onclick={confirm}>{$view.payload?.queued ? 'Add to queue' : 'Continue'}</button>
     {/snippet}
 </ModalShell>

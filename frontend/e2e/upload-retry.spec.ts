@@ -1,4 +1,4 @@
-import { bootTDrive, expect, resolves, test } from './wails-mock';
+import { bootTDrive, byFirstArg, expect, resolves, test } from './wails-mock';
 
 for (const platform of ['desktop', 'android']) {
     test(`${platform}: retry only safe failed files after a partial batch`, async ({ page }) => {
@@ -9,15 +9,14 @@ for (const platform of ['desktop', 'android']) {
         const mock = await bootTDrive(page, {
             SelectFiles: resolves(['/tmp/accepted.txt', '/tmp/retry.txt', '/tmp/uncertain.txt']),
             PlanImport: resolves({ files: 3, folders: 0, archives: 0, limitExceeded: false }),
-            UploadToDriveFS: resolves({
+            RetryUploadToDriveFS: byFirstArg({ '/tmp/accepted.txt,/tmp/retry.txt,/tmp/uncertain.txt': resolves({
                 result: { ok: false, error: { code: 'network_unavailable', message: 'Two files need attention' } },
                 files: [{ name: 'accepted.txt', msg_id: 41, size: 3 }],
                 failures: [
                     { index: 1, name: 'retry.txt', message: 'Connection unavailable before sending', code: 'temporary_failure', retryable: true },
                     { index: 2, name: 'uncertain.txt', message: 'Receipt was lost', code: 'outcome_unknown', retryable: false },
                 ],
-            }),
-            RetryUploadToDriveFS: resolves({ result: { ok: true }, files: [{ name: 'retry.txt', msg_id: 42 }], failures: [] }),
+            }) }, resolves({ result: { ok: true }, files: [{ name: 'retry.txt', msg_id: 42 }], failures: [] })),
         });
         await expect(page.locator('#success-screen')).toBeVisible();
         if (platform === 'android') {
@@ -33,6 +32,13 @@ for (const platform of ['desktop', 'android']) {
             await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: /^Transfers/ }).click();
         } else {
             await page.locator('#notif-bell').click();
+            const activity = page.getByRole('dialog', { name: 'Activity', exact: true });
+            await activity.getByRole('button', { name: 'View 3 files', exact: true }).click();
+            const files = activity.getByRole('region', { name: 'Files in upload', exact: true });
+            await expect(files.locator('li').filter({ hasText: 'accepted.txt' })).toContainText('Completed');
+            await expect(files.locator('li').filter({ hasText: 'retry.txt' })).toContainText('Failed');
+            await expect(files.locator('li').filter({ hasText: 'uncertain.txt' })).toContainText('Receipt was lost');
+            await activity.screenshot({ path: test.info().outputPath('activity-partial-batch-desktop.png') });
         }
         await page.getByRole('region', { name: 'Upload failures' }).getByRole('button', { name: 'Review failed files', exact: true }).click();
         const dialog = page.getByRole('dialog', { name: 'Failed uploads' });
@@ -43,8 +49,9 @@ for (const platform of ['desktop', 'android']) {
         await dialog.screenshot({ path: test.info().outputPath('failed-files.png') });
         await dialog.getByRole('button', { name: /^Retry failed files/ }).click();
         await expect.poll(() => mock.calls('RetryUploadToDriveFS')).toMatchObject([
+            { args: [['/tmp/accepted.txt', '/tmp/retry.txt', '/tmp/uncertain.txt'], ['', '', ''], false, 1], state: 'fulfilled' },
             { args: [['/tmp/retry.txt'], [''], false, 1], state: 'fulfilled' },
         ]);
-        expect(await mock.calls('UploadToDriveFS')).toHaveLength(1);
+        expect(await mock.calls('UploadToDriveFS')).toHaveLength(0);
     });
 }

@@ -9,6 +9,7 @@ export interface FailedUploadsPayload {
     encrypt: boolean;
     driveId: number | null;
     driveTitle: string;
+    destination?: string;
 }
 
 export const failedUploadsModal = createModalController<FailedUploadsPayload>();

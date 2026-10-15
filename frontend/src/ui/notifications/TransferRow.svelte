@@ -24,6 +24,7 @@
      */
     interface Props {
         transfer: TransferEvent;
+        onOpen?: () => void;
         /**
          * Cancels everything moving in this row's direction. The bell's rows are
          * its only cancel -- there is no Cancel all beside its section titles --
@@ -39,7 +40,7 @@
         onCancelFile?: (key: string) => void;
     }
 
-    let { transfer, onCancel, onCancelFile }: Props = $props();
+    let { transfer, onCancel, onCancelFile, onOpen }: Props = $props();
 
     const direction = $derived(transfer.direction === 'up' ? 'upload' : 'download');
     const dirLabel = $derived(transfer.direction === 'up' ? 'Uploading' : 'Downloading');
@@ -99,7 +100,7 @@
         {/if}
     </span>
     <div class="notif-row-body">
-        <div class="notif-row-title" title={transfer.name}>{transfer.name || dirLabel}</div>
+        <div class="notif-row-title" title={transfer.name}>{#if onOpen}<button class="preview-title" type="button" onclick={onOpen}>{transfer.name || dirLabel}</button>{:else}{transfer.name || dirLabel}{/if}</div>
         {#if transfer.note}
             <!-- Why it failed, or on a phone where it landed: the one sentence
                  the row keeps after the toast that said it has gone. -->
@@ -160,6 +161,8 @@
 </div>
 
 <style>
+    .preview-title { max-width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+    .preview-title:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
     /* The one state the shared stylesheet has no word for: a transfer that has
        started with nothing measurable yet -- a folder still being walked. The
        bar says the work is running rather than standing at a figure it does not

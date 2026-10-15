@@ -103,14 +103,14 @@ func TestTransferConcurrentCompletionAndCancellation(t *testing.T) {
 	}
 }
 
-func TestPickerSourcesAreConsumedOnceAndReplacedByNewSelection(t *testing.T) {
+func TestPickerSourcesSurviveLaterQueuedSelectionsAndAreConsumedOnce(t *testing.T) {
 	var state transferState
 	state.rememberPickerSources([]string{"old", "selected"})
 	if !state.takePickerSource("selected") || state.takePickerSource("selected") {
 		t.Fatal("picker copy must be consumable exactly once")
 	}
 	state.rememberPickerSources([]string{"new"})
-	if state.takePickerSource("old") || !state.takePickerSource("new") {
-		t.Fatal("new selection must replace old picker ownership")
+	if !state.takePickerSource("old") || !state.takePickerSource("new") {
+		t.Fatal("new selection lost ownership of a waiting picker copy")
 	}
 }

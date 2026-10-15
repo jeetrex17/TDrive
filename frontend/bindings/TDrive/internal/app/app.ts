@@ -97,6 +97,13 @@ export function CreateFolder(foldername: string, parentID: string): $Cancellable
     return $Call.ByID(4072853788, foldername, parentID);
 }
 
+/**
+ * CreateFolderForDrive keeps queued folder preparation in its original drive.
+ */
+export function CreateFolderForDrive(foldername: string, parentID: string, expectedChannelID: number): $CancellablePromise<backend$0.Folder> {
+    return $Call.ByID(453123593, foldername, parentID, expectedChannelID);
+}
+
 export function DeleteFile(msgID: number): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(2969367385, msgID);
 }
@@ -228,6 +235,14 @@ export function GetStorageUsed(): $CancellablePromise<number> {
  */
 export function ImportPaths(paths: string[] | null, parentID: string, encrypt: boolean, extractArchives: boolean): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(3650510347, paths, parentID, encrypt, extractArchives);
+}
+
+/**
+ * ImportPathsForDrive starts a waiting import only in its original drive and
+ * never replaces an active upload.
+ */
+export function ImportPathsForDrive(paths: string[] | null, parentID: string, encrypt: boolean, extractArchives: boolean, expectedChannelID: number): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(63775042, paths, parentID, encrypt, extractArchives, expectedChannelID);
 }
 
 export function ListMediaFolderPage(folderID: string, cursor: string, limit: number): $CancellablePromise<$models.GalleryPage> {
@@ -409,6 +424,15 @@ export function PreviewThumbnail(msgID: number): $CancellablePromise<$models.Pre
  */
 export function RebuildProjection(channelID: number): $CancellablePromise<void> {
     return $Call.ByID(3751182286, channelID);
+}
+
+/**
+ * ReleaseUploadSources discards abandoned mobile picker copies. Only paths
+ * registered by SelectFiles remain eligible; caller-owned files and sources
+ * already transferred into durable upload storage are never removed.
+ */
+export function ReleaseUploadSources(paths: string[] | null): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(759765162, paths);
 }
 
 export function RemovePhotoBackupSource(id: string): $CancellablePromise<void> {

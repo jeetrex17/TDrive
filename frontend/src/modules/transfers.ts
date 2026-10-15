@@ -6,7 +6,7 @@
 // Completed transfers stay in the bell's "Recent" panel until cleared.
 
 import { invalidateFolderIndex, state, setTransferDirectionActive, type DownloadQueueItem, type UploadTransfer } from '../state';
-import { createFolder, downloadFile, downloadFolder, importPaths, isAndroidPlatform, isMobilePlatform, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs, retryUploadToDriveFs, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
+import { createFolderForDrive, downloadFile, downloadFolder, isAndroidPlatform, isMobilePlatform, onRuntimeEvent, planImport, selectFiles, selectFolder, uploadToDriveFs, retryUploadToDriveFs, importPathsForDrive, releaseUploadSources, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
 import { canSaveToDownloads, saveToDownloads } from './android-downloads';
 import { rememberDownloadSharePath } from '../ui/mobile/mobile-shell-store';
 import { get } from 'svelte/store';
@@ -28,9 +28,9 @@ import {
 import { humanizeBackendError } from './errors';
 import { appActions } from './app-actions';
 import { loadEncryptionStatus } from './encryption';
-import { openUploadOptionsModal } from './modals/upload-options';
+import { openUploadOptionsModal, cancelUploadOptions } from './modals/upload-options';
 import { activateFileSelectionProgress } from './file-selection';
-import { openImportOptionsModal } from './modals/import-options';
+import { openImportOptionsModal, cancelImportOptions } from './modals/import-options';
 import { openEncryptionSetupModal } from './modals/encryption-setup';
 import { openEncryptionPasswordModal } from './modals/encryption-password';
 import { postSystemNotification } from './android-foreground';
@@ -52,6 +52,10 @@ import {
     wasUploadCanceled,
 } from './notif-bell';
 
+
+import { sidebarState } from '../ui/sidebar/sidebar-store';
+import { createUploadQueue, nextUploadActivityId } from './upload-queue';
+import { clearUploadActivities, finishUploadActivity, updateUploadActivity, uploadActivities, updateUploadActivityFile, type NewUploadActivity } from '../ui/notifications/upload-activity-store';
 
 let transferUnsubscribers: RuntimeUnsubscribe[] = [];
 let stopTransferPersistence: (() => void) | null = null;
@@ -485,53 +489,110 @@ function clampFinite(raw: unknown, fallback: number, minValue: number, maxValue:
 
 // IMPORT_TRANSFER_ID keys the single aggregate bell row for a folder/archive
 // import. It is a string so it never collides with numeric per-file upload ids.
-const IMPORT_TRANSFER_ID = 'import';
+let IMPORT_TRANSFER_ID = 'import';
 
 // UPLOAD_BATCH_TRANSFER_ID keys the same kind of row for a multi-file upload.
 // One row per batch rather than one per file: a two-hundred-file selection used
 // to push two hundred rows, which told the reader nothing about the batch and
 // pushed everything else in the bell past its hundred-entry cap.
-const UPLOAD_BATCH_TRANSFER_ID = 'upload-batch';
+let UPLOAD_BATCH_TRANSFER_ID = 'upload-batch';
 
 // The aggregate for the batch currently uploading, or null when files are
 // uploading one at a time and each keeps its own row.
 let uploadBatch: TransferBatch | null = null;
 
-// flowBusy serializes import/upload flows: a second trigger (rapid menu clicks,
-// or a drop during an active import) is rejected rather than corrupting the
-// shared batch/transfer state.
+// Selection owns native pickers and confirmation dialogs. Execution owns the
+// backend transfer slot independently, so another selection can join its queue.
 let flowBusy = false;
-
-/**
- * Runs a transfer flow under that lock, or declines if one is already running.
- *
- * Every entry point needs the same four lines, and one of them used to take the
- * lock a beat too late: the file picker only claimed it once the selection had
- * come back, so during the seconds a phone spends copying the picked documents
- * nothing was held at all. Tapping Upload again -- which is exactly what a
- * reader does when the screen has not moved -- opened a second picker on top of
- * the first. Held from the trigger, that window is covered too.
- */
-export async function withTransferFlow(run: () => Promise<void>): Promise<void> {
-    if (!await tryWithTransferFlow(run)) {
-        notify({
-            level: 'info',
-            title: 'A transfer is already in progress',
-            body: 'Wait for it to finish, then start another.',
-        });
+let selectionBusy = false;
+let activeUploadActivityId: string | null = null;
+// Android currently owns one native document tree. A second picker invalidates
+// its opaque IDs, so hold this lease through waiting and active execution.
+let androidFolderOwner: symbol | null = null;
+interface UploadDestination {
+    driveId: number;
+    driveTitle: string;
+    personal: boolean;
+    destination: string;
+    generation: number;
+}
+function captureUploadDestination(parentID: string): UploadDestination | null {
+    const drive = state.activeChannel;
+    if (!drive?.id) return null;
+    const folder = state.folderPath.map((entry) => entry.name).filter(Boolean).join(' / ');
+    return { driveId: drive.id, driveTitle: drive.title, personal: drive.kind === 'personal',
+        destination: `${drive.title}${folder ? ` / ${folder}` : parentID ? ' / Selected folder' : ''}`,
+        generation: transferSurfaceGeneration };
+}
+function isCurrentDestination(destination: UploadDestination): boolean {
+    return destination.generation === transferSurfaceGeneration;
+}
+function createSessionUploadQueue() {
+    return createUploadQueue({ canRun: (activity) => !flowBusy && !selectionBusy && state.activeChannel?.id === activity.driveId });
+}
+let sessionUploadQueue = createSessionUploadQueue();
+function selectionIsQueued(): boolean { return flowBusy || sessionUploadQueue.pending; }
+async function releasePickedSources(paths: string[]): Promise<void> {
+    try { await releaseUploadSources(paths); } catch (error) { console.error('Could not release picker sources:', error); }
+}
+async function withUploadSelection(run: () => Promise<void>): Promise<void> {
+    if (selectionBusy) {
+        notify({ level: 'info', title: 'A transfer is already in progress', body: 'Finish the current file selection first.' });
+        return;
+    }
+    const generation = transferSurfaceGeneration;
+    const queue = sessionUploadQueue;
+    selectionBusy = true;
+    try { await run(); }
+    finally {
+        if (generation === transferSurfaceGeneration) {
+            selectionBusy = false;
+            await queue.wake();
+        }
     }
 }
-
-/** Background recovery yields to a user-started transfer without a toast. */
+function enqueueUpload(activity: NewUploadActivity, destination: UploadDestination, run: () => Promise<void>, release?: (reason: 'removed' | 'completed' | 'disposed') => void): void {
+    const queue = sessionUploadQueue;
+    void queue.add({ activity, release, run: async () => {
+        const generation = transferSurfaceGeneration;
+        if (!isCurrentDestination(destination)) return;
+        flowBusy = true;
+        activeTransferDriveId = activity.driveId;
+        activeUploadActivityId = activity.id;
+        IMPORT_TRANSFER_ID = activity.id;
+        UPLOAD_BATCH_TRANSFER_ID = activity.id;
+        try { await run(); }
+        finally {
+            if (generation === transferSurfaceGeneration) {
+                flowBusy = false;
+                activeUploadActivityId = null;
+            }
+        }
+    } });
+}
+export async function withTransferFlow(run: () => Promise<void>): Promise<void> {
+    if (!await tryWithTransferFlow(run)) notify({ level: 'info', title: 'A transfer is already in progress', body: 'Wait for it to finish, then start another.' });
+}
+/** Recovery never replaces an active upload or a pending user selection. */
 export async function tryWithTransferFlow(run: () => Promise<void>): Promise<boolean> {
-    if (flowBusy) return false;
+    const waitingForThisDrive = sessionUploadQueue.pending && sessionUploadQueue.nextDriveId === state.activeChannel?.id;
+    if (flowBusy || selectionBusy || waitingForThisDrive) return false;
+    const generation = transferSurfaceGeneration;
     flowBusy = true;
-    try {
-        await run();
-        return true;
-    } finally {
-        flowBusy = false;
+    try { await run(); return true; }
+    finally {
+        if (generation === transferSurfaceGeneration) {
+            flowBusy = false;
+            void sessionUploadQueue.wake();
+        }
     }
+}
+function uploadActivity(destination: UploadDestination, paths: string[], encrypt: boolean, fileCount = paths.length, detailNote?: string): NewUploadActivity {
+    const id = nextUploadActivityId();
+    return { id, name: paths.length === 1 ? paths[0].split(/[/\\]/).pop() || 'Upload' : `${fileCount} files`,
+        driveId: destination.driveId, driveTitle: destination.driveTitle, destination: destination.destination,
+        encrypt, fileCount, detailNote, transferId: `xfer:up:${id}`,
+        files: detailNote ? [] : paths.map((path, index) => ({ index, name: path.split(/[/\\]/).pop() || 'Untitled', status: 'queued' })) };
 }
 // First few distinct per-file failure reasons, folded into the aggregate
 // import summary toast. Imports report one toast for the whole batch, so this
@@ -679,6 +740,7 @@ function activateUploadProgressEvents(): void {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
         const filename = String(name ?? "");
+        if (activeUploadActivityId) updateUploadActivityFile(activeUploadActivityId, uploadId, { status: 'active', size: Number(size) || 0, name: filename });
 
         // In a batch the file joins the aggregate row instead of raising one of
         // its own, and nothing per-file is retained once it finishes.
@@ -735,6 +797,7 @@ function activateUploadProgressEvents(): void {
         const uploadId = Number(id);
         if (!Number.isFinite(uploadId)) return;
         forgetResumableUpload(uploadId);
+        if (activeUploadActivityId) updateUploadActivityFile(activeUploadActivityId, uploadId, { status: 'done', progress: 100 });
         if (state.importBatch) {
             return;
         }
@@ -779,6 +842,7 @@ function activateUploadProgressEvents(): void {
         // the backend reports it through this same error event, and neither the
         // row nor a toast should call it a failure.
         const canceled = state.cancelingUpload || wasUploadCanceled(uploadId);
+        if (activeUploadActivityId) updateUploadActivityFile(activeUploadActivityId, uploadId, { status: canceled ? 'canceled' : 'failed', message: humanizeBackendError(message) });
 
         if (uploadBatch) {
             settleUploadInBatch(uploadId, canceled ? 'canceled' : 'failed');
@@ -856,6 +920,7 @@ function activateUploadProgressEvents(): void {
         const payload = asObjectRecord(info);
         const files = Number(payload.files) || 0;
         state.importBatch = reduceImportProgress(state.importBatch, { total: files });
+        if (activeUploadActivityId) updateUploadActivity(activeUploadActivityId, { fileCount: files });
         // The counts live in the row's own detail line from here on, so the
         // title stays put instead of being rewritten on every tick.
         updateTransferName({
@@ -889,6 +954,7 @@ function activateUploadProgressEvents(): void {
         const status = canceled
             ? 'canceled'
             : (fatal || failedUploads > 0 ? 'failed' : 'done');
+        if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, status, [], fatalError || (failedUploads ? `${failedUploads} files failed` : undefined));
         const resultLabel = formatImportResultLabel(uploaded, failedUploads);
         if (!state.importBatch) {
             pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import completed', total: uploaded + failedUploads });
@@ -944,38 +1010,27 @@ function activateUploadProgressEvents(): void {
 // uploadWithParentID opens the file picker and routes the selection through the
 // shared import flow.
 export async function uploadWithParentID(parentID: string) {
-    // The lock covers the picker, not just what follows it: on a phone the
-    // host spends seconds copying the picked documents before this resolves,
-    // and that window used to be unguarded. See withTransferFlow.
-    await withTransferFlow(async () => {
+    const destination = captureUploadDestination(parentID);
+    if (!destination) return;
+    await withUploadSelection(async () => {
         const paths = await selectFiles();
-        await importSelection(parentID, paths);
+        if (!isCurrentDestination(destination)) { await releasePickedSources(paths); return; }
+        await importSelection(parentID, paths, destination);
     });
 }
 
-// importFolderWithParentID opens the directory picker and imports the chosen
-// folder tree into parentID.
 export async function importFolderWithParentID(parentID: string) {
-    // The lock is taken here rather than inside either branch, so it covers the
-    // picker itself -- the same window the file picker was leaving open.
-    await withTransferFlow(async () => {
-        // Android's picker answers through the app's own bridge with a manifest
-        // rather than a path, because Wails will not hand a document tree to its
-        // dialog API and because nothing has been copied out of the tree yet.
+    const destination = captureUploadDestination(parentID);
+    if (!destination) return;
+    await withUploadSelection(async () => {
         if (canPickFolder()) {
-            await importAndroidFolder(parentID);
+            await importAndroidFolder(parentID, destination);
             return;
         }
-        let dir = "";
-        try {
-            dir = await selectFolder();
-        } catch (err) {
-            console.error("SelectFolder failed:", err);
-            notify({ level: 'error', title: 'Could not open the folder picker', body: humanizeBackendError(err) });
-            return;
-        }
-        if (!dir) return;
-        await importSelection(parentID, [dir]);
+        let dir = '';
+        try { dir = await selectFolder(); }
+        catch (error) { notify({ level: 'error', title: 'Could not open the folder picker', body: humanizeBackendError(error) }); return; }
+        if (dir && isCurrentDestination(destination)) await importSelection(parentID, [dir], destination);
     });
 }
 
@@ -987,90 +1042,49 @@ const ANDROID_UPLOAD_WINDOW = 4;
 
 // importAndroidFolder picks a folder and uploads it without ever copying the
 // whole tree into the cache.
-async function importAndroidFolder(parentID: string) {
-    activeTransferDriveId = state.activeChannel?.id ?? null;
-    // The picker covers the app while it is open, so this row is only seen once
-    // it closes, which is exactly when the tree walk is still running and the
-    // screen would otherwise look frozen. Document-tree walks are slow enough
-    // on a deep folder for that to be seconds.
-    pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Reading folder…', total: 0 });
+async function importAndroidFolder(parentID: string, destination: UploadDestination) {
+    if (androidFolderOwner) {
+        notify({ level: 'info', title: 'A folder is already selected', body: 'Finish or remove the current Android folder import before choosing another folder.' });
+        return;
+    }
+    const owner = Symbol('android-folder');
+    androidFolderOwner = owner;
+    let enqueued = false;
+    const release = () => { if (androidFolderOwner === owner) androidFolderOwner = null; };
     try {
-        let manifest: AndroidFolderManifest | null = null;
-        try {
-            manifest = await pickAndroidFolder();
-        } catch (err) {
-            console.error("PickFolder failed:", err);
-            setTransferNote({ id: IMPORT_TRANSFER_ID, direction: 'up', note: humanizeBackendError(err) });
-            markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'failed' });
-            notify({ level: 'error', title: 'Could not open the folder picker', body: humanizeBackendError(err), history: false });
-            return;
+        const manifest = await pickAndroidFolder();
+        if (!manifest || !isCurrentDestination(destination)) return;
+        const plan: ImportPlan = { files: manifest.files.length, folders: folderPathsFor(manifest).length,
+            bytes: manifest.files.reduce((sum, file) => sum + file.size, 0), oversize: 0, archives: 0, ignored: 0,
+            maxBytes: 0, maxItems: 10_000, limitExceeded: manifest.files.length > 10_000, errorCount: 0, errors: [] };
+        if (destination.personal) await loadEncryptionStatus();
+        if (!isCurrentDestination(destination)) return;
+        const choice = await openImportOptionsModal({ plan, personal: destination.personal, hasArchives: false,
+            queued: selectionIsQueued(), destination: destination.destination, names: [manifest.root], replan: async () => plan });
+        if (!choice || !isCurrentDestination(destination)) return;
+        if (choice.encrypt && !state.encryption.passwordRemembered) {
+            const ok = state.encryption.passwordSet ? await openEncryptionPasswordModal() : await openEncryptionSetupModal();
+            if (!ok || !isCurrentDestination(destination)) return;
         }
-        if (!manifest) {
-            // Changing your mind is not an error and must not read as one.
-            markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'canceled' });
-            return;
-        }
-        await runAndroidImport(parentID, manifest);
-    } catch (err) {
-        // The row above is already on screen and would spin forever if one of
-        // the confirmation steps threw. markTransferDone leaves an entry that
-        // already ended alone, so this never rewrites a real outcome.
-        console.error('Android folder import failed:', err);
-        setTransferNote({ id: IMPORT_TRANSFER_ID, direction: 'up', note: humanizeBackendError(err) });
-        markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'failed' });
-        notify({ level: 'error', title: 'Import failed', body: humanizeBackendError(err), history: false });
+        const activity = uploadActivity(destination, [manifest.root], choice.encrypt, manifest.files.length,
+            'Folder imports report aggregate progress. Per-file outcomes are unavailable for this import.');
+        enqueueUpload(activity, destination, () => runAndroidImport(parentID, manifest, choice.encrypt, destination), release);
+        enqueued = true;
+    } catch (error) {
+        if (isCurrentDestination(destination)) notify({ level: 'error', title: 'Import failed', body: humanizeBackendError(error), history: false });
     } finally {
-        state.cancelingUpload = false;
+        if (!enqueued) release();
     }
 }
 
-// runAndroidImport recreates the manifest's folder tree, then uploads its files
-// a window at a time so the cache never holds more than one window.
-async function runAndroidImport(parentID: string, manifest: AndroidFolderManifest) {
+// Only this runner materializes sources; waiting manifests keep no copied tree.
+async function runAndroidImport(parentID: string, manifest: AndroidFolderManifest, encrypt: boolean, destination: UploadDestination) {
+    const generation = transferSurfaceGeneration;
     const folderPaths = folderPathsFor(manifest);
     const totalFiles = manifest.files.length;
     const totalBytes = manifest.files.reduce((sum, file) => sum + file.size, 0);
-
-    const onPersonal = state.activeChannel?.kind === 'personal';
-    // Refresh the snapshot so the modal's follow-up steps see truth.
-    if (onPersonal) await loadEncryptionStatus();
-
-    const plan: ImportPlan = {
-        files: totalFiles,
-        folders: folderPaths.length,
-        bytes: totalBytes,
-        oversize: 0,
-        archives: 0,
-        ignored: 0,
-        maxBytes: 0,
-        maxItems: 0,
-        limitExceeded: false,
-        errorCount: 0,
-        errors: [],
-    };
-    const choice = await openImportOptionsModal({
-        plan,
-        personal: onPersonal,
-        hasArchives: false,
-        // Nothing here moves with the options: there are no archives to
-        // extract, and encrypting changes neither the file count nor which
-        // folder a file lands in.
-        replan: async () => plan,
-    });
-    if (!choice) {
-        markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'canceled' });
-        return;
-    }
-    if (choice.encrypt && !state.encryption.passwordRemembered) {
-        const ok = state.encryption.passwordSet
-            ? await openEncryptionPasswordModal()
-            : await openEncryptionSetupModal();
-        if (!ok) {
-            markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'canceled' });
-            return;
-        }
-    }
-
+    activeTransferDriveId = destination.driveId;
+    pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Creating folders…', total: totalBytes });
     importFailureReasons.length = 0;
     // The aggregate row is the only upload surface an import gets, and setting
     // this is what makes the per-file upload events fold into it.
@@ -1082,6 +1096,7 @@ async function runAndroidImport(parentID: string, manifest: AndroidFolderManifes
     let failed = 0;
     let bytesDone = 0;
     const report = () => {
+        if (!isCurrentDestination(destination)) return;
         const batch = state.importBatch;
         if (!batch) return;
         const next = reduceImportProgress(batch, {
@@ -1104,7 +1119,8 @@ async function runAndroidImport(parentID: string, manifest: AndroidFolderManifes
 
     let fatalError = '';
     try {
-        const folderIds = await createAndroidFolderTree(parentID, folderPaths);
+        const folderIds = await createAndroidFolderTree(parentID, folderPaths, destination);
+        if (!isCurrentDestination(destination)) return;
         // Show the tree before the bytes arrive, so the user can navigate into
         // it while a long upload runs.
         invalidateTransferCaches();
@@ -1113,8 +1129,11 @@ async function runAndroidImport(parentID: string, manifest: AndroidFolderManifes
         report();
 
         for (let start = 0; start < totalFiles && !state.cancelingUpload; start += ANDROID_UPLOAD_WINDOW) {
+            if (!isCurrentDestination(destination)) return;
+            if (state.activeChannel?.id !== destination.driveId) throw new Error(`Open ${destination.driveTitle} before continuing this folder import.`);
             const batch = manifest.files.slice(start, start + ANDROID_UPLOAD_WINDOW);
-            const outcome = await uploadAndroidWindow(batch, manifest.root, folderIds, parentID, choice.encrypt);
+            const outcome = await uploadAndroidWindow(batch, manifest.root, folderIds, parentID, encrypt, destination);
+            if (!isCurrentDestination(destination)) return;
             done += outcome.done;
             failed += outcome.failed;
             // Count the window's bytes however it ended: the bar tracks work
@@ -1126,21 +1145,27 @@ async function runAndroidImport(parentID: string, manifest: AndroidFolderManifes
         console.error('Android folder import failed:', err);
         fatalError = humanizeBackendError(err);
     } finally {
-        setTransferDirectionActive('upload', false);
-        finishAndroidImport(done, failed, fatalError);
+        if (generation === transferSurfaceGeneration) {
+            setTransferDirectionActive('upload', false);
+            finishAndroidImport(done, failed, fatalError);
+            if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, state.cancelingUpload ? 'canceled' : fatalError || failed ? 'failed' : 'done', [], fatalError || undefined);
+            state.cancelingUpload = false;
+        }
     }
 }
 
 // createAndroidFolderTree maps every directory in the manifest to a drive
 // folder id. folderPathsFor orders parents before children, so each lookup of
 // a parent has already happened.
-async function createAndroidFolderTree(parentID: string, folderPaths: string[]): Promise<Map<string, string>> {
+async function createAndroidFolderTree(parentID: string, folderPaths: string[], destination: UploadDestination): Promise<Map<string, string>> {
     const folderIds = new Map<string, string>([['', parentID]]);
     for (const path of folderPaths) {
+        if (!isCurrentDestination(destination)) throw new Error('This upload session has ended.');
+        if (state.activeChannel?.id !== destination.driveId) throw new Error(`Open ${destination.driveTitle} before continuing this folder import.`);
         if (state.cancelingUpload) break;
         const cut = path.lastIndexOf('/');
         const parent = folderIds.get(cut < 0 ? '' : path.slice(0, cut)) ?? parentID;
-        const folder = await createFolder(path.slice(cut + 1), parent);
+        const folder = await createFolderForDrive(path.slice(cut + 1), parent, destination.driveId);
         folderIds.set(path, folder.id);
     }
     return folderIds;
@@ -1154,10 +1179,12 @@ async function uploadAndroidWindow(
     folderIds: Map<string, string>,
     parentID: string,
     encrypt: boolean,
+    destination: UploadDestination,
 ): Promise<{ done: number; failed: number }> {
     const ids = files.map((file) => file.id);
     try {
         const materialized = await materializeAndroidFiles(ids);
+        if (!isCurrentDestination(destination)) return { done: 0, failed: 0 };
         const paths: string[] = [];
         const parentIDs: string[] = [];
         let unreadable = 0;
@@ -1174,7 +1201,9 @@ async function uploadAndroidWindow(
         }
         if (!paths.length) return { done: 0, failed: unreadable };
 
-        const upload = await uploadToDriveFs(paths, parentIDs, encrypt);
+        if (!isCurrentDestination(destination) || state.activeChannel?.id !== destination.driveId) throw new Error('The upload destination changed.');
+        const upload = await retryUploadToDriveFs(paths, parentIDs, encrypt, destination.driveId);
+        if (!isCurrentDestination(destination)) return { done: 0, failed: 0 };
         if (!upload.result.ok && upload.result.error.code === 'canceled') state.cancelingUpload = true;
         return { done: upload.files.length, failed: unreadable + paths.length - upload.files.length };
     } finally {
@@ -1231,113 +1260,86 @@ function finishAndroidImport(done: number, failed: number, fatalError: string) {
  * picker has to be covered from the moment it opens, which is well before it
  * has a selection to hand over; see withTransferFlow.
  */
-async function importSelection(parentID: string, paths: string[]) {
+async function importSelection(parentID: string, paths: string[], destination: UploadDestination) {
     if (!paths.length) return;
-    activeTransferDriveId = state.activeChannel?.id ?? null;
+    let enqueued = false;
     try {
-        const onPersonal = state.activeChannel?.kind === 'personal';
-
-        // Both answers are wanted before the first modal and neither needs the
-        // other, so they go together. Awaited one after the next, the encryption
-        // snapshot -- which does not depend on the selection at all -- sat on
-        // the critical path between the picker closing and the modal opening.
-        let plan: ImportPlan | null = null;
-        const [, planned] = await Promise.all([
-            // Refresh the snapshot so the modal's follow-up steps see truth.
-            onPersonal ? loadEncryptionStatus() : Promise.resolve(),
-            planImport(paths, false, false).catch((err: unknown) => {
-                console.error("PlanImport failed:", err);
-                return null;
-            }),
+        const [, plan] = await Promise.all([
+            destination.personal ? loadEncryptionStatus() : Promise.resolve(),
+            planImport(paths, false, false).catch(() => null),
         ]);
-        plan = planned;
-        if (!plan) {
-            // Don't fall through to the plain uploader: a directory path would be
-            // sent to UploadToDriveFS and fail. Surface it and stop.
-            notify({ level: 'error', title: 'Could not read the selection', body: 'Please try again.' });
-            return;
-        }
-
+        if (!isCurrentDestination(destination)) return;
+        if (!plan) { notify({ level: 'error', title: 'Could not read the selection', body: 'Please try again.' }); return; }
         if (plan.limitExceeded) {
-            const maxItems = Math.max(1, Math.floor(Number(plan.maxItems) || 10_000));
-            notify({
-                level: 'info',
-                title: 'Selection is too large',
-                body: `Keep it under ${maxItems.toLocaleString()} items by removing generated/cache folders or splitting it into smaller batches.`,
-            });
+            notify({ level: 'info', title: 'Selection is too large', body: `Keep it under ${Math.max(1, plan.maxItems || 10_000).toLocaleString()} items by removing generated/cache folders or splitting it into smaller batches.` });
             return;
         }
-
-        const complex = Number(plan.folders) > 0 || Number(plan.archives) > 0;
-
-        if (!complex) {
-            // Plain files: the flat uploader, behind the encrypt-options modal.
-            let encrypt = false;
-            if (onPersonal) {
-                const choice = await openUploadOptionsModal({ count: plan.files || paths.length });
-                if (!choice) return;
-                encrypt = !!choice.encrypt;
-                if (encrypt && !state.encryption.passwordRemembered) {
-                    const ok = state.encryption.passwordSet
-                        ? await openEncryptionPasswordModal()
-                        : await openEncryptionSetupModal();
-                    if (!ok) return;
-                }
-            }
-            await uploadPathsBatch(paths, parentID, encrypt);
-            return;
+        const complex = plan.folders > 0 || plan.archives > 0;
+        const queued = selectionIsQueued();
+        const names = paths.map((path) => path.split(/[/\\]/).pop() || 'Untitled');
+        let encrypt = false;
+        let extract = false;
+        if (complex) {
+            const choice = await openImportOptionsModal({ plan, personal: destination.personal, hasArchives: plan.archives > 0,
+                queued, destination: destination.destination, names,
+                replan: (encrypt, extract) => planImport(paths, encrypt, extract) });
+            if (!choice || !isCurrentDestination(destination)) return;
+            ({ encrypt, extract } = choice);
+        } else if (destination.personal || queued) {
+            const choice = await openUploadOptionsModal({ count: plan.files || paths.length, personal: destination.personal,
+                queued, destination: destination.destination, names });
+            if (!choice || !isCurrentDestination(destination)) return;
+            encrypt = destination.personal && choice.encrypt;
         }
-
-        // Folders/archives: confirm via the import dialog.
-        const choice = await openImportOptionsModal({
-            plan,
-            personal: onPersonal,
-            hasArchives: Number(plan.archives) > 0,
-            replan: (encrypt: boolean, extract: boolean) => planImport(paths, encrypt, extract),
-        });
-        if (!choice) return;
-
-        const { encrypt, extract } = choice;
         if (encrypt && !state.encryption.passwordRemembered) {
-            const ok = state.encryption.passwordSet
-                ? await openEncryptionPasswordModal()
-                : await openEncryptionSetupModal();
-            if (!ok) return;
+            const ok = state.encryption.passwordSet ? await openEncryptionPasswordModal() : await openEncryptionSetupModal();
+            if (!ok || !isCurrentDestination(destination)) return;
         }
+        const activity = uploadActivity(destination, paths, encrypt, plan.files || paths.length,
+            complex ? 'Folder and archive imports report aggregate progress. Per-file outcomes are unavailable for this import.' : undefined);
+        enqueueUpload(activity, destination,
+            () => complex ? runDesktopImport(paths, parentID, encrypt, extract, destination) : uploadPathsBatch(paths, parentID, encrypt, destination.driveId, destination.driveTitle),
+            (reason) => { if (reason !== 'completed') void releasePickedSources(paths); });
+        enqueued = true;
+    } catch (error) {
+        notify({ level: 'error', title: 'Could not queue upload', body: humanizeBackendError(error) });
+    } finally {
+        if (!enqueued) await releasePickedSources(paths);
+    }
+}
 
-        setTransferDirectionActive('upload', true);
-        importCompleteReceived = false;
-        let importThrew = false;
-        try {
-            const result = await importPaths(paths, parentID, encrypt, extract);
-            if (!result.ok) {
-                if (result.error.code === 'canceled') state.cancelingUpload = true;
-                throw result.error;
-            }
-        } catch (error) {
-            importThrew = true;
-            console.error('Import failed:', error);
-            if (!state.cancelingUpload && !importCompleteReceived) {
-                notify({ level: 'error', title: 'Import failed', body: humanizeBackendError(error) });
-            }
-            if (!importCompleteReceived && !state.importBatch) {
-                pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import failed', total: 0 });
-            }
-        } finally {
+async function runDesktopImport(paths: string[], parentID: string, encrypt: boolean, extract: boolean, destination: UploadDestination): Promise<void> {
+    const generation = transferSurfaceGeneration;
+    setTransferDirectionActive('upload', true);
+    importCompleteReceived = false;
+    let importThrew = false;
+    try {
+        const result = await importPathsForDrive(paths, parentID, encrypt, extract, destination.driveId);
+        if (!isCurrentDestination(destination)) return;
+        if (!result.ok) {
+            if (result.error.code === 'canceled') state.cancelingUpload = true;
+            throw result.error;
+        }
+    } catch (error) {
+        if (generation !== transferSurfaceGeneration) return;
+        importThrew = true;
+        if (!state.cancelingUpload && !importCompleteReceived) notify({ level: 'error', title: 'Import failed', body: humanizeBackendError(error) });
+        if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, state.cancelingUpload ? 'canceled' : 'failed', [], humanizeBackendError(error));
+        if (!importCompleteReceived && !state.importBatch) pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import failed', total: 0 });
+    } finally {
+        if (generation === transferSurfaceGeneration) {
             setTransferDirectionActive('upload', false);
-            // import_complete is authoritative; if it never arrived (error or a
-            // dropped event), finalize the aggregate row here with the right status.
             if (state.importBatch) {
                 markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: importThrew ? 'failed' : 'done' });
                 state.importBatch = null;
             }
-            if (importThrew && !importCompleteReceived) {
-                markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: 'failed' });
+            if (!importCompleteReceived) {
+                markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: importThrew ? 'failed' : 'done' });
+                if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, state.cancelingUpload ? 'canceled' : importThrew ? 'failed' : 'done');
+                invalidateTransferCaches();
             }
+            state.cancelingUpload = false;
         }
-    } finally {
-        if (!importCompleteReceived) invalidateTransferCaches();
-        state.cancelingUpload = false;
     }
 }
 
@@ -1346,7 +1348,7 @@ export function closeFailedUploads(): void {
 }
 
 export async function retryFailedUploads(): Promise<void> {
-    await withTransferFlow(async () => {
+    await withUploadSelection(async () => {
         const view = get(failedUploadsModal.state);
         const payload = view.payload;
         if (!view.open || view.busy || !payload) return;
@@ -1357,11 +1359,16 @@ export async function retryFailedUploads(): Promise<void> {
         if (consumedFailedUploadBatches.has(payload)) return;
         const paths = payload.failures.filter((failure) => failure.retryable).map((failure) => payload.paths[failure.index]);
         if (!paths.length) return;
-        // Consume this action before awaiting. Repeated taps cannot resend it.
-        consumedFailedUploadBatches.add(payload);
-        failedUploadsModal.close();
-        activeTransferDriveId = payload.driveId;
-        await uploadPathsBatch(paths, payload.parentId, payload.encrypt, payload.driveId);
+        const captured = captureUploadDestination(payload.parentId);
+        if (!captured) return;
+        const destination = { ...captured, driveTitle: payload.driveTitle,
+            destination: payload.destination || `${payload.driveTitle} / Original folder` };
+        try {
+            enqueueUpload(uploadActivity(destination, paths, payload.encrypt), destination,
+                () => uploadPathsBatch(paths, payload.parentId, payload.encrypt, payload.driveId ?? undefined, payload.driveTitle));
+            consumedFailedUploadBatches.add(payload);
+            failedUploadsModal.close();
+        } catch (error) { failedUploadsModal.setError(humanizeBackendError(error)); }
     });
 }
 
@@ -1401,16 +1408,17 @@ function showFailedUploadNotice(payload: FailedUploadsPayload, body: string, gen
  * aggregate row with the files currently moving listed under it, so the reader
  * can see both how far the batch has got and what it is working on.
  */
-async function uploadPathsBatch(paths: string[], parentID: string, encrypt: boolean, retryDriveId?: number) {
+async function uploadPathsBatch(paths: string[], parentID: string, encrypt: boolean, retryDriveId?: number, originalDriveTitle?: string) {
     const generation = transferSurfaceGeneration;
-    const driveId = state.activeChannel?.id ?? null;
-    const driveTitle = state.activeChannel?.title || 'the original drive';
+    const driveId = retryDriveId ?? state.activeChannel?.id ?? null;
+    const driveTitle = originalDriveTitle || state.activeChannel?.title || 'the original drive';
+    const destination = get(uploadActivities).find((entry) => entry.id === activeUploadActivityId)?.destination;
     let failures: UploadFailure[] = [];
     if (activeTransferDriveId === null) activeTransferDriveId = state.activeChannel?.id ?? null;
     setTransferDirectionActive('upload', true);
     state.uploadBatch = { total: paths.length, done: 0, failed: 0 };
 
-    const aggregated = paths.length > 1;
+    const aggregated = !!activeUploadActivityId || paths.length > 1;
     const nextTransfers = new Map<string | number, UploadTransfer>();
     if (aggregated) {
         uploadBatchFailureReasons.length = 0;
@@ -1418,7 +1426,7 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
         pushTransferStart({
             id: UPLOAD_BATCH_TRANSFER_ID,
             direction: 'up',
-            name: `Uploading ${paths.length} files`,
+            name: paths.length === 1 ? paths[0].split(/[/\\]/).pop() || 'Upload' : `Uploading ${paths.length} files`,
         });
         refreshUploadBatchRow();
     } else {
@@ -1448,12 +1456,14 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
         const upload = retryDriveId === undefined
             ? await uploadToDriveFs(paths, parentIDs, encrypt)
             : await retryUploadToDriveFs(paths, parentIDs, encrypt, retryDriveId);
+        if (generation !== transferSurfaceGeneration) return;
         failures = upload.failures ?? [];
         if (!upload.result.ok) {
             if (upload.result.error.code === 'canceled') state.cancelingUpload = true;
             throw upload.result.error;
         }
     } catch (error) {
+        if (generation !== transferSurfaceGeneration) return;
         uploadThrew = true;
         console.error('Upload failed:', error);
         if (!state.cancelingUpload) {
@@ -1463,34 +1473,37 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
                 index, name: path.split(/[/\\]/).pop() || 'Untitled',
                 message: humanizeBackendError(error), code: 'outcome_unknown', retryable: false,
             }));
-            showFailedUploadNotice({ paths: [...paths], failures, parentId: parentID, encrypt, driveId, driveTitle }, failedUploadBody(paths.length, failures.length, humanizeBackendError(error)), generation);
+            showFailedUploadNotice({ paths: [...paths], failures, parentId: parentID, encrypt, driveId, driveTitle, destination }, failedUploadBody(paths.length, failures.length, humanizeBackendError(error)), generation);
         }
     } finally {
-        setTransferDirectionActive('upload', false);
-        // Safety sweep: by the time UploadToDriveFS resolves, every upload in
-        // the batch has terminated on the backend. If a Wails event was dropped,
-        // an entry may still be stuck 'active' at 100% in the bell.
-        // markTransferDone is idempotent against terminal entries.
-        if (uploadBatch) {
-            finalizeUploadBatch(uploadThrew, failures);
-        } else {
-            for (const [uploadId, item] of state.uploadTransfers) {
-                if (state.cancelingUpload) {
-                    markTransferDone({ id: uploadId, direction: 'up', status: 'canceled' });
-                } else if (uploadThrew && item?.state !== 'done' && item?.state !== 'failed') {
-                    pushTransferStart({ id: uploadId, direction: 'up', name: item?.name || 'Upload failed', total: item?.size || 0 });
-                    markTransferDone({ id: uploadId, direction: 'up', status: 'failed' });
-                } else {
-                    markTransferDone({ id: uploadId, direction: 'up', status: 'done' });
+        if (generation === transferSurfaceGeneration) {
+            if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, state.cancelingUpload ? 'canceled' : uploadThrew || failures.length || (uploadBatch?.failures ?? 0) > 0 ? 'failed' : 'done', failures);
+            setTransferDirectionActive('upload', false);
+            // Safety sweep: by the time UploadToDriveFS resolves, every upload in
+            // the batch has terminated on the backend. If a Wails event was dropped,
+            // an entry may still be stuck 'active' at 100% in the bell.
+            // markTransferDone is idempotent against terminal entries.
+            if (uploadBatch) {
+                finalizeUploadBatch(uploadThrew, failures);
+            } else {
+                for (const [uploadId, item] of state.uploadTransfers) {
+                    if (state.cancelingUpload) {
+                        markTransferDone({ id: uploadId, direction: 'up', status: 'canceled' });
+                    } else if (uploadThrew && item?.state !== 'done' && item?.state !== 'failed') {
+                        pushTransferStart({ id: uploadId, direction: 'up', name: item?.name || 'Upload failed', total: item?.size || 0 });
+                        markTransferDone({ id: uploadId, direction: 'up', status: 'failed' });
+                    } else {
+                        markTransferDone({ id: uploadId, direction: 'up', status: 'done' });
+                    }
                 }
             }
+            if (!uploadThrew && failures.length && !state.cancelingUpload) {
+                showFailedUploadNotice({ paths: [...paths], failures, parentId: parentID, encrypt, driveId, driveTitle, destination }, failedUploadBody(paths.length, failures.length), generation);
+            }
+            invalidateTransferCaches();
+            state.uploadBatch = null;
+            state.cancelingUpload = false;
         }
-        if (!uploadThrew && failures.length && !state.cancelingUpload) {
-            showFailedUploadNotice({ paths: [...paths], failures, parentId: parentID, encrypt, driveId, driveTitle }, failedUploadBody(paths.length, failures.length), generation);
-        }
-        invalidateTransferCaches();
-        state.uploadBatch = null;
-        state.cancelingUpload = false;
     }
 }
 
@@ -1525,14 +1538,25 @@ function activateFileDropEvents(): void {
         if (!Number.isFinite(x) || !Number.isFinite(y)) return;
         const target = document.elementFromPoint(x, y);
         if (!target || !(target as HTMLElement).closest('#file-list')) return;
-        void withTransferFlow(() => importSelection(state.currentFolderId, paths));
+        const parentID = state.currentFolderId;
+        const destination = captureUploadDestination(parentID);
+        if (destination) void withUploadSelection(() => importSelection(parentID, paths, destination));
     });
 }
 
 export function activateTransferSurfaces(): () => void {
     teardownTransferSurfaces();
+    sessionUploadQueue.register();
+    transferUnsubscribers.push(sidebarState.subscribe(() => { void sessionUploadQueue.wake(); }));
     activateDownloadProgressEvents();
     activateUploadProgressEvents();
+    transferUnsubscribers.push(onRuntimeEvent('resumable_upload_changed', (payload) => {
+        const value = asObjectRecord(payload);
+        if (!activeUploadActivityId || value.upload_id === undefined || typeof value.job_id !== 'string') return;
+        const current = get(uploadActivities).find((entry) => entry.id === activeUploadActivityId);
+        if (!current || current.driveId !== Number(value.channel_id)) return;
+        updateUploadActivity(current.id, { resumableJobIds: [...new Set([...(current.resumableJobIds ?? []), value.job_id])] });
+    }));
     activateFileDropEvents();
     // Makes the phone's copy-out-of-the-picker wait visible; silent everywhere
     // the host hands back paths directly. Torn down with the rest.
@@ -1553,6 +1577,18 @@ let transferSurfaceGeneration = 0;
 
 export function teardownTransferSurfaces(): void {
     transferSurfaceGeneration += 1;
+    sessionUploadQueue.dispose();
+    sessionUploadQueue = createSessionUploadQueue();
+    clearUploadActivities();
+    flowBusy = false;
+    selectionBusy = false;
+    activeUploadActivityId = null;
+    activeTransferDriveId = null;
+    uploadBatch = null;
+    IMPORT_TRANSFER_ID = 'import';
+    UPLOAD_BATCH_TRANSFER_ID = 'upload-batch';
+    cancelUploadOptions();
+    cancelImportOptions();
     closeFailedUploads();
     failedUploadReports.set([]);
     const unsubscribers = transferUnsubscribers;
