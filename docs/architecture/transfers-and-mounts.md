@@ -125,8 +125,8 @@ folder pick cannot invalidate its URI grant or reuse its file IDs. Flat file
 selections can still join the queue. Teardown does not release an active tree
 lease until its outstanding native materialization has settled.
 
-The bell opens a compact panel on hover or click; its rows and View all
-activity open the full Activity view. The panel and the phone Transfers tab
+Hovering the bell previews a compact panel; clicking the bell, a panel row or
+View all activity opens the full Activity view. The panel and the phone Transfers tab
 keep a running batch on its aggregate row, which carries progress and cancel,
 and list waiting batches separately. Activity combines notifications, ordinary
 transfer summaries, session upload batches and journal-backed recovery jobs; it

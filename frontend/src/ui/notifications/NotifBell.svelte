@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onDestroy, tick } from 'svelte';
+    import { onDestroy } from 'svelte';
     import BellIcon from '@lucide/svelte/icons/bell';
     import FailedUploadReports from './FailedUploadReports.svelte';
     import { failedUploadReports, dismissFailedUploadReport } from '../modals/failed-uploads-store';
@@ -56,9 +56,6 @@
     // One timer for both directions: the pointer is only ever arriving or
     // leaving, and a single slot makes the second intent cancel the first.
     let hoverTimer: ReturnType<typeof setTimeout> | null = null;
-    // Opened on purpose (click or key) rather than by hover, so the pointer
-    // leaving the bell must not take it away.
-    let pinned = false;
 
     /**
      * What the bell is about, not just that it exists. Colour alone carried
@@ -96,33 +93,13 @@
         hoverTimer = null;
     }
 
-    /**
-     * Opens the panel. `focusPanel` is for deliberate activation only -- a
-     * click or a key -- because hover must never pull focus away from whatever
-     * the reader is actually typing into.
-     */
-    async function openPanel({ focusPanel = false }: { focusPanel?: boolean } = {}): Promise<void> {
+    /** Hover only previews; it never takes focus from what the reader is typing into. */
+    function openPanel(): void {
         clearHoverTimer();
         if ($activityView.open || hasActiveModal()) return;
         reanchor();
         notifPanelOpen.set(true);
         notifUnreadErrors.set(0);
-        if (!focusPanel) return;
-        pinned = true;
-        await tick();
-        // The container, not its first button: a pointer-opened panel shows no
-        // focus ring this way, while Tab still steps into the controls.
-        panelEl?.focus({ preventScroll: true });
-    }
-
-    /**
-     * Activation toggles; aria-expanded would otherwise be a standing lie. A
-     * click on a panel that hover opened keeps it, rather than closing what the
-     * reader just reached for.
-     */
-    function togglePanel(): void {
-        if ($notifPanelOpen && pinned) closePanel({ restoreFocus: true });
-        else void openPanel({ focusPanel: true });
     }
 
     function openFullActivity(selectedId: string | null = null, tab: 'transfers' | 'notifications' = 'transfers'): void {
@@ -136,7 +113,6 @@
         // <body>. The bell takes it back whenever it was inside, not only when
         // the caller asked -- otherwise Tab restarts from the top of the page.
         const heldFocus = panelEl?.contains(document.activeElement) ?? false;
-        pinned = false;
         notifPanelOpen.set(false);
         if (restoreFocus || heldFocus) bellEl?.focus({ preventScroll: true });
     }
@@ -154,7 +130,6 @@
         // Also drops a pending open, so a pointer that only passes over the
         // bell leaves nothing behind.
         clearHoverTimer();
-        if (pinned) return;
         hoverTimer = setTimeout(() => {
             hoverTimer = null;
             closePanel();
@@ -163,9 +138,9 @@
 
     function onBellKeydown(event: KeyboardEvent): void {
         if (event.key !== 'Enter' && event.key !== ' ') return;
-        // Swallowed here so the synthesised click cannot toggle a second time.
+        // Swallowed here so the synthesised click cannot open it a second time.
         event.preventDefault();
-        togglePanel();
+        openFullActivity();
     }
 
     function panelFocusables(): HTMLElement[] {
@@ -218,9 +193,6 @@
         closePanel();
     }
 
-    // Anything else that closes the panel (opening Activity, a modal) ends the pin too.
-    $effect(() => { if (!$notifPanelOpen) pinned = false; });
-
     onDestroy(clearHoverTimer);
 </script>
 
@@ -234,12 +206,12 @@
     type="button"
     data-mode={$bellMode}
     aria-haspopup="dialog"
-    aria-controls="notif-panel"
-    aria-expanded={$notifPanelOpen ? 'true' : 'false'}
+    aria-controls={$notifPanelOpen ? 'notif-panel' : 'activity-modal'}
+    aria-expanded={$notifPanelOpen || $activityView.open ? 'true' : 'false'}
     aria-label={bellLabel}
     onclick={(event) => {
         event.stopPropagation();
-        togglePanel();
+        openFullActivity();
     }}
     onkeydown={onBellKeydown}
     onmouseenter={scheduleOpenPanel}

@@ -12,7 +12,6 @@ async function chooseUpload(page: Page, mobile = false): Promise<void> {
 
 async function openActivity(page: Page): Promise<void> {
     await page.locator('#notif-bell').click();
-    await page.getByRole('dialog', { name: 'Notifications', exact: true }).getByRole('button', { name: 'View all activity', exact: true }).click();
 }
 
 for (const platform of ['desktop', 'android'] as const) {

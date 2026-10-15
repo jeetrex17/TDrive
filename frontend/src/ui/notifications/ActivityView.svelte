@@ -227,8 +227,8 @@
     .activity-list-pane { border-right: 1px solid var(--color-border-soft); background: var(--color-surface-0); }
     .empty .activity-list-pane { border-right: 0; }
     .activity-detail-pane { background: var(--color-surface-1); }
-    .activity-filters { display: flex; gap: var(--space-1); padding: var(--space-3) var(--space-3) var(--space-1); overflow-x: auto; scrollbar-width: none; }
-    .activity-filters::-webkit-scrollbar { display: none; }
+    /* Wraps rather than scrolls: a narrow pane must never cut a chip off at its edge. */
+    .activity-filters { display: flex; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-3) var(--space-3) var(--space-1); }
     .activity-filters button { flex-shrink: 0; border: 1px solid transparent; border-radius: var(--radius-pill); padding: var(--space-1) var(--space-3); background: transparent; color: var(--color-text-muted); font-size: var(--type-xs); white-space: nowrap; }
     .activity-filters button[aria-pressed='true'] { background: var(--overlay-accent-1); border-color: var(--overlay-accent-2); color: var(--color-accent-text); }
     .activity-list { margin: 0; padding: var(--space-2); list-style: none; }
@@ -277,7 +277,7 @@
         .activity-search { width: 100%; height: var(--touch-target); margin: 0; }
         .activity-search input { font-size: 16px; }
         .activity-filters { padding: var(--space-3) var(--space-4) var(--space-1); }
-        .activity-filters button { min-height: 36px; padding-inline: var(--space-4); font-size: var(--type-sm); }
+        .activity-filters button { min-height: 36px; padding-inline: var(--space-3); font-size: var(--type-sm); }
         .activity-content { display: block; }
         .activity-list-pane, .activity-detail-pane { height: 100%; }
         .activity-list-pane { border: 0; }

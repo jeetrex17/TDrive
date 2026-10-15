@@ -75,64 +75,27 @@ afterEach(async () => {
 });
 
 describe('notification panel keyboard reachability', () => {
-    it('moves focus into the panel when it is opened from the keyboard', async () => {
+    it.each(['Enter', ' '])('opens full Activity from %s without opening a preview', async (key) => {
         bell().focus();
-        press(bell(), 'Enter');
+        press(bell(), key);
         await settle();
-
-        const open = panel();
-        expect(open).not.toBeNull();
-        expect(document.activeElement).toBe(open);
-        expect(get(activityView).open).toBe(false);
+        expect(get(activityView).open).toBe(true);
+        expect(panel()).toBeNull();
+        expect(bell().getAttribute('aria-controls')).toBe('activity-modal');
     });
 
-    it('toggles on activation and hands focus back to the bell', async () => {
-        bell().focus();
-        press(bell(), ' ');
-        await settle();
-        expect(bell().getAttribute('aria-expanded')).toBe('true');
-
-        press(bell(), 'Enter');
-        await settle();
-        expect(panel()).toBeNull();
-        expect(bell().getAttribute('aria-expanded')).toBe('false');
-        expect(document.activeElement).toBe(bell());
-
-        bell().click();
+    it('promotes a hover-open preview on click, including when already expanded', async () => {
+        notifPanelOpen.set(true);
         await settle();
         expect(panel()).not.toBeNull();
         bell().click();
         await settle();
         expect(panel()).toBeNull();
-        expect(get(activityView).open).toBe(false);
-    });
-
-    it('keeps a clicked panel open when the pointer leaves, and a click pins a hover preview', async () => {
-        vi.useFakeTimers();
-        try {
-            bell().click();
-            await settle();
-            bell().dispatchEvent(new MouseEvent('mouseleave'));
-            vi.advanceTimersByTime(HOVER_INTENT_MS * 2);
-            flushSync();
-            expect(panel()).not.toBeNull();
-            bell().click();
-            await settle();
-            expect(panel()).toBeNull();
-
-            bell().dispatchEvent(new MouseEvent('mouseenter'));
-            vi.advanceTimersByTime(HOVER_INTENT_MS);
-            flushSync();
-            expect(panel()).not.toBeNull();
-            bell().click();
-            await settle();
-            bell().dispatchEvent(new MouseEvent('mouseleave'));
-            vi.advanceTimersByTime(HOVER_INTENT_MS * 2);
-            flushSync();
-            expect(panel()).not.toBeNull();
-        } finally {
-            vi.useRealTimers();
-        }
+        expect(get(activityView).open).toBe(true);
+        expect(bell().getAttribute('aria-expanded')).toBe('true');
+        bell().click();
+        await settle();
+        expect(get(activityView).open).toBe(true);
     });
 
     it('keeps keyboard navigation inside a focused hover preview', async () => {

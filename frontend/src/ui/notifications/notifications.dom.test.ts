@@ -212,7 +212,7 @@ describe('notification interaction controls', () => {
         expect(preparing.querySelector('[role="progressbar"]')?.hasAttribute('aria-valuenow')).toBe(false);
     });
 
-    it('opens from the keyboard and restores the bell after Escape', () => {
+    it('opens full Activity from the keyboard', () => {
         const host = mountComponent(NotifBell, { onCancelDirection: vi.fn(), onClearHistory: vi.fn() });
         const bell = host.querySelector<HTMLButtonElement>('#notif-bell');
         if (!bell) throw new Error('Expected the notification bell');
@@ -220,12 +220,8 @@ describe('notification interaction controls', () => {
         bell.focus();
         bell.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
         flushSync();
-        expect(document.querySelector('.notif-panel')).not.toBeNull();
-        expect(get(activityView).open).toBe(false);
-
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-        flushSync();
+        expect(get(activityView).open).toBe(true);
         expect(document.querySelector('.notif-panel')).toBeNull();
-        expect(document.activeElement).toBe(bell);
+        expect(bell.getAttribute('aria-controls')).toBe('activity-modal');
     });
 });

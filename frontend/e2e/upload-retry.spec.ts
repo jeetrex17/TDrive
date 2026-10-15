@@ -33,7 +33,6 @@ for (const platform of ['desktop', 'android']) {
             await page.getByRole('region', { name: 'Upload failures' }).getByRole('button', { name: 'Review failed files', exact: true }).click();
         } else {
             await page.locator('#notif-bell').click();
-            await page.getByRole('dialog', { name: 'Notifications', exact: true }).getByRole('button', { name: 'View all activity', exact: true }).click();
             const activity = page.getByRole('dialog', { name: 'Activity', exact: true });
             await activity.getByRole('button', { name: 'View accepted.txt and 2 more', exact: true }).click();
             const files = activity.getByRole('region', { name: 'Files in upload', exact: true });
