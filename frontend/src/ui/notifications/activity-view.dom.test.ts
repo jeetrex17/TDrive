@@ -26,6 +26,12 @@ const batch = (status: UploadActivity['status'] = 'queued'): UploadActivity => (
     startedAt: 0, finishedAt: 0, status, fileCount: 121, files: Array.from({ length: 121 }, (_, index) => ({ index, name: `photo-${index + 1}.jpg`, status })),
 });
 async function settle(): Promise<void> { flushSync(); await tick(); await tick(); }
+function chips(): string[] {
+    return Array.from(host.querySelectorAll('.file-chips button')).map((chip) => {
+        const count = chip.querySelector('span')?.textContent;
+        return count ? `${chip.textContent!.slice(0, -count.length)} ${count}` : chip.textContent!;
+    });
+}
 function button(text: string): HTMLButtonElement {
     const match = Array.from(host.querySelectorAll('button')).find((el) => el.textContent?.trim() === text);
     if (!match) throw new Error(`Missing button ${text}`);
@@ -72,6 +78,8 @@ describe('full activity view', () => {
         expect(details?.textContent).toContain('Summer');
         expect(details?.textContent).toContain('Encrypted');
         expect(details?.textContent).toContain('Queued · Starting soon');
+        // Every file is waiting, so there is nothing to narrow the list by.
+        expect(details?.querySelector('.file-chips')).toBeNull();
         expect(details?.querySelectorAll('[data-activity-file]')).toHaveLength(50);
         expect(details?.textContent).toContain('photo-50.jpg');
         expect(details?.textContent).not.toContain('photo-51.jpg');
@@ -88,7 +96,7 @@ describe('full activity view', () => {
         historyEvents.set([{ kind: 'transfer', id: 'xfer:up:sample', name: 'Photo selection', direction: 'up', status: 'active', progress: 25, bytes: 250, total: 1000, speed: 10, startedAt: 1, finishedAt: 0, items: [{ key: '0', name: 'sample.bin', progress: 50, total: 500 }] }]);
         openActivity(); await settle();
         const rows = host.querySelectorAll('[data-activity-file]');
-        expect(rows[0].textContent).toContain('Uploading · 50%');
+        expect(rows[0].querySelector('.file-status')?.textContent).toBe('50%');
         expect(rows[1].textContent).toContain('Uploading');
         expect(rows[1].textContent).not.toContain('%');
     });
@@ -177,12 +185,20 @@ describe('full activity view', () => {
             '[Album / 2024: 2 files · 1 done · 1 failed]', 'a.jpg', 'b.jpg',
             '[Album: 1 file · 1 uploading]', 'c.jpg',
         ]);
-        expect(host.querySelector('.file-summary')?.textContent).toBe('2 completed · 1 failed · 1 uploading · 2 waiting');
-        expect(Array.from(host.querySelectorAll('[data-activity-file]')).find((row) => row.textContent?.includes('c.jpg'))?.textContent).toContain('Uploading · 40%');
+        // Files the import has not reached yet count as waiting.
+        expect(chips()).toEqual(['All', 'Uploading 1', 'Waiting 2', 'Failed 1', 'Done 2']);
+        expect(Array.from(host.querySelectorAll('[data-activity-file]')).find((row) => row.textContent?.includes('c.jpg'))?.querySelector('.file-status')?.textContent).toBe('40%');
         const folder = Array.from(host.querySelectorAll<HTMLButtonElement>('.file-folder button')).find((row) => row.textContent?.includes('Album / 2024'));
         expect(folder?.getAttribute('aria-expanded')).toBe('true');
         folder?.click(); await settle();
         expect(list()).toEqual(['cover.jpg', '[Album / 2024: 2 files · 1 done · 1 failed]', '[Album: 1 file · 1 uploading]', 'c.jpg']);
+        folder?.click(); await settle();
+        const chip = (label: string) => Array.from(host.querySelectorAll<HTMLButtonElement>('.file-chips button')).find((item) => item.textContent?.startsWith(label))!;
+        chip('Failed').click(); await settle();
+        expect(chip('Failed').getAttribute('aria-pressed')).toBe('true');
+        expect(list()).toEqual(['[Album / 2024: 1 file · 1 failed]', 'b.jpg']);
+        chip('All').click(); await settle();
+        expect(list()).toHaveLength(6);
     });
 
     it('offers pause and cancel for the running upload and for each file that has not finished', async () => {
@@ -194,10 +210,10 @@ describe('full activity view', () => {
         ] }]);
         openActivity({ selectedId: 'session-1' }); await settle();
         const row = (name: string) => Array.from(host.querySelectorAll('[data-activity-file]')).find((item) => item.querySelector('.file-name')?.textContent === name);
-        expect(row('sending.jpg')?.querySelector('.file-status')?.textContent).toBe('Uploading · 40%');
+        expect(row('sending.jpg')?.querySelector('.file-status')?.textContent).toBe('40%');
         expect(row('saving.jpg')?.querySelector('.file-status')?.textContent).toBe('Saving…');
         expect(row('waiting.jpg')?.querySelector('.file-status')?.textContent).toBe('Waiting');
-        expect(host.querySelector('.file-summary')?.textContent).toBe('1 completed · 1 saving · 1 uploading · 1 waiting');
+        expect(chips()).toEqual(['All', 'Uploading 2', 'Waiting 1', 'Done 1']);
         // Only files that can still be stopped carry a cancel control.
         expect(Array.from(host.querySelectorAll('.file-cancel')).map((control) => control.getAttribute('aria-label'))).toEqual(['Cancel sending.jpg', 'Cancel waiting.jpg']);
         (row('waiting.jpg')?.querySelector('.file-cancel') as HTMLButtonElement).click();
@@ -206,7 +222,8 @@ describe('full activity view', () => {
         button('Pause').click();
         expect(actions.setUploadsPaused).toHaveBeenCalledWith(true);
         uploadsPaused.set(true); await settle();
-        expect(host.querySelector('.detail-status')?.textContent).toBe('Paused · Files already sending will finish');
+        expect(host.querySelector('.activity-details h3')?.textContent).toBe('Upload to Family paused');
+        expect(host.querySelector('.detail-status')?.textContent).toBe('Files already sending will finish. The rest wait until you resume.');
         expect(row('waiting.jpg')?.querySelector('.file-status')?.textContent).toBe('Paused');
         expect(host.querySelector('.activity-item .item-summary')?.textContent).toContain('Paused');
         button('Resume').click();

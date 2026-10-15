@@ -221,15 +221,16 @@
     .activity-search:focus-within { border-color: var(--color-accent); }
     .activity-search input { flex: 1; min-width: 0; height: 100%; margin: 0; padding: 0; border: 0; outline: none; background: transparent; color: var(--color-text-soft); font: inherit; font-size: var(--type-sm); line-height: 1; box-shadow: none; appearance: none; }
     .activity-search input::-webkit-search-cancel-button { cursor: pointer; }
-    .activity-content { display: grid; grid-template-columns: minmax(280px, .85fr) minmax(0, 1.4fr); min-height: 0; flex: 1; }
+    /* A list column like Mail's: wide enough for a name and its state, the rest to the detail. */
+    .activity-content { display: grid; grid-template-columns: minmax(260px, 380px) minmax(0, 1fr); min-height: 0; flex: 1; }
     .activity-content.empty { grid-template-columns: 1fr; }
     .activity-list-pane, .activity-detail-pane { overflow: auto; min-width: 0; overscroll-behavior: contain; }
     .activity-list-pane { border-right: 1px solid var(--color-border-soft); background: var(--color-surface-0); }
     .empty .activity-list-pane { border-right: 0; }
     .activity-detail-pane { background: var(--color-surface-1); }
     /* Wraps rather than scrolls: a narrow pane must never cut a chip off at its edge. */
-    .activity-filters { display: flex; flex-wrap: wrap; gap: var(--space-1); padding: var(--space-3) var(--space-3) var(--space-1); }
-    .activity-filters button { flex-shrink: 0; border: 1px solid transparent; border-radius: var(--radius-pill); padding: var(--space-1) var(--space-3); background: transparent; color: var(--color-text-muted); font-size: var(--type-xs); white-space: nowrap; }
+    .activity-filters { display: flex; flex-wrap: wrap; gap: var(--space-0-5); padding: var(--space-3) var(--space-2) var(--space-1); }
+    .activity-filters button { flex-shrink: 0; border: 1px solid transparent; border-radius: var(--radius-pill); padding: var(--space-1) var(--space-2-5); background: transparent; color: var(--color-text-muted); font-size: var(--type-xs); white-space: nowrap; }
     .activity-filters button[aria-pressed='true'] { background: var(--overlay-accent-1); border-color: var(--overlay-accent-2); color: var(--color-accent-text); }
     .activity-list { margin: 0; padding: var(--space-2); list-style: none; }
     .activity-item { display: flex; align-items: flex-start; width: 100%; gap: var(--space-3); padding: var(--space-3); border: 1px solid transparent; border-radius: var(--radius-md); background: transparent; color: var(--color-text-soft); text-align: left; }
