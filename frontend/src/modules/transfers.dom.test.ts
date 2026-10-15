@@ -238,14 +238,14 @@ describe('aggregate import completion', () => {
         handlers.get('import_start')?.();
         handlers.get('import_upload_progress')?.({ total: 3, active: [{ id: 0, name: 'a.jpg', size: 10, percent: 50 }] });
         handlers.get('import_upload_progress')?.({ total: 3, active: [], settled: [
-            { id: 0, name: 'a.jpg', size: 10, status: 'done' },
+            { id: 0, name: 'a.jpg', path: 'Album/2024/a.jpg', size: 10, status: 'done' },
             { id: 1, name: 'b.jpg', status: 'failed', message: 'upload part: rpc error code 400: FILE_REFERENCE_EXPIRED' },
         ] });
         const { get } = await import('svelte/store');
         const { uploadActivities } = await import('../ui/notifications/upload-activity-store');
         const [batch] = get(uploadActivities);
         expect(batch.files).toEqual([
-            expect.objectContaining({ index: 0, name: 'a.jpg', status: 'done', size: 10 }),
+            expect.objectContaining({ index: 0, name: 'a.jpg', path: 'Album/2024/a.jpg', status: 'done', size: 10 }),
             expect.objectContaining({ index: 1, name: 'b.jpg', status: 'failed', message: expect.stringContaining('fresh reference') }),
         ]);
         expect(batch.fileCount).toBe(3);

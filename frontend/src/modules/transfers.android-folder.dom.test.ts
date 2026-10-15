@@ -233,10 +233,10 @@ describe('uploading an Android folder a window at a time', () => {
         const [batch] = get(uploadActivities);
         // The empty file is skipped rather than listed as a failure.
         expect(batch.fileCount).toBe(3);
-        expect(batch.files.map(({ name, status, message }) => ({ name, status, message }))).toEqual([
-            { name: 'trip/a.jpg', status: 'done', message: undefined },
-            { name: 'trip/b.jpg', status: 'failed', message: 'Could not be read from the folder.' },
-            { name: 'c.jpg', status: 'done', message: undefined },
+        expect(batch.files.map(({ name, path, status, message }) => ({ name, path, status, message }))).toEqual([
+            { name: 'a.jpg', path: 'Holiday/trip/a.jpg', status: 'done', message: undefined },
+            { name: 'b.jpg', path: 'Holiday/trip/b.jpg', status: 'failed', message: 'Could not be read from the folder.' },
+            { name: 'c.jpg', path: 'Holiday/c.jpg', status: 'done', message: undefined },
         ]);
     });
 

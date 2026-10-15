@@ -1,7 +1,7 @@
 import type { ResumableUpload } from '../../api/resumable-uploads';
 import type { ResumableDownload } from '../../api/resumable-downloads';
 import { isUnfinishedTransfer, type HistoryEvent, type TransferEvent } from './notif-store';
-import type { UploadActivity } from './upload-activity-store';
+import type { UploadActivity, UploadActivityFile } from './upload-activity-store';
 import { formatAge, transferDetailParts, transferPercent } from './transfer-view';
 
 export type ActivityFilter = 'All' | 'Active' | 'Queued' | 'Needs attention' | 'History';
@@ -106,12 +106,30 @@ export function activityEntries(batches: readonly UploadActivity[], events: read
     return entries.sort(compareEntries);
 }
 
+export interface FileFolder { folder: string; files: UploadActivityFile[] }
+
+/**
+ * A batch's files by the folder they sit in, in the order the upload reached
+ * them: loose files first, then each folder of the selection.
+ */
+export function groupFilesByFolder(files: readonly UploadActivityFile[]): FileFolder[] {
+    const groups = new Map<string, UploadActivityFile[]>([['', []]]);
+    for (const file of [...files].sort((a, b) => a.index - b.index)) {
+        const path = file.path ?? '';
+        const folder = path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+        const group = groups.get(folder);
+        if (group) group.push(file);
+        else groups.set(folder, [file]);
+    }
+    return [...groups].filter(([, members]) => members.length).map(([folder, members]) => ({ folder, files: members }));
+}
+
 /** Batch file names remain searchable even when they are outside the DOM page. */
 export function matchesActivity(entry: ActivityEntry, query: string): boolean {
     const text = query.trim().toLocaleLowerCase();
     if (!text) return true;
     if (`${entry.name} ${entry.summary}`.toLocaleLowerCase().includes(text)) return true;
-    return entry.kind === 'batch' && (entry.batch.files.some((file) => file.name.toLocaleLowerCase().includes(text))
+    return entry.kind === 'batch' && (entry.batch.files.some((file) => (file.path ?? file.name).toLocaleLowerCase().includes(text))
         || `${entry.batch.driveTitle} ${entry.batch.destination}`.toLocaleLowerCase().includes(text));
 }
 

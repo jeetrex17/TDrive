@@ -651,7 +651,7 @@ function importFileUpdates(payload: Record<string, unknown>): UploadActivityFile
     const list = (value: unknown) => Array.isArray(value) ? value.map(asObjectRecord) : [];
     for (const file of list(payload.active)) {
         const index = Number(file.id);
-        if (Number.isInteger(index)) updates.push({ index, name: String(file.name ?? ''), status: 'active', size: Number(file.size) || 0, progress: Number(file.percent) || 0 });
+        if (Number.isInteger(index)) updates.push({ index, name: String(file.name ?? ''), ...(file.path ? { path: String(file.path) } : {}), status: 'active', size: Number(file.size) || 0, progress: Number(file.percent) || 0 });
     }
     for (const file of list(payload.settled)) {
         const index = Number(file.id);
@@ -659,6 +659,7 @@ function importFileUpdates(payload: Record<string, unknown>): UploadActivityFile
         const failed = file.status === 'failed';
         updates.push({
             index, name: String(file.name ?? ''), status: failed ? 'failed' : 'done', progress: failed ? undefined : 100,
+            ...(file.path ? { path: String(file.path) } : {}),
             ...(Number(file.size) > 0 ? { size: Number(file.size) } : {}),
             ...(failed && file.message ? { message: humanizeBackendError(String(file.message)) } : {}),
         });
@@ -1118,7 +1119,7 @@ async function importAndroidFolder(parentID: string, destination: UploadDestinat
         // The manifest already names every file, so the batch can list each one
         // from the start; empty plaintext files are skipped as the runner does.
         const files = androidUploadFiles(manifest, choice.encrypt)
-            .map((file, index): UploadActivityFile => ({ index, name: file.rel, size: file.size, status: 'queued' }));
+            .map((file, index): UploadActivityFile => ({ ...androidActivityFile(manifest, file, index), size: file.size, status: 'queued' }));
         const activity = uploadActivity(destination, [manifest.root], choice.encrypt, files.length, files);
         enqueueUpload(activity, destination, () => runAndroidImport(parentID, manifest, choice.encrypt, destination), release);
         enqueued = true;
@@ -1127,6 +1128,11 @@ async function importAndroidFolder(parentID: string, destination: UploadDestinat
     } finally {
         if (!enqueued) release();
     }
+}
+
+/** One manifest file as Activity lists it: its own name, under the picked folder. */
+function androidActivityFile(manifest: AndroidFolderManifest, file: AndroidFolderFile, index: number): Pick<UploadActivityFile, 'index' | 'name' | 'path'> {
+    return { index, name: file.rel.split('/').pop() || file.rel, path: `${manifest.root}/${file.rel}` };
 }
 
 /** Telegram can't store an empty plaintext file; encryption gives it a header. */
@@ -1192,15 +1198,16 @@ async function runAndroidImport(parentID: string, manifest: AndroidFolderManifes
             if (state.activeChannel?.id !== destination.driveId) throw new Error(`Open ${destination.driveTitle} before continuing this folder import.`);
             const batch = files.slice(start, start + ANDROID_UPLOAD_WINDOW);
             const activityId = activeUploadActivityId;
-            if (activityId) mergeUploadActivityFiles(activityId, batch.map((file, offset) => ({ index: start + offset, name: file.rel, status: 'active' })));
+            if (activityId) mergeUploadActivityFiles(activityId, batch.map((file, offset) => ({ ...androidActivityFile(manifest, file, start + offset), status: 'active' })));
             const outcome = await uploadAndroidWindow(batch, manifest.root, folderIds, parentID, encrypt, destination);
             if (!isCurrentDestination(destination)) return;
             if (activityId) {
                 mergeUploadActivityFiles(activityId, batch.map((file, offset): UploadActivityFile => {
                     const message = outcome.failures.get(offset);
+                    const row = androidActivityFile(manifest, file, start + offset);
                     return message === undefined
-                        ? { index: start + offset, name: file.rel, status: 'done', progress: 100 }
-                        : { index: start + offset, name: file.rel, status: state.cancelingUpload ? 'canceled' : 'failed', message };
+                        ? { ...row, status: 'done', progress: 100 }
+                        : { ...row, status: state.cancelingUpload ? 'canceled' : 'failed', message };
                 }));
             }
             done += outcome.done;

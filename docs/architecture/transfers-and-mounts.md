@@ -144,9 +144,12 @@ Session batch details use stable identities and bounded retention. File details
 are paged in the UI rather than expanded into one notification per file. Import
 progress payloads carry aggregate counts, a bounded active-file sample and each
 file that settled since the previous payload, reported exactly once, plus a final
-flush before `import_complete`. A folder or archive batch therefore lists files
-as the import reaches them and counts the rest as waiting; Android folder imports
-list every manifest file from the start. Older finished batches give up their
+flush before `import_complete`. Every file carries its display path within the
+selection (the drive folder name plus its relative path, never a local path);
+the observer keeps those only for the window in flight. A folder or archive
+batch therefore lists files folder by folder as the import reaches them and
+counts the rest as waiting; Android folder imports list every manifest file from
+the start. Older finished batches give up their
 detail first when a growing import needs the session's file budget. Clearing completed display history must preserve
 pending batches, active work and backend recovery journals.
 

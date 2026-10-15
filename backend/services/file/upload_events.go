@@ -80,6 +80,9 @@ type importUploadObserver struct {
 	// Files settled since the last payload. Each file is reported once, so the
 	// list a reader assembles is bounded by the import itself.
 	settled []map[string]any
+	// Display path per upload id for the window in flight; an entry leaves when
+	// its file settles, so this never outgrows one window.
+	labels map[int]string
 }
 
 func newImportUploadObserver(service *Service, total int) *importUploadObserver {
@@ -88,6 +91,7 @@ func newImportUploadObserver(service *Service, total int) *importUploadObserver 
 		total:       max(total, 0),
 		now:         time.Now,
 		active:      make(map[int]*importUploadFile, maxUploadConcurrency),
+		labels:      make(map[int]string, importUploadBatchSize),
 		lastPercent: -1,
 	}
 }
@@ -165,6 +169,17 @@ func (o *importUploadObserver) EmitInitial() {
 	}
 }
 
+// LabelWindow records where each file of the next window sits in the selection.
+func (o *importUploadObserver) LabelWindow(idOffset int, labels []string) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	for index, label := range labels {
+		if label != "" {
+			o.labels[idOffset+index] = label
+		}
+	}
+}
+
 // Flush sends any settled files no throttled payload has carried yet, so the
 // last few outcomes reach the reader before import_complete does.
 func (o *importUploadObserver) Flush() {
@@ -180,6 +195,10 @@ func (o *importUploadObserver) Flush() {
 
 func (o *importUploadObserver) settleLocked(id int, name string, file *importUploadFile, status, message string) {
 	entry := map[string]any{"id": id, "name": name, "status": status}
+	if label, ok := o.labels[id]; ok {
+		entry["path"] = label
+		delete(o.labels, id)
+	}
 	if file != nil {
 		entry["size"] = file.size
 		if name == "" {
@@ -225,12 +244,16 @@ func (o *importUploadObserver) activeFilesLocked() (files []map[string]any, part
 	files = make([]map[string]any, 0, min(len(ids), maxImportUploadActiveFiles))
 	for _, id := range ids[:min(len(ids), maxImportUploadActiveFiles)] {
 		file := o.active[id]
-		files = append(files, map[string]any{
+		entry := map[string]any{
 			"id":      id,
 			"name":    file.name,
 			"size":    file.size,
 			"percent": file.fraction * 100,
-		})
+		}
+		if label, ok := o.labels[id]; ok {
+			entry["path"] = label
+		}
+		files = append(files, entry)
 	}
 	return files, partialBytes
 }

@@ -472,3 +472,39 @@ func TestRunImportArchiveSkipsEmptyEntry(t *testing.T) {
 		t.Fatalf("import completion = %+v, want done with one empty entry skipped", payload)
 	}
 }
+
+func TestImportReportsWhereEachFileSitsInTheSelection(t *testing.T) {
+	svc, db, _, _ := newTestService(t)
+	svc.CreateFolder = testFolderCreator(db)
+	events := &importTestEventRecorder{}
+	svc.Events = events
+
+	dir := t.TempDir()
+	album := filepath.Join(dir, "Album")
+	mkfile(t, filepath.Join(album, "2024", "a.jpg"), "a")
+	mkfile(t, filepath.Join(album, "b.jpg"), "b")
+	loose := filepath.Join(dir, "loose.txt")
+	mkfile(t, loose, "c")
+
+	if err := svc.RunImport(t.Context(), personalChannelID, []string{album, loose}, "", false, false); err != nil {
+		t.Fatalf("RunImport: %v", err)
+	}
+	var paths []string
+	events.mu.Lock()
+	for _, record := range events.records {
+		if record.name != "import_upload_progress" || len(record.args) != 1 {
+			continue
+		}
+		payload, _ := record.args[0].(map[string]any)
+		settled, _ := payload["settled"].([]map[string]any)
+		for _, file := range settled {
+			label, _ := file["path"].(string)
+			paths = append(paths, label)
+		}
+	}
+	events.mu.Unlock()
+	slices.Sort(paths)
+	if want := []string{"Album/2024/a.jpg", "Album/b.jpg", "loose.txt"}; !slices.Equal(paths, want) {
+		t.Fatalf("settled paths = %q, want %q", paths, want)
+	}
+}

@@ -4,6 +4,8 @@ export type UploadActivityStatus = 'queued' | 'active' | 'done' | 'failed' | 'ca
 export interface UploadActivityFile {
     index: number;
     name: string;
+    /** Where the file sits in what was selected ("Album/2024/a.jpg"); display only, never a local path. */
+    path?: string;
     status: UploadActivityStatus;
     size?: number;
     progress?: number;

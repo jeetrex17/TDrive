@@ -161,17 +161,28 @@ describe('full activity view', () => {
         expect(host.querySelector('[aria-label="Details for Photo selection"]')).not.toBeNull();
     });
 
-    it('lists moving and failed files first and counts files an import has not reached as waiting', async () => {
-        uploadActivities.set([{ ...batch('active'), fileCount: 5, files: [
-            { index: 0, name: 'done.jpg', status: 'done' },
-            { index: 1, name: 'moving.jpg', status: 'active', progress: 40 },
-            { index: 2, name: 'broken.jpg', status: 'failed', message: 'Lost' },
+    it('lists loose files, then each folder with its own files and counts, and folds a folder', async () => {
+        uploadActivities.set([{ ...batch('active'), fileCount: 6, files: [
+            { index: 0, name: 'cover.jpg', path: 'cover.jpg', status: 'done' },
+            { index: 1, name: 'a.jpg', path: 'Album/2024/a.jpg', status: 'done' },
+            { index: 2, name: 'b.jpg', path: 'Album/2024/b.jpg', status: 'failed', message: 'Lost' },
+            { index: 3, name: 'c.jpg', path: 'Album/c.jpg', status: 'active', progress: 40 },
         ] }]);
         openActivity({ selectedId: 'session-1' }); await settle();
-        const rows = Array.from(host.querySelectorAll('[data-activity-file] .file-name')).map((row) => row.textContent);
-        expect(rows).toEqual(['moving.jpg', 'broken.jpg', 'done.jpg']);
-        expect(host.querySelector('[data-activity-file]')?.textContent).toContain('Uploading · 40%');
-        expect(host.querySelector('.file-summary')?.textContent).toBe('1 completed · 1 failed · 1 uploading · 2 waiting');
+        const list = () => Array.from(host.querySelectorAll('.file-list > li')).map((row) => row.classList.contains('file-folder')
+            ? `[${row.querySelector('.folder-path')?.textContent}: ${row.querySelector('.folder-counts')?.textContent}]`
+            : row.querySelector('.file-name')?.textContent);
+        expect(list()).toEqual([
+            'cover.jpg',
+            '[Album / 2024: 2 files · 1 done · 1 failed]', 'a.jpg', 'b.jpg',
+            '[Album: 1 file · 1 uploading]', 'c.jpg',
+        ]);
+        expect(host.querySelector('.file-summary')?.textContent).toBe('2 completed · 1 failed · 1 uploading · 2 waiting');
+        expect(Array.from(host.querySelectorAll('[data-activity-file]')).find((row) => row.textContent?.includes('c.jpg'))?.textContent).toContain('Uploading · 40%');
+        const folder = Array.from(host.querySelectorAll<HTMLButtonElement>('.file-folder button')).find((row) => row.textContent?.includes('Album / 2024'));
+        expect(folder?.getAttribute('aria-expanded')).toBe('true');
+        folder?.click(); await settle();
+        expect(list()).toEqual(['cover.jpg', '[Album / 2024: 2 files · 1 done · 1 failed]', '[Album: 1 file · 1 uploading]', 'c.jpg']);
     });
 
     it('keeps the session batch authoritative over its compact legacy row', async () => {

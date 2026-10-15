@@ -320,18 +320,23 @@ func scanArchiveForImportLimit(ctx context.Context, archivePath string, maxScann
 type importBatch struct {
 	paths   []string
 	parents []string
+	// Where each file sits in what the user selected ("Album/2024/a.jpg"), for
+	// display only; never a local path.
+	labels []string
 }
 
 func newImportBatch() *importBatch {
 	return &importBatch{
 		paths:   make([]string, 0, importUploadBatchSize),
 		parents: make([]string, 0, importUploadBatchSize),
+		labels:  make([]string, 0, importUploadBatchSize),
 	}
 }
 
-func (b *importBatch) add(srcPath, parentID string) bool {
+func (b *importBatch) add(srcPath, parentID, label string) bool {
 	b.paths = append(b.paths, srcPath)
 	b.parents = append(b.parents, parentID)
+	b.labels = append(b.labels, label)
 	return len(b.paths) == importUploadBatchSize
 }
 
@@ -342,8 +347,10 @@ func (b *importBatch) len() int {
 func (b *importBatch) reset() {
 	clear(b.paths)
 	clear(b.parents)
+	clear(b.labels)
 	b.paths = b.paths[:0]
 	b.parents = b.parents[:0]
+	b.labels = b.labels[:0]
 }
 
 type importBatchUploader func(paths, parents []string, idOffset int) error
@@ -364,6 +371,9 @@ type importTasks struct {
 	errorCount   int
 	errors       []string
 	warnf        WarnFunc
+	// labelWindow hands a window's display paths to the progress observer
+	// before its uploads start, keyed by upload id.
+	labelWindow func(idOffset int, labels []string)
 }
 
 func (t *importTasks) reserveRemoteItem() error {
@@ -374,12 +384,12 @@ func (t *importTasks) reserveRemoteItem() error {
 	return nil
 }
 
-func (t *importTasks) add(srcPath, parentID string) error {
+func (t *importTasks) add(srcPath, parentID, label string) error {
 	if err := t.reserveRemoteItem(); err != nil {
 		return err
 	}
 	t.files++
-	if t.batch.add(srcPath, parentID) {
+	if t.batch.add(srcPath, parentID, label) {
 		return t.flush()
 	}
 	return nil
@@ -390,6 +400,9 @@ func (t *importTasks) flush() error {
 		return nil
 	}
 	batchSize := t.batch.len()
+	if t.labelWindow != nil {
+		t.labelWindow(t.nextUploadID, t.batch.labels)
+	}
 	err := t.upload(t.batch.paths, t.batch.parents, t.nextUploadID)
 	t.nextUploadID += batchSize
 	t.batch.reset()
@@ -496,8 +509,9 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 	observer := newImportUploadObserver(s, plan.Files)
 	observer.EmitInitial()
 	tasks := &importTasks{
-		batch: newImportBatch(),
-		warnf: s.warnf,
+		batch:       newImportBatch(),
+		warnf:       s.warnf,
+		labelWindow: observer.LabelWindow,
 	}
 	tasks.upload = func(batchPaths, batchParents []string, idOffset int) error {
 		_, err := s.upload(ctx, channelID, batchPaths, batchParents, encrypt, uploadOptions{
@@ -545,7 +559,7 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 					break
 				}
 				tasks.addError(filepath.Base(p), fmt.Errorf("extract failed, uploading as a file: %w", err))
-				if err := s.addFileTask(p, info.Size(), parent, encrypt, tasks); err != nil {
+				if err := s.addFileTask(p, filepath.Base(p), info.Size(), parent, encrypt, tasks); err != nil {
 					fatalErr = err
 				}
 				break // reach the shared fatal guard before scheduling another selected path
@@ -558,7 +572,7 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 				tasks.addError(filepath.Base(p), err)
 			}
 		default:
-			if err := s.addFileTask(p, info.Size(), parent, encrypt, tasks); err != nil {
+			if err := s.addFileTask(p, filepath.Base(p), info.Size(), parent, encrypt, tasks); err != nil {
 				fatalErr = err
 			}
 		}
@@ -615,7 +629,7 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 
 // addFileTask queues a single file for upload, skipping (and counting) it if it
 // exceeds the per-file limit or has nothing Telegram can store.
-func (s *Service) addFileTask(srcPath string, size int64, parentID string, encrypt bool, tasks *importTasks) error {
+func (s *Service) addFileTask(srcPath, label string, size int64, parentID string, encrypt bool, tasks *importTasks) error {
 	stored := uploadByteSize(size, encrypt)
 	if stored == 0 {
 		tasks.empty++
@@ -625,7 +639,7 @@ func (s *Service) addFileTask(srcPath string, size int64, parentID string, encry
 		tasks.oversize++
 		return nil
 	}
-	return tasks.add(srcPath, parentID)
+	return tasks.add(srcPath, parentID, label)
 }
 
 // importTree creates a top folder (collision-suffixed) under parentID, mirrors
@@ -684,7 +698,8 @@ func (s *Service) importTree(ctx context.Context, channelID int64, root, topName
 			tasks.addError(rel, err)
 			return false, nil
 		}
-		return false, s.addFileTask(p, info.Size(), parentID, encrypt, tasks)
+		// Labelled with the folder's name in the drive, which may carry a (2).
+		return false, s.addFileTask(p, path.Join(freeName, rel), info.Size(), parentID, encrypt, tasks)
 	}, func(p string, err error) error {
 		tasks.addError(filepath.Base(p), err)
 		return nil
