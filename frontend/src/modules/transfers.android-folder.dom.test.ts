@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
     updateTransferName: vi.fn(),
     updateTransferProgress: vi.fn(),
     refreshFiles: vi.fn(),
+    cancelSingleUpload: vi.fn(),
 }));
 
 const eventListeners = vi.hoisted(() => new Map<string, (...args: unknown[]) => void>());
@@ -17,13 +18,15 @@ const eventsOn = vi.hoisted(() => vi.fn((eventName: string, callback: (event: { 
     return () => eventListeners.delete(eventName);
 }));
 const app = vi.hoisted(() => ({
-    CreateFolder: vi.fn(),
+    CreateFolderForDrive: vi.fn(),
     DownloadFile: vi.fn(),
     ImportPaths: vi.fn(),
     PlanImport: vi.fn(),
     SelectFiles: vi.fn(),
     SelectFolder: vi.fn(),
-    UploadToDriveFS: vi.fn(),
+    RetryUploadToDriveFS: vi.fn(),
+    ResumeUploads: vi.fn(),
+    FlushEvents: vi.fn(async (token: string) => { eventListeners.get('events_flushed')?.(token); }),
 }));
 
 vi.mock('../../bindings/TDrive/internal/app/app', () => app);
@@ -37,16 +40,19 @@ vi.mock('./notif-bell', () => ({
     updateTransferName: mocks.updateTransferName,
     updateTransferProgress: mocks.updateTransferProgress,
     wasUploadCanceled: () => false,
+    cancelSingleUpload: mocks.cancelSingleUpload,
 }));
 vi.mock('./encryption', () => ({ loadEncryptionStatus: vi.fn() }));
-vi.mock('./modals/import-options', () => ({ openImportOptionsModal: mocks.openImportOptionsModal }));
-vi.mock('./modals/upload-options', () => ({ openUploadOptionsModal: vi.fn() }));
+vi.mock('./modals/import-options', () => ({ openImportOptionsModal: mocks.openImportOptionsModal, cancelImportOptions: vi.fn() }));
+vi.mock('./modals/upload-options', () => ({ openUploadOptionsModal: vi.fn().mockResolvedValue({ encrypt: false }), cancelUploadOptions: vi.fn() }));
 vi.mock('./modals/encryption-setup', () => ({ openEncryptionSetupModal: vi.fn() }));
 vi.mock('./modals/encryption-password', () => ({ openEncryptionPasswordModal: vi.fn() }));
 vi.mock('../ui/chrome/UploadMenu.svelte', () => ({ default: {} }));
 vi.mock('../ui/mount', () => ({ mountSvelte: vi.fn() }));
 
 import { activateTransferSurfaces, importFolderWithParentID } from './transfers';
+import { get } from 'svelte/store';
+import { uploadActivities } from '../ui/notifications/upload-activity-store';
 
 interface BridgeWindow {
     wails?: {
@@ -117,12 +123,12 @@ beforeEach(() => {
     createdFolders = [];
 
     mocks.openImportOptionsModal.mockResolvedValue({ encrypt: false, extract: false });
-    app.CreateFolder.mockImplementation(async (name: string, parentId: string) => {
+    app.CreateFolderForDrive.mockImplementation(async (name: string, parentId: string) => {
         const folder = { id: `f${createdFolders.length + 1}`, name, parentId };
         createdFolders.push(folder);
         return { id: folder.id, name, parent_id: parentId };
     });
-    app.UploadToDriveFS.mockImplementation(async (paths: string[]) => ({
+    app.RetryUploadToDriveFS.mockImplementation(async (paths: string[]) => ({
         result: { ok: true },
         files: paths.map((path) => ({ name: path })),
     }));
@@ -155,7 +161,7 @@ describe('uploading an Android folder a window at a time', () => {
         ]);
         // Nothing stays in the cache behind the window that is uploading.
         expect(released).toEqual(materialized);
-        expect(app.UploadToDriveFS).toHaveBeenCalledTimes(3);
+        expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(3);
     });
 
     it('creates the folder tree parents first and uploads each file into its own', async () => {
@@ -169,33 +175,33 @@ describe('uploading an Android folder a window at a time', () => {
             { id: 'f3', name: 'a', parentId: 'f1' },
             { id: 'f4', name: 'deep', parentId: 'f2' },
         ]);
-        const [paths, parentIDs] = app.UploadToDriveFS.mock.calls[0];
+        const [paths, parentIDs] = app.RetryUploadToDriveFS.mock.calls[0];
         expect(paths).toEqual(['/cache/doc:0', '/cache/doc:1', '/cache/doc:2']);
         expect(parentIDs).toEqual(['f4', 'f3', 'f1']);
     });
 
     it('releases the window even when the upload throws', async () => {
         manifestJson = manifestOf('Holiday', ['a', 'b']);
-        app.UploadToDriveFS.mockRejectedValue(new Error('backend went away'));
+        app.RetryUploadToDriveFS.mockRejectedValue(new Error('backend went away'));
 
         await importFolderWithParentID('root');
 
         expect(released).toEqual([['doc:0', 'doc:1']]);
-        expect(mocks.markTransferDone).toHaveBeenCalledWith({ id: 'import', direction: 'up', status: 'failed' });
+        expect(mocks.markTransferDone).toHaveBeenCalledWith({ id: expect.stringMatching(/^(import|upload-)/), direction: 'up', status: 'failed' });
     });
 
     it('releases the window it was cancelled in and starts no more', async () => {
         manifestJson = manifestOf('Holiday', ['a', 'b', 'c', 'd', 'e']);
-        app.UploadToDriveFS.mockResolvedValue({
+        app.RetryUploadToDriveFS.mockResolvedValue({
             result: { ok: false, error: { code: 'canceled', message: 'canceled' } },
             files: [],
         });
 
         await importFolderWithParentID('root');
 
-        expect(app.UploadToDriveFS).toHaveBeenCalledTimes(1);
+        expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(1);
         expect(released).toEqual([['doc:0', 'doc:1', 'doc:2', 'doc:3']]);
-        expect(mocks.markTransferDone).toHaveBeenCalledWith({ id: 'import', direction: 'up', status: 'canceled' });
+        expect(mocks.markTransferDone).toHaveBeenCalledWith({ id: expect.stringMatching(/^(import|upload-)/), direction: 'up', status: 'canceled' });
         // Backing out is not a failure to report.
         expect(mocks.notify).not.toHaveBeenCalled();
     });
@@ -206,17 +212,58 @@ describe('uploading an Android folder a window at a time', () => {
 
         await importFolderWithParentID('root');
 
-        const [paths] = app.UploadToDriveFS.mock.calls[0];
+        const [paths] = app.RetryUploadToDriveFS.mock.calls[0];
         expect(paths).toEqual(['/cache/doc:0', '/cache/doc:2']);
         // The id that never became a file is still released: a half-done copy
         // would otherwise sit in the cache forever.
         expect(released).toEqual([['doc:0', 'doc:1', 'doc:2']]);
-        expect(mocks.markTransferDone).toHaveBeenCalledWith({ id: 'import', direction: 'up', status: 'failed' });
+        expect(mocks.markTransferDone).toHaveBeenCalledWith({ id: expect.stringMatching(/^(import|upload-)/), direction: 'up', status: 'failed' });
         expect(mocks.updateTransferName).toHaveBeenLastCalledWith({
-            id: 'import',
+            id: expect.stringMatching(/^(import|upload-)/),
             direction: 'up',
             name: 'Imported 2 files · 1 failed',
         });
+    });
+
+    it('lists every file of the folder with its own outcome', async () => {
+        manifestJson = JSON.stringify({ root: 'Holiday', files: [
+            { id: 'doc:0', rel: 'trip/a.jpg', size: 100 }, { id: 'doc:1', rel: 'trip/b.jpg', size: 100 },
+            { id: 'doc:2', rel: 'notes/empty.txt', size: 0 }, { id: 'doc:3', rel: 'c.jpg', size: 100 },
+        ] });
+        unreadable = new Set(['doc:1']);
+
+        await importFolderWithParentID('root');
+
+        const [batch] = get(uploadActivities);
+        // The empty file is skipped rather than listed as a failure.
+        expect(batch.fileCount).toBe(3);
+        expect(batch.files.map(({ name, path, status, message }) => ({ name, path, status, message }))).toEqual([
+            { name: 'a.jpg', path: 'Holiday/trip/a.jpg', status: 'done', message: undefined },
+            { name: 'b.jpg', path: 'Holiday/trip/b.jpg', status: 'failed', message: 'Could not be read from the folder.' },
+            { name: 'c.jpg', path: 'Holiday/c.jpg', status: 'done', message: undefined },
+        ]);
+    });
+
+    it('never copies or sends a row cancelled while it waited, and stops a sending row by its window id', async () => {
+        manifestJson = manifestOf('Holiday', ['a', 'b', 'c', 'd', 'e', 'f']);
+        let finishFirst = () => {};
+        app.RetryUploadToDriveFS.mockImplementationOnce((paths: string[]) => new Promise((resolve) => {
+            finishFirst = () => resolve({ result: { ok: true }, files: paths.map((path) => ({ name: path })) });
+        }));
+        const run = importFolderWithParentID('root');
+        await vi.waitFor(() => expect(app.RetryUploadToDriveFS).toHaveBeenCalledOnce());
+        const { cancelActivityFile } = await import('./transfers');
+        const [batch] = get(uploadActivities);
+        cancelActivityFile(batch.id, batch.files[1]);
+        expect(mocks.cancelSingleUpload).toHaveBeenCalledWith(1);
+        cancelActivityFile(batch.id, batch.files[5]);
+        finishFirst();
+        await run;
+
+        expect(materialized).toEqual([['doc:0', 'doc:1', 'doc:2', 'doc:3'], ['doc:4']]);
+        const files = get(uploadActivities)[0].files;
+        expect(files[5].status).toBe('canceled');
+        expect(files[4].status).toBe('done');
     });
 
     it('releases a window whose files all failed to copy', async () => {
@@ -225,7 +272,7 @@ describe('uploading an Android folder a window at a time', () => {
 
         await importFolderWithParentID('root');
 
-        expect(app.UploadToDriveFS).not.toHaveBeenCalled();
+        expect(app.RetryUploadToDriveFS).not.toHaveBeenCalled();
         expect(released).toEqual([['doc:0', 'doc:1']]);
     });
 
@@ -241,7 +288,7 @@ describe('uploading an Android folder a window at a time', () => {
         await importFolderWithParentID('root');
 
         expect(mocks.updateTransferProgress).toHaveBeenLastCalledWith({
-            id: 'import',
+            id: expect.stringMatching(/^(import|upload-)/),
             direction: 'up',
             progress: 100,
             bytes: 1000,
@@ -249,17 +296,17 @@ describe('uploading an Android folder a window at a time', () => {
             itemsDone: 2,
             itemsTotal: 2,
         });
-        expect(mocks.markTransferDone).toHaveBeenCalledWith({ id: 'import', direction: 'up', status: 'done' });
+        expect(mocks.markTransferDone).toHaveBeenCalledWith({ id: expect.stringMatching(/^(import|upload-)/), direction: 'up', status: 'done' });
     });
 
-    it('shows the walk is running before the manifest arrives', async () => {
+    it('starts the aggregate only after the selection is confirmed', async () => {
         await importFolderWithParentID('root');
 
         expect(mocks.pushTransferStart).toHaveBeenCalledWith({
-            id: 'import',
+            id: expect.stringMatching(/^(import|upload-)/),
             direction: 'up',
-            name: 'Reading folder…',
-            total: 0,
+            name: 'Creating folders…',
+            total: 100,
         });
     });
 
@@ -268,11 +315,11 @@ describe('uploading an Android folder a window at a time', () => {
 
         await importFolderWithParentID('root');
 
-        expect(app.CreateFolder).not.toHaveBeenCalled();
-        expect(app.UploadToDriveFS).not.toHaveBeenCalled();
+        expect(app.CreateFolderForDrive).not.toHaveBeenCalled();
+        expect(app.RetryUploadToDriveFS).not.toHaveBeenCalled();
         expect(mocks.openImportOptionsModal).not.toHaveBeenCalled();
         expect(mocks.notify).not.toHaveBeenCalled();
-        expect(mocks.markTransferDone).toHaveBeenCalledWith({ id: 'import', direction: 'up', status: 'canceled' });
+        expect(mocks.markTransferDone).not.toHaveBeenCalled();
     });
 
     it('uploads nothing when the import dialog is dismissed', async () => {
@@ -280,20 +327,20 @@ describe('uploading an Android folder a window at a time', () => {
 
         await importFolderWithParentID('root');
 
-        expect(app.CreateFolder).not.toHaveBeenCalled();
+        expect(app.CreateFolderForDrive).not.toHaveBeenCalled();
         expect(materialized).toEqual([]);
-        expect(mocks.markTransferDone).toHaveBeenCalledWith({ id: 'import', direction: 'up', status: 'canceled' });
+        expect(mocks.markTransferDone).not.toHaveBeenCalled();
     });
 
     it('stops when the tree cannot be created, rather than uploading into the wrong place', async () => {
         manifestJson = manifestOf('Holiday', ['sub/a.jpg']);
-        app.CreateFolder.mockRejectedValue(new Error('folder projection failed'));
+        app.CreateFolderForDrive.mockRejectedValue(new Error('folder projection failed'));
 
         await importFolderWithParentID('root');
 
         expect(materialized).toEqual([]);
-        expect(app.UploadToDriveFS).not.toHaveBeenCalled();
-        expect(mocks.markTransferDone).toHaveBeenCalledWith({ id: 'import', direction: 'up', status: 'failed' });
+        expect(app.RetryUploadToDriveFS).not.toHaveBeenCalled();
+        expect(mocks.markTransferDone).toHaveBeenCalledWith({ id: expect.stringMatching(/^(import|upload-)/), direction: 'up', status: 'failed' });
     });
 
     it('leaves the desktop picker alone', async () => {
@@ -304,5 +351,38 @@ describe('uploading an Android folder a window at a time', () => {
 
         expect(app.SelectFolder).toHaveBeenCalled();
         expect(materialized).toEqual([]);
+    });
+});
+
+describe('Android document tree ownership', () => {
+    it('keeps the native tree stable until the active folder run has released it', async () => {
+        let finishUpload = (_result: unknown) => {};
+        const pick = vi.spyOn(host.wails!, 'pickFolder');
+        app.RetryUploadToDriveFS.mockImplementationOnce(() => new Promise((resolve) => { finishUpload = resolve; }))
+            .mockResolvedValue({ result: { ok: true }, files: [{ name: 'a.jpg' }] });
+        const first = importFolderWithParentID('root');
+        await vi.waitFor(() => expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(1));
+        await importFolderWithParentID('root');
+        expect(pick).toHaveBeenCalledTimes(1);
+        expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ title: 'A folder is already selected' }));
+        finishUpload({ result: { ok: true }, files: [{ name: 'a.jpg' }] });
+        await first;
+        await importFolderWithParentID('root');
+        expect(pick).toHaveBeenCalledTimes(2);
+    });
+
+    it('ignores a canceled result from the previous dashboard lifetime', async () => {
+        let finishUpload = (_result: unknown) => {};
+        app.RetryUploadToDriveFS.mockImplementationOnce(() => new Promise((resolve) => { finishUpload = resolve; }));
+        const old = importFolderWithParentID('root');
+        await vi.waitFor(() => expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(1));
+        deactivateTransfers();
+        deactivateTransfers = activateTransferSurfaces();
+        state.cancelingUpload = false;
+        state.importBatch = null;
+        finishUpload({ result: { ok: false, error: { code: 'canceled', message: 'old session canceled' } }, files: [] });
+        await old;
+        expect(state.cancelingUpload).toBe(false);
+        expect(state.importBatch).toBeNull();
     });
 });

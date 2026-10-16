@@ -144,8 +144,12 @@ type Service struct {
 	// upload ID its progress events carry, so one transfer row can be stopped
 	// without taking the rest of the batch with it. Only goroutines that hold
 	// an upload slot are registered, so it stays bounded by MaxConcurrentUploads.
-	uploadCancelMu     sync.Mutex
-	uploadCancels      map[int]context.CancelFunc
+	uploadCancelMu sync.Mutex
+	uploadCancels  map[int]context.CancelCauseFunc
+	// uploadWindows are the id ranges of running batches, so a cancel can
+	// reach a file that has not started yet. Guarded by uploadCancelMu.
+	uploadWindows      []*uploadWindow
+	pause              uploadPause
 	resumeOnce         sync.Once
 	resumeErr          error
 	resumeMu           sync.Mutex

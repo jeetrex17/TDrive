@@ -342,6 +342,7 @@ const TELEGRAM_CODES = new Map<string, string>([
     ['CHANNEL_PRIVATE', 'This drive is no longer available to you.'],
     ['FILE_PARTS_INVALID', 'Telegram rejected the upload. Try again.'],
     ['MEDIA_EMPTY', 'Telegram received an empty file.'],
+    ['FILE_PART_LENGTH_INVALID', "Empty files can't be uploaded."],
 ]);
 
 function telegramPresentation(code: string): ErrorPresentation {

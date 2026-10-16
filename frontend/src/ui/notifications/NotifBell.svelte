@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { onDestroy, tick } from 'svelte';
+    import { onDestroy } from 'svelte';
     import BellIcon from '@lucide/svelte/icons/bell';
     import FailedUploadReports from './FailedUploadReports.svelte';
     import { failedUploadReports, dismissFailedUploadReport } from '../modals/failed-uploads-store';
@@ -8,16 +8,18 @@
     import TransferRow from './TransferRow.svelte';
     import ResumableUploadRow from './ResumableUploadRow.svelte';
     import ResumableDownloadRow from './ResumableDownloadRow.svelte';
-    import { resumableUploads } from '../../modules/resumable-uploads';
     import { resumableDownloads } from '../../modules/resumable-downloads';
     import { hasActiveModal } from '../modals/modal-a11y';
     import { portal } from './portal';
+    import { activityView, openActivity } from './activity-store';
+    import { visibleActiveTransfers, visibleRecentEvents, standaloneResumableUploads as resumableUploads } from './visible-history';
+    import { uploadActivities, clearUploadActivityHistory } from './upload-activity-store';
+    import QueuedUploadRow from './QueuedUploadRow.svelte';
+    import { sidebarState } from '../sidebar/sidebar-store';
     import {
-        activeTransfers,
         bellMode,
         notifPanelOpen,
         notifUnreadErrors,
-        recentEvents,
         type TransferDirection,
     } from './notif-store';
 
@@ -60,15 +62,12 @@
      * this before, which says nothing to a screen reader and little to anyone
      * who cannot separate the accent from the danger hue.
      */
-    const resumableIds = $derived(new Set($resumableUploads.map((job) => job.jobId)));
-    const downloadKeys = $derived(new Set($resumableDownloads.map((job) => `xfer:down:file:${job.channelId}:${job.logicalMsgId}`)));
-    const visibleActive = $derived($activeTransfers.filter((transfer) =>
-        (!transfer.resumableJobId || !resumableIds.has(transfer.resumableJobId)) && !downloadKeys.has(transfer.id)
-    ));
-    const visibleRecent = $derived($recentEvents.filter((entry) =>
-        entry.kind !== 'transfer' || ((!entry.resumableJobId || !resumableIds.has(entry.resumableJobId)) && !downloadKeys.has(entry.id))
-    ));
-    const activeCount = $derived(visibleActive.length + $resumableUploads.length + $resumableDownloads.length);
+    const visibleActive = visibleActiveTransfers;
+    const visibleRecent = visibleRecentEvents;
+    // A running batch shows through its own aggregate row; only waiting ones need a row of their own.
+    const queued = $derived($uploadActivities.filter((entry) => entry.status === 'queued').sort((a, b) => a.addedAt - b.addedAt));
+    const finishedBatches = $derived($uploadActivities.some((entry) => entry.status !== 'queued' && entry.status !== 'active'));
+    const activeCount = $derived($visibleActive.length + $resumableUploads.length + $resumableDownloads.length + queued.length);
     const bellLabel = $derived(
         $bellMode === 'error'
             ? `Notifications, ${$notifUnreadErrors} ${$notifUnreadErrors === 1 ? 'error' : 'errors'}`
@@ -94,21 +93,18 @@
         hoverTimer = null;
     }
 
-    /**
-     * Opens the panel. `focusPanel` is for deliberate activation only -- a
-     * click or a key -- because hover must never pull focus away from whatever
-     * the reader is actually typing into.
-     */
-    async function openPanel({ focusPanel = false }: { focusPanel?: boolean } = {}): Promise<void> {
+    /** Hover only previews; it never takes focus from what the reader is typing into. */
+    function openPanel(): void {
         clearHoverTimer();
+        if ($activityView.open || hasActiveModal()) return;
         reanchor();
         notifPanelOpen.set(true);
         notifUnreadErrors.set(0);
-        if (!focusPanel) return;
-        await tick();
-        // The container, not its first button: a pointer-opened panel shows no
-        // focus ring this way, while Tab still steps into the controls.
-        panelEl?.focus({ preventScroll: true });
+    }
+
+    function openFullActivity(selectedId: string | null = null, tab: 'transfers' | 'notifications' = 'transfers'): void {
+        clearHoverTimer();
+        openActivity({ selectedId, tab });
     }
 
     function closePanel({ restoreFocus = false }: { restoreFocus?: boolean } = {}): void {
@@ -121,15 +117,9 @@
         if (restoreFocus || heldFocus) bellEl?.focus({ preventScroll: true });
     }
 
-    /** Activation toggles; aria-expanded would otherwise be a standing lie. */
-    function togglePanel(): void {
-        if ($notifPanelOpen) closePanel({ restoreFocus: true });
-        else void openPanel({ focusPanel: true });
-    }
-
     function scheduleOpenPanel(): void {
         clearHoverTimer();
-        if ($notifPanelOpen) return;
+        if ($notifPanelOpen || $activityView.open) return;
         hoverTimer = setTimeout(() => {
             hoverTimer = null;
             void openPanel();
@@ -148,9 +138,9 @@
 
     function onBellKeydown(event: KeyboardEvent): void {
         if (event.key !== 'Enter' && event.key !== ' ') return;
-        // Swallowed here so the synthesised click cannot toggle a second time.
+        // Swallowed here so the synthesised click cannot open it a second time.
         event.preventDefault();
-        togglePanel();
+        openFullActivity();
     }
 
     function panelFocusables(): HTMLElement[] {
@@ -216,12 +206,12 @@
     type="button"
     data-mode={$bellMode}
     aria-haspopup="dialog"
-    aria-controls="notif-panel"
-    aria-expanded={$notifPanelOpen ? 'true' : 'false'}
+    aria-controls={$notifPanelOpen ? 'notif-panel' : 'activity-modal'}
+    aria-expanded={$notifPanelOpen || $activityView.open ? 'true' : 'false'}
     aria-label={bellLabel}
     onclick={(event) => {
         event.stopPropagation();
-        togglePanel();
+        openFullActivity();
     }}
     onkeydown={onBellKeydown}
     onmouseenter={scheduleOpenPanel}
@@ -256,8 +246,8 @@
                 <button
                     class="notif-panel-clear"
                     type="button"
-                    disabled={visibleRecent.length === 0}
-                    onclick={onClearHistory}
+                    disabled={$visibleRecent.length === 0 && !finishedBatches}
+                    onclick={() => { onClearHistory(); clearUploadActivityHistory(); }}
                 >
                     Clear
                 </button>
@@ -269,29 +259,32 @@
                 <h3 id="notif-section-active" class="notif-section-label">{$resumableUploads.length + $resumableDownloads.length > 0 ? 'Transfers' : 'Active'}</h3>
                 <div class="notif-section" role="list" aria-labelledby="notif-section-active">
                     {#each $resumableUploads as job (job.jobId)}
-                        <div role="listitem"><ResumableUploadRow {job} /></div>
+                        <div role="listitem"><ResumableUploadRow {job} onOpen={() => openFullActivity(`upload:${job.jobId}`)} /></div>
                     {/each}
                     {#each $resumableDownloads as job (job.jobId)}
-                        <div role="listitem"><ResumableDownloadRow {job} /></div>
+                        <div role="listitem"><ResumableDownloadRow {job} onOpen={() => openFullActivity(`download:${job.jobId}`)} /></div>
                     {/each}
-                    {#each visibleActive as transfer (transfer.id)}
+                    {#each $visibleActive as transfer (transfer.id)}
                         <!-- TransferRow carries no role of its own, unlike its
                              phone twin; the wrapper supplies one until it grows
                              EventRow's `listItem` prop. -->
                         <div role="listitem">
-                            <TransferRow {transfer} onCancel={onCancelDirection} {onCancelFile} />
+                            <TransferRow {transfer} onOpen={() => openFullActivity(transfer.id)} onCancel={onCancelDirection} {onCancelFile} />
                         </div>
+                    {/each}
+                    {#each queued as batch (batch.id)}
+                        <QueuedUploadRow {batch} activeDriveId={$sidebarState.activeChannelId} onOpen={() => openFullActivity(batch.id)} />
                     {/each}
                 </div>
             {/if}
-            {#if visibleRecent.length > 0}
+            {#if $visibleRecent.length > 0}
                 <h3 id="notif-section-recent" class="notif-section-label">Recent</h3>
                 <div class="notif-section" role="list" aria-labelledby="notif-section-recent">
-                    {#each visibleRecent.slice(0, 50) as entry (entry.id)}
+                    {#each $visibleRecent.slice(0, 50) as entry (entry.id)}
                         {#if entry.kind === 'transfer'}
-                            <div role="listitem"><TransferRow transfer={entry} /></div>
+                            <div role="listitem"><TransferRow transfer={entry} onOpen={() => openFullActivity(entry.id)} /></div>
                         {:else}
-                            <EventRow event={entry} listItem />
+                            <EventRow event={entry} listItem onOpen={() => openFullActivity(entry.id, 'notifications')} />
                         {/if}
                     {/each}
                 </div>
@@ -305,5 +298,12 @@
                 </div>
             {/if}
         </div>
+        <button class="view-all-activity" type="button" onclick={() => openFullActivity()}>View all activity</button>
     </div>
 {/if}
+
+<style>
+    .view-all-activity { flex-shrink: 0; width: 100%; padding: var(--space-3); border: 0; border-top: 1px solid var(--color-border-soft); background: transparent; color: var(--color-accent-text); font: inherit; font-size: var(--type-sm); cursor: pointer; }
+    .view-all-activity:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -3px; }
+    @media (hover: hover) { .view-all-activity:hover { background: var(--overlay-neutral-1); } }
+</style>

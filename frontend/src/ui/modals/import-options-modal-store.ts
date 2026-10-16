@@ -5,6 +5,7 @@ export interface ImportOptionsPlan {
     folders: number;
     bytes: number;
     oversize: number;
+    empty?: number;
     archives: number;
     ignored: number;
     maxItems: number;
@@ -19,6 +20,9 @@ export interface ImportOptionsPayload {
     personal: boolean;
     hasArchives: boolean;
     replanning?: boolean;
+    queued?: boolean;
+    destination?: string;
+    names?: readonly string[];
 }
 
 export const importOptionsModal = createModalController<ImportOptionsPayload>();

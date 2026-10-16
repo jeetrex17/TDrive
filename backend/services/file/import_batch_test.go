@@ -81,7 +81,7 @@ func TestImportBatchIsBoundedAndPreservesPairs(t *testing.T) {
 	for i := 0; i < total; i++ {
 		wantPaths[i] = fmt.Sprintf("path-%03d", i)
 		wantParents[i] = fmt.Sprintf("parent-%03d", i)
-		if full := batch.add(wantPaths[i], wantParents[i]); full {
+		if full := batch.add(wantPaths[i], wantParents[i], filepath.Base(wantPaths[i])); full {
 			consume()
 		}
 		if batch.len() > importUploadBatchSize {

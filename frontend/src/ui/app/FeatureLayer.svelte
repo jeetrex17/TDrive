@@ -88,6 +88,7 @@
     import ChannelPickerModal from '../channels/ChannelPickerModal.svelte';
     import { channelPickerOpen, channelSources } from '../channels/channel-store';
     import ToastStack from '../notifications/ToastStack.svelte';
+    import ActivityView from '../notifications/ActivityView.svelte';
     import PreviewModal from '../preview/PreviewModal.svelte';
     import DropOverlay from '../transfers/DropOverlay.svelte';
     import VideoModal from '../video/VideoModal.svelte';
@@ -160,6 +161,9 @@
         <ContextMenu />
     </div>
     <DropOverlay />
+    <div id="activity-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
+        <ActivityView />
+    </div>
     <div id="failed-uploads-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <FailedUploadsModal onClose={closeFailedUploads} onRetry={() => { void retryFailedUploads(); }} />
     </div>

@@ -3,6 +3,7 @@ package file
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -24,37 +25,20 @@ func (s *Service) Upload(ctx context.Context, channelID int64, filePaths []strin
 	})
 }
 
-// CancelUpload stops the single running upload with this ID — the one carried
-// by its progress events — and leaves the rest of the batch to finish. Reports
-// whether an upload with that ID was still running.
+// CancelUpload stops the single upload with this ID — the one carried by its
+// progress events — and leaves the rest of the batch to finish. A file of a
+// running batch that has not started yet is skipped when its turn comes.
+// Reports whether a running or waiting upload with that ID was found.
 func (s *Service) CancelUpload(uploadID int) bool {
 	s.uploadCancelMu.Lock()
 	cancel := s.uploadCancels[uploadID]
+	skipped := cancel == nil && s.skipWaitingUploadLocked(uploadID)
 	s.uploadCancelMu.Unlock()
 	if cancel == nil {
-		return false
+		return skipped
 	}
-	cancel()
+	cancel(errUploadCanceled)
 	return true
-}
-
-// trackUploadCancel derives one upload's context from the batch context and
-// registers it for CancelUpload. Cancelling the batch still stops every file;
-// the returned func unregisters this one and releases its context.
-func (s *Service) trackUploadCancel(ctx context.Context, uploadID int) (context.Context, func()) {
-	ctx, cancel := context.WithCancel(ctx)
-	s.uploadCancelMu.Lock()
-	if s.uploadCancels == nil {
-		s.uploadCancels = make(map[int]context.CancelFunc)
-	}
-	s.uploadCancels[uploadID] = cancel
-	s.uploadCancelMu.Unlock()
-	return ctx, func() {
-		s.uploadCancelMu.Lock()
-		delete(s.uploadCancels, uploadID)
-		s.uploadCancelMu.Unlock()
-		cancel()
-	}
 }
 
 type uploadOptions struct {
@@ -62,6 +46,8 @@ type uploadOptions struct {
 	peer      *tgclient.InputPeer
 	idOffset  int
 	resumable bool
+	// pausable files wait while the user has paused interactive uploads.
+	pausable bool
 }
 
 type uploadedResult struct {
@@ -131,22 +117,36 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 	uploaded := make([]uploadedResult, 0, len(filePaths))
 	failed := 0
 	var firstErr error
+	window, closeWindow := s.openUploadWindow(options.idOffset, len(filePaths))
+	defer closeWindow()
+	// fail reports a file that did not upload. A file the user cancelled on
+	// its own is reported too, but the batch carried on without it, so it is
+	// not a failure of the batch.
+	fail := func(uploadID int, path string, err error) {
+		if !errors.Is(err, errUploadCanceled) {
+			mu.Lock()
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+			mu.Unlock()
+		}
+		observer.Failed(uploadID, filepath.Base(path), err)
+	}
 
 	for i := range len(filePaths) {
 		path := filePaths[i]
 		pid := parentIDs[i]
 		uploadID := options.idOffset + i
-		slotStarted := time.Now()
-		release, slotErr := s.acquireUploadSlot(ctx)
-		reportUploadTiming(ctx, "slot_wait", slotStarted)
-		if slotErr != nil {
-			mu.Lock()
-			failed++
-			if firstErr == nil {
-				firstErr = slotErr
-			}
-			mu.Unlock()
-			observer.Failed(uploadID, filepath.Base(path), slotErr)
+		release, err := s.awaitUploadTurn(ctx, options.pausable)
+		if err != nil {
+			fail(uploadID, path, err)
+			continue
+		}
+		uploadCtx, untrack, ok := s.startUpload(ctx, window, uploadID)
+		if !ok {
+			release()
+			fail(uploadID, path, errUploadCanceled)
 			continue
 		}
 		wg.Go(func() {
@@ -156,17 +156,10 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 					release()
 				}
 			}()
-			uploadCtx, untrack := s.trackUploadCancel(ctx, uploadID)
 			defer untrack()
 			defer func() {
 				if r := recover(); r != nil {
-					mu.Lock()
-					failed++
-					if firstErr == nil {
-						firstErr = fmt.Errorf("upload panic: %v", r)
-					}
-					mu.Unlock()
-					observer.Failed(uploadID, filepath.Base(path), fmt.Errorf("upload panic: %v", r))
+					fail(uploadID, path, fmt.Errorf("upload panic: %v", r))
 				}
 			}()
 
@@ -186,18 +179,19 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 					s.warnf("warn: upload committed but local projection is pending for %q: %v\n", meta.Name, err)
 					return
 				}
-				mu.Lock()
-				failed++
-				if firstErr == nil {
-					firstErr = err
+				if canceledOnItsOwn(ctx, uploadCtx, err) {
+					fail(uploadID, path, errUploadCanceled)
+					return
 				}
-				mu.Unlock()
 				s.warnf("warn: upload failed for %q: %v\n", filepath.Base(path), err)
-				observer.Failed(uploadID, filepath.Base(path), err)
+				fail(uploadID, path, err)
 				return
 			}
 
 			projected := op.Type == ""
+			if accepted, ok := observer.(uploadAcceptedObserver); ok && !projected {
+				accepted.Accepted(uploadID)
+			}
 			mu.Lock()
 			uploaded = append(uploaded, uploadedResult{
 				UploadID:          uploadID,

@@ -2,7 +2,7 @@
 // per-batch encryption. Resolves to { encrypt: boolean } on Continue,
 // or null on Cancel.
 
-import { uploadOptionsModal } from '../../ui/modals/upload-options-modal-store';
+import { uploadOptionsModal, type UploadOptionsPayload } from '../../ui/modals/upload-options-modal-store';
 
 type UploadChoice = { encrypt: boolean } | null;
 
@@ -26,7 +26,7 @@ export function confirmUploadOptions(choice: { encrypt: boolean }): void {
 
 
 
-export function openUploadOptionsModal({ count }: { count: number }): Promise<UploadChoice> {
+export function openUploadOptionsModal(opts: UploadOptionsPayload): Promise<UploadChoice> {
     return new Promise<UploadChoice>((resolve) => {
         // A second open while one is pending keeps the visible modal and lets
         // both callers observe the same eventual choice.
@@ -39,6 +39,6 @@ export function openUploadOptionsModal({ count }: { count: number }): Promise<Up
             return;
         }
         pending = resolve;
-        uploadOptionsModal.open({ count: Number(count) || 0 });
+        uploadOptionsModal.open({ ...opts, count: Number(opts.count) || 0 });
     });
 }

@@ -35,6 +35,7 @@ import {
 } from '../ui/notifications/notif-store';
 import { downloadSharePaths, rememberDownloadSharePath } from '../ui/mobile/mobile-shell-store';
 import { state } from '../state';
+import { closeActivity } from '../ui/notifications/activity-store';
 
 
 let host: HTMLElement;
@@ -54,6 +55,7 @@ function bell(): HTMLElement {
 }
 
 function reset(): void {
+    closeActivity();
     notifPanelOpen.set(false);
     notifUnreadErrors.set(0);
     historyEvents.set([]);
@@ -210,7 +212,7 @@ describe('notif-bell', () => {
             itemsDone: 3,
             itemsTotal: 5,
         });
-        bell().dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        notifPanelOpen.set(true);
         flushSync();
         // The wording both rows share: the desktop popover stacks the figures
         // in its meta column and the phone joins the same ones into a line, but

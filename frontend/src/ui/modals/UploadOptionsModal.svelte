@@ -1,5 +1,6 @@
 <script lang="ts">
     import ModalShell from './ModalShell.svelte';
+    import SelectedUploadFiles from './SelectedUploadFiles.svelte';
     import { uploadOptionsModal } from './upload-options-modal-store';
 
     interface Props {
@@ -32,30 +33,33 @@
 <ModalShell
     hostId="upload-options-modal"
     open={$view.open}
-    title="How would you like to upload?"
+    title={$view.payload?.queued ? 'Add uploads to queue' : 'How would you like to upload?'}
     titleId="upload-options-title"
     subtitle={summary}
     initialFocus='input[name="upload-mode"]:checked'
     restoreFocus="#file-list"
     onClose={onCancel}
 >
-    <label class="modal-choice-row">
-        <input type="radio" name="upload-mode" value="plain" bind:group={uploadMode} />
-        <span>
-            <strong>Upload</strong>
-            <small>Files are stored on Telegram as-is.</small>
-        </span>
-    </label>
-    <label class="modal-choice-row">
-        <input type="radio" name="upload-mode" value="encrypt" bind:group={uploadMode} />
-        <span>
-            <strong>Encrypt before upload</strong>
-            <small>TDrive encrypts file contents before sending them to Telegram. Names and folders stay visible.</small>
-        </span>
-    </label>
+    <SelectedUploadFiles names={$view.payload?.names ?? []} destination={$view.payload?.destination} queued={$view.payload?.queued} />
+    {#if $view.payload?.personal !== false}
+        <label class="modal-choice-row">
+            <input type="radio" name="upload-mode" value="plain" bind:group={uploadMode} />
+            <span>
+                <strong>Upload</strong>
+                <small>Files are stored on Telegram as-is.</small>
+            </span>
+        </label>
+        <label class="modal-choice-row">
+            <input type="radio" name="upload-mode" value="encrypt" bind:group={uploadMode} />
+            <span>
+                <strong>Encrypt before upload</strong>
+                <small>TDrive encrypts file contents before sending them to Telegram. Names and folders stay visible.</small>
+            </span>
+        </label>
+    {/if}
 
     {#snippet actions()}
         <button id="upload-options-cancel" class="secondary-btn" type="button" onclick={onCancel}>Cancel</button>
-        <button id="upload-options-confirm" class="primary-btn" type="button" onclick={confirm}>Continue</button>
+        <button id="upload-options-confirm" class="primary-btn" type="button" onclick={confirm}>{$view.payload?.queued ? 'Add to queue' : 'Continue'}</button>
     {/snippet}
 </ModalShell>

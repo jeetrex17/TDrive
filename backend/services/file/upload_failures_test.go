@@ -153,3 +153,18 @@ func TestUploadWithFailuresPreflightReportsNothingSent(t *testing.T) {
 		}
 	}
 }
+
+func TestUploadWithFailuresRefusesEmptyPlaintextBeforeSending(t *testing.T) {
+	svc, _, fake, _ := newTestService(t)
+	paths := []string{writeTempNamedFile(t, "empty.toc", nil), writeTempNamedFile(t, "notes.txt", []byte("hi"))}
+	files, failures, err := svc.UploadWithFailures(t.Context(), personalChannelID, paths, []string{"", ""}, false)
+	if err == nil || len(files) != 1 || len(failures) != 1 {
+		t.Fatalf("files=%v failures=%v error=%v, want one success and one failure", files, failures, err)
+	}
+	if f := failures[0]; f.Index != 0 || f.Code != "empty_file" || f.Retryable {
+		t.Fatalf("failure = %+v, want a non-retryable empty_file for the first input", f)
+	}
+	if sent := fake.SentFiles(); len(sent) != 1 {
+		t.Fatalf("sent files = %d, want only the non-empty file", len(sent))
+	}
+}

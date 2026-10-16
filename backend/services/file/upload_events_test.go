@@ -2,6 +2,7 @@ package file
 
 import (
 	"errors"
+	"fmt"
 	"testing"
 	"time"
 )
@@ -88,8 +89,8 @@ func TestImportUploadObserverCountsOnlyDeliveredBytes(t *testing.T) {
 	if count, _ := last["activeCount"].(int); count != 0 {
 		t.Fatalf("activeCount = %v, want nothing left in flight", last["activeCount"])
 	}
-	if done, failed, reasons := observer.Summary(); done != 1 || failed != 1 || len(reasons) != 1 {
-		t.Fatalf("summary = (%d, %d, %v), want one of each and one reason", done, failed, reasons)
+	if done, failed, canceled, reasons := observer.Summary(); done != 1 || failed != 1 || canceled != 0 || len(reasons) != 1 {
+		t.Fatalf("summary = (%d, %d, %d, %v), want one done, one failed and one reason", done, failed, canceled, reasons)
 	}
 }
 
@@ -135,5 +136,55 @@ func TestImportUploadObserverStaysBoundedWhenEveryFileChurns(t *testing.T) {
 	}
 	if progress, _ := payloads[len(payloads)-1]["progress"].(float64); progress != 100 {
 		t.Fatalf("final progress = %v, want 100", progress)
+	}
+}
+
+// Activity lists every imported file with its outcome. Each one is reported once,
+// inside the payloads the aggregate row already receives, so per-file detail
+// costs no event per file.
+func TestImportUploadObserverReportsEachSettledFileOnce(t *testing.T) {
+	const total = 500
+	events := &importTestEventRecorder{}
+	observer := newImportUploadObserver(&Service{Events: events}, total)
+	clock := time.Unix(0, 0)
+	observer.now = func() time.Time { return clock }
+	for id := range total {
+		clock = clock.Add(time.Millisecond)
+		name := fmt.Sprintf("file-%d.jpg", id)
+		observer.Started(id, name, 10, "")
+		if id == 7 {
+			observer.Failed(id, name, errors.New("rpc error code 400: FILE_REFERENCE_EXPIRED"))
+			continue
+		}
+		observer.Completed(id, name)
+	}
+	observer.Flush()
+
+	payloads := importPayloads(t, events)
+	if bound := 101 + int(time.Duration(total)*time.Millisecond/minImportUploadActiveInterval) + 2; len(payloads) > bound {
+		t.Fatalf("events = %d for %d files, want at most %d", len(payloads), total, bound)
+	}
+	seen := map[int]map[string]any{}
+	for _, payload := range payloads {
+		settled, _ := payload["settled"].([]map[string]any)
+		for _, file := range settled {
+			id, _ := file["id"].(int)
+			if _, duplicate := seen[id]; duplicate {
+				t.Fatalf("file %d reported twice", id)
+			}
+			seen[id] = file
+		}
+	}
+	if len(seen) != total {
+		t.Fatalf("settled files = %d, want %d", len(seen), total)
+	}
+	if failed := seen[7]; failed["status"] != "failed" || failed["name"] != "file-7.jpg" || failed["message"] == nil {
+		t.Fatalf("failed file = %+v, want its name, status and reason", failed)
+	}
+	if done := seen[8]; done["status"] != "done" || done["size"] != int64(10) {
+		t.Fatalf("completed file = %+v, want done with its size", done)
+	}
+	if len(observer.settled) != 0 {
+		t.Fatalf("observer still holds %d settled files after flushing", len(observer.settled))
 	}
 }

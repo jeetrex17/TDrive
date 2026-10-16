@@ -16,7 +16,7 @@ describe('import progress reducer', () => {
         });
 
         expect(first).not.toBe(initial);
-        expect(initial).toEqual({ total: 0, done: 0, failed: 0, progress: 0, bytes: 0, active: [], activeCount: 0 });
+        expect(initial).toEqual({ total: 0, done: 0, failed: 0, canceled: 0, progress: 0, bytes: 0, active: [], activeCount: 0 });
 
         let current: ImportProgress = first;
         for (let done = 2; done <= 10_000; done++) {
@@ -41,7 +41,7 @@ describe('import progress reducer', () => {
         // grow with the number of files (the previous implementation kept one
         // Map entry per active upload and repeatedly iterated the whole Map).
         expect(Object.keys(current).sort())
-            .toEqual(['active', 'activeCount', 'bytes', 'done', 'failed', 'progress', 'total']);
+            .toEqual(['active', 'activeCount', 'bytes', 'canceled', 'done', 'failed', 'progress', 'total']);
         expect(current.active).toHaveLength(3);
         expect(current).toMatchObject({ total: 10_000, done: 10_000, failed: 0, progress: 100, bytes: 10_000_000 });
     });
@@ -54,7 +54,7 @@ describe('import progress reducer', () => {
             progress: -20,
         });
 
-        expect(clamped).toEqual({ total: 8, done: 2, failed: 0, progress: 0, bytes: 0, active: [], activeCount: 0 });
+        expect(clamped).toEqual({ total: 8, done: 2, failed: 0, canceled: 0, progress: 0, bytes: 0, active: [], activeCount: 0 });
 
         const unchanged = reduceImportProgress(clamped, {
             total: Number.NaN,
@@ -98,7 +98,9 @@ describe('import progress reducer', () => {
             progress: 83,
         });
 
-        expect(complete).toEqual({ total: 10, done: 7, failed: 3, progress: 100, bytes: 0, active: [], activeCount: 0 });
+        expect(complete).toEqual({ total: 10, done: 7, failed: 3, canceled: 0, progress: 100, bytes: 0, active: [], activeCount: 0 });
+        // A file the user cancelled is accounted for too.
+        expect(reduceImportProgress(createImportProgress(), { total: 10, done: 7, failed: 2, canceled: 1, progress: 83 }).progress).toBe(100);
     });
 
     it('creates an independent zero state for the next import', () => {
@@ -111,7 +113,7 @@ describe('import progress reducer', () => {
         const reset = createImportProgress();
 
         expect(reset).not.toBe(previous);
-        expect(reset).toEqual({ total: 0, done: 0, failed: 0, progress: 0, bytes: 0, active: [], activeCount: 0 });
+        expect(reset).toEqual({ total: 0, done: 0, failed: 0, canceled: 0, progress: 0, bytes: 0, active: [], activeCount: 0 });
     });
 
     it('caps the named files at what a row can show, and says how many it left out', () => {
