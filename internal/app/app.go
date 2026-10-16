@@ -143,6 +143,14 @@ func (a *App) emit(name string, args ...any) {
 	a.wails.Event.Emit(name, args)
 }
 
+// FlushEvents emits events_flushed with token behind every event emitted
+// before this call. Wails delivers events in order, but apart from call
+// results, so a call can resolve before its last events arrive; a caller that
+// waits for the flush knows they have.
+func (a *App) FlushEvents(token string) {
+	a.emit("events_flushed", token)
+}
+
 func (a *App) ActiveChannelID() int64 {
 	if a.engine == nil {
 		return 0

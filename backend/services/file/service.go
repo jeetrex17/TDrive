@@ -145,7 +145,7 @@ type Service struct {
 	// without taking the rest of the batch with it. Only goroutines that hold
 	// an upload slot are registered, so it stays bounded by MaxConcurrentUploads.
 	uploadCancelMu sync.Mutex
-	uploadCancels  map[int]context.CancelFunc
+	uploadCancels  map[int]context.CancelCauseFunc
 	// uploadWindows are the id ranges of running batches, so a cancel can
 	// reach a file that has not started yet. Guarded by uploadCancelMu.
 	uploadWindows      []*uploadWindow

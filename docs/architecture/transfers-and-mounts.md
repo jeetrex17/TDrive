@@ -141,15 +141,28 @@ receipt, and ordinary uploads do not gain pause/resume or broader retry
 eligibility merely because they appear in Activity.
 
 Interactive uploads can be paused. Pausing holds back files that have not
-started; files already sending finish, because an ordinary upload cannot stop
-part way and continue later (only journal-backed large uploads can). A pause
-belongs to its batch: the frontend lifts it when the batch ends and whenever the
-transfer surfaces start or tear down. A cancel can reach a file of a running
-batch before it starts; that file is skipped and reported canceled without a
-send. A file Telegram has accepted while its window's index entries are still
-pending is reported as accepted (`upload_accepted`, or `accepted` in import
-payloads) and shows as saving rather than uploading; it already exists and must
-not be sent again.
+started, including one already waiting for an upload slot; files already
+sending finish, because an ordinary upload cannot stop part way and continue
+later (only journal-backed large uploads can). A pause belongs to its batch: the
+frontend lifts it when the batch ends and whenever the transfer surfaces start
+or tear down. A file is marked started and its cancel handle registered in one
+step, so a cancel always finds a file of a running batch either waiting, and
+skips it without a send, or sending, and stops it. A file the user cancelled on
+its own is reported canceled, but it is not a failure of the batch: the batch
+result, an import's completion and the failed-file review leave it out, and the
+rest of the batch or import carries on. A cancel that lands while the send
+outcome is unknown, or that leaves a resumable job, stays a failure that needs
+attention. A file Telegram has accepted while its window's index entries are
+still pending is reported as accepted (`upload_accepted`, or `accepted` in
+import payloads) and shows as saving rather than uploading; it already exists
+and must not be sent again.
+
+Wails delivers events in order but apart from call results, so an upload call
+can resolve before its last events arrive. After each upload or import call the
+frontend asks `FlushEvents` for an `events_flushed` reply, which travels behind
+every earlier event, and acts on the result only once it lands or a short
+timeout passes. A batch's late events therefore reach its own rows and never
+the batch queued behind it, which reuses the same upload ids.
 
 Session batch details use stable identities and bounded retention. File details
 are paged in the UI rather than expanded into one notification per file. Import

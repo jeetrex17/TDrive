@@ -26,6 +26,7 @@ const app = vi.hoisted(() => ({
     SelectFolder: vi.fn(),
     RetryUploadToDriveFS: vi.fn(),
     ResumeUploads: vi.fn(),
+    FlushEvents: vi.fn(async (token: string) => { eventListeners.get('events_flushed')?.(token); }),
 }));
 
 vi.mock('../../bindings/TDrive/internal/app/app', () => app);

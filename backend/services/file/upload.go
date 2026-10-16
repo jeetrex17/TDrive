@@ -3,6 +3,7 @@ package file
 import (
 	"cmp"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -36,27 +37,8 @@ func (s *Service) CancelUpload(uploadID int) bool {
 	if cancel == nil {
 		return skipped
 	}
-	cancel()
+	cancel(errUploadCanceled)
 	return true
-}
-
-// trackUploadCancel derives one upload's context from the batch context and
-// registers it for CancelUpload. Cancelling the batch still stops every file;
-// the returned func unregisters this one and releases its context.
-func (s *Service) trackUploadCancel(ctx context.Context, uploadID int) (context.Context, func()) {
-	ctx, cancel := context.WithCancel(ctx)
-	s.uploadCancelMu.Lock()
-	if s.uploadCancels == nil {
-		s.uploadCancels = make(map[int]context.CancelFunc)
-	}
-	s.uploadCancels[uploadID] = cancel
-	s.uploadCancelMu.Unlock()
-	return ctx, func() {
-		s.uploadCancelMu.Lock()
-		delete(s.uploadCancels, uploadID)
-		s.uploadCancelMu.Unlock()
-		cancel()
-	}
 }
 
 type uploadOptions struct {
@@ -137,13 +119,18 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 	var firstErr error
 	window, closeWindow := s.openUploadWindow(options.idOffset, len(filePaths))
 	defer closeWindow()
-	failBeforeStart := func(uploadID int, path string, err error) {
-		mu.Lock()
-		failed++
-		if firstErr == nil {
-			firstErr = err
+	// fail reports a file that did not upload. A file the user cancelled on
+	// its own is reported too, but the batch carried on without it, so it is
+	// not a failure of the batch.
+	fail := func(uploadID int, path string, err error) {
+		if !errors.Is(err, errUploadCanceled) {
+			mu.Lock()
+			failed++
+			if firstErr == nil {
+				firstErr = err
+			}
+			mu.Unlock()
 		}
-		mu.Unlock()
 		observer.Failed(uploadID, filepath.Base(path), err)
 	}
 
@@ -151,27 +138,15 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 		path := filePaths[i]
 		pid := parentIDs[i]
 		uploadID := options.idOffset + i
-		if options.pausable {
-			if err := s.waitWhileUploadsPaused(ctx); err != nil {
-				failBeforeStart(uploadID, path, err)
-				continue
-			}
-		}
-		if !s.claimUploadStart(window, uploadID) {
-			failBeforeStart(uploadID, path, errUploadSkipped)
+		release, err := s.awaitUploadTurn(ctx, options.pausable)
+		if err != nil {
+			fail(uploadID, path, err)
 			continue
 		}
-		slotStarted := time.Now()
-		release, slotErr := s.acquireUploadSlot(ctx)
-		reportUploadTiming(ctx, "slot_wait", slotStarted)
-		if slotErr != nil {
-			mu.Lock()
-			failed++
-			if firstErr == nil {
-				firstErr = slotErr
-			}
-			mu.Unlock()
-			observer.Failed(uploadID, filepath.Base(path), slotErr)
+		uploadCtx, untrack, ok := s.startUpload(ctx, window, uploadID)
+		if !ok {
+			release()
+			fail(uploadID, path, errUploadCanceled)
 			continue
 		}
 		wg.Go(func() {
@@ -181,17 +156,10 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 					release()
 				}
 			}()
-			uploadCtx, untrack := s.trackUploadCancel(ctx, uploadID)
 			defer untrack()
 			defer func() {
 				if r := recover(); r != nil {
-					mu.Lock()
-					failed++
-					if firstErr == nil {
-						firstErr = fmt.Errorf("upload panic: %v", r)
-					}
-					mu.Unlock()
-					observer.Failed(uploadID, filepath.Base(path), fmt.Errorf("upload panic: %v", r))
+					fail(uploadID, path, fmt.Errorf("upload panic: %v", r))
 				}
 			}()
 
@@ -211,14 +179,12 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 					s.warnf("warn: upload committed but local projection is pending for %q: %v\n", meta.Name, err)
 					return
 				}
-				mu.Lock()
-				failed++
-				if firstErr == nil {
-					firstErr = err
+				if canceledOnItsOwn(ctx, uploadCtx, err) {
+					fail(uploadID, path, errUploadCanceled)
+					return
 				}
-				mu.Unlock()
 				s.warnf("warn: upload failed for %q: %v\n", filepath.Base(path), err)
-				observer.Failed(uploadID, filepath.Base(path), err)
+				fail(uploadID, path, err)
 				return
 			}
 

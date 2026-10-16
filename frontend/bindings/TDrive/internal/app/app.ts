@@ -161,6 +161,16 @@ export function EnqueuePhotoBackupAssets(sourceID: string, values: $models.Photo
 }
 
 /**
+ * FlushEvents emits events_flushed with token behind every event emitted
+ * before this call. Wails delivers events in order, but apart from call
+ * results, so a call can resolve before its last events arrive; a caller that
+ * waits for the flush knows they have.
+ */
+export function FlushEvents(token: string): $CancellablePromise<void> {
+    return $Call.ByID(1416985879, token);
+}
+
+/**
  * GetAllFsMsgIDs lists the Telegram messages this drive already accounts for.
  * The root listing subtracts them from the channel's history to show what was
  * posted outside TDrive; a deleted file stays on the list, because its message

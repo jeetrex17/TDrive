@@ -6,7 +6,8 @@ type MockOutcome =
     | { kind: 'resolve'; value: unknown; delayMs: number }
     | { kind: 'reject'; message: string; delayMs: number }
     | { kind: 'deferred'; key: string; value: unknown }
-    | { kind: 'return'; value: unknown };
+    | { kind: 'return'; value: unknown }
+    | { kind: 'echo'; event: string; value: unknown };
 
 export type MockPlan =
     | MockOutcome
@@ -50,6 +51,12 @@ export function returnsSynchronously(value: unknown): MockPlan {
     return { kind: 'return', value };
 }
 
+/** Resolve, then emit event with the call's own arguments, as the backend
+ * answers FlushEvents. */
+export function echoesAsEvent(event: string, value: unknown = null): MockPlan {
+    return { kind: 'echo', event, value };
+}
+
 export function byFirstArg(values: Record<string, MockPlan>, fallback: MockPlan = resolves(null)): MockPlan {
     return { kind: 'byFirstArg', values, fallback };
 }
@@ -88,6 +95,7 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
     GetUpdateState: resolves({ phase: 'idle', current_version: '0.0.0-test' }),
     PauseUploads: resolves(null),
     ResumeUploads: resolves(null),
+    FlushEvents: echoesAsEvent('events_flushed'),
     ListChannels: resolves([
         {
             id: 1,
@@ -308,6 +316,12 @@ export async function bootTDrive(
 
             if (plan.kind === 'return') {
                 call.state = 'returned';
+                return Promise.resolve(jsonResponse(200, plan.value));
+            }
+
+            if (plan.kind === 'echo') {
+                call.state = 'fulfilled';
+                window.setTimeout(() => window.__wailsMock.emit(plan.event, ...args), 0);
                 return Promise.resolve(jsonResponse(200, plan.value));
             }
 

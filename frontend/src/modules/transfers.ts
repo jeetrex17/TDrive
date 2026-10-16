@@ -6,7 +6,7 @@
 // Completed transfers stay in the bell's "Recent" panel until cleared.
 
 import { invalidateFolderIndex, state, setTransferDirectionActive, type DownloadQueueItem, type UploadTransfer } from '../state';
-import { createFolderForDrive, downloadFile, downloadFolder, isAndroidPlatform, isMobilePlatform, onRuntimeEvent, planImport, pauseUploads, resumeUploads, selectFiles, selectFolder, uploadToDriveFs, retryUploadToDriveFs, importPathsForDrive, releaseUploadSources, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
+import { createFolderForDrive, downloadFile, downloadFolder, flushRuntimeEvents, isAndroidPlatform, isMobilePlatform, onRuntimeEvent, planImport, pauseUploads, resumeUploads, selectFiles, selectFolder, uploadToDriveFs, retryUploadToDriveFs, importPathsForDrive, releaseUploadSources, type RuntimeEventMap, type RuntimeUnsubscribe } from '../api';
 import { canSaveToDownloads, saveToDownloads } from './android-downloads';
 import { rememberDownloadSharePath } from '../ui/mobile/mobile-shell-store';
 import { get } from 'svelte/store';
@@ -70,6 +70,17 @@ function subscribeTransferEvent<K extends keyof RuntimeEventMap>(
     transferUnsubscribers.push(unsubscribe);
     return unsubscribe;
 }
+
+// An upload call's result travels apart from the events it emitted and can
+// arrive first. Waiting for a flush before acting on it lets the batch's last
+// events land on its own rows, never on the batch queued behind it.
+async function withEventsDelivered<T>(call: Promise<T>): Promise<T> {
+    try { return await call; } finally { await flushRuntimeEvents(); }
+}
+
+// A file the user cancelled on its own is listed as canceled, but it is not a
+// failure to review or retry, and it is not why a batch needs attention.
+const needsAttention = (failure: UploadFailure) => failure.code !== 'canceled';
 
 
 
@@ -695,12 +706,12 @@ function importFileUpdates(payload: Record<string, unknown>): Array<Pick<UploadA
     for (const file of list(payload.settled)) {
         const index = Number(file.id);
         if (!Number.isInteger(index)) continue;
-        const failed = file.status === 'failed';
+        const status = file.status === 'failed' || file.status === 'canceled' ? file.status : 'done';
         updates.push({
-            index, name: String(file.name ?? ''), status: failed ? 'failed' : 'done', progress: failed ? undefined : 100,
+            index, name: String(file.name ?? ''), status, progress: status === 'done' ? 100 : undefined,
             ...(file.path ? { path: String(file.path) } : {}),
             ...(Number(file.size) > 0 ? { size: Number(file.size) } : {}),
-            ...(failed && file.message ? { message: humanizeBackendError(String(file.message)) } : {}),
+            ...(status === 'failed' && file.message ? { message: humanizeBackendError(String(file.message)) } : {}),
         });
     }
     return updates;
@@ -722,7 +733,7 @@ function refreshImportRow() {
         direction: 'up',
         progress: batch.progress,
         bytes: batch.bytes,
-        itemsDone: batch.done + batch.failed,
+        itemsDone: batch.done + batch.failed + batch.canceled,
         itemsTotal: batch.total,
         items: batch.active,
         itemsActive: batch.activeCount,
@@ -782,6 +793,7 @@ function finalizeUploadBatch(uploadThrew: boolean, failures?: UploadFailure[]): 
     refreshUploadBatchRow();
     uploadBatch = null;
     const confirmedSuccesses = Math.max(0, batch.snapshot().itemsTotal - (failures?.length ?? 0));
+    const problems = failures?.filter(needsAttention);
     if (!canceled && failures !== undefined) {
         const snapshot = batch.snapshot();
         updateTransferProgress({
@@ -794,8 +806,8 @@ function finalizeUploadBatch(uploadThrew: boolean, failures?: UploadFailure[]): 
     updateTransferName({
         id: UPLOAD_BATCH_TRANSFER_ID,
         direction: 'up',
-        name: canceled ? 'Upload canceled' : failures?.length
-            ? `Uploaded ${confirmedSuccesses} ${confirmedSuccesses === 1 ? 'file' : 'files'} · ${failures.length} ${failures.length === 1 ? 'needs' : 'need'} attention`
+        name: canceled ? 'Upload canceled' : problems?.length
+            ? `Uploaded ${confirmedSuccesses} ${confirmedSuccesses === 1 ? 'file' : 'files'} · ${problems.length} ${problems.length === 1 ? 'needs' : 'need'} attention`
             : formatUploadBatchLabel(batch),
     });
     // Failed-file recovery lives in its session report. Keep event-only reasons
@@ -807,7 +819,7 @@ function finalizeUploadBatch(uploadThrew: boolean, failures?: UploadFailure[]): 
     markTransferDone({
         id: UPLOAD_BATCH_TRANSFER_ID,
         direction: 'up',
-        status: canceled ? 'canceled' : (uploadThrew || batch.failures > 0 || (failures?.length ?? 0) > 0) ? 'failed' : 'done',
+        status: canceled ? 'canceled' : (uploadThrew || batch.failures > 0 || (problems?.length ?? 0) > 0) ? 'failed' : 'done',
     });
     appActions().refreshFiles();
 
@@ -1264,13 +1276,17 @@ async function runAndroidImport(parentID: string, manifest: AndroidFolderManifes
                 mergeUploadActivityFiles(activityId, window.map(({ file, index }, position): UploadActivityFile => {
                     const message = outcome.failures.get(position);
                     const row = androidActivityFile(manifest, file, index);
+                    if (outcome.canceled?.has(position)) return { ...row, status: 'canceled' };
                     return message === undefined
                         ? { ...row, status: 'done', progress: 100 }
-                        : { ...row, status: state.cancelingUpload || run?.canceled.has(index) ? 'canceled' : 'failed', message };
+                        : { ...row, status: state.cancelingUpload ? 'canceled' : 'failed', message };
                 }));
             }
             done += outcome.done;
             failed += outcome.failed;
+            // Like a row cancelled while it waited, one cancelled mid-window no
+            // longer counts toward the import's total.
+            totalFiles -= outcome.canceled?.size ?? 0;
             // Count the window's bytes however it ended: the bar tracks work
             // gone through, and the failure count carries the outcome.
             bytesDone += slice.reduce((sum, file) => sum + file.size, 0);
@@ -1317,7 +1333,7 @@ async function uploadAndroidWindow(
     encrypt: boolean,
     destination: UploadDestination,
     onUploadId?: (position: number, uploadId: number) => void,
-): Promise<{ done: number; failed: number; failures: Map<number, string> }> {
+): Promise<{ done: number; failed: number; canceled?: ReadonlySet<number>; failures: Map<number, string> }> {
     const ids = files.map((file) => file.id);
     // Why each file of the window failed, keyed by its position in the window.
     const failures = new Map<number, string>();
@@ -1345,18 +1361,21 @@ async function uploadAndroidWindow(
         if (!paths.length) return { done: 0, failed: unreadable, failures };
 
         if (!isCurrentDestination(destination) || state.activeChannel?.id !== destination.driveId) throw new Error('The upload destination changed.');
-        const upload = await retryUploadToDriveFs(paths, parentIDs, encrypt, destination.driveId);
+        const upload = await withEventsDelivered(retryUploadToDriveFs(paths, parentIDs, encrypt, destination.driveId));
         if (!isCurrentDestination(destination)) return { done: 0, failed: 0, failures };
         if (!upload.result.ok && upload.result.error.code === 'canceled') state.cancelingUpload = true;
         const named = upload.failures ?? [];
+        // Positions the user cancelled on their own: neither done nor failed.
+        const canceled = new Set<number>();
         for (const failure of named) {
-            failures.set(pathFiles[failure.index], failure.code === 'empty_file' ? "Empty files can't be uploaded." : humanizeBackendError(failure.message));
+            if (!needsAttention(failure)) canceled.add(pathFiles[failure.index]);
+            else failures.set(pathFiles[failure.index], failure.code === 'empty_file' ? "Empty files can't be uploaded." : humanizeBackendError(failure.message));
         }
         // A failed call that named no file leaves every file in doubt.
         if (!upload.result.ok && !named.length) {
             for (const position of pathFiles) failures.set(position, humanizeBackendError(upload.result.error));
         }
-        return { done: upload.files.length, failed: unreadable + paths.length - upload.files.length, failures };
+        return { done: upload.files.length, failed: unreadable + paths.length - upload.files.length - canceled.size, canceled, failures };
     } finally {
         // Cache stays bounded only if every window is released, including the
         // one that threw or was cancelled part way through. A release that
@@ -1467,7 +1486,7 @@ async function runDesktopImport(paths: string[], parentID: string, encrypt: bool
     importCompleteReceived = false;
     let importThrew = false;
     try {
-        const result = await importPathsForDrive(paths, parentID, encrypt, extract, destination.driveId);
+        const result = await withEventsDelivered(importPathsForDrive(paths, parentID, encrypt, extract, destination.driveId));
         if (!isCurrentDestination(destination)) return;
         if (!result.ok) {
             if (result.error.code === 'canceled') state.cancelingUpload = true;
@@ -1608,9 +1627,9 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
     let uploadThrew = false;
     try {
         const parentIDs = paths.map(() => parentID);
-        const upload = retryDriveId === undefined
-            ? await uploadToDriveFs(paths, parentIDs, encrypt)
-            : await retryUploadToDriveFs(paths, parentIDs, encrypt, retryDriveId);
+        const upload = await withEventsDelivered(retryDriveId === undefined
+            ? uploadToDriveFs(paths, parentIDs, encrypt)
+            : retryUploadToDriveFs(paths, parentIDs, encrypt, retryDriveId));
         if (generation !== transferSurfaceGeneration) return;
         failures = upload.failures ?? [];
         if (!upload.result.ok) {
@@ -1628,11 +1647,13 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
                 index, name: path.split(/[/\\]/).pop() || 'Untitled',
                 message: humanizeBackendError(error), code: 'outcome_unknown', retryable: false,
             }));
-            showFailedUploadNotice({ paths: [...paths], failures, parentId: parentID, encrypt, driveId, driveTitle, destination, activityId }, failedUploadBody(paths.length, failures.length, humanizeBackendError(error)), generation);
+            const problems = failures.filter(needsAttention);
+            if (problems.length) showFailedUploadNotice({ paths: [...paths], failures: problems, parentId: parentID, encrypt, driveId, driveTitle, destination, activityId }, failedUploadBody(paths.length - (failures.length - problems.length), problems.length, humanizeBackendError(error)), generation);
         }
     } finally {
         if (generation === transferSurfaceGeneration) {
-            if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, state.cancelingUpload ? 'canceled' : uploadThrew || failures.length || (uploadBatch?.failures ?? 0) > 0 ? 'failed' : 'done',
+            const problems = failures.filter(needsAttention);
+            if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, state.cancelingUpload ? 'canceled' : uploadThrew || problems.length || (uploadBatch?.failures ?? 0) > 0 ? 'failed' : 'done',
                 failures.map((failure) => ({ ...failure, message: failure.code === 'empty_file' ? "Empty files can't be uploaded." : humanizeBackendError(failure.message) })));
             setTransferDirectionActive('upload', false);
             // Safety sweep: by the time UploadToDriveFS resolves, every upload in
@@ -1653,8 +1674,8 @@ async function uploadPathsBatch(paths: string[], parentID: string, encrypt: bool
                     }
                 }
             }
-            if (!uploadThrew && failures.length && !state.cancelingUpload) {
-                showFailedUploadNotice({ paths: [...paths], failures, parentId: parentID, encrypt, driveId, driveTitle, destination, activityId }, failedUploadBody(paths.length, failures.length), generation);
+            if (!uploadThrew && problems.length && !state.cancelingUpload) {
+                showFailedUploadNotice({ paths: [...paths], failures: problems, parentId: parentID, encrypt, driveId, driveTitle, destination, activityId }, failedUploadBody(paths.length - (failures.length - problems.length), problems.length), generation);
             }
             invalidateTransferCaches();
             state.uploadBatch = null;

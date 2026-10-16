@@ -89,8 +89,8 @@ func TestImportUploadObserverCountsOnlyDeliveredBytes(t *testing.T) {
 	if count, _ := last["activeCount"].(int); count != 0 {
 		t.Fatalf("activeCount = %v, want nothing left in flight", last["activeCount"])
 	}
-	if done, failed, reasons := observer.Summary(); done != 1 || failed != 1 || len(reasons) != 1 {
-		t.Fatalf("summary = (%d, %d, %v), want one of each and one reason", done, failed, reasons)
+	if done, failed, canceled, reasons := observer.Summary(); done != 1 || failed != 1 || canceled != 0 || len(reasons) != 1 {
+		t.Fatalf("summary = (%d, %d, %d, %v), want one done, one failed and one reason", done, failed, canceled, reasons)
 	}
 }
 

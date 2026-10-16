@@ -39,6 +39,7 @@ const app = vi.hoisted(() => ({
     CancelResumableUpload: vi.fn(),
     PauseUploads: vi.fn(),
     ResumeUploads: vi.fn(),
+    FlushEvents: vi.fn(),
 }));
 
 vi.mock('../../bindings/TDrive/internal/app/app', () => app);
@@ -87,6 +88,8 @@ beforeEach(() => {
     state.uploadBatch = null;
     state.uploadTransfers = new Map();
     mocks.wasUploadCanceled.mockReturnValue(false);
+    // The backend answers a flush with its token once earlier events are out.
+    app.FlushEvents.mockImplementation(async (token: string) => { eventListeners.get('events_flushed')?.(token); });
 
     mocks.openImportOptionsModal.mockResolvedValue({ encrypt: false, extract: false });
     app.SelectFolder.mockResolvedValue('/tmp/empty-folder');
@@ -945,6 +948,72 @@ describe('pausing and cancelling single files', () => {
         expect(get(uploadActivities)[0].files[0]).toMatchObject({ status: 'active', progress: 100 });
         finish({ result: { ok: true }, files: [], failures: [] });
         await run;
+    });
+});
+
+describe('a file the user cancelled on its own', () => {
+    const cancelThird = async (outcome: unknown) => {
+        let finish = (_result: unknown) => {};
+        app.PlanImport.mockResolvedValue({ files: 3, folders: 0, archives: 0 });
+        app.SelectFiles.mockResolvedValue(['/tmp/a.txt', '/tmp/b.txt', '/tmp/c.txt']);
+        app.RetryUploadToDriveFS.mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+        const run = uploadWithParentID('');
+        await vi.waitFor(() => expect(app.RetryUploadToDriveFS).toHaveBeenCalled());
+        const { get } = await import('svelte/store');
+        const { uploadActivities } = await import('../ui/notifications/upload-activity-store');
+        const { failedUploadReports } = await import('../ui/modals/failed-uploads-store');
+        const { cancelActivityFile } = await import('./transfers');
+        cancelActivityFile(get(uploadActivities)[0].id, get(uploadActivities)[0].files[2]);
+        finish(outcome);
+        await run;
+        return { batch: get(uploadActivities)[0], reports: get(failedUploadReports) };
+    };
+    const canceled = { index: 2, name: 'c.txt', message: 'upload canceled', code: 'canceled', retryable: false };
+
+    it('lists it canceled and leaves the batch done, with nothing to review', async () => {
+        const { batch, reports } = await cancelThird({ result: { ok: true }, files: [], failures: [canceled] });
+        expect(batch.status).toBe('done');
+        expect(batch.files.map((file) => file.status)).toEqual(['done', 'done', 'canceled']);
+        expect(reports).toEqual([]);
+    });
+
+    it('still reports a real failure in the same batch, and only that one', async () => {
+        const failed = { index: 1, name: 'b.txt', message: 'connection lost', code: 'temporary_failure', retryable: true };
+        const { batch, reports } = await cancelThird({ result: { ok: true }, files: [], failures: [canceled, failed] });
+        expect(batch.status).toBe('failed');
+        expect(batch.files.map((file) => file.status)).toEqual(['done', 'failed', 'canceled']);
+        expect(reports).toHaveLength(1);
+        expect(reports[0].failures.map((failure) => failure.index)).toEqual([1]);
+    });
+});
+
+describe('events that arrive after their call', () => {
+    it('land on their own batch before the next queued batch starts', async () => {
+        let finishFirst = (_result: unknown) => {};
+        let finishSecond = (_result: unknown) => {};
+        app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0 });
+        app.SelectFiles.mockResolvedValueOnce(['/tmp/first.txt']).mockResolvedValueOnce(['/tmp/second.txt']);
+        app.RetryUploadToDriveFS.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }))
+            .mockImplementationOnce(() => new Promise((resolve) => { finishSecond = resolve; }));
+        // A flush travels behind every event emitted before it.
+        app.FlushEvents.mockImplementation(async (token: string) => {
+            setTimeout(() => eventListeners.get('events_flushed')?.(token), 0);
+        });
+        const first = uploadWithParentID('');
+        await vi.waitFor(() => expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(1));
+        await uploadWithParentID('');
+        // Wails hands the first result back before that batch's last event.
+        finishFirst({ result: { ok: true }, files: [], failures: [] });
+        setTimeout(() => handlers.get('upload_complete')?.(0, 'first.txt'), 0);
+        await vi.waitFor(() => expect(app.RetryUploadToDriveFS).toHaveBeenCalledTimes(2));
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        const { get } = await import('svelte/store');
+        const { uploadActivities } = await import('../ui/notifications/upload-activity-store');
+        const second = () => get(uploadActivities).find((entry) => entry.name === 'second.txt');
+        expect(second()?.files[0].status).not.toBe('done');
+        finishSecond({ result: { ok: true }, files: [], failures: [] });
+        await first;
+        expect(second()?.status).toBe('done');
     });
 });
 

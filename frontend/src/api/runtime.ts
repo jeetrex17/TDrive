@@ -6,6 +6,7 @@ import {
     SetKeyboardWatch as rawSetKeyboardWatch,
     SetScreenProtect as rawSetScreenProtect,
 } from "../../bindings/TDrive/internal/app/deviceservice";
+import { FlushEvents as rawFlushEvents } from "../../bindings/TDrive/internal/app/app";
 import {
     invokeBackend,
     invokeRuntimeAsync,
@@ -55,6 +56,8 @@ export interface RuntimeEventMap {
     import_uploading: [payload: unknown];
     import_upload_progress: [payload: unknown];
     import_complete: [payload: unknown];
+    /** FlushEvents answering with its token once every earlier event is delivered. */
+    events_flushed: [token: unknown];
     files_dropped: [payload: unknown];
     native_media_state: [payload: unknown];
     encrypted_media_sessions_closed: [];
@@ -119,6 +122,34 @@ export function onRuntimeEvent<EventName extends RuntimeEventName>(
             throw new RuntimeInvocationError(`Events.On(${eventName}) teardown`, cause);
         }
     };
+}
+
+let flushSequence = 0;
+
+/**
+ * Resolves once every event the backend emitted before this call has arrived.
+ * Wails delivers events apart from call results, so a call can resolve before
+ * the last events it emitted; the flush travels behind them. Gives up after
+ * timeoutMs, so a lost event cannot hold the caller up for long.
+ */
+export function flushRuntimeEvents(timeoutMs = 2000): Promise<void> {
+    const token = `flush-${++flushSequence}`;
+    return new Promise((resolve) => {
+        let unsubscribe: RuntimeUnsubscribe = noopRuntimeUnsubscribe;
+        const finish = () => {
+            clearTimeout(timer);
+            unsubscribe();
+            resolve();
+        };
+        const timer = setTimeout(finish, timeoutMs);
+        try {
+            unsubscribe = onRuntimeEvent("events_flushed", (value) => { if (value === token) finish(); });
+        } catch {
+            finish();
+            return;
+        }
+        invokeBackend(rawFlushEvents, token).catch(finish);
+    });
 }
 
 /**

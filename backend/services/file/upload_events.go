@@ -1,6 +1,7 @@
 package file
 
 import (
+	"errors"
 	"math"
 	"slices"
 	"sync"
@@ -79,6 +80,9 @@ type importUploadObserver struct {
 	doneBytes      int64
 	done           int
 	failed         int
+	// Files the user cancelled on their own: neither uploaded nor failed, but
+	// settled all the same.
+	canceled       int
 	lastPercent    int
 	activeDirty    bool
 	lastEmit       time.Time
@@ -178,13 +182,18 @@ func (o *importUploadObserver) Completed(id int, name string) {
 
 func (o *importUploadObserver) Failed(id int, name string, err error) {
 	o.mu.Lock()
-	o.settleLocked(id, name, o.settledFileLocked(id), "failed", err.Error())
-	o.failed++
-	if len(o.failureReasons) < maxImportUploadFailureReasons {
-		if name == "" {
-			o.failureReasons = append(o.failureReasons, err.Error())
-		} else {
-			o.failureReasons = append(o.failureReasons, name+": "+err.Error())
+	if errors.Is(err, errUploadCanceled) {
+		o.settleLocked(id, name, o.settledFileLocked(id), "canceled", "")
+		o.canceled++
+	} else {
+		o.settleLocked(id, name, o.settledFileLocked(id), "failed", err.Error())
+		o.failed++
+		if len(o.failureReasons) < maxImportUploadFailureReasons {
+			if name == "" {
+				o.failureReasons = append(o.failureReasons, err.Error())
+			} else {
+				o.failureReasons = append(o.failureReasons, name+": "+err.Error())
+			}
 		}
 	}
 	payload, emit := o.progressPayloadLocked(false, true)
@@ -245,10 +254,10 @@ func (o *importUploadObserver) settleLocked(id int, name string, file *importUpl
 	o.settled = append(o.settled, entry)
 }
 
-func (o *importUploadObserver) Summary() (done, failed int, failureReasons []string) {
+func (o *importUploadObserver) Summary() (done, failed, canceled int, failureReasons []string) {
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	return o.done, o.failed, append([]string(nil), o.failureReasons...)
+	return o.done, o.failed, o.canceled, append([]string(nil), o.failureReasons...)
 }
 
 func (o *importUploadObserver) removeActiveLocked(id int) *importUploadFile {
@@ -295,7 +304,7 @@ func (o *importUploadObserver) activeFilesLocked() (files []map[string]any, part
 func (o *importUploadObserver) progressPayloadLocked(force, allowEmit bool) (map[string]any, bool) {
 	progress := 100.0
 	if o.total > 0 {
-		progress = (float64(o.done+o.failed+len(o.accepted)) + o.activeProgress) / float64(o.total) * 100
+		progress = (float64(o.done+o.failed+o.canceled+len(o.accepted)) + o.activeProgress) / float64(o.total) * 100
 		progress = math.Max(0, math.Min(100, progress))
 	}
 	wholePercent := int(math.Floor(progress))
@@ -329,6 +338,7 @@ func (o *importUploadObserver) progressPayloadLocked(force, allowEmit bool) (map
 		"total":       o.total,
 		"done":        o.done,
 		"failed":      o.failed,
+		"canceled":    o.canceled,
 		"progress":    progress,
 		"bytes":       o.doneBytes + acceptedBytes + int64(partialBytes),
 		"active":      active,

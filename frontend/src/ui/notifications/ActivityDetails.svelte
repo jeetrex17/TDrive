@@ -247,7 +247,7 @@
                                 {#if canCancel(file)}
                                     <button type="button" class="file-cancel" aria-label={`Cancel ${file.name}`} onclick={() => cancelActivityFile(batch.id, file)}><XIcon size={14} aria-hidden="true" /></button>
                                 {/if}
-                                {#if file.message}<p class="file-message">{file.message}</p>{/if}
+                                {#if file.message && file.status === 'failed'}<p class="file-message">{file.message}</p>{/if}
                             </li>
                         {/if}
                     {/each}
