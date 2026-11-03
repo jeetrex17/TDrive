@@ -139,9 +139,8 @@ describe('phone file list', () => {
 
     it('captures the account when a thumbnail row is published after login', () => {
         const previousAccount = state.myUserID;
-        state.myUserID = 0;
-        const thumbnail = fileThumbnailIdentity({ msgId: 42, name: 'clip.mp4', revision: 9 }, 7);
         state.myUserID = 21;
+        const thumbnail = fileThumbnailIdentity({ msgId: 42, name: 'clip.mp4', revision: 9 }, 7, state.myUserID);
         const published = buildFileRow({ id: 42, name: 'clip.mp4' }, '', { thumbnail });
         state.myUserID = 22;
         expect(published.thumbnail).toEqual({ accountId: 21, channelId: 7, fileId: 42, revision: 9 });
