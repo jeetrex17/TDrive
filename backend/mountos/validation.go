@@ -54,14 +54,19 @@ func normalizeMode(mode Mode) (Mode, error) {
 }
 
 // validateEndpoint intentionally uses a narrow canonical grammar instead of a
-// permissive URL parser. This rejects userinfo, alternate loopback spellings,
+// permissive URL parser. macOS additionally permits its one fixed persistent
+// hostname. This rejects userinfo, alternate loopback spellings,
 // encoded path components, queries, fragments, and scheme confusion in one
 // place before any value reaches an OS command.
 func validateEndpoint(value string) (string, error) {
-	if !strings.HasPrefix(value, capabilityPrefix) {
-		return "", ErrInvalidEndpoint
+	prefix := capabilityPrefix
+	if !strings.HasPrefix(value, prefix) {
+		if friendlyCapabilityPrefix == "" || !strings.HasPrefix(value, friendlyCapabilityPrefix) {
+			return "", ErrInvalidEndpoint
+		}
+		prefix = friendlyCapabilityPrefix
 	}
-	remainder := strings.TrimPrefix(value, capabilityPrefix)
+	remainder := strings.TrimPrefix(value, prefix)
 	markerIndex := strings.Index(remainder, capabilityMarker)
 	if markerIndex <= 0 {
 		return "", ErrInvalidEndpoint

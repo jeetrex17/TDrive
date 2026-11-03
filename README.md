@@ -325,7 +325,7 @@ Use **Mount** in the app, or close the GUI and run `tdrive mount`. TDrive starts
 
 If the selected encrypted drive is locked, the CLI prompts for its existing vault password and retries the mount. Scripts can supply the password through stdin with `tdrive mount --password-stdin --non-interactive`; mount start does not support JSON mode.
 
-- **macOS:** appears in Finder as **Tdrive personal**.
+- **macOS:** appears under **TDrive.localhost** in Finder's Locations sidebar; the personal volume is named **Tdrive personal**. The first mount asks for administrator permission to add a persistent loopback entry to `/etc/hosts`. Later mounts reuse it without prompting. Setup preserves unrelated entries and refuses conflicting mappings. If you use a system proxy, bypass `TDrive.localhost` so the drive connects directly.
 - **Windows:** defaults to drive `T:`. Windows WebDAV has a default 50,000,000-byte file-size limit that must be changed in the OS for larger files.
 - **Linux:** uses the active GIO/GVfs desktop session and requires the GVfs WebDAV backend, such as `gvfs-backends` on Debian or Ubuntu.
 
