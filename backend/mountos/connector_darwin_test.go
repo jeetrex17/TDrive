@@ -448,3 +448,40 @@ func TestDarwinMountpointCreationRejectsInvalidCacheAndNonEmptyCleanup(t *testin
 		t.Fatalf("removeEmptyDirectory(non-empty) = %v", err)
 	}
 }
+
+func TestDarwinFriendlyHostnameSetupAndOwnership(t *testing.T) {
+	endpoint := strings.Replace(testEndpoint, "127.0.0.1", "TDrive.localhost", 1)
+	runner := &recordingRunner{}
+	probe := &sequenceProbe{results: []probeResult{{mounted: true, readOnly: true, source: endpoint}, {mounted: true, readOnly: true, source: endpoint}, {mounted: false}}}
+	prepared := false
+	connector := newDarwinConnector(darwinDependencies{
+		runner: runner, userCacheDir: func() (string, error) { return t.TempDir(), nil }, inspectMount: probe.inspect,
+		prepareHostname: func(_ context.Context, got string) error {
+			if got != endpoint {
+				t.Fatal("wrong setup endpoint")
+			}
+			prepared = true
+			return nil
+		},
+	})
+	attachment, err := connector.Attach(t.Context(), Config{Endpoint: endpoint, Label: "Tdrive personal"})
+	if err != nil || !prepared {
+		t.Fatalf("Attach = %v; prepared=%v", err, prepared)
+	}
+	if err := connector.Detach(t.Context(), attachment); err != nil {
+		t.Fatal(err)
+	}
+	if got := runner.snapshot()[0].Args; got[len(got)-2] != endpoint {
+		t.Fatal("mount command lost friendly authority")
+	}
+}
+
+func TestDarwinHostnameSetupFailureDoesNotMount(t *testing.T) {
+	runner := &recordingRunner{}
+	failure := errors.New("hostname setup denied")
+	connector := newDarwinConnector(darwinDependencies{runner: runner, prepareHostname: func(context.Context, string) error { return failure }})
+	_, err := connector.Attach(t.Context(), Config{Endpoint: strings.Replace(testEndpoint, "127.0.0.1", "TDrive.localhost", 1), Label: "Tdrive personal"})
+	if !errors.Is(err, failure) || len(runner.snapshot()) != 0 {
+		t.Fatalf("Attach = %v; commands=%d", err, len(runner.snapshot()))
+	}
+}

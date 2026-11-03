@@ -407,6 +407,51 @@ picker sources in private app storage for unfinished jobs. Cleanup checks journa
 references before removing copies; startup can sweep unreferenced staging left
 before a job was saved. iOS excludes these source copies from device backup.
 
+## macOS mount presentation
+
+Finder's Locations sidebar displays the WebDAV server hostname, independently
+of the volume name supplied to `mount_webdav -v`. The macOS connector advertises
+one fixed hostname, `TDrive.localhost`, through the controller's endpoint adapter.
+The WebDAV server still binds only to `127.0.0.1`; its Host, Destination and tagged
+If-header checks require the exact advertised hostname and port. Other platforms
+and connectors without this opt-in retain numeric loopback URLs.
+
+Before mounting, [mountlocal](../../backend/mountlocal/setup_darwin.go) checks
+`/private/etc/hosts` as a root-owned, non-symlink regular file without group/world
+write permissions. The first mount requests administrator authorization using
+an embedded, fixed AppleScript/shell operation that appends only:
+
+```text
+127.0.0.1 TDrive.localhost # TDrive Finder mount
+```
+
+Setup serializes cooperating installers, rechecks file safety and all existing
+aliases while privileged, preserves unrelated contents, and refuses conflicting
+addresses, including IPv6. No user-controlled text, capability or temporary
+helper path enters the privileged script. A valid existing mapping skips the
+prompt. The entry persists across unmount, quit and crashes, because native
+WebDAV mounts can outlive TDrive. To remove it, first unmount all TDrive volumes,
+then have an administrator remove that exact entry; the next mount will request
+setup again. Setup has a separate two-minute context so authorization does not
+consume the ordinary 30-second attachment deadline.
+
+Before the OS receives its capability URL, native `getaddrinfo` must return only
+IPv4 `127.0.0.1`, and CFNetwork proxy selection for a token-free URL at the actual
+authority must return only direct connections. Non-direct/PAC routes fail with
+an instruction to bypass the hostname in system proxy settings. These checks
+require CGO on desktop macOS. The synchronous native DNS call cannot be canceled
+mid-call; cancellation is checked before and after it. Preflight does not pin
+future routes against later administrator hosts edits or system proxy changes.
+Unmount before changing those settings. The private, temporary mountpoint and
+existing endpoint/mount-source ownership verification are unchanged.
+
+For [issue #166](https://github.com/jeetrex17/TDrive/issues/166), native validation
+on macOS 15.7.3 used the production WebDAV server and connector with synthetic
+file contents: Finder displayed `TDrive.localhost`, reading through the mount
+returned the expected bytes, and detach/remount succeeded without another hosts
+edit. macOS 26 has not been independently tested. Named cache directories and a
+system-managed `/Volumes` mount had not fixed the original numeric sidebar label.
+
 ## WebDAV range assembly
 
 The [WebDAV Content-Range handler](../../backend/mountdav/writes.go) implements a

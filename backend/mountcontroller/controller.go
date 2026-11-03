@@ -106,7 +106,7 @@ func NewWithConnector(engine *core.Engine, connector mountos.Connector) (*Contro
 		},
 		Writers:           newEngineWriterBuilder(engine),
 		Keys:              engineMountKeyLeaser{engine: engine},
-		Endpoint:          newWebDAVEndpoint(),
+		Endpoint:          newWebDAVEndpoint(connector),
 		Connector:         connector,
 		ProjectionChanges: engine,
 	})

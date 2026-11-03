@@ -12,12 +12,15 @@ import (
 	"sync"
 
 	"golang.org/x/sys/unix"
+
+	"TDrive/backend/mountlocal"
 )
 
 type darwinDependencies struct {
-	runner       commandRunner
-	userCacheDir func() (string, error)
-	inspectMount func(string) (darwinMountInspection, error)
+	prepareHostname func(context.Context, string) error
+	runner          commandRunner
+	userCacheDir    func() (string, error)
+	inspectMount    func(string) (darwinMountInspection, error)
 }
 
 type darwinMountInspection struct {
@@ -27,13 +30,14 @@ type darwinMountInspection struct {
 }
 
 type darwinConnector struct {
-	mu           sync.Mutex
-	owner        *ownerMarker
-	runner       commandRunner
-	userCacheDir func() (string, error)
-	inspectMount func(string) (darwinMountInspection, error)
-	serial       uint64
-	active       map[string]darwinActive
+	prepareHostname func(context.Context, string) error
+	mu              sync.Mutex
+	owner           *ownerMarker
+	runner          commandRunner
+	userCacheDir    func() (string, error)
+	inspectMount    func(string) (darwinMountInspection, error)
+	serial          uint64
+	active          map[string]darwinActive
 }
 
 type darwinActive struct {
@@ -64,24 +68,41 @@ func newDarwinConnector(dependencies darwinDependencies) *darwinConnector {
 	if inspectMount == nil {
 		inspectMount = inspectDarwinMount
 	}
+	prepareHostname := dependencies.prepareHostname
+	if prepareHostname == nil {
+		prepareHostname = mountlocal.Prepare
+	}
 	return &darwinConnector{
-		owner:        &ownerMarker{},
-		runner:       runner,
-		userCacheDir: userCacheDir,
-		inspectMount: inspectMount,
-		active:       make(map[string]darwinActive),
+		prepareHostname: prepareHostname,
+		owner:           &ownerMarker{},
+		runner:          runner,
+		userCacheDir:    userCacheDir,
+		inspectMount:    inspectMount,
+		active:          make(map[string]darwinActive),
 	}
 }
 
 func (c *darwinConnector) Attach(parent context.Context, config Config) (Attachment, error) {
+	if parent == nil {
+		return Attachment{}, ErrInvalidContext
+	}
+	validated, err := validateConfig(config)
+	if err != nil {
+		return Attachment{}, err
+	}
+	// Administrator authorization gets its own bounded setup period; the mount's
+	// 30-second deadline starts only once setup and route verification finish.
+	if strings.HasPrefix(validated.endpoint, friendlyCapabilityPrefix) {
+		if err := c.prepareHostname(parent, validated.endpoint); err != nil {
+			return Attachment{}, err
+		}
+	}
 	ctx, cancel, err := boundedContext(parent, attachTimeout)
 	if err != nil {
 		return Attachment{}, err
 	}
 	defer cancel()
-
-	validated, err := validateConfig(config)
-	if err != nil {
+	if err := ctx.Err(); err != nil {
 		return Attachment{}, err
 	}
 

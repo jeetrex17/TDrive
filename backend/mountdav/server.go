@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"TDrive/backend/mountfs"
+	"TDrive/backend/mountlocal"
 
 	"golang.org/x/net/webdav"
 )
@@ -42,6 +43,9 @@ type StartConfig struct {
 	WindowsDrive string
 	Writable     bool
 	Writer       WriteCoordinator
+	// LocalHostname selects the fixed macOS alias without changing the listener.
+	// The OS connector verifies its persistent loopback mapping before mounting.
+	LocalHostname string
 }
 
 type Status struct {
@@ -65,12 +69,13 @@ type Commands struct {
 }
 
 type activeConfig struct {
-	fs           mountfs.ReadFilesystem
-	driveID      int64
-	driveTitle   string
-	windowsDrive string
-	writable     bool
-	writer       WriteCoordinator
+	fs            mountfs.ReadFilesystem
+	driveID       int64
+	driveTitle    string
+	windowsDrive  string
+	writable      bool
+	writer        WriteCoordinator
+	localHostname string
 }
 
 type Server struct {
@@ -113,6 +118,9 @@ func (server *Server) Start(ctx context.Context, config StartConfig) (Status, er
 		return Status{}, fmt.Errorf("mountdav: listen on loopback: %w", err)
 	}
 	authority := listener.Addr().String()
+	if active.localHostname != "" {
+		authority = net.JoinHostPort(active.localHostname, fmt.Sprint(listener.Addr().(*net.TCPAddr).Port))
+	}
 	filesystem := NewFileSystem(config.FS)
 	lockSystem := webdav.NewMemLS()
 	var resume *resumeStore
@@ -284,6 +292,9 @@ func validateStartConfig(ctx context.Context, config StartConfig) (activeConfig,
 	if config.DriveID <= 0 {
 		return activeConfig{}, fmt.Errorf("mountdav: positive drive id required")
 	}
+	if config.LocalHostname != "" && config.LocalHostname != mountlocal.Hostname {
+		return activeConfig{}, fmt.Errorf("mountdav: unsupported local hostname")
+	}
 	drive, err := validateWindowsDrive(config.WindowsDrive)
 	if err != nil {
 		return activeConfig{}, err
@@ -293,12 +304,13 @@ func validateStartConfig(ctx context.Context, config StartConfig) (activeConfig,
 		return activeConfig{}, fmt.Errorf("mountdav: writable mode requires an explicit writer and flag")
 	}
 	return activeConfig{
-		fs:           config.FS,
-		driveID:      config.DriveID,
-		driveTitle:   config.DriveTitle,
-		windowsDrive: drive,
-		writable:     config.Writable,
-		writer:       config.Writer,
+		fs:            config.FS,
+		driveID:       config.DriveID,
+		driveTitle:    config.DriveTitle,
+		windowsDrive:  drive,
+		writable:      config.Writable,
+		writer:        config.Writer,
+		localHostname: config.LocalHostname,
 	}, nil
 }
 
@@ -308,6 +320,7 @@ func sameActiveConfig(left, right activeConfig) bool {
 		left.driveTitle == right.driveTitle &&
 		left.windowsDrive == right.windowsDrive &&
 		left.writable == right.writable &&
+		left.localHostname == right.localHostname &&
 		sameWriteCoordinator(left.writer, right.writer)
 }
 

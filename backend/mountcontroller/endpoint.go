@@ -6,14 +6,22 @@ import (
 	"log/slog"
 
 	"TDrive/backend/mountdav"
+	"TDrive/backend/mountos"
 )
 
 type webDAVEndpoint struct {
-	server *mountdav.Server
+	server        *mountdav.Server
+	localHostname string
 }
 
-func newWebDAVEndpoint() Endpoint {
-	return &webDAVEndpoint{server: mountdav.NewServer()}
+func newWebDAVEndpoint(connector mountos.Connector) Endpoint {
+	// Only connectors that establish a persistent loopback alias opt in.
+	// Other platforms and injected connectors keep the numeric endpoint.
+	var hostname string
+	if named, ok := connector.(interface{ EndpointHostname() string }); ok {
+		hostname = named.EndpointHostname()
+	}
+	return &webDAVEndpoint{server: mountdav.NewServer(), localHostname: hostname}
 }
 
 func (endpoint *webDAVEndpoint) Start(ctx context.Context, config EndpointConfig) (EndpointStatus, error) {
@@ -30,12 +38,13 @@ func (endpoint *webDAVEndpoint) Start(ctx context.Context, config EndpointConfig
 	}
 	slog.Debug("mountcontroller: starting WebDAV endpoint", "drive_id", config.DriveID, "drive_title", config.DriveTitle, "writable", writable)
 	status, err := endpoint.server.Start(ctx, mountdav.StartConfig{
-		FS:           config.FS,
-		DriveID:      config.DriveID,
-		DriveTitle:   config.DriveTitle,
-		WindowsDrive: config.WindowsDrive,
-		Writable:     writable,
-		Writer:       writer,
+		FS:            config.FS,
+		DriveID:       config.DriveID,
+		DriveTitle:    config.DriveTitle,
+		WindowsDrive:  config.WindowsDrive,
+		Writable:      writable,
+		Writer:        writer,
+		LocalHostname: endpoint.localHostname,
 	})
 	if err != nil {
 		slog.Warn("mountcontroller: WebDAV endpoint start failed", "drive_id", config.DriveID, "error", err)

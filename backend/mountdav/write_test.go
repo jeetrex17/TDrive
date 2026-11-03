@@ -1417,3 +1417,25 @@ func TestServerWiresExplicitWritableCoordinatorEndToEnd(t *testing.T) {
 		t.Fatalf("DELETE response/request = %d/%+v", response.StatusCode, writer.deleteRequest)
 	}
 }
+
+func TestFriendlyHostnameWriteResourcesStayWithinAuthority(t *testing.T) {
+	application := &readApplication{authority: "TDrive.localhost:7331", capabilityPath: testCapability}
+	request := trustedRequest("MOVE", testCapability+"/Docs/note.txt", nil)
+	request.Host = application.authority
+	for _, authority := range []string{"TDrive.localhost:7331", "127.0.0.1:7331", "other.localhost:7331", "TDrive.localhost:7332"} {
+		t.Run(authority, func(t *testing.T) {
+			resource := "http://" + authority + testCapability + "/Docs/renamed.txt"
+			request := request.Clone(t.Context())
+			request.Header.Set("Destination", resource)
+			path, status := application.parseDestination(request)
+			taggedPath, taggedStatus := application.resolveTaggedResource(request)(resource)
+			if authority == application.authority {
+				if status != 0 || path != "/Docs/renamed.txt" || taggedStatus != 0 || taggedPath != path {
+					t.Fatalf("same-authority paths rejected: %q/%d, %q/%d", path, status, taggedPath, taggedStatus)
+				}
+			} else if status == 0 || taggedStatus == 0 {
+				t.Fatal("foreign authority accepted")
+			}
+		})
+	}
+}
