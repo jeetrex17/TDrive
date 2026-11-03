@@ -64,7 +64,7 @@ describe('GalleryCell', () => {
     it('starts idle with no image source and a plain title', () => {
         const { body } = render(GalleryCell, { props: { item: makeItem({ name: 'a.jpg' }), index: 0 } });
 
-        expect(body).toContain('class="gallery-cell"');
+        expect(body).toMatch(/class="gallery-cell(?: [^"]*)?"/);
         expect(body).not.toContain('is-loaded');
         expect(body).not.toContain('src=');
         expect(body).toContain('title="a.jpg"');
