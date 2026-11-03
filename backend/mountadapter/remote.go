@@ -502,10 +502,12 @@ func projectionOperationMatchesCommit(request mountwrite.CommitRequest, actual p
 }
 
 func isZeroFloodWaitRetryPolicy(policy tgclient.FloodWaitRetryPolicy) bool {
-	return policy.MaxRetries == 0 &&
+	return !policy.WaitUntilCanceled &&
+		policy.MaxRetries == 0 &&
 		policy.MaxWait == 0 &&
 		policy.MaxTotalWait == 0 &&
 		policy.Sleep == nil &&
+		!policy.RetryTransportUntilCanceled &&
 		policy.MaxTransientRetries == 0 &&
 		policy.TransientBackoff == 0 &&
 		policy.MaxTransientBackoff == 0 &&

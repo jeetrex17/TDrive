@@ -149,14 +149,15 @@ func TestRetryingUploadClientReacquiresAndRetriesSameTelegramPart(t *testing.T) 
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			t.Parallel()
-			partClient := &transientUploadPartClient{firstError: errors.New("engine forcibly closed: context canceled")}
+			partClient := &transientUploadPartClient{}
+			for range 8 {
+				partClient.failures = append(partClient.failures, errors.New("engine forcibly closed: context canceled"))
+			}
+			policy := DefaultUploadNetworkRetryPolicy()
+			policy.Sleep = func(context.Context, time.Duration) error { return nil }
 			acquires := 0
 			client := &retryingUploadClient{
-				policy: FloodWaitRetryPolicy{
-					MaxTransientRetries: 1,
-					TransientBackoff:    time.Millisecond,
-					Sleep:               func(context.Context, time.Duration) error { return nil },
-				},
+				policy: policy,
 				run: func(ctx context.Context, action func(uploader.Client) error) error {
 					acquires++
 					return action(partClient)
@@ -166,23 +167,27 @@ func TestRetryingUploadClientReacquiresAndRetriesSameTelegramPart(t *testing.T) 
 			if err != nil || !ok {
 				t.Fatalf("upload part = (%v, %v), want (true, nil)", ok, err)
 			}
-			if partClient.calls != 2 || acquires != 2 {
-				t.Fatalf("part calls=%d connection acquires=%d, want 2 and 2", partClient.calls, acquires)
+			if partClient.calls != 9 || acquires != 9 {
+				t.Fatalf("part calls=%d connection acquires=%d, want 9 and 9", partClient.calls, acquires)
 			}
 			switch test.name {
 			case "small part":
-				if len(partClient.smallParts) != 2 {
-					t.Fatalf("small-part request count = %d, want 2", len(partClient.smallParts))
+				if len(partClient.smallParts) != 9 {
+					t.Fatalf("small-part request count = %d, want 9", len(partClient.smallParts))
 				}
-				if partClient.smallParts[0] != partClient.smallParts[1] {
-					t.Fatalf("small-part requests = %p and %p, want the exact retained request", partClient.smallParts[0], partClient.smallParts[1])
+				for _, request := range partClient.smallParts {
+					if request != partClient.smallParts[0] || request.FileID != 77 || request.FilePart != 705 || !bytes.Equal(request.Bytes, []byte("same buffered chunk")) {
+						t.Fatalf("small-part retry = %+v, want original request, identity and bytes", request)
+					}
 				}
 			case "big part":
-				if len(partClient.bigParts) != 2 {
-					t.Fatalf("big-part request count = %d, want 2", len(partClient.bigParts))
+				if len(partClient.bigParts) != 9 {
+					t.Fatalf("big-part request count = %d, want 9", len(partClient.bigParts))
 				}
-				if partClient.bigParts[0] != partClient.bigParts[1] {
-					t.Fatalf("big-part requests = %p and %p, want the exact retained request", partClient.bigParts[0], partClient.bigParts[1])
+				for _, request := range partClient.bigParts {
+					if request != partClient.bigParts[0] || request.FileID != 77 || request.FilePart != 705 || request.FileTotalParts != 3800 || !bytes.Equal(request.Bytes, []byte("same buffered chunk")) {
+						t.Fatalf("big-part retry = %+v, want original request, identity and bytes", request)
+					}
 				}
 			}
 		})
@@ -195,7 +200,7 @@ func TestRetryingUploadClientDoesNotRetryPermanentRPCError(t *testing.T) {
 	want := errors.New("rpc error code 400: FILE_PARTS_INVALID")
 	partClient := &transientUploadPartClient{firstError: want}
 	client := &retryingUploadClient{
-		policy: DefaultUploadFloodWaitRetryPolicy(),
+		policy: DefaultUploadNetworkRetryPolicy(),
 		run: func(ctx context.Context, action func(uploader.Client) error) error {
 			return action(partClient)
 		},
