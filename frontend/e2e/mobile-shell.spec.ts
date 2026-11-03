@@ -341,22 +341,22 @@ test('the bars carry safe-area padding', async ({ page }) => {
 });
 
 /**
- * Photos and Trash are each turned off from the refresh that turns the other
+ * Media and Trash are each turned off from the refresh that turns the other
  * on. A setter that cleared the shared view unconditionally wiped out what its
- * sibling had just published: the Photos tab read as Files, the top bar kept
+ * sibling had just published: the Media tab read as Files, the top bar kept
  * the drive header, and BACK at the gallery root left the app.
  */
-test('the Photos tab lights, wears its own top bar, and BACK stays in the app', async ({ page }) => {
+test('the Media tab lights, wears its own top bar, and BACK stays in the app', async ({ page }) => {
     await bootMobile(page);
-    await tab(page, /^Photos/).click();
+    await tab(page, /^Media/).click();
     await expect(page.locator('.main-content.photos-mode')).toBeVisible();
-    await expect(tab(page, /^Photos/)).toHaveClass(/active/);
+    await expect(tab(page, /^Media/)).toHaveClass(/active/);
     await expect(page.locator('.topbar-files')).toBeHidden();
-    await expect(page.locator('.topbar-plain').getByRole('heading', { name: 'Photos' })).toBeVisible();
+    await expect(page.locator('.topbar-plain').getByRole('heading', { name: 'Media' })).toBeVisible();
 
-    // Leaving Photos is one BACK, handled here, not by the host.
-    const atPhotos = await page.evaluate(() => window.__tdriveHandleBack?.());
-    expect(atPhotos).toBe(true);
+    // Leaving Media is one BACK, handled here, not by the host.
+    const atMedia = await page.evaluate(() => window.__tdriveHandleBack?.());
+    expect(atMedia).toBe(true);
     await expect(tab(page, /^Files/)).toHaveClass(/active/);
 });
 
@@ -369,7 +369,7 @@ test('photos expose Select and queue every chosen photo for download', async ({ 
     }, { url: '/?mobile=android' });
     await expect(page.locator('#success-screen.mobile-shell')).toBeVisible();
 
-    await tab(page, /^Photos/).click();
+    await tab(page, /^Media/).click();
     await expect(page.getByRole('button', { name: FIRST_PHOTO.name }).locator('img'))
         .toHaveAttribute('src', /^blob:/);
     await page.getByRole('button', { name: 'Select photos' }).click();

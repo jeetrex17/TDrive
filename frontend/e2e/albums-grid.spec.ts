@@ -26,7 +26,7 @@ test('a full album grid draws every cover and keeps each name in its column', as
             cover_msg_id: FIRST_PHOTO.msg_id, cover_revision: 1, cover_name: FIRST_PHOTO.name,
         }))),
     });
-    await page.getByRole('button', { name: 'Photos' }).click();
+    await page.getByRole('button', { name: 'Media' }).click();
 
     const tiles = page.locator('button.album-tile');
     await expect(tiles.first()).toBeVisible();
@@ -65,11 +65,11 @@ test('inside an album the phone top bar carries its name and a way back', async 
         ]),
     }, { url: '/?mobile=android' });
     await expect(page.locator('#success-screen.mobile-shell')).toBeVisible();
-    await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: /^Photos/ }).click();
+    await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: /^Media/ }).click();
 
     // The Albums grid has no photos to pick, so no Select; the bar names the view.
     const bar = page.locator('.topbar-photos');
-    await expect(bar.getByRole('heading', { name: 'Photos' })).toBeVisible();
+    await expect(bar.getByRole('heading', { name: 'Media' })).toBeVisible();
     await expect(bar.getByRole('button', { name: 'Select photos' })).toHaveCount(0);
 
     await page.getByRole('button', { name: /^Camera/ }).click();
@@ -77,12 +77,12 @@ test('inside an album the phone top bar carries its name and a way back', async 
     await expect(bar.getByRole('button', { name: 'Select photos' })).toBeVisible();
 
     await bar.getByRole('button', { name: 'Back to albums' }).click();
-    await expect(bar.getByRole('heading', { name: 'Photos' })).toBeVisible();
+    await expect(bar.getByRole('heading', { name: 'Media' })).toBeVisible();
     await expect(page.locator('button.album-tile').first()).toBeVisible();
 
     // Hardware BACK does the same, and is consumed rather than leaving the app.
     await page.getByRole('button', { name: /^Camera/ }).click();
     await expect(bar.getByRole('heading', { name: 'Camera', exact: true })).toBeVisible();
     expect(await page.evaluate(() => window.__tdriveHandleBack?.())).toBe(true);
-    await expect(bar.getByRole('heading', { name: 'Photos' })).toBeVisible();
+    await expect(bar.getByRole('heading', { name: 'Media' })).toBeVisible();
 });

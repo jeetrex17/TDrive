@@ -189,7 +189,7 @@ test('windows large file lists while preserving endpoint keyboard focus', async 
     expect(await list.locator('.drive-row').count()).toBeLessThan(64);
 });
 
-test('returning from Photos keeps the current file list while it refreshes', async ({ page }) => {
+test('returning from Media keeps the current file list while it refreshes', async ({ page }) => {
     const contents = {
         folders: [
             { id: 'alpha', name: 'Alpha', parent_id: '' },
@@ -225,7 +225,7 @@ test('returning from Photos keeps the current file list while it refreshes', asy
     await mock.setPlan('GetFolderContents', deferred('foreground-files', contents));
     await page.keyboard.press('Control+R');
     await expect.poll(async () => (await mock.calls('GetFolderContents'))[initialFolderRequests]?.state).toBe('pending');
-    await page.getByRole('button', { name: 'Photos' }).click();
+    await page.getByRole('button', { name: 'Media' }).click();
     await expect(page.locator('#gallery-view')).toBeVisible();
     await page.locator('#file-list').evaluate((list) => {
         const states: string[] = window.__fileListLoadingStates = [];
@@ -272,7 +272,7 @@ test('returning from Photos keeps the current file list while it refreshes', asy
     await expect(folders.nth(0).locator('.folder-size')).toHaveText('3 KB');
 });
 
-test('a Photos click wins over a pending drive switch', async ({ page }) => {
+test('a Media click wins over a pending drive switch', async ({ page }) => {
     const mock = await bootTDrive(page, {
         ListChannels: resolves([
             PERSONAL_CHANNEL,
@@ -290,16 +290,16 @@ test('a Photos click wins over a pending drive switch', async ({ page }) => {
     await expect(page.locator('#success-screen')).toBeVisible();
     await page.getByRole('button', { name: 'Team', exact: true }).click();
     await expect.poll(async () => (await mock.calls('SetActiveChannel'))[0]?.state).toBe('pending');
-    await page.getByRole('button', { name: 'Photos' }).click();
+    await page.getByRole('button', { name: 'Media' }).click();
 
     await expect(page.locator('#gallery-view')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Photos' })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('button', { name: 'Media' })).toHaveAttribute('aria-current', 'page');
     await mock.release('drive-switch');
     // Background sync starts after the switch has applied its navigation and
     // refreshed the selected view, so this cannot pass on the pre-switch UI.
     await expect.poll(async () => (await mock.calls('SyncChannel')).find((call) => call.args[0] === 2)?.state).toBe('fulfilled');
     await expect(page.locator('#gallery-view')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Photos' })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('button', { name: 'Media' })).toHaveAttribute('aria-current', 'page');
 });
 
 
@@ -387,7 +387,7 @@ test('the sender can rename a forwarded root attachment in a shared drive', asyn
 test('gallery loads binary thumbnails and one explicitly opened original stream', async ({ page }) => {
     const requested = await routeRenditions(page);
     const mock = await bootTDrive(page, galleryPlans([FIRST_PHOTO]));
-    await page.getByRole('button', { name: 'Photos' }).click();
+    await page.getByRole('button', { name: 'Media' }).click();
     const photo = page.getByRole('button', { name: 'first.jpg' });
     await expect(photo).toBeVisible();
     await expect(photo.locator('img')).toHaveAttribute('src', /^blob:/);
@@ -410,7 +410,7 @@ test('gallery displays resized photo previews and downloads the original file', 
         OpenOriginalImage: resolves({ ...openedOriginal(photo, RED_BASE64), image_preview: true }),
         DownloadFile: resolves({ result: { ok: true }, saved_path: '/tmp/50-megapixel.jpg' }),
     });
-    await page.getByRole('button', { name: 'Photos' }).click();
+    await page.getByRole('button', { name: 'Media' }).click();
     await page.getByRole('button', { name: photo.name }).click();
     const image = page.locator('#preview-image');
     await expect(image).toHaveAttribute('title', 'Resized preview. Download for original quality.');
@@ -437,9 +437,9 @@ test('gallery displays resized photo previews and downloads the original file', 
 test('albums open on the folder grid and scope the one gallery to a folder', async ({ page }, testInfo) => {
     const requested = await routeRenditions(page);
     await bootTDrive(page, { ...galleryPlans([FIRST_PHOTO, SECOND_PHOTO]), ...albumPlans() });
-    await page.getByRole('button', { name: 'Photos' }).click();
+    await page.getByRole('button', { name: 'Media' }).click();
 
-    // More than one folder, so Photos opens on the grid. Each tile names
+    // More than one folder, so Media opens on the grid. Each tile names
     // itself fully, and the drive's own root is called what the trash calls it.
     const camera = page.getByRole('button', { name: 'Camera, 1 photo' });
     await expect(camera).toBeVisible();
@@ -469,7 +469,7 @@ test('mixed gallery loads video thumbnails before opening the streaming player',
         ...galleryPlans([FIRST_PHOTO, clip]),
         OpenMedia: rejects('Test stream unavailable'),
     });
-    await page.getByRole('button', { name: 'Photos', exact: true }).click();
+    await page.getByRole('button', { name: 'Media', exact: true }).click();
     const video = page.getByRole('button', { name: 'Video: holiday.mp4', exact: true });
     await expect(video).toBeVisible();
     await expect(video.locator('img')).toHaveAttribute('src', /^blob:/);
@@ -492,7 +492,7 @@ test('a late original completion cannot overwrite rapid gallery navigation', asy
             [SECOND_PHOTO.msg_id]: resolves(openedOriginal(SECOND_PHOTO, BLUE_BASE64)),
         }),
     });
-    await page.getByRole('button', { name: 'Photos' }).click();
+    await page.getByRole('button', { name: 'Media' }).click();
     await expect(page.getByRole('button', { name: 'first.jpg' }).locator('img')).toHaveAttribute('src', /^blob:/);
     await page.getByRole('button', { name: 'first.jpg' }).click();
     await expect(page.getByRole('dialog', { name: 'first.jpg' })).toBeVisible();
@@ -610,8 +610,8 @@ for (const platform of ['desktop', 'android', 'ios'] as const) {
             }),
             ListMediaPage: galleryPage(count, FIRST_PHOTO),
         });
-        const photos = platform === 'desktop' ? page.getByRole('button', { name: 'Photos', exact: true })
-            : page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Photos', exact: true });
+        const photos = platform === 'desktop' ? page.getByRole('button', { name: 'Media', exact: true })
+            : page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Media', exact: true });
         await photos.click();
         const gallery = page.locator('#gallery-view');
         await expect(gallery.locator('[data-id="1000"]')).toBeVisible();

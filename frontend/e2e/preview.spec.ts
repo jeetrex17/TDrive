@@ -24,7 +24,7 @@ import {
 import type { Page } from '@playwright/test';
 
 async function openGallery(page: Page): Promise<void> {
-    await page.getByRole('button', { name: 'Photos' }).click();
+    await page.getByRole('button', { name: 'Media' }).click();
     // The cell only becomes clickable once its thumbnail lease resolves.
     await expect(page.getByRole('button', { name: FIRST_PHOTO.name }).locator('img'))
         .toHaveAttribute('src', /^blob:/);
