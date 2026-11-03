@@ -502,7 +502,7 @@ seek, and startup zero-time events cannot overwrite a saved class position.
 Natural completion clears that video's position; stopping near the end retains
 it. Storage unavailable or full does not block playback. This is device-local
 history, not cross-device synchronization, and clearing app storage removes it.
-Media video thumbnails show a thin progress bar from the same record, updated
+Media and My Drive video thumbnails show a progress bar from the same record, updated
 on saves without reloading gallery pages. Older records without duration still
 resume playback and gain a progress bar after the next playback save.
 

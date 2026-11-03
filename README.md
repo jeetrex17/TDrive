@@ -127,7 +127,7 @@ TDrive stores your API credentials locally; it does not ship a shared project-wi
 - Stream media directly from Telegram, including encrypted personal-drive media.
 - Desktop mpv playback for formats the system webview cannot decode, including MKV and HEVC.
 - Audio-track, subtitle, playback-speed, picture-fit, and subtitle-appearance controls.
-- Drag or swipe the video timeline to seek. Playback position is saved locally so reopening a class continues where you left off. A thin bar beneath video thumbnails in Media shows watched progress.
+- Drag or swipe the video timeline to seek. Playback position is saved locally so reopening a class continues where you left off. A progress bar on video thumbnails in Media and My Drive shows how much you have watched.
 - On mobile, swipe the left side for brightness. Swipe the right side for volume on Android or to open the native volume slider on iOS. The rotate button switches portrait and landscape.
 - **Media** groups photos and videos together. Available codecs and playback controls depend on the platform and player.
 

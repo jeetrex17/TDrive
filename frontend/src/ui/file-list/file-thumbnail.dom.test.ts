@@ -19,6 +19,7 @@ vi.mock('../../modules/renditions/runtime', () => ({
 }));
 
 import FileList from './FileList.svelte';
+import { PlaybackResume, playbackResumeKey } from '../../modules/video/playback-resume';
 import { state } from '../../state';
 import { showFileListRows, showFileListState } from './file-list-store';
 import type { FileListFileRow } from './types';
@@ -190,4 +191,45 @@ it('keeps a missing Telegram thumbnail stable for the current revision', async (
     expect(runtime.acquire).toHaveBeenCalledOnce();
     expect(thumbnail.title).toBe('thumbnail unavailable');
     expect(thumbnail.querySelector<HTMLImageElement>('.row-thumbnail-image')?.getAttribute('src')).toBeNull();
+});
+
+
+it.each([false, true])('updates watched video progress and isolates recycled row identities (mobile=%s)', async (mobile) => {
+    platform.mobile = mobile;
+    const data = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => data.set(key, value) });
+    const identity = { accountId: 21, channelId: 7, fileId: 42, revision: 9 };
+    const video = row({ name: 'clip.mp4', ext: 'MP4', thumbnail: identity });
+    showFileListRows([video]);
+    app = mount(FileList, { target: host });
+    flushSync();
+    expect(host.querySelector('.row-watch-progress')).toBeNull();
+
+    const recorder = new PlaybackResume(playbackResumeKey(21, identity));
+    recorder.observe({ currentTime: 25, duration: 100, paused: true, loading: false });
+    flushSync();
+    expect(host.querySelector<HTMLElement>('.row-watch-progress-fill')?.style.width).toBe('25%');
+    recorder.observe({ currentTime: 25, duration: 200, paused: true, loading: false });
+    recorder.flush();
+    flushSync();
+    expect(host.querySelector<HTMLElement>('.row-watch-progress-fill')?.style.width).toBe('12.5%');
+
+    // A late active-drive change cannot relabel an already published row.
+    state.activeChannel = { id: 99, title: 'Other drive', kind: 'personal' };
+    flushSync();
+    expect(host.querySelector('.row-watch-progress')).not.toBeNull();
+    for (const changed of [{ accountId: 22 }, { channelId: 8 }, { fileId: 43 }, { revision: 10 }]) {
+        showFileListRows([{ ...video, thumbnail: { ...identity, ...changed } }]);
+        flushSync();
+        expect(host.querySelector('.row-watch-progress')).toBeNull();
+    }
+    showFileListRows([{ ...video, ext: 'JPG' }]);
+    flushSync();
+    expect(host.querySelector('.row-watch-progress')).toBeNull();
+    showFileListRows([video]);
+    flushSync();
+    expect(host.querySelector('.row-watch-progress')).not.toBeNull();
+    recorder.complete();
+    flushSync();
+    expect(host.querySelector('.row-watch-progress')).toBeNull();
 });

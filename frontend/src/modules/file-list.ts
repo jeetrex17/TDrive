@@ -378,7 +378,9 @@ export function buildFileRow(file: FileRowInput, parentId: string, overrides: Pa
         encrypted,
         canDelete,
         canRename,
-        thumbnail: overrides.thumbnail,
+        thumbnail: overrides.thumbnail
+            ? Object.freeze({ ...overrides.thumbnail, accountId: overrides.thumbnail.accountId ?? state.myUserID })
+            : undefined,
         uploaderChip: overrides.uploaderChip !== undefined
             ? overrides.uploaderChip
             : uploaderChipFor(uploaderID, uploadTime),
@@ -723,7 +725,7 @@ function rowsForLoadedData(data: LoadedFileData, view: FileViewIdentity): FileLi
         uploaderID: file.uploaderId,
         encrypted: file.encrypted,
     }, view.folderId, {
-        // Only the current folder's projected images opt in. This avoids a
+        // Only the current folder's projected media opt in. This avoids a
         // gallery-wide lookup and keeps raw Telegram/search rows icon-only.
         thumbnail: fileThumbnailIdentity(file, view.channelId),
     }));
