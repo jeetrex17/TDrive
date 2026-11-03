@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { isApplePlatform } from '../../utils';
     import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
     import { breadcrumbPath, type BreadcrumbDrag } from './breadcrumb-store';
 
@@ -54,8 +55,9 @@
     id="breadcrumb-back"
     class="icon-btn back-btn"
     type="button"
-    title="Back"
-    aria-label="Back"
+    title={isApplePlatform() ? "Parent folder (⌘↑ or Alt+↑)" : "Parent folder (Alt+↑)"}
+    aria-label="Parent folder"
+    aria-keyshortcuts={isApplePlatform() ? "Meta+ArrowUp Alt+ArrowUp" : "Alt+ArrowUp"}
     disabled={atRoot}
     style={`opacity: ${atRoot ? '0.35' : '1'}`}
     onclick={onBack}

@@ -6,13 +6,16 @@ type Refresh = () => void | Promise<void>;
 let installed = false;
 
 function isRefreshShortcut(event: KeyboardEvent): boolean {
+    if (event.key === 'F5') {
+        return !event.metaKey && !event.ctrlKey && !event.altKey && !event.shiftKey;
+    }
     return (event.metaKey || event.ctrlKey)
         && !event.altKey
         && event.key.toLowerCase() === 'r';
 }
 
 /**
- * Cmd/Ctrl+R while a dialog is open consumes the press without refreshing: the
+ * F5 or Cmd/Ctrl+R while a dialog is open consumes the press without refreshing: the
  * reload the WebView would otherwise do throws away whatever the dialog was
  * collecting, and re-listing the folder underneath a rename or a delete sheet
  * leaves the dialog talking about a row that is no longer in the list.

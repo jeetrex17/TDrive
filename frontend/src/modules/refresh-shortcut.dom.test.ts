@@ -19,6 +19,7 @@ describe('handleRefreshShortcut', () => {
     it.each([
         ['macOS', shortcut({ metaKey: true, ctrlKey: false })],
         ['Windows and Linux', shortcut()],
+        ['F5', shortcut({ key: 'F5', ctrlKey: false })],
     ])('refreshes with the %s shortcut and prevents WebView reload', (_platform, event) => {
         const refresh = vi.fn();
 
@@ -38,6 +39,7 @@ describe('handleRefreshShortcut', () => {
             shortcut({ key: 'f' }),
             shortcut({ ctrlKey: false, metaKey: false }),
             shortcut({ altKey: true }),
+            shortcut({ key: 'F5', ctrlKey: false, shiftKey: true }),
             prevented,
         ]) {
             expect(handleRefreshShortcut(event, refresh)).toBe(false);
@@ -45,9 +47,9 @@ describe('handleRefreshShortcut', () => {
         expect(refresh).not.toHaveBeenCalled();
     });
 
-    it('consumes repeated shortcuts and shortcuts behind an open modal without refreshing', () => {
+    it.each([{ key: 'r', ctrlKey: true }, { key: 'F5', ctrlKey: false }])('consumes repeated $key shortcuts and shortcuts behind an open modal without refreshing', (keys) => {
         const refresh = vi.fn();
-        const repeated = shortcut({ repeat: true });
+        const repeated = shortcut({ ...keys, repeat: true });
 
         expect(handleRefreshShortcut(repeated, refresh)).toBe(true);
         expect(repeated.defaultPrevented).toBe(true);
@@ -55,7 +57,7 @@ describe('handleRefreshShortcut', () => {
         const dialog = document.createElement('div');
         document.body.append(dialog);
         activateModalOwnership(dialog);
-        const modalEvent = shortcut();
+        const modalEvent = shortcut(keys);
 
         const handled = handleRefreshShortcut(modalEvent, refresh);
 
