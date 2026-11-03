@@ -300,7 +300,7 @@ func (g *Gotd) sendFileWithThumbnail(ctx context.Context, peer InputPeer, r io.R
 	// the complete ~1.9 GiB TDrive segment. Parts travel over the home data
 	// center's connection pool, several at a time.
 	partClient := &retryingUploadClient{
-		policy: DefaultUploadFloodWaitRetryPolicy(),
+		policy: DefaultUploadNetworkRetryPolicy(),
 		run: func(ctx context.Context, action func(uploader.Client) error) error {
 			return g.writes.Do(ctx, writeClassUploadPart, func() error {
 				return g.runClient(ctx, func(ctx context.Context, client *telegram.Client) error {

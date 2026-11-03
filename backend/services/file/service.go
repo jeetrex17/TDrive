@@ -272,7 +272,7 @@ func (s *Service) uploadRetryPolicy() tgclient.FloodWaitRetryPolicy {
 
 func (s *Service) hasCustomRetryPolicy() bool {
 	p := s.FloodWaitRetry
-	return p.WaitUntilCanceled || p.MaxRetries != 0 || p.MaxWait != 0 || p.MaxTotalWait != 0 || p.Sleep != nil ||
+	return p.WaitUntilCanceled || p.RetryTransportUntilCanceled || p.MaxRetries != 0 || p.MaxWait != 0 || p.MaxTotalWait != 0 || p.Sleep != nil ||
 		p.MaxTransientRetries != 0 || p.TransientBackoff != 0 || p.MaxTransientBackoff != 0 || p.TransientJitter != 0
 }
 

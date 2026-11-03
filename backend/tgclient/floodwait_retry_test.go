@@ -513,3 +513,71 @@ func TestTransientAndFloodBudgetsAreIndependent(t *testing.T) {
 		t.Fatalf("attempts = %d, want 5", attempts)
 	}
 }
+
+func TestUploadNetworkRetryPolicyRecoversPastTransportBudget(t *testing.T) {
+	t.Parallel()
+	policy := DefaultUploadNetworkRetryPolicy()
+	policy.TransientJitter = 0
+	var slept []time.Duration
+	policy.Sleep = func(_ context.Context, wait time.Duration) error {
+		slept = append(slept, wait)
+		return nil
+	}
+	attempts := 0
+	err := policy.Do(t.Context(), func() error {
+		attempts++
+		if attempts <= 8 {
+			return errors.New("connection reset by peer")
+		}
+		return nil
+	})
+	want := []time.Duration{2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second, 30 * time.Second, 30 * time.Second, 30 * time.Second, 30 * time.Second}
+	if err != nil || attempts != 9 || !slices.Equal(slept, want) {
+		t.Fatalf("Do = %v after %d attempts with waits %v; want recovery and waits %v", err, attempts, slept, want)
+	}
+}
+
+func TestUploadNetworkRetryPolicyStopsOnPermanentFailure(t *testing.T) {
+	t.Parallel()
+	policy := DefaultUploadNetworkRetryPolicy()
+	policy.Sleep = func(context.Context, time.Duration) error { return nil }
+	permanent := errors.New("FILE_PART_INVALID")
+	attempts := 0
+	err := policy.Do(t.Context(), func() error {
+		attempts++
+		if attempts <= 6 {
+			return errors.New("connection reset by peer")
+		}
+		return permanent
+	})
+	if !errors.Is(err, permanent) || attempts != 7 {
+		t.Fatalf("Do = %v after %d attempts; want permanent error after recovery", err, attempts)
+	}
+}
+
+func TestUploadNetworkRetryPolicyCancellationInterruptsOfflineWait(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
+		done := make(chan error, 1)
+		attempts := 0
+		go func() {
+			done <- DefaultUploadNetworkRetryPolicy().Do(ctx, func() error {
+				attempts++
+				return errors.New("connection reset by peer")
+			})
+		}()
+		synctest.Wait()
+		cancel()
+		if err := <-done; !errors.Is(err, context.Canceled) || attempts != 1 {
+			t.Fatalf("Do = %v after %d attempts, want cancellation during first backoff", err, attempts)
+		}
+	})
+}
+
+func TestUploadNetworkRetryRequiresBackoff(t *testing.T) {
+	policy := FloodWaitRetryPolicy{RetryTransportUntilCanceled: true}
+	if err := policy.Validate(); !errors.Is(err, ErrInvalidFloodWaitRetryPolicy) {
+		t.Fatalf("Validate = %v, want invalid policy without backoff", err)
+	}
+}

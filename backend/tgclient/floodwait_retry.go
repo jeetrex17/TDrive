@@ -39,23 +39,30 @@ var ErrInvalidFloodWaitRetryPolicy = errors.New("tgclient: invalid flood wait re
 //
 // MaxRetries counts FLOOD_WAIT retries after the initial call and
 // MaxTransientRetries counts transport retries; both are independent budgets.
+// RetryTransportUntilCanceled may replace the transport budget only where the
+// action retains the same idempotent network request across attempts.
 // A zero-value policy performs one call and no retries; callers that want the
 // bounded production defaults should use DefaultWriteFloodWaitRetryPolicy.
 type FloodWaitRetryPolicy struct {
 	// WaitUntilCanceled ignores the FLOOD_WAIT retry and duration budgets.
 	// Each server-requested wait remains interruptible by the caller's context.
-	// Transport retries still obey their independent budget.
+	// Transport retries have an independent policy.
 	WaitUntilCanceled bool
 	MaxRetries        int
 	MaxWait           time.Duration
 	MaxTotalWait      time.Duration
 	Sleep             func(context.Context, time.Duration) error
 
+	// RetryTransportUntilCanceled keeps retrying transient failures while the
+	// context is live. Use only at network boundaries that retain their request
+	// bytes and identity, never around source reads or whole-file preparation.
+	RetryTransportUntilCanceled bool
 	// MaxTransientRetries bounds transport-failure retries after the initial
-	// attempt. Zero disables them.
+	// attempt unless RetryTransportUntilCanceled is set. Otherwise zero disables
+	// transport retries.
 	MaxTransientRetries int
 	// TransientBackoff is the first backoff; it doubles each attempt up to
-	// MaxTransientBackoff. Required when MaxTransientRetries > 0.
+	// MaxTransientBackoff. Required whenever transport retries are enabled.
 	TransientBackoff time.Duration
 	// MaxTransientBackoff caps the doubling backoff. When zero, backoff stays
 	// constant at TransientBackoff.
@@ -89,6 +96,16 @@ func DefaultUploadFloodWaitRetryPolicy() FloodWaitRetryPolicy {
 	return p
 }
 
+// DefaultUploadNetworkRetryPolicy keeps an active upload's buffered network
+// request alive across outages. The retry caller must retain the same part bytes
+// or uploaded media handle and publication random ID; it must not reopen sources.
+func DefaultUploadNetworkRetryPolicy() FloodWaitRetryPolicy {
+	p := DefaultUploadFloodWaitRetryPolicy()
+	p.RetryTransportUntilCanceled = true
+	p.MaxTransientRetries = 0
+	return p
+}
+
 // Validate reports whether p has valid, non-negative retry settings.
 func (p FloodWaitRetryPolicy) Validate() error {
 	if p.MaxRetries < 0 || p.MaxWait < 0 || p.MaxTotalWait < 0 ||
@@ -98,7 +115,7 @@ func (p FloodWaitRetryPolicy) Validate() error {
 	if !p.WaitUntilCanceled && p.MaxRetries > 0 && (p.MaxWait == 0 || p.MaxTotalWait == 0) {
 		return fmt.Errorf("%w: retrying requires per-wait and total-wait limits", ErrInvalidFloodWaitRetryPolicy)
 	}
-	if p.MaxTransientRetries > 0 && p.TransientBackoff == 0 {
+	if (p.MaxTransientRetries > 0 || p.RetryTransportUntilCanceled) && p.TransientBackoff == 0 {
 		return fmt.Errorf("%w: retrying transient failures requires a backoff", ErrInvalidFloodWaitRetryPolicy)
 	}
 	return nil
@@ -147,7 +164,7 @@ func (p FloodWaitRetryPolicy) Do(ctx context.Context, action func() error) error
 			floodRetries++
 			continue
 		}
-		if !IsTransientTransport(err) || transientRetries >= p.MaxTransientRetries {
+		if !IsTransientTransport(err) || (!p.RetryTransportUntilCanceled && transientRetries >= p.MaxTransientRetries) {
 			return err
 		}
 		backoff := p.transientBackoff(transientRetries)
@@ -155,6 +172,7 @@ func (p FloodWaitRetryPolicy) Do(ctx context.Context, action func() error) error
 			"tgclient: transient transport failure, reconnecting before retry",
 			"attempt", transientRetries+1,
 			"max_retries", p.MaxTransientRetries,
+			"retry_until_canceled", p.RetryTransportUntilCanceled,
 			"backoff", backoff,
 			"error", err,
 		)

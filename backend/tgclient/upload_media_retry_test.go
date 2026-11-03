@@ -43,17 +43,69 @@ func TestSendUploadedMediaRetainsUploadedHandleAndIdentityThroughThrottling(t *t
 	})
 }
 
-func TestSendUploadedMediaReturnsUnknownTransportOutcomeWithoutInnerRetry(t *testing.T) {
-	t.Parallel()
-	g := &Gotd{writes: newWriteCoordinator(nil, nil)}
-	want := errors.New("connection reset by peer")
-	attempts := 0
-	_, err := g.sendUploadedMedia(t.Context(), &tg.MessagesSendMediaRequest{RandomID: 53}, func(context.Context, *tg.MessagesSendMediaRequest) (tg.UpdatesClass, error) {
-		attempts++
-		return nil, want
+func TestSendUploadedMediaRecoversLostReceiptWithoutDuplicate(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		g := &Gotd{writes: newWriteCoordinator(nil, nil)}
+		file := &tg.InputFileBig{ID: 87, Parts: 20, Name: "clip.mkv"}
+		request := &tg.MessagesSendMediaRequest{RandomID: 53, Media: &tg.InputMediaUploadedDocument{File: file}}
+		accepted := map[int64]int{}
+		attempts := 0
+		result, err := g.sendUploadedMedia(t.Context(), request, func(_ context.Context, actual *tg.MessagesSendMediaRequest) (tg.UpdatesClass, error) {
+			attempts++
+			if actual != request || actual.RandomID != 53 || actual.Media.(*tg.InputMediaUploadedDocument).File != file {
+				t.Fatal("retry changed the publication identity or uploaded handle")
+			}
+			// Model Telegram accepting the first send, losing its receipt, and
+			// deduplicating subsequent attempts by random_id after connectivity returns.
+			if _, exists := accepted[actual.RandomID]; !exists {
+				accepted[actual.RandomID] = 99
+			}
+			if attempts <= 8 {
+				return nil, errors.New("connection reset by peer")
+			}
+			return &tg.Updates{Updates: []tg.UpdateClass{&tg.UpdateMessageID{ID: accepted[actual.RandomID], RandomID: actual.RandomID}}}, nil
+		})
+		if err != nil || result.MsgID != 99 || attempts != 9 || len(accepted) != 1 {
+			t.Fatalf("send = %+v, %v; attempts=%d accepted=%v", result, err, attempts, accepted)
+		}
 	})
-	if attempts != 1 || !errors.Is(err, want) || !errors.Is(err, ErrSendOutcomeUnknown) {
-		t.Fatalf("send = %v after %d attempts, want original unknown outcome after one", err, attempts)
+}
+
+func TestSendUploadedMediaRetainsUnknownOutcomeWhenRecoveryStops(t *testing.T) {
+	for _, cancelRecovery := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cancel=%v", cancelRecovery), func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				g := &Gotd{writes: newWriteCoordinator(nil, nil)}
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				attempts := 0
+				transport := errors.New("connection reset by peer")
+				permanent := tgerr.New(400, "FILE_PART_MISSING")
+				_, err := g.sendUploadedMedia(ctx, &tg.MessagesSendMediaRequest{RandomID: 53}, func(context.Context, *tg.MessagesSendMediaRequest) (tg.UpdatesClass, error) {
+					attempts++
+					if attempts == 1 {
+						if cancelRecovery {
+							cancel()
+						}
+						return nil, transport
+					}
+					return nil, permanent
+				})
+				want := error(permanent)
+				if cancelRecovery {
+					want = context.Canceled
+				}
+				if !errors.Is(err, want) || !errors.Is(err, ErrSendOutcomeUnknown) || !errors.Is(err, transport) {
+					t.Fatalf("send = %v, want terminal error and retained unknown outcome", err)
+				}
+				select {
+				case g.writes.messageSlot <- struct{}{}:
+					<-g.writes.messageSlot
+				default:
+					t.Fatal("recovery retained message slot")
+				}
+			})
+		})
 	}
 }
 

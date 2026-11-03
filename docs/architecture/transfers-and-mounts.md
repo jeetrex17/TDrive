@@ -85,16 +85,23 @@ Uploads wait for every server-directed `FLOOD_WAIT` while their transfer context
 is live, including repeated cooldowns and waits longer than 30 seconds. The
 shared Telegram write coordinator applies the longest observed cooldown across
 message sends and upload parts. Retrying a part retains its buffered bytes,
-file ID and part index; retrying final document publication after throttling
-retains the uploaded file handle and random ID, without uploading the body
-again. Cancellation interrupts these waits. Part-request slots are released
-between attempts, while the owning transfer keeps its upload slot until it ends.
-Transport failures still have bounded retries, and permanent errors fail
-immediately. Upload manifests, hidden bodies and visible file sends use this
-upload policy by default; downloads, deletes and other control writes keep their
-existing bounded policies. An explicitly configured file-service retry policy
-continues to override its defaults. Preserve unknown send outcomes across later
-cooldowns or cancellation so reconciliation can protect accepted remote bodies.
+file ID and part index; retrying final document publication retains the uploaded
+file handle and random ID, without uploading the body again. These native upload
+requests also retry transient transport failures until connectivity returns or
+the transfer is canceled, with exponential backoff capped at 30 seconds. Keeping
+the publication random ID lets Telegram deduplicate a send whose receipt was
+lost. Cancellation interrupts waits, and permanent errors stop recovery. Request
+slots are released between attempts, while the owning transfer keeps its upload
+slot until it ends.
+
+Whole-file service retries remain bounded for transport failures so local source
+errors cannot cause endless rereads. Upload manifests, hidden bodies and visible
+file sends all use native request recovery; downloads, deletes and other control
+writes keep their existing bounded policies. An explicitly configured
+file-service retry policy overrides that outer layer only. Unknown send outcomes
+survive later errors or cancellation so reconciliation can protect accepted
+remote bodies. This recovery requires a live transfer context; it does not add
+restart persistence or extend Telegram's temporary uploaded-part lifetime.
 
 ## Interactive upload queue and Activity
 
