@@ -132,6 +132,9 @@ describe('channel video queue', () => {
             ['source:7:channel:44:one:9', 'Dawn chorus'],
             ['source:7:channel:44:one:6', 'Coastline'],
         ]);
+        expect(target.resumeKey).toBe('source:7:channel:44');
+        const reconnected = channelVideoQueue(posts[3], { ...SOURCE, generation: 'new-connection' }, posts, async () => ({} as MediaOpenResult));
+        expect(reconnected.target.resumeKey).toBe(target.resumeKey);
         expect(playlist.currentIndex).toBe(1);
         expect(target).toMatchObject({ id: 6, name: 'Telegram media 6.mp4', title: 'Coastline' });
         await playlist.items[0].open?.();

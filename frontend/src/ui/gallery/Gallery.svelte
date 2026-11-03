@@ -169,7 +169,7 @@
     </div>
 {:else}
     {#key $galleryView.source.timeline.channelId}
-    <div class="gallery-virtual" role="grid" aria-label="Photos" aria-rowcount={layout.rowCount} aria-colcount={layout.columns} style:height={`${scrollSpace.physicalHeight}px`}>
+    <div class="gallery-virtual" role="grid" aria-label="Media" aria-rowcount={layout.rowCount} aria-colcount={layout.columns} style:height={`${scrollSpace.physicalHeight}px`}>
         {#each rows as row (row.key)}
             <div class="gallery-grid gallery-virtual-row" role="row" aria-rowindex={row.rowIndex} style:top={`${scrollSpace.project(row.top, physicalScrollTop)}px`} style:height={`${layout.cellSize}px`} style:grid-template-columns={`repeat(${layout.columns}, minmax(0, 1fr))`}>
                 {#each row.cells as cell (cell.item?.msgId ?? `pending:${cell.index}`)}

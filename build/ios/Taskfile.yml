@@ -130,7 +130,7 @@ tasks:
           -framework Photos \
           -framework UniformTypeIdentifiers \
           -framework LocalAuthentication -framework UserNotifications \
-          -framework AVFoundation -framework CoreMedia \
+          -framework AVFoundation -framework CoreMedia -framework MediaPlayer \
           -framework CoreLocation -framework CoreMotion -framework SystemConfiguration \
           -lresolv \
           -o "{{.BIN_DIR}}/{{.APP_NAME | lower}}" \
@@ -321,11 +321,13 @@ tasks:
       - build/ios/Info.plist
       - build/ios/main.m
       - build/ios/TDrivePhotoBridge.inc
+      - build/ios/TDrivePlayerBridge.inc
       - build/ios/scripts/build_xcode_archive.sh
       - build/ios/scripts/patch_xcode_project.go
     generates:
       - build/ios/xcode/main/main.m
       - build/ios/xcode/main/TDrivePhotoBridge.inc
+      - build/ios/xcode/main/TDrivePlayerBridge.inc
       - build/ios/xcode/main/Assets.xcassets/**/*
       - build/ios/xcode/main.xcodeproj/project.pbxproj
     cmds:
@@ -336,11 +338,12 @@ tasks:
       # ships without it while a build driven from here has it.
       - cp build/ios/main.m build/ios/xcode/main/main.m
       - cp build/ios/TDrivePhotoBridge.inc build/ios/xcode/main/TDrivePhotoBridge.inc
+      - cp build/ios/TDrivePlayerBridge.inc build/ios/xcode/main/TDrivePlayerBridge.inc
       # Go's c-archive carries ImageIO calls but Xcode links the final binary.
       # The Wails template only includes its own frameworks; add ours to both
       # generated configurations every time the project is regenerated.
       - |
-        perl -0pi -e 's/"-ObjC",/"-ObjC", "-framework", "CoreGraphics", "-framework", "ImageIO", "-framework", "Photos", "-framework", "UniformTypeIdentifiers",/g' build/ios/xcode/main.xcodeproj/project.pbxproj
+        perl -0pi -e 's/"-ObjC",/"-ObjC", "-framework", "MediaPlayer", "-framework", "CoreGraphics", "-framework", "ImageIO", "-framework", "Photos", "-framework", "UniformTypeIdentifiers",/g' build/ios/xcode/main.xcodeproj/project.pbxproj
       # Make the generated project archive-safe. The patcher validates every
       # Wails template anchor before changing it, so upstream template drift
       # fails here instead of producing a subtly broken TestFlight archive.

@@ -7,6 +7,7 @@
 #include <stdio.h>
 
 #import "TDrivePhotoBridge.inc"
+#import "TDrivePlayerBridge.inc"
 
 // Wails lays its WKWebView out inside the safe area. On a notched phone held
 // sideways that leaves a 59 point strip of bare, unpainted view down each edge
@@ -235,6 +236,7 @@ static void tdriveFullBleedLayout(id self, SEL _cmd) {
     if (controller.webView != nil) {
         tdriveMakeInspectable(controller.webView);
         TDriveInstallPhotoBridge(controller.webView, controller);
+        TDriveInstallPlayerBridge(controller.webView, controller);
         tdriveTextScaleController = controller;
         tdriveInstallEdgeBackGesture(controller);
         tdriveApplyTextScale(controller);

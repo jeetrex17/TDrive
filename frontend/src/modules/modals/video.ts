@@ -1,3 +1,5 @@
+import { state as appState } from '../../state';
+import { PlaybackResume, playbackResumeKey } from '../video/playback-resume';
 import { acquireScreenProtection, bindViewOnlyGuards } from '../../ui/viewers/view-only-guards';
 import { htmlPictureStyle, loadPlaybackPreferences, normalizePlaybackPreferences, savePlaybackPreferences, type PlaybackPreferences, type PictureMode } from "../video/playback-preferences";
 import {
@@ -61,6 +63,7 @@ import {
 } from "../video/video-queue";
 import { attachHls, prefersJsPlayer, type HlsSource } from "../video/hls-source";
 import { MediaPrefetcher, readyToPrefetch, warmMediaEdges } from "../video/video-prefetch";
+import { MobileVideoControls } from "../video/mobile-controls";
 import { VideoGeometryController } from "../video/video-geometry";
 import { SEEK_STEP_SECONDS, VOLUME_STEP, VideoTransportController } from "../video/video-transport";
 import { bindVideoDOM, collectVideoDOM, videoDOMLive, type VideoDOM } from "../video/video-dom";
@@ -85,6 +88,7 @@ const PLAYBACK_HINT_INTERVAL_MS = 1000;
 
 interface VideoOpenAttempt {
     generation: number;
+    accountId: number;
     target: VideoOpenTarget;
     htmlFailureHandled: boolean;
     nativeFallbackRequested: boolean;
@@ -110,6 +114,7 @@ let activeMediaEncrypted = false;
 let activeMediaProtected = false;
 let releaseScreenProtection: (() => void) | null = null;
 let unsubscribeState: (() => void) | null = null;
+let activeResume: PlaybackResume | null = null;
 let currentState: PlayerState = { ...EMPTY_PLAYER_STATE };
 let activeOpenAttempt: VideoOpenAttempt | null = null;
 const playbackTransitions = new SerialPlaybackTransitions();
@@ -132,6 +137,8 @@ let unbindTouchGestures: (() => void) | null = null;
 // Where the last stage pointer came from: touch taps go through the phone
 // recogniser, and a tap that began on the chrome is the chrome's to handle.
 let stagePointerTouch = false;
+let stagePointerX = 0;
+let mobileControls: MobileVideoControls | null = null;
 let stagePointerOnChrome = false;
 let videoDOM: VideoDOM = collectVideoDOM(null);
 let geometry: VideoGeometryController | null = null;
@@ -611,6 +618,16 @@ function maybePrefetchNext(state: PlayerState) {
 }
 
 function applyState(state: PlayerState) {
+    const resumePosition = activeResume?.observe(state);
+    if (resumePosition != null && activeAdapter) {
+        try {
+            activeAdapter.seekAbsolute(resumePosition);
+            return;
+        } catch {
+            activeResume?.restoreFailed();
+            console.warn('Could not restore the video position; playback remains available.');
+        }
+    }
     const wasPaused = currentState.paused;
     currentState = state;
     if (!state.loading && loadingStatusOverride) {
@@ -696,6 +713,8 @@ async function releaseActive() {
 }
 
 function detachActiveReferences(): PlayerAdapter | null {
+    activeResume?.flush();
+    activeResume = null;
     const adapter = activeAdapter;
     const nativeToken = activeNative?.token ?? "";
     if (adapter instanceof NativeMpvAdapter) nativeStateRouter.deactivate(adapter);
@@ -868,6 +887,9 @@ export function updateVideoAutoNext(enabled: boolean): void {
 }
 
 function handleNaturalMediaEnd(attempt: VideoOpenAttempt, adapter: PlayerAdapter) {
+    if (activeOpenAttempt === attempt && activeAdapter === adapter && playbackTransitions.isCurrent(attempt.generation)) {
+        activeResume?.complete();
+    }
     if (
         activeOpenAttempt !== attempt ||
         activeAdapter !== adapter ||
@@ -950,11 +972,15 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
             mediaEnded: () => handleNaturalMediaEnd(attempt, adapter!),
         }, hlsSource);
         activeAdapter = adapter;
+        adapter.load();
+        activeResume = new PlaybackResume(
+            attempt.target.open && !attempt.target.resumeKey ? null : playbackResumeKey(attempt.accountId, opened.info, attempt.target.resumeKey),
+            undefined, undefined, attempt.playbackIntent?.currentTime,
+        );
         unsubscribeState = adapter.subscribe((state) => {
             if (!isCurrent() || activeAdapter !== adapter) return;
             applyState(state);
         });
-        adapter.load();
         if (attempt.playbackIntent) {
             adapter.setVolume(attempt.playbackIntent.volume);
             adapter.setMuted(attempt.playbackIntent.muted);
@@ -1197,14 +1223,13 @@ function activateNativePlayback(
         adapter.setPaused(intent.paused);
     }
 
-    let positionRestored = !intent || intent.currentTime <= 0;
+    activeResume = new PlaybackResume(
+        attempt.target.open && !attempt.target.resumeKey ? null : playbackResumeKey(attempt.accountId, opened.info, attempt.target.resumeKey),
+        undefined, undefined, intent?.currentTime,
+    );
     unsubscribeState = adapter.subscribe((state) => {
         if (!playbackTransitions.isCurrent(attempt.generation) || activeAdapter !== adapter) return;
         applyState(state);
-        if (!positionRestored && state.duration > 0) {
-            positionRestored = true;
-            adapter.seekAbsolute(intent!.currentTime);
-        }
     });
     setChromeVisible(true);
     if (!standalone) geometry?.scheduleNativeResize();
@@ -1217,6 +1242,7 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
 
     const attempt: VideoOpenAttempt = {
         generation: playbackTransitions.begin(),
+        accountId: appState.myUserID,
         target,
         htmlFailureHandled: false,
         nativeFallbackRequested: false,
@@ -1240,6 +1266,7 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
     // way to be rid of the band the system paints behind the navigation
     // buttons, which lands on top of the picture.
     setImmersive(true);
+    mobileControls?.open();
     activateModalOwnership(videoDOM.modal);
     a11y?.activate();
     void geometry?.syncFullscreenState();
@@ -1308,6 +1335,7 @@ export async function closeVideoModal() {
     modal.style.display = "none";
     modal.setAttribute("aria-hidden", "true");
     setImmersive(false);
+    mobileControls?.close();
     deactivateModalOwnership(modal);
     a11y?.deactivate();
     await playbackTransitions.run(generation, async () => releaseActive());
@@ -1497,15 +1525,17 @@ function handleStageDoubleClick(event: MouseEvent) {
 }
 
 function trackStagePointer(event: PointerEvent) {
+    stagePointerX = event.clientX;
     stagePointerTouch = event.pointerType === "touch";
     stagePointerOnChrome = targetIsVideoChrome(event.target);
 }
 
 // Phone gestures: a tap toggles the controls, a double tap on either side
-// seeks ten seconds (in the middle it toggles playback) and a swipe down
-// closes the player.
+// seeks ten seconds (in the middle it toggles playback). Edge swipes control
+// brightness/volume; a swipe down through the centre closes the player.
 function videoTouchHandlers(): TouchGestureHandlers {
     const shell = () => byID<HTMLElement>("video-shell");
+    let adjustingControl = false;
     return {
         tap: () => {
             if (!isOpen() || hasError || stagePointerOnChrome) return;
@@ -1524,8 +1554,15 @@ function videoTouchHandlers(): TouchGestureHandlers {
             else if (across > 2 / 3) transport?.seekBy(SEEK_STEP_SECONDS);
             else transport?.togglePlayback();
         },
-        dragStart: (axis) => axis === "y" && isOpen() && !stagePointerOnChrome && !isAnyMenuOpen(),
+        dragStart: (axis) => {
+            adjustingControl = false;
+            if (axis !== "y" || !isOpen() || hasError || stagePointerOnChrome || isAnyMenuOpen()) return false;
+            const rect = videoDOM.stage?.getBoundingClientRect();
+            if (rect) adjustingControl = mobileControls?.startDrag((stagePointerX - rect.left) / Math.max(1, rect.width), rect.height) ?? false;
+            return true;
+        },
         drag: (_dx, dy) => {
+            if (adjustingControl) { mobileControls?.drag(dy); return; }
             const el = shell();
             if (!el) return;
             const drop = Math.max(0, dy);
@@ -1534,6 +1571,7 @@ function videoTouchHandlers(): TouchGestureHandlers {
             el.style.opacity = String(Math.max(0.4, 1 - drop / 480));
         },
         dragEnd: (_dx, dy, _axis, velocity) => {
+            if (adjustingControl) { mobileControls?.endDrag(); adjustingControl = false; return; }
             const el = shell();
             if (!el) return;
             el.style.transition = "";
@@ -1572,6 +1610,7 @@ export function teardownVideoModal(): void {
     }
 
     setImmersive(false);
+    mobileControls?.close();
     if (videoDOM.modal) deactivateModalOwnership(videoDOM.modal);
     a11y?.deactivate();
     a11y = null;
@@ -1586,6 +1625,8 @@ export function teardownVideoModal(): void {
     unsubscribeEncryptedMediaSessionsClosed?.();
     unsubscribeEncryptedMediaSessionsClosed = null;
     void releaseActive();
+    mobileControls?.destroy();
+    mobileControls = null;
     transport?.destroy();
     geometry?.destroy();
     transport = null;
@@ -1622,6 +1663,10 @@ export function activateVideoModal(): () => void {
 
     videoDOM = collectVideoDOM(host);
     controlListeners = new AbortController();
+    window.addEventListener('pagehide', () => activeResume?.flush(), { signal: controlListeners.signal });
+    document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState === 'hidden') activeResume?.flush();
+    }, { signal: controlListeners.signal });
     audioPicker = new TrackPicker("Audio", null, (player, id) => {
         if (id !== null) player.setAudioTrack(id);
     }, videoDOM.audioPicker, trackPickerHost, controlListeners.signal);
@@ -1715,6 +1760,11 @@ export function activateVideoModal(): () => void {
         applyHtmlPicture();
     });
     if (isMobilePlatform()) {
+        mobileControls = new MobileVideoControls({
+            rotate: byID<HTMLButtonElement>("video-rotate"),
+            volume: byID<HTMLButtonElement>("video-mobile-volume"),
+            feedback: byID("video-mobile-feedback"),
+        });
         videoDOM.stage.addEventListener("pointerdown", trackStagePointer);
         unbindTouchGestures = bindTouchGestures(videoDOM.stage, videoTouchHandlers());
     }

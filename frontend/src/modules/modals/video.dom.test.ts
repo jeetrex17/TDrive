@@ -2230,3 +2230,53 @@ describe("video on a phone", () => {
         expect(apiMocks.openMedia).toHaveBeenCalledOnce();
     });
 });
+
+describe('remembered class playback', () => {
+    it('restores HTML position after closing and reopening, but keeps accounts separate', async () => {
+        const { state } = await import('../../state');
+        const module = await import('./video');
+        state.myUserID = 71;
+        try {
+            apiMocks.openMedia.mockResolvedValue(mediaOpenResult(44, SHARED_SESSION_ID));
+            await module.openVideoModal({ id: 44, name: 'class.mp4' });
+            const video = document.querySelector<HTMLVideoElement>('#video-player')!;
+            Object.defineProperty(video, 'duration', { configurable: true, value: 3600 });
+            video.currentTime = 1234;
+            video.dispatchEvent(new Event('timeupdate'));
+            video.pause();
+            await module.closeVideoModal();
+            video.currentTime = 0;
+            await module.openVideoModal({ id: 44, name: 'class.mp4' });
+            video.dispatchEvent(new Event('loadedmetadata'));
+            expect(video.currentTime).toBe(1234);
+            await module.closeVideoModal();
+            video.currentTime = 0;
+            state.myUserID = 72;
+            await module.openVideoModal({ id: 44, name: 'class.mp4' });
+            video.dispatchEvent(new Event('loadedmetadata'));
+            expect(video.currentTime).toBe(0);
+        } finally {
+            await module.closeVideoModal();
+            state.myUserID = 0;
+        }
+    });
+
+    it('restores native playback after metadata arrives', async () => {
+        const { state } = await import('../../state');
+        const module = await import('./video');
+        state.myUserID = 71;
+        try {
+            apiMocks.openNativeMedia.mockResolvedValue(nativeOpenResult(44, MKV_SESSION_ID));
+            await module.openVideoModal({ id: 44, name: 'class.mkv' });
+            runtimeMocks.events.get('native_media_state')?.({ token: MKV_SESSION_ID, sequence: 2, paused: false, loading: false, duration: 3600, current_time: 1234 });
+            await module.closeVideoModal();
+            apiMocks.nativeMediaCommand.mockClear();
+            await module.openVideoModal({ id: 44, name: 'class.mkv' });
+            runtimeMocks.events.get('native_media_state')?.({ token: MKV_SESSION_ID, sequence: 2, paused: false, loading: false, duration: 3600, current_time: 0 });
+            await vi.waitFor(() => expect(apiMocks.nativeMediaCommand).toHaveBeenCalledWith(MKV_SESSION_ID, ['seek', '1234', 'absolute']));
+        } finally {
+            await module.closeVideoModal();
+            state.myUserID = 0;
+        }
+    });
+});

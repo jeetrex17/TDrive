@@ -415,7 +415,7 @@
                 </div>
             {:else}
                 <div class="topbar-plain-titles">
-                    <h1 class="topbar-title">Photos</h1>
+                    <h1 class="topbar-title">Media</h1>
                     <span class="topbar-subtitle">{driveName}</span>
                 </div>
             {/if}

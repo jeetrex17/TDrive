@@ -26,10 +26,43 @@ public class WailsJSBridge {
 
     private final WailsBridge bridge;
     private final WebView webView;
+    private MobilePlayerControls playerControls;
+    private boolean playerControlsForeground;
 
     public WailsJSBridge(WailsBridge bridge, WebView webView) {
         this.bridge = bridge;
         this.webView = webView;
+    }
+
+    void mobilePlayer(final String callbackId, final String payload) {
+        if (callbackId == null || callbackId.length() > 128 || payload == null || payload.length() > 4096) return;
+        webView.post(() -> {
+            JSONObject reply = new JSONObject();
+            try {
+                MainActivity host = activity();
+                if (!playerControlsForeground || host == null || host.isFinishing() || host.isDestroyed()) throw new IllegalStateException("Player controls unavailable");
+                if (playerControls == null) playerControls = new MobilePlayerControls(host);
+                reply.put("callbackId", callbackId).put("result", playerControls.execute(new JSONObject(payload))).put("error", JSONObject.NULL);
+            } catch (Exception error) {
+                try { reply.put("callbackId", callbackId).put("result", JSONObject.NULL).put("error", error.getMessage()); }
+                catch (Exception ignored) { return; }
+            }
+            webView.evaluateJavascript("window.__tdrivePlayerReply && window.__tdrivePlayerReply(" + reply.toString() + ");", null);
+        });
+    }
+
+    void resumePlayerControls() {
+        playerControlsForeground = true;
+        webView.evaluateJavascript("window.dispatchEvent(new Event('tdrive:player-controls-active'));", null);
+    }
+
+    void releasePlayerControls() {
+        playerControlsForeground = false;
+        if (playerControls != null) {
+            String session = playerControls.activeSession();
+            playerControls.restore();
+            if (session != null) webView.evaluateJavascript("window.dispatchEvent(new CustomEvent('tdrive:player-controls-ended',{detail:{session:" + JSONObject.quote(session) + "}}));", null);
+        }
     }
 
     /**

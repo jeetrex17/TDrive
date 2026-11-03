@@ -43,7 +43,7 @@ describe('TabBar account cell', () => {
     it('keeps exactly four navigation destinations', () => {
         const { body } = render(TabBar, { props });
 
-        for (const label of ['Files', 'Photos', 'Transfers', 'Account']) {
+        for (const label of ['Files', 'Media', 'Transfers', 'Account']) {
             expect(body).toContain(label);
         }
         // Upload is a contextual action the shell floats above this bar, not a

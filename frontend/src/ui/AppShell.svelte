@@ -124,9 +124,9 @@
                         {/if}
                     </div>
                     <div class="drives-list">
-                        <button id="nav-photos" class="drive-item nav-photos-item" type="button" title="Photos">
+                        <button id="nav-photos" class="drive-item nav-photos-item" type="button" title="Media">
                             <ImagesIcon class="icon" size={18} strokeWidth={2} aria-hidden="true" />
-                            <span class="drive-item-title">Photos</span>
+                            <span class="drive-item-title">Media</span>
                         </button>
                         <!-- Trash sits with the drive's other destinations,
                              where a user who just lost a file looks for it,
@@ -250,7 +250,7 @@
             {#if dashboardVisible}
                 <Breadcrumb onNavigate={navigateToIndex} onBack={navigateBack} drag={breadcrumbDrag} />
             {/if}
-            <div id="gallery-title" class="gallery-title">Photos</div>
+            <div id="gallery-title" class="gallery-title">Media</div>
             <PhotosModeBar />
             <div id="trash-title" class="trash-title">Trash</div>
             <!-- Destructive and irreversible, so it only ever opens the
@@ -338,7 +338,7 @@
              portal that filled it from elsewhere is gone. Held back until the
              dashboard is up so the grid's window listeners and resize observer
              live no longer than the dashboard does. -->
-        <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Photos">
+        <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Media">
             {#if dashboardVisible}
                 <PhotosSurface />
             {/if}
