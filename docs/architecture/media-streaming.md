@@ -492,7 +492,7 @@ The video controller captures the account at open and records positions through
 [`PlaybackResume`](../../frontend/src/modules/video/playback-resume.ts). Keys
 include the resolved drive/file/revision or the connected source's durable peer
 identity. Reconnecting a source does not lose its position; switching accounts
-or videos cannot reuse another recording. Records contain identifiers and seconds,
+or videos cannot reuse another recording. Records contain identifiers, seconds and duration,
 not filenames, media URLs or credentials.
 
 Positions persist in local WebView storage, bounded to the latest 500 recordings.
@@ -502,6 +502,9 @@ seek, and startup zero-time events cannot overwrite a saved class position.
 Natural completion clears that video's position; stopping near the end retains
 it. Storage unavailable or full does not block playback. This is device-local
 history, not cross-device synchronization, and clearing app storage removes it.
+Media video thumbnails show a thin progress bar from the same record, updated
+on saves without reloading gallery pages. Older records without duration still
+resume playback and gain a progress bar after the next playback save.
 
 Mobile player controls use a session-scoped native bridge. A left-side vertical
 swipe changes brightness; Android right-side swipes adjust media-stream volume.

@@ -1,9 +1,11 @@
+import { readable } from 'svelte/store';
+
 /** Local positions contain identifiers and seconds only, never media URLs or titles. */
 const STORAGE_KEY = 'tdrive.playback-position.v1';
 const MAX_ENTRIES = 500;
 const SAVE_INTERVAL_MS = 5000;
 export type ResumeStorage = Pick<Storage, 'getItem' | 'setItem'>;
-type Entry = { key: string; seconds: number };
+type Entry = { key: string; seconds: number; duration?: number };
 type PlaybackSample = { currentTime: number; duration: number; paused: boolean; loading: boolean };
 
 export function playbackResumeKey(
@@ -35,6 +37,27 @@ function entries(storage: ResumeStorage | null): Entry[] {
     } catch { return []; }
 }
 
+function progressMap(records: readonly Entry[]): ReadonlyMap<string, number> {
+    return new Map(records.flatMap((entry) => typeof entry.duration === 'number' && Number.isFinite(entry.duration)
+        && entry.duration > 0 ? [[entry.key, Math.min(1, entry.seconds / entry.duration)] as const] : []));
+}
+
+let publishProgress: ((value: ReadonlyMap<string, number>) => void) | null = null;
+
+/** Shared bounded snapshot: mounting more thumbnails never reparses storage per cell. */
+export const playbackProgress = readable<ReadonlyMap<string, number>>(new Map(), (set) => {
+    publishProgress = set;
+    set(progressMap(entries(browserStorage())));
+    const changed = (event: StorageEvent) => {
+        if (event.key === STORAGE_KEY || event.key === null) set(progressMap(entries(browserStorage())));
+    };
+    if (typeof window !== 'undefined') window.addEventListener('storage', changed);
+    return () => {
+        publishProgress = null;
+        if (typeof window !== 'undefined') window.removeEventListener('storage', changed);
+    };
+});
+
 /** One recorder belongs to one resolved player session, independent of the active drive. */
 export class PlaybackResume {
     private pending: number;
@@ -43,6 +66,7 @@ export class PlaybackResume {
     private ready = false;
     private finished = false;
     private latest: number | null = null;
+    private duration = 0;
     private lastSavedAt = -Infinity;
     private wasPaused = true;
 
@@ -80,6 +104,7 @@ export class PlaybackResume {
         if (state.loading || (this.protectStartupZero && state.currentTime === 0)) return null;
         this.protectStartupZero = false;
         this.latest = Math.min(state.currentTime, state.duration);
+        this.duration = state.duration;
         const pausedNow = state.paused && !this.wasPaused;
         this.wasPaused = state.paused;
         if (pausedNow || this.now() - this.lastSavedAt >= SAVE_INTERVAL_MS) this.flush();
@@ -106,8 +131,11 @@ export class PlaybackResume {
     private write(seconds: number): void {
         if (!this.storage || !this.key) return;
         const retained = entries(this.storage).filter((entry) => entry.key !== this.key);
-        const next = seconds > 0 ? [...retained, { key: this.key, seconds }].slice(-MAX_ENTRIES) : retained;
-        try { this.storage.setItem(STORAGE_KEY, JSON.stringify(next)); } catch {
+        const next = seconds > 0 ? [...retained, { key: this.key, seconds, duration: this.duration }].slice(-MAX_ENTRIES) : retained;
+        try {
+            this.storage.setItem(STORAGE_KEY, JSON.stringify(next));
+            if (this.storage === browserStorage()) publishProgress?.(progressMap(next));
+        } catch {
             // Disabled/full storage must never interrupt a class or block closing the player.
         }
     }

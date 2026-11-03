@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { PlaybackResume, playbackResumeKey, type ResumeStorage } from './playback-resume';
+import { PlaybackResume, playbackResumeKey, playbackProgress, type ResumeStorage } from './playback-resume';
 
 function storage(): ResumeStorage {
     const data = new Map<string, string>();
@@ -77,4 +77,28 @@ describe('playback position memory', () => {
         expect(player.observe(sample(NaN))).toBeNull();
         expect(() => { player.observe(sample(5)); player.flush(); player.complete(); }).not.toThrow();
     });
+});
+
+
+it('publishes a duration-based bar while preserving legacy bookmarks', () => {
+    const data = new Map<string, string>();
+    const saved = { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => { data.set(key, value); } };
+    vi.stubGlobal('localStorage', saved);
+    data.set('tdrive.playback-position.v1', JSON.stringify([{ key: 'legacy', seconds: 900 }]));
+    let progress: ReadonlyMap<string, number> = new Map();
+    const unsubscribe = playbackProgress.subscribe((value) => { progress = value; });
+    try {
+        expect(progress.has('legacy')).toBe(false);
+        const player = new PlaybackResume('legacy');
+        expect(player.observe(sample(0))).toBe(900);
+        player.observe(sample(900));
+        player.flush();
+        expect(progress.get('legacy')).toBe(0.25);
+        expect(new PlaybackResume('legacy').observe(sample(0))).toBe(900);
+        player.complete();
+        expect(progress.has('legacy')).toBe(false);
+    } finally {
+        unsubscribe();
+        vi.unstubAllGlobals();
+    }
 });

@@ -5,6 +5,7 @@
     import PlayIcon from '@lucide/svelte/icons/play';
     import { isMobilePlatform } from '../../api';
     import { isVideoFile } from '../../modules/media-types';
+    import { playbackProgress, playbackResumeKey } from '../../modules/video/playback-resume';
     import type { FileItem } from '../../types';
     import { selectedFileRowKeys } from '../file-list/row-state-store';
     import { selectionBarState } from '../selection/selection-bar-store';
@@ -14,9 +15,11 @@
         item: FileItem;
         index: number;
         tabindex?: number;
+        accountId?: number;
+        channelId?: number;
     }
 
-    let { item, index, tabindex = 0 }: Props = $props();
+    let { item, index, tabindex = 0, accountId = 0, channelId = 0 }: Props = $props();
 
     let status = $state<CellStatus>('idle');
     let src = $state('');
@@ -28,6 +31,9 @@
     const selecting = $derived(mobile && Boolean($selectionBarState.active || $selectedFileRowKeys.size > 0));
     const selected = $derived(selecting && $selectedFileRowKeys.has(`file:${item.msgId}`));
     const video = $derived(isVideoFile(item.name));
+    const resumeKey = $derived(playbackResumeKey(accountId, { channelId, fileId: item.msgId, revision: item.revision }));
+    const watched = $derived(video && resumeKey ? $playbackProgress.get(resumeKey) ?? 0 : 0);
+    const watchedLabel = $derived(watched > 0 ? `, ${Math.round(watched * 100)}% watched` : '');
 
     // The controller drives loads/eviction and pushes state here (O(1) per
     // cell, matching the old direct DOM writes).
@@ -70,13 +76,18 @@
     data-name={item.name}
     {title}
     {tabindex}
-    aria-label={title}
+    aria-label={`${title}${watchedLabel}`}
     aria-pressed={selecting ? selected : undefined}
     use:register={{ msgId: item.msgId, revision: 'revision' in item ? Number(item.revision) : 0 }}
 >
     <img class="gallery-thumb" alt="" width="512" height="512" decoding="async" src={src || undefined} />
     {#if video}
         <span class="gallery-video-badge" aria-hidden="true"><PlayIcon size={14} fill="currentColor" strokeWidth={2.5} /></span>
+    {/if}
+    {#if watched > 0}
+        <span class="gallery-watch-progress" aria-hidden="true">
+            <span class="gallery-watch-progress-fill" style:width={`${watched * 100}%`}></span>
+        </span>
     {/if}
     {#if item.encrypted}
         <span class="gallery-lock">
@@ -97,3 +108,19 @@
         </span>
     {/if}
 </button>
+
+
+<style>
+    .gallery-watch-progress {
+        position: absolute;
+        inset: auto 0 0;
+        height: 3px;
+        background: rgb(0 0 0 / 45%);
+        pointer-events: none;
+    }
+    .gallery-watch-progress-fill {
+        display: block;
+        height: 100%;
+        background: var(--accent);
+    }
+</style>
