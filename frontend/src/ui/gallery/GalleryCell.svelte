@@ -113,18 +113,14 @@
 <style>
     .gallery-watch-progress {
         position: absolute;
-        inset: auto 6px 6px;
-        height: 6px;
-        border-radius: 999px;
-        overflow: hidden;
-        background: rgb(0 0 0 / 75%);
-        box-shadow: 0 0 0 1px rgb(0 0 0 / 55%);
+        inset: auto 0 0;
+        height: 4px;
+        background: rgb(0 0 0 / 45%);
         pointer-events: none;
     }
     .gallery-watch-progress-fill {
         display: block;
         height: 100%;
-        border-radius: inherit;
         background: var(--accent);
     }
 </style>

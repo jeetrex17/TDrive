@@ -14,6 +14,7 @@
     import { isMobilePlatform } from '../../api';
     import FileState from './FileState.svelte';
     import FileThumbnail from './FileThumbnail.svelte';
+    import FileWatchProgress from './FileWatchProgress.svelte';
     import { minuteTick } from './clock';
     import { fileTypeFamily, fileTypeIcon } from './file-type';
     import { rowMetaLine, splitRowLabel } from './row-meta';
@@ -402,6 +403,9 @@
                         {/if}
                         <span class="row-text">
                             {@render phoneLabel(row.name, row.kind === 'file')}
+                            {#if row.kind === 'file' && row.thumbnail && fileTypeFamily(row.ext) === 'video'}
+                                <FileWatchProgress identity={row.thumbnail} />
+                            {/if}
                             {#if meta || (row.kind === 'file' && (row.encrypted || row.uploaderChip?.firstName))}
                                 <span class="row-sub">
                                     {#if meta}
@@ -526,8 +530,12 @@
                                 <LockKeyholeIcon size={12} strokeWidth={2} aria-hidden="true" />
                             </span>
                         {/if}
-                        <!-- The glyph says document or video; only the name says mkv or mp4. -->
-                        <span class="row-label">{row.name}</span>
+                        <span class="row-text file-row-title">
+                            <span class="row-label">{row.name}</span>
+                            {#if row.thumbnail && fileTypeFamily(row.ext) === 'video'}
+                                <FileWatchProgress identity={row.thumbnail} />
+                            {/if}
+                        </span>
                         {#if row.uploaderChip}
                             <span class="uploader-chip">{row.uploaderChip.label}</span>
                         {/if}

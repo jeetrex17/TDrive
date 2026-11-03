@@ -1,5 +1,4 @@
 <script lang="ts">
-    import { playbackProgress, playbackResumeKey } from '../../modules/video/playback-resume';
     import { fileTypeFamily, fileTypeIcon } from './file-type';
     import { registerFileThumbnail, unregisterFileThumbnail } from './file-thumbnail-controller';
     import type { FileThumbnailIdentity } from './types';
@@ -16,8 +15,6 @@
     let title = $state('');
 
     const family = $derived(fileTypeFamily(ext));
-    const resumeKey = $derived(family === 'video' ? playbackResumeKey(identity.accountId ?? 0, identity) : null);
-    const watched = $derived(resumeKey ? $playbackProgress.get(resumeKey) ?? 0 : 0);
     const TypeIcon = $derived(fileTypeIcon(family));
 
     function apply(patch: ThumbnailPatch): void {
@@ -66,28 +63,4 @@
         decoding="async"
         src={src || undefined}
     />
-    {#if watched > 0}
-        <span class="row-watch-progress" aria-hidden="true">
-            <span class="row-watch-progress-fill" style:width={`${watched * 100}%`}></span>
-        </span>
-    {/if}
 </span>
-
-<style>
-    .row-watch-progress {
-        position: absolute;
-        inset: auto 2px 2px;
-        z-index: 3;
-        height: 4px;
-        overflow: hidden;
-        border-radius: 2px;
-        background: rgb(0 0 0 / 65%);
-        box-shadow: 0 0 0 1px rgb(0 0 0 / 70%);
-        pointer-events: none;
-    }
-    .row-watch-progress-fill {
-        display: block;
-        height: 100%;
-        background: var(--accent);
-    }
-</style>
