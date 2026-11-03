@@ -10,6 +10,13 @@ import { get } from 'svelte/store';
 import NotifBell from './NotifBell.svelte';
 import { historyEvents, notifPanelOpen, notifUnreadErrors } from './notif-store';
 import { resumableUploads } from '../../modules/resumable-uploads';
+import { activityView, closeActivity } from './activity-store';
+import { uploadActivities, type UploadActivity } from './upload-activity-store';
+import { sidebarState } from '../sidebar/sidebar-store';
+
+const actions = vi.hoisted(() => ({ removeQueuedUpload: vi.fn(), switchActiveChannel: vi.fn() }));
+vi.mock('../../modules/upload-queue', async (original) => ({ ...await original<object>(), removeQueuedUpload: actions.removeQueuedUpload }));
+vi.mock('../../modules/channels', async (original) => ({ ...await original<object>(), switchActiveChannel: actions.switchActiveChannel }));
 
 const HOVER_INTENT_MS = 140;
 
@@ -38,6 +45,7 @@ function press(target: EventTarget, key: string, init: KeyboardEventInit = {}): 
 }
 
 beforeEach(() => {
+    closeActivity();
     historyEvents.set([
         { kind: 'event', id: 'err-1', level: 'error', title: 'Could not join drive', body: 'INVITE_HASH_EXPIRED', ts: Date.now() },
     ]);
@@ -53,10 +61,13 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
+    closeActivity();
     notifPanelOpen.set(false);
     notifUnreadErrors.set(0);
     historyEvents.set([]);
     resumableUploads.set([]);
+    uploadActivities.set([]);
+    vi.clearAllMocks();
     flushSync();
     if (app) await unmount(app);
     app = null;
@@ -64,59 +75,83 @@ afterEach(async () => {
 });
 
 describe('notification panel keyboard reachability', () => {
-    it('moves focus into the panel when it is opened from the keyboard', async () => {
+    it.each(['Enter', ' '])('opens full Activity from %s without opening a preview', async (key) => {
         bell().focus();
-        press(bell(), 'Enter');
+        press(bell(), key);
         await settle();
-
-        const open = panel();
-        expect(open).not.toBeNull();
-        expect(document.activeElement).toBe(open);
-    });
-
-    it('keeps Tab inside the panel instead of letting it walk into the header', async () => {
-        bell().focus();
-        press(bell(), 'Enter');
-        await settle();
-
-        const open = panel();
-        if (!open) throw new Error('Expected the panel');
-        const stops = Array.from(open.querySelectorAll<HTMLElement>('button:not([disabled])'));
-        // Clear plus the error row's Copy details: enough to have two edges.
-        expect(stops.length).toBeGreaterThan(1);
-
-        // From the container, the first Tab steps in rather than out.
-        press(open, 'Tab');
-        expect(document.activeElement).toBe(stops[0]);
-
-        // And the last stop wraps to the first rather than reaching the header.
-        stops[stops.length - 1].focus();
-        press(open, 'Tab');
-        expect(document.activeElement).toBe(stops[0]);
-
-        // Backwards from the first wraps to the last, not back onto the bell.
-        press(open, 'Tab', { shiftKey: true });
-        expect(document.activeElement).toBe(stops[stops.length - 1]);
-    });
-
-    it('toggles on activation and hands focus back to the bell', async () => {
-        bell().focus();
-        press(bell(), 'Enter');
-        await settle();
-        expect(bell().getAttribute('aria-expanded')).toBe('true');
-
-        press(bell(), 'Enter');
-        await settle();
+        expect(get(activityView).open).toBe(true);
         expect(panel()).toBeNull();
-        expect(bell().getAttribute('aria-expanded')).toBe('false');
-        expect(document.activeElement).toBe(bell());
+        expect(bell().getAttribute('aria-controls')).toBe('activity-modal');
+    });
 
-        bell().click();
+    it('promotes a hover-open preview on click, including when already expanded', async () => {
+        notifPanelOpen.set(true);
         await settle();
         expect(panel()).not.toBeNull();
         bell().click();
         await settle();
         expect(panel()).toBeNull();
+        expect(get(activityView).open).toBe(true);
+        expect(bell().getAttribute('aria-expanded')).toBe('true');
+        bell().click();
+        await settle();
+        expect(get(activityView).open).toBe(true);
+    });
+
+    it('keeps keyboard navigation inside a focused hover preview', async () => {
+        notifPanelOpen.set(true);
+        await settle();
+        const open = panel();
+        if (!open) throw new Error('Expected hover preview');
+        open.focus();
+        const stops = Array.from(open.querySelectorAll<HTMLElement>('button:not([disabled])'));
+        press(open, 'Tab');
+        expect(document.activeElement).toBe(stops[0]);
+        stops[stops.length - 1].focus();
+        press(open, 'Tab');
+        expect(document.activeElement).toBe(stops[0]);
+        press(open, 'Tab', { shiftKey: true });
+        expect(document.activeElement).toBe(stops[stops.length - 1]);
+        press(open, 'Escape');
+        await settle();
+        expect(panel()).toBeNull();
+        expect(document.activeElement).toBe(bell());
+    });
+
+    it('opens selected preview notices and the View all activity action', async () => {
+        notifPanelOpen.set(true);
+        await settle();
+        Array.from(panel()?.querySelectorAll('button') ?? []).find((button) => button.textContent === 'Could not join drive')?.click();
+        await settle();
+        expect(get(activityView)).toMatchObject({ open: true, tab: 'notifications', selectedId: 'err-1' });
+        closeActivity(); notifPanelOpen.set(true); await settle();
+        Array.from(panel()?.querySelectorAll('button') ?? []).find((button) => button.textContent === 'View all activity')?.click();
+        expect(get(activityView)).toMatchObject({ open: true, tab: 'transfers', selectedId: null });
+    });
+
+    it('keeps a running batch on its progress row and gives waiting batches their own controls', async () => {
+        const waiting = (id: string, driveId: number, driveTitle: string): UploadActivity => ({
+            id, name: `${id}.pdf`, driveId, driveTitle, destination: driveTitle, encrypt: false,
+            addedAt: driveId, startedAt: 0, finishedAt: 0, status: 'queued', fileCount: 1, files: [],
+        });
+        sidebarState.update((state) => ({ ...state, activeChannelId: 1 }));
+        uploadActivities.set([waiting('team-notes', 2, 'Team'), waiting('report', 1, 'Personal')]);
+        historyEvents.set([{ kind: 'transfer', id: 'xfer:up:running', direction: 'up', name: 'Uploading 3 files', progress: 40, total: 1_000, bytes: 400, speed: 0, status: 'active', startedAt: Date.now(), finishedAt: 0 }]);
+        notifPanelOpen.set(true);
+        await settle();
+        const open = panel();
+        if (!open) throw new Error('Expected the panel');
+        expect(open.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('40');
+        expect(open.textContent).toContain('Queued · 1 file · Personal');
+        expect(open.textContent).toContain('Paused until Team is open');
+        const buttons = Array.from(open.querySelectorAll('button'));
+        buttons.find((button) => button.textContent === 'Open Team')?.click();
+        expect(actions.switchActiveChannel).toHaveBeenCalledWith(2);
+        buttons.find((button) => button.getAttribute('aria-label') === 'Remove report.pdf from queue')?.click();
+        expect(actions.removeQueuedUpload).toHaveBeenCalledWith('report');
+        buttons.find((button) => button.textContent === 'Uploading 3 files')?.click();
+        expect(get(activityView)).toMatchObject({ open: true, selectedId: 'xfer:up:running' });
+        sidebarState.update((state) => ({ ...state, activeChannelId: null }));
     });
 
     it('says what it is about rather than only colouring itself', () => {
@@ -158,7 +193,7 @@ describe('notification panel keyboard reachability', () => {
             jobId: 'job-7', channelId: 1, name: 'archive.bin', size: 1_000,
             confirmedBytes: 400, status: 'paused', error: '',
         }]);
-        bell().click();
+        notifPanelOpen.set(true);
         await settle();
 
         const open = panel();

@@ -2,7 +2,10 @@ import {
     CancelDownload as rawCancelDownload,
     CancelUpload as rawCancelUpload,
     CancelUploadByID as rawCancelUploadById,
+    PauseUploads as rawPauseUploads,
+    ResumeUploads as rawResumeUploads,
     CreateFolder as rawCreateFolder,
+    CreateFolderForDrive as rawCreateFolderForDrive,
     DeleteFile as rawDeleteFile,
     DeleteFolder as rawDeleteFolder,
     DownloadFile as rawDownloadFile,
@@ -14,6 +17,7 @@ import {
     GetFolderStats as rawGetFolderStats,
     GetStorageUsed as rawGetStorageUsed,
     ImportPaths as rawImportPaths,
+    ImportPathsForDrive as rawImportPathsForDrive,
     MoveFile as rawMoveFile,
     MoveFolder as rawMoveFolder,
     MsgToTdriveSystem as rawMsgToTdriveSystem,
@@ -22,6 +26,7 @@ import {
     PreviewThumbnail as rawPreviewThumbnail,
     RenameFile as rawRenameFile,
     RenameFolder as rawRenameFolder,
+    ReleaseUploadSources as rawReleaseUploadSources,
     Search as rawSearch,
     SelectFiles as rawSelectFiles,
     SelectFolder as rawSelectFolder,
@@ -109,6 +114,7 @@ export function normalizeImportPlan(value: unknown): ImportPlan {
         folders: nonNegativeNumber(raw.folders),
         bytes: nonNegativeNumber(raw.bytes),
         oversize: nonNegativeNumber(raw.oversize),
+        empty: nonNegativeNumber(raw.empty),
         archives: nonNegativeNumber(raw.archives),
         ignored: nonNegativeNumber(raw.ignored),
         maxBytes: nonNegativeNumber(raw.maxBytes),
@@ -121,6 +127,10 @@ export function normalizeImportPlan(value: unknown): ImportPlan {
 
 export async function createFolder(name: string, parentId: string): Promise<FolderItem> {
     return toFolderItem(await invokeBackend(rawCreateFolder, name, parentId));
+}
+
+export async function createFolderForDrive(name: string, parentId: string, expectedChannelId: number): Promise<FolderItem> {
+    return toFolderItem(await invokeBackend(rawCreateFolderForDrive, name, parentId, expectedChannelId));
 }
 
 export async function deleteFile(messageId: number): Promise<OperationResult> {
@@ -228,6 +238,20 @@ export async function importPaths(paths: string[], parentId: string, encrypt: bo
     );
 }
 
+export async function importPathsForDrive(paths: string[], parentId: string, encrypt: boolean, extract: boolean, expectedChannelId: number): Promise<OperationResult> {
+    return normalizeOperationResult(
+        await invokeBackend(rawImportPathsForDrive, paths, parentId, encrypt, extract, expectedChannelId),
+        "Could not start the queued import",
+    );
+}
+
+export async function releaseUploadSources(paths: string[]): Promise<OperationResult> {
+    return normalizeOperationResult(
+        await invokeBackend(rawReleaseUploadSources, paths),
+        "Could not release selected upload sources",
+    );
+}
+
 function normalizeUploadResult(value: unknown, pathCount: number): UploadResult {
     const raw = asRecord(value);
     const files = Array.isArray(raw.files) ? raw.files as FileMetaData[] : [];
@@ -275,6 +299,15 @@ export async function cancelUpload(): Promise<void> {
 // is the one the backend puts on that upload's progress events.
 export async function cancelUploadById(uploadId: number): Promise<void> {
     await invokeBackend(rawCancelUploadById, uploadId);
+}
+
+// Pausing holds back files that have not started; files already sending finish.
+export async function pauseUploads(): Promise<void> {
+    await invokeBackend(rawPauseUploads);
+}
+
+export async function resumeUploads(): Promise<void> {
+    await invokeBackend(rawResumeUploads);
 }
 
 export async function getPreviewFile(messageId: number): Promise<PreviewPayload> {

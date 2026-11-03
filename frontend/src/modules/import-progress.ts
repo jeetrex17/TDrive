@@ -5,6 +5,8 @@ export interface ImportProgress {
     total: number;
     done: number;
     failed: number;
+    /** Files the user cancelled on their own: neither done nor failed, but settled. */
+    canceled: number;
     progress: number;
     /** Bytes the import has actually sent, partial files included. */
     bytes: number;
@@ -17,6 +19,7 @@ export interface ImportProgressSnapshot {
     total?: unknown;
     done?: unknown;
     failed?: unknown;
+    canceled?: unknown;
     progress?: unknown;
     bytes?: unknown;
     active?: unknown;
@@ -24,7 +27,7 @@ export interface ImportProgressSnapshot {
 }
 
 export function createImportProgress(): ImportProgress {
-    return { total: 0, done: 0, failed: 0, progress: 0, bytes: 0, active: [], activeCount: 0 };
+    return { total: 0, done: 0, failed: 0, canceled: 0, progress: 0, bytes: 0, active: [], activeCount: 0 };
 }
 
 function monotonicCount(value: unknown, previous: number): number {
@@ -71,11 +74,12 @@ export function reduceImportProgress(
     const total = monotonicCount(snapshot.total, previous.total);
     const done = monotonicCount(snapshot.done, previous.done);
     const failed = monotonicCount(snapshot.failed, previous.failed);
+    const canceled = monotonicCount(snapshot.canceled, previous.canceled);
     const bytes = monotonicCount(snapshot.bytes, previous.bytes);
     let progress = monotonicPercent(snapshot.progress, previous.progress);
     const active = activeItems(snapshot.active, previous.active);
     const activeCount = Math.max(active.length, Math.floor(nonNegativeNumber(snapshot.activeCount)));
 
-    if (total > 0 && done + failed >= total) progress = 100;
-    return { total, done, failed, progress, bytes, active, activeCount };
+    if (total > 0 && done + failed + canceled >= total) progress = 100;
+    return { total, done, failed, canceled, progress, bytes, active, activeCount };
 }

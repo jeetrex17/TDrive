@@ -97,6 +97,13 @@ export function CreateFolder(foldername: string, parentID: string): $Cancellable
     return $Call.ByID(4072853788, foldername, parentID);
 }
 
+/**
+ * CreateFolderForDrive keeps queued folder preparation in its original drive.
+ */
+export function CreateFolderForDrive(foldername: string, parentID: string, expectedChannelID: number): $CancellablePromise<backend$0.Folder> {
+    return $Call.ByID(453123593, foldername, parentID, expectedChannelID);
+}
+
 export function DeleteFile(msgID: number): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(2969367385, msgID);
 }
@@ -151,6 +158,16 @@ export function EmptyTrash(): $CancellablePromise<$models.OperationResult> {
 
 export function EnqueuePhotoBackupAssets(sourceID: string, values: $models.PhotoBackupAsset[] | null): $CancellablePromise<number> {
     return $Call.ByID(1336452721, sourceID, values);
+}
+
+/**
+ * FlushEvents emits events_flushed with token behind every event emitted
+ * before this call. Wails delivers events in order, but apart from call
+ * results, so a call can resolve before its last events arrive; a caller that
+ * waits for the flush knows they have.
+ */
+export function FlushEvents(token: string): $CancellablePromise<void> {
+    return $Call.ByID(1416985879, token);
 }
 
 /**
@@ -228,6 +245,14 @@ export function GetStorageUsed(): $CancellablePromise<number> {
  */
 export function ImportPaths(paths: string[] | null, parentID: string, encrypt: boolean, extractArchives: boolean): $CancellablePromise<$models.OperationResult> {
     return $Call.ByID(3650510347, paths, parentID, encrypt, extractArchives);
+}
+
+/**
+ * ImportPathsForDrive starts a waiting import only in its original drive and
+ * never replaces an active upload.
+ */
+export function ImportPathsForDrive(paths: string[] | null, parentID: string, encrypt: boolean, extractArchives: boolean, expectedChannelID: number): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(63775042, paths, parentID, encrypt, extractArchives, expectedChannelID);
 }
 
 export function ListMediaFolderPage(folderID: string, cursor: string, limit: number): $CancellablePromise<$models.GalleryPage> {
@@ -387,6 +412,15 @@ export function PauseResumableUpload(jobID: string): $CancellablePromise<$models
 }
 
 /**
+ * PauseUploads holds back the files of the running upload that have not
+ * started. Files already sending finish: an ordinary upload cannot stop part
+ * way and continue later.
+ */
+export function PauseUploads(): $CancellablePromise<void> {
+    return $Call.ByID(806745944);
+}
+
+/**
  * PlanImport scans the selected paths and returns the counts shown in the
  * import dialog (files, folders, total size, archives, oversize-skipped). It
  * mutates nothing.
@@ -409,6 +443,15 @@ export function PreviewThumbnail(msgID: number): $CancellablePromise<$models.Pre
  */
 export function RebuildProjection(channelID: number): $CancellablePromise<void> {
     return $Call.ByID(3751182286, channelID);
+}
+
+/**
+ * ReleaseUploadSources discards abandoned mobile picker copies. Only paths
+ * registered by SelectFiles remain eligible; caller-owned files and sources
+ * already transferred into durable upload storage are never removed.
+ */
+export function ReleaseUploadSources(paths: string[] | null): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(759765162, paths);
 }
 
 export function RemovePhotoBackupSource(id: string): $CancellablePromise<void> {
@@ -468,6 +511,13 @@ export function ResumePhotoBackup(): $CancellablePromise<$models.OperationResult
  */
 export function ResumeResumableUpload(jobID: string, sourcePath: string): $CancellablePromise<$models.UploadResult> {
     return $Call.ByID(1946634256, jobID, sourcePath);
+}
+
+/**
+ * ResumeUploads lets held-back files start again.
+ */
+export function ResumeUploads(): $CancellablePromise<void> {
+    return $Call.ByID(1051441747);
 }
 
 export function RetryPhotoBackup(): $CancellablePromise<$models.OperationResult> {

@@ -1,4 +1,6 @@
-import { get, writable } from 'svelte/store';
+import { get } from 'svelte/store';
+import { resumableDownloads } from './resumable-download-store';
+export { resumableDownloads } from './resumable-download-store';
 import { isAndroidPlatform, isIOSPlatform, onRuntimeEvent } from '../api';
 import {
     discardResumableDownload,
@@ -17,9 +19,6 @@ import { humanizeBackendError } from './errors';
 import { openEncryptionPasswordModal } from './modals/encryption-password';
 import { notify } from './notifications';
 import { markTransferDone, pushTransferStart, removeTransfer, setTransferNote, updateTransferProgress } from './notif-bell';
-
-/** The backend journal owns these bytes. This store is only its current UI view. */
-export const resumableDownloads = writable<ResumableDownload[]>([]);
 
 let activeChannelId: number | null = null;
 let generation = 0;

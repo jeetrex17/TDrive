@@ -44,8 +44,8 @@ vi.mock('./notifications', () => ({
     dismissNotification: notifications.dismissNotification,
 }));
 vi.mock('./encryption', () => ({ loadEncryptionStatus: vi.fn(async () => undefined) }));
-vi.mock('./modals/upload-options', () => ({ openUploadOptionsModal: vi.fn() }));
-vi.mock('./modals/import-options', () => ({ openImportOptionsModal: vi.fn() }));
+vi.mock('./modals/upload-options', () => ({ openUploadOptionsModal: vi.fn().mockResolvedValue({ encrypt: false }), cancelUploadOptions: vi.fn() }));
+vi.mock('./modals/import-options', () => ({ openImportOptionsModal: vi.fn(), cancelImportOptions: vi.fn() }));
 vi.mock('./modals/encryption-setup', () => ({ openEncryptionSetupModal: vi.fn() }));
 vi.mock('./modals/encryption-password', () => ({ openEncryptionPasswordModal: passwordModal }));
 

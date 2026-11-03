@@ -520,9 +520,10 @@ func TestCancelUploadStopsOneFileAndLeavesTheBatchRunning(t *testing.T) {
 		close(release)
 		synctest.Wait()
 
-		err := <-errCh
-		if !errors.Is(err, context.Canceled) {
-			t.Fatalf("upload error = %v, want context canceled", err)
+		// The rest of the batch carried on, so one cancelled file is not a
+		// failure of the batch.
+		if err := <-errCh; err != nil {
+			t.Fatalf("upload error = %v, want none", err)
 		}
 		got := map[string]bool{}
 		for _, file := range <-resultCh {

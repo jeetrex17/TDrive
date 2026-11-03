@@ -96,13 +96,24 @@ func (s *transferState) syncKeepAwakeLocked() {
 }
 
 func (s *transferState) rememberPickerSources(paths []string) {
-	sources := make(map[string]struct{}, len(paths))
-	for _, path := range paths {
-		sources[path] = struct{}{}
-	}
 	s.mu.Lock()
-	s.pickerSources = sources
-	s.mu.Unlock()
+	defer s.mu.Unlock()
+	if s.pickerSources == nil {
+		s.pickerSources = make(map[string]struct{}, len(paths))
+	}
+	for _, path := range paths {
+		s.pickerSources[path] = struct{}{}
+	}
+}
+
+// Finished attempts keep source bytes for retry reports, but queued picker
+// ownership is bounded by selections that have not finished an attempt.
+func (s *transferState) forgetPickerSources(paths []string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for _, path := range paths {
+		delete(s.pickerSources, path)
+	}
 }
 
 // takePickerSource consumes ownership once, before a disposable mobile copy

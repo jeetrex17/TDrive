@@ -72,6 +72,9 @@ export function openImportOptionsModal(opts: {
     personal: boolean;
     hasArchives: boolean;
     replan: ReplanFn;
+    queued?: boolean;
+    destination?: string;
+    names?: readonly string[];
 }): Promise<ImportChoice | null> {
     return new Promise((resolve) => {
         // A re-open while one is pending would strand the previous caller;
@@ -89,6 +92,9 @@ export function openImportOptionsModal(opts: {
             personal: opts.personal,
             hasArchives: opts.hasArchives,
             replanning: false,
+            queued: opts.queued,
+            destination: opts.destination,
+            names: opts.names,
         };
         importOptionsModal.open(currentPayload);
     });

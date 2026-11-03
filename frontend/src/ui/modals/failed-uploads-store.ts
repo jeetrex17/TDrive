@@ -9,6 +9,9 @@ export interface FailedUploadsPayload {
     encrypt: boolean;
     driveId: number | null;
     driveTitle: string;
+    destination?: string;
+    /** The session batch this report came from, so its detail page owns the review. */
+    activityId?: string;
 }
 
 export const failedUploadsModal = createModalController<FailedUploadsPayload>();

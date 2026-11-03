@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -142,6 +143,14 @@ func (a *App) emit(name string, args ...any) {
 	a.wails.Event.Emit(name, args)
 }
 
+// FlushEvents emits events_flushed with token behind every event emitted
+// before this call. Wails delivers events in order, but apart from call
+// results, so a call can resolve before its last events arrive; a caller that
+// waits for the flush knows they have.
+func (a *App) FlushEvents(token string) {
+	a.emit("events_flushed", token)
+}
+
 func (a *App) ActiveChannelID() int64 {
 	if a.engine == nil {
 		return 0
@@ -217,6 +226,25 @@ func (a *App) SelectFiles() ([]string, error) {
 	return uploadfilepaths, nil
 }
 
+// ReleaseUploadSources discards abandoned mobile picker copies. Only paths
+// registered by SelectFiles remain eligible; caller-owned files and sources
+// already transferred into durable upload storage are never removed.
+func (a *App) ReleaseUploadSources(paths []string) OperationResult {
+	var failures []error
+	for _, path := range paths {
+		if !a.transfers.takePickerSource(path) {
+			continue
+		}
+		if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
+			a.transfers.rememberPickerSources([]string{path})
+			failures = append(failures, fmt.Errorf("release picked upload source: %w", err))
+			continue
+		}
+		removePickerSource(path)
+	}
+	return operationFailure(errors.Join(failures...))
+}
+
 // SelectFolder opens a directory picker and returns the chosen folder path
 // (empty if the user cancels). Folder import walks it on the Go side.
 func (a *App) SelectFolder() (string, error) {
@@ -253,6 +281,22 @@ func (a *App) CancelUpload() {
 func (a *App) CancelUploadByID(uploadID int) {
 	if svc := a.fileService(); svc != nil {
 		svc.CancelUpload(uploadID)
+	}
+}
+
+// PauseUploads holds back the files of the running upload that have not
+// started. Files already sending finish: an ordinary upload cannot stop part
+// way and continue later.
+func (a *App) PauseUploads() {
+	if svc := a.fileService(); svc != nil {
+		svc.PauseUploads()
+	}
+}
+
+// ResumeUploads lets held-back files start again.
+func (a *App) ResumeUploads() {
+	if svc := a.fileService(); svc != nil {
+		svc.ResumeUploads()
 	}
 }
 
@@ -296,6 +340,9 @@ func (a *App) uploadToDriveFS(filePaths []string, parentIDs []string, encrypt bo
 	}
 	defer finish()
 	sources := filePaths
+	// Finished attempts retain their readable source bytes for safe manual
+	// retries, but no longer own disposable queued picker entries.
+	defer a.transfers.forgetPickerSources(sources)
 	filePaths, staged, err := a.stageMobileUploadPaths(ctx, filePaths, encrypt)
 	if err != nil {
 		return UploadResult{Result: operationFailure(err), Failures: fileservice.NotSentFailures(sources, err)}
@@ -404,14 +451,37 @@ func (a *App) PlanImport(paths []string, encrypt bool, extractArchives bool) fil
 // is set, otherwise uploaded as-is. Progress flows through aggregate import_*
 // events.
 func (a *App) ImportPaths(paths []string, parentID string, encrypt bool, extractArchives bool) OperationResult {
+	return a.importPaths(paths, parentID, encrypt, extractArchives, a.ActiveChannelID(), false)
+}
+
+// ImportPathsForDrive starts a waiting import only in its original drive and
+// never replaces an active upload.
+func (a *App) ImportPathsForDrive(paths []string, parentID string, encrypt bool, extractArchives bool, expectedChannelID int64) OperationResult {
+	if expectedChannelID == 0 || a.ActiveChannelID() != expectedChannelID {
+		return operationFailureMessage(errors.New("upload destination changed"), "Switch back to the original drive before starting this import")
+	}
+	return a.importPaths(paths, parentID, encrypt, extractArchives, expectedChannelID, true)
+}
+
+func (a *App) importPaths(paths []string, parentID string, encrypt bool, extractArchives bool, channelID int64, queued bool) OperationResult {
 	svc, err := a.requireFileService()
 	if err != nil {
 		return operationFailure(err)
 	}
-	ctx, finish := a.transfers.begin(a.ctx, uploadTransfer)
+	var ctx context.Context
+	var finish func()
+	if queued {
+		ctx, finish, err = a.transfers.resumeUpload(a.ctx)
+		if err != nil {
+			return operationFailure(err)
+		}
+	} else {
+		ctx, finish = a.transfers.begin(a.ctx, uploadTransfer)
+	}
 	defer finish()
+	defer a.transfers.forgetPickerSources(paths)
 	a.sweepOrphanParts(ctx)
-	return operationFailure(svc.RunImport(ctx, a.ActiveChannelID(), paths, parentID, encrypt, extractArchives))
+	return operationFailure(svc.RunImport(ctx, channelID, paths, parentID, encrypt, extractArchives))
 }
 
 func uploadMetaToBackend(f fileservice.Metadata) backend.FileMetaData {
@@ -664,7 +734,18 @@ func (a *App) SubmitPassword(password string) {
 }
 
 func (a *App) CreateFolder(foldername string, parentID string) (backend.Folder, error) {
-	channelID := a.ActiveChannelID()
+	return a.createFolder(foldername, parentID, a.ActiveChannelID())
+}
+
+// CreateFolderForDrive keeps queued folder preparation in its original drive.
+func (a *App) CreateFolderForDrive(foldername string, parentID string, expectedChannelID int64) (backend.Folder, error) {
+	if expectedChannelID == 0 || a.ActiveChannelID() != expectedChannelID {
+		return backend.Folder{}, errors.New("upload destination changed; switch back to the original drive before creating this folder")
+	}
+	return a.createFolder(foldername, parentID, expectedChannelID)
+}
+
+func (a *App) createFolder(foldername string, parentID string, channelID int64) (backend.Folder, error) {
 	svc, err := a.requireFolderService()
 	if err != nil {
 		return backend.Folder{}, err

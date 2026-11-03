@@ -32,9 +32,10 @@
     interface Props {
         event: NoticeEvent;
         listItem?: boolean;
+        onOpen?: () => void;
     }
 
-    let { event, listItem = false }: Props = $props();
+    let { event, listItem = false, onOpen }: Props = $props();
     let copied = $state(false);
     let copiedTimer: ReturnType<typeof setTimeout> | null = null;
 
@@ -90,7 +91,7 @@
     </span>
     <div class="notif-row-body">
         <div class="notif-row-title">
-            {event.title}
+            {#if onOpen}<button class="preview-title" type="button" onclick={onOpen}>{event.title}</button>{:else}{event.title}{/if}
             {#if (event.repeats ?? 1) > 1}
                 <!-- Said once, with a count, rather than said again. -->
                 <span class="notif-row-repeats">&times;{event.repeats}</span>
@@ -112,3 +113,8 @@
         </button>
     {/if}
 </div>
+
+<style>
+    .preview-title { padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+    .preview-title:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
+</style>

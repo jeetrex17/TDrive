@@ -22,6 +22,10 @@ The current [limits](../../backend/services/file/limits.go) are 1900 MiB per
 stored part, 40 GiB per stored logical file and a defensive maximum of 32 parts.
 These are application limits, applied uniformly; an encrypted file can cross a
 part boundary because its stored size exceeds its plaintext size.
+A stored size of zero is the other bound: Telegram rejects an empty document, so
+imports count and skip empty plaintext files the way they skip oversize ones, and
+a direct upload reports one as a non-retryable `empty_file` failure before any
+send. Encrypted empty files still upload, because the header gives them a body.
 
 The diagram below describes the ordinary upload path. Eligible unencrypted
 uploads use the durable recovery path described below instead of aborting their
@@ -91,6 +95,87 @@ upload policy by default; downloads, deletes and other control writes keep their
 existing bounded policies. An explicitly configured file-service retry policy
 continues to override its defaults. Preserve unknown send outcomes across later
 cooldowns or cancellation so reconciliation can protect accepted remote bodies.
+
+## Interactive upload queue and Activity
+
+The frontend's [upload queue](../../frontend/src/modules/upload-queue.ts)
+serializes confirmed interactive batches. Selecting files is separate from
+executing a batch, so another selection can be reviewed while an upload is
+running. Confirmation captures the drive, destination folder and encryption
+choice. Queue admission does not start another backend upload or replace its
+cancellation context. Waiting entries can be removed independently of the
+current transfer. Admission is bounded to ten waiting batches; session file
+detail retention is bounded separately to 10,000 files across retained batches.
+Older completed detail can be evicted to admit a new selection, while pending
+and active detail is retained.
+
+Queued work is session-only. Original source paths and retry actions do not
+enter persisted notification history. The backend only accepts a batch for the
+active drive, so a batch waits while its original drive is not selected. Order
+holds per drive: a batch for a closed drive is shown as paused with a way to
+open that drive, and does not hold back batches for the open one. The queue
+must invalidate pending selections and callbacks on logout or transfer-surface
+teardown. Native picker sources retain their platform
+ownership rules; a queued selection does not establish durable source access or
+promise background execution after suspension or process death.
+Abandoned selections release only picker copies whose ownership the backend
+recorded. A new selection adds to that ownership set instead of replacing it.
+Completing an upload drops pending picker ownership without deleting sources
+that a failed-file report may still need. Durable resumable sources keep their
+existing journal-based cleanup rules.
+Android's native folder picker owns one document tree at a time. Its selection
+lease stays held while that folder batch is waiting or running, so another
+folder pick cannot invalidate its URI grant or reuse its file IDs. Flat file
+selections can still join the queue. Teardown does not release an active tree
+lease until its outstanding native materialization has settled.
+
+Hovering the bell previews a compact panel; clicking the bell, a panel row or
+View all activity opens the full Activity view. The panel and the phone Transfers tab
+keep a running batch on its aggregate row, which carries progress and cancel,
+and list waiting batches separately. Activity combines notifications, ordinary
+transfer summaries, session upload batches and journal-backed recovery jobs; it
+folds a batch's aggregate row into the batch and owns that batch's failed-file
+review. Toasts stay hidden while Activity is open. Existing journal rows
+supersede their matching legacy progress rows. Display progress is not a remote
+receipt, and ordinary uploads do not gain pause/resume or broader retry
+eligibility merely because they appear in Activity.
+
+Interactive uploads can be paused. Pausing holds back files that have not
+started, including one already waiting for an upload slot; files already
+sending finish, because an ordinary upload cannot stop part way and continue
+later (only journal-backed large uploads can). A pause belongs to its batch: the
+frontend lifts it when the batch ends and whenever the transfer surfaces start
+or tear down. A file is marked started and its cancel handle registered in one
+step, so a cancel always finds a file of a running batch either waiting, and
+skips it without a send, or sending, and stops it. A file the user cancelled on
+its own is reported canceled, but it is not a failure of the batch: the batch
+result, an import's completion and the failed-file review leave it out, and the
+rest of the batch or import carries on. A cancel that lands while the send
+outcome is unknown, or that leaves a resumable job, stays a failure that needs
+attention. A file Telegram has accepted while its window's index entries are
+still pending is reported as accepted (`upload_accepted`, or `accepted` in
+import payloads) and shows as saving rather than uploading; it already exists
+and must not be sent again.
+
+Wails delivers events in order but apart from call results, so an upload call
+can resolve before its last events arrive. After each upload or import call the
+frontend asks `FlushEvents` for an `events_flushed` reply, which travels behind
+every earlier event, and acts on the result only once it lands or a short
+timeout passes. A batch's late events therefore reach its own rows and never
+the batch queued behind it, which reuses the same upload ids.
+
+Session batch details use stable identities and bounded retention. File details
+are paged in the UI rather than expanded into one notification per file. Import
+progress payloads carry aggregate counts, a bounded active-file sample and each
+file that settled since the previous payload, reported exactly once, plus a final
+flush before `import_complete`. Every file carries its display path within the
+selection (the drive folder name plus its relative path, never a local path);
+the observer keeps those only for the window in flight. A folder or archive
+batch therefore lists files folder by folder as the import reaches them and
+counts the rest as waiting; Android folder imports list every manifest file from
+the start. Older finished batches give up their
+detail first when a growing import needs the session's file budget. Clearing completed display history must preserve
+pending batches, active work and backend recovery journals.
 
 ## Downloads publish completed output
 

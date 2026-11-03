@@ -201,6 +201,7 @@ export interface ImportPlan {
     folders: number;
     bytes: number;
     oversize: number;
+    empty: number;
     archives: number;
     ignored: number;
     maxBytes: number;

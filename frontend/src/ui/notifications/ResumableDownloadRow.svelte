@@ -7,8 +7,8 @@
     import { formatBytes } from '../../utils';
     import { formatEta, formatSizePair } from './transfer-view';
 
-    interface Props { job: ResumableDownload; mobile?: boolean }
-    let { job, mobile = false }: Props = $props();
+    interface Props { job: ResumableDownload; mobile?: boolean; onOpen?: () => void }
+    let { job, mobile = false, onOpen }: Props = $props();
     let busy = $state(false);
     let confirmingDiscard = $state(false);
     let confirmationStatus = $state<string | null>(null);
@@ -58,7 +58,7 @@
 
 <div class:mobile class="download-row" data-phase={job.status} role={mobile ? 'listitem' : undefined}>
     <span class="glyph" aria-hidden="true"><ArrowDownIcon size={mobile ? 15 : 14} strokeWidth={2} /></span>
-    <div class="name" title={job.name}>{job.name || 'Download'}</div>
+    <div class="name" title={job.name}>{#if onOpen}<button class="preview-title" type="button" onclick={onOpen}>{job.name || 'Download'}</button>{:else}{job.name || 'Download'}{/if}</div>
     <div
         class="track"
         role="progressbar"
@@ -93,6 +93,8 @@
 </div>
 
 <style>
+    .preview-title { max-width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+    .preview-title:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
     .download-row { display: grid; grid-template-columns: 22px minmax(0, 1fr); gap: 7px 10px; padding: 10px 12px; align-items: center; }
     .glyph { display: grid; place-items: center; width: 22px; height: 22px; color: var(--color-accent); }
     .name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: var(--weight-medium); }

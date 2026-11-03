@@ -191,7 +191,7 @@ func TestPlanImportReportsRemoteObjectLimit(t *testing.T) {
 	// the plan exactly one object beyond the safe admission limit.
 	for i := 0; i < expectedMaxImportItems; i++ {
 		name := filepath.Join(root, fmt.Sprintf("file-%05d.txt", i))
-		if err := os.WriteFile(name, nil, 0o644); err != nil {
+		if err := os.WriteFile(name, []byte("x"), 0o644); err != nil {
 			t.Fatalf("create item %d: %v", i, err)
 		}
 	}

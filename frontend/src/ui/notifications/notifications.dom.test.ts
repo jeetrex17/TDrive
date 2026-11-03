@@ -6,6 +6,8 @@ import ToastStack from './ToastStack.svelte';
 import TransferRow from './TransferRow.svelte';
 import { historyEvents, notifPanelOpen, type NoticeEvent, type TransferEvent } from './notif-store';
 import { toasts, type ToastItem } from './toast-store';
+import { activityView, closeActivity, openActivity } from './activity-store';
+import { get } from 'svelte/store';
 import { cancelSingleUpload } from '../../modules/notif-bell';
 
 // The row talks to the backend itself when it can stop just this one upload;
@@ -79,6 +81,7 @@ afterEach(async () => {
     vi.clearAllMocks();
     toasts.set([]);
     historyEvents.set([]);
+    closeActivity();
     notifPanelOpen.set(false);
     flushSync();
     await Promise.all(mounts.map((app) => unmount(app)));
@@ -165,6 +168,20 @@ describe('notification interaction controls', () => {
         expect(onDismiss).toHaveBeenCalledWith('toast-1');
     });
 
+    it('keeps banners off the Activity view, which already lists them', () => {
+        toasts.set([makeToast()]);
+        const host = mountComponent(ToastStack, {
+            onDismiss: vi.fn(), onPauseToast: vi.fn(), onResumeToast: vi.fn(), onPauseAll: vi.fn(), onResumeAll: vi.fn(),
+        });
+        expect(host.querySelector('.toast')).not.toBeNull();
+        openActivity();
+        flushSync();
+        expect(host.querySelector('.toast')).toBeNull();
+        closeActivity();
+        flushSync();
+        expect(host.querySelector('.toast')).not.toBeNull();
+    });
+
     it('exposes transfer progress without creating a live region for each tick', () => {
         const host = mountComponent(TransferRow, { transfer: makeTransfer() });
         const progress = host.querySelector<HTMLElement>('[role="progressbar"]');
@@ -195,7 +212,7 @@ describe('notification interaction controls', () => {
         expect(preparing.querySelector('[role="progressbar"]')?.hasAttribute('aria-valuenow')).toBe(false);
     });
 
-    it('opens from the keyboard and restores the bell after Escape', () => {
+    it('opens full Activity from the keyboard', () => {
         const host = mountComponent(NotifBell, { onCancelDirection: vi.fn(), onClearHistory: vi.fn() });
         const bell = host.querySelector<HTMLButtonElement>('#notif-bell');
         if (!bell) throw new Error('Expected the notification bell');
@@ -203,12 +220,8 @@ describe('notification interaction controls', () => {
         bell.focus();
         bell.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
         flushSync();
-        expect(document.querySelector('.notif-panel')).not.toBeNull();
-        expect(document.querySelector('.notif-panel-close')).toBeNull();
-
-        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
-        flushSync();
+        expect(get(activityView).open).toBe(true);
         expect(document.querySelector('.notif-panel')).toBeNull();
-        expect(document.activeElement).toBe(bell);
+        expect(bell.getAttribute('aria-controls')).toBe('activity-modal');
     });
 });

@@ -4,8 +4,8 @@
     import { checkUploadStatus, chooseSourceAndResume, discardUpload, pauseUpload, resumeUpload } from '../../modules/resumable-uploads';
     import { formatSizePair } from './transfer-view';
 
-    interface Props { job: ResumableUpload }
-    let { job }: Props = $props();
+    interface Props { job: ResumableUpload; onOpen?: () => void }
+    let { job, onOpen }: Props = $props();
     let busy = $state(false);
     let confirmingDiscard = $state(false);
     let confirmationStatus = $state<string | null>(null);
@@ -55,7 +55,7 @@
         <ArrowUpIcon size={14} strokeWidth={2} aria-hidden="true" />
     </span>
     <div class="notif-row-body">
-        <div class="notif-row-title" title={job.name}>{job.name || 'Large upload'}</div>
+        <div class="notif-row-title" title={job.name}>{#if onOpen}<button class="preview-title" type="button" onclick={onOpen}>{job.name || 'Large upload'}</button>{:else}{job.name || 'Large upload'}{/if}</div>
         <div
             class="notif-row-progress"
             role="progressbar"
@@ -93,6 +93,8 @@
 </div>
 
 <style>
+    .preview-title { max-width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
+    .preview-title:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
     .resumable-row { grid-template-columns: 22px minmax(0, 1fr) auto; row-gap: 8px; }
     .resumable-row .notif-row-meta { grid-column: 2 / -1; margin-left: 0; align-items: flex-start; }
     .resumable-row .notif-row-body { grid-column: 2 / -1; }

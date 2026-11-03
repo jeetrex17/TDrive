@@ -44,7 +44,7 @@ func notSentFailure(index int, name string, err error) UploadFailure {
 // it does not create a durable ordinary-upload retry journal.
 func (s *Service) UploadWithFailures(ctx context.Context, channelID int64, filePaths, parentIDs []string, encrypt bool) ([]Metadata, []UploadFailure, error) {
 	observer := &failureUploadObserver{uploadObserver: detailedUploadObserver{service: s}, failures: make(map[int]UploadFailure), started: make(map[int]bool), completed: make(map[int]bool), ctx: ctx}
-	files, err := s.upload(ctx, channelID, filePaths, parentIDs, encrypt, uploadOptions{observer: observer, resumable: true})
+	files, err := s.upload(ctx, channelID, filePaths, parentIDs, encrypt, uploadOptions{observer: observer, resumable: true, pausable: true})
 	failures := make([]UploadFailure, 0, len(observer.failures))
 	for index, path := range filePaths {
 		if failure, ok := observer.failures[index]; ok {
@@ -79,6 +79,12 @@ func (o *failureUploadObserver) Started(id int, name string, size int64, parentI
 	o.uploadObserver.Started(id, name, size, parentID)
 }
 
+func (o *failureUploadObserver) Accepted(id int) {
+	if accepted, ok := o.uploadObserver.(uploadAcceptedObserver); ok {
+		accepted.Accepted(id)
+	}
+}
+
 func (o *failureUploadObserver) Completed(id int, name string) {
 	o.mu.Lock()
 	o.completed[id] = true
@@ -97,6 +103,8 @@ func (o *failureUploadObserver) Failed(id int, name string, err error) {
 func classifyUploadFailure(ctx context.Context, index int, name string, err error) UploadFailure {
 	failure := UploadFailure{Index: index, Name: name, Message: err.Error(), Code: "upload_failed"}
 	switch {
+	case errors.Is(err, ErrEmptyFile):
+		failure.Code = "empty_file"
 	case errors.Is(err, errUploadProjection):
 		failure.Code = "projection_pending"
 	case errors.Is(err, errUploadResumable):

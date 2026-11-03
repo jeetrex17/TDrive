@@ -36,6 +36,11 @@ const (
 // cap, so import can classify a skipped file with errors.Is.
 var ErrFileTooLarge = errors.New("file exceeds the maximum upload size")
 
+// ErrEmptyFile marks a file with no bytes to store. Telegram rejects an empty
+// document (FILE_PART_LENGTH_INVALID), and encryption adds a header, so only
+// plaintext uploads can hit it. Callers check before announcing a send.
+var ErrEmptyFile = errors.New("empty files can't be uploaded")
+
 // maxPartBytes is the active per-part ceiling: the Service override when set
 // (tests force splitting at small sizes), else MaxPartBytes.
 func (s *Service) maxPartBytes() int64 {

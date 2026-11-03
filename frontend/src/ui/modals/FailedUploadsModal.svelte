@@ -50,6 +50,8 @@
                 return { tone: 'info', label: 'Retry started', detail: 'A retry was already started. Review its result in Transfers.', icon: ClockIcon };
             case 'canceled':
                 return { tone: 'muted', label: 'Canceled', detail: 'This file was canceled.', icon: BanIcon };
+            case 'empty_file':
+                return { tone: 'muted', label: 'Skipped', detail: "Empty files can't be uploaded.", icon: BanIcon };
             default:
                 return { tone: 'danger', label: 'Failed', detail: humanizeBackendError(new Error(failure.message)), icon: CircleXIcon };
         }
