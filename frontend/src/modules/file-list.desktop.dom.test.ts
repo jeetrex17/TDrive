@@ -53,6 +53,7 @@ vi.mock('./uploaders', () => ({ ensureUserNames: vi.fn(), uploaderChipLabel: () 
 vi.mock('./drive-data', () => ({ calculateVisibleFolderStats: vi.fn() }));
 vi.mock('./folder-index', () => ({ refreshFolderIndex: vi.fn(() => Promise.resolve({ children: new Map() })), collectDescendants: vi.fn(() => []) }));
 
+import { activateFolderShortcuts } from './folder-shortcuts';
 import FileList from '../ui/file-list/FileList.svelte';
 import { activateFileList, buildFileRow, buildFolderRow, renderFileListRows, renderFileState } from './file-list';
 import { state } from '../state';
@@ -424,10 +425,32 @@ describe('desktop keyboard shortcuts', () => {
         await vi.waitFor(() => expect(document.activeElement).toBe(row('file:41')));
     });
 
-    it('goes up to the parent folder on the platform accelerator', () => {
-        // metaKey and altKey both set so the test holds whichever this platform uses.
-        row('file:41').dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowUp', metaKey: true, altKey: true, bubbles: true, cancelable: true }));
-        expect(actions.navigateBack).toHaveBeenCalledTimes(1);
+    it('navigates once from a populated row through the dashboard shortcut', () => {
+        const previousPath = state.folderPath;
+        state.folderPath = [{ id: 'folder', name: 'Folder' }];
+        const disposeShortcut = activateFolderShortcuts();
+        try {
+            const target = row('file:41');
+            target.focus();
+            const event = new KeyboardEvent('keydown', { key: 'ArrowUp', altKey: true, bubbles: true, cancelable: true });
+            target.dispatchEvent(event);
+            expect(event.defaultPrevented).toBe(true);
+            expect(actions.navigateBack).toHaveBeenCalledTimes(1);
+            expect(document.activeElement).toBe(target);
+        } finally {
+            disposeShortcut();
+            state.folderPath = previousPath;
+        }
+    });
+
+    it('lets modified arrows bubble without navigating or changing row focus', () => {
+        const target = row('file:41');
+        target.focus();
+        const event = new KeyboardEvent('keydown', { key: 'ArrowUp', altKey: true, bubbles: true, cancelable: true });
+        target.dispatchEvent(event);
+        expect(event.defaultPrevented).toBe(false);
+        expect(document.activeElement).toBe(target);
+        expect(actions.navigateBack).not.toHaveBeenCalled();
     });
 });
 

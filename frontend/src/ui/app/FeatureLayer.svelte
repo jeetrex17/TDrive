@@ -18,6 +18,7 @@
     } from '../../modules/notifications';
     import { ensureProfileLoaded } from '../../modules/profile-menu';
     import { activateConnectivityWatch } from '../../modules/connectivity';
+    import { activateFolderShortcuts } from '../../modules/folder-shortcuts';
     import { activateRefreshShortcut } from '../../modules/refresh-shortcut';
     import { activateSearchBar } from '../../modules/search';
     import { activateSelectionBar } from '../../modules/selection';
@@ -113,6 +114,7 @@
             activateResumableDownloads(),
             activateSearchBar(),
             activateRefreshShortcut(),
+            activateFolderShortcuts(),
             activateConnectivityWatch(),
             activateLiveSyncEvents(),
             activateUpdates(),

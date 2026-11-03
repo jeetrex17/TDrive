@@ -1,7 +1,7 @@
 // File list rendering for TDrive frontend
 
 import { state, resetFolderCaches } from '../state';
-import { splitNameAndExt, formatDate, formatBytes, isApplePlatform } from '../utils';
+import { splitNameAndExt, formatDate, formatBytes } from '../utils';
 import { isOffline } from './connectivity';
 import { humanizeBackendError } from './errors';
 import { tick } from 'svelte';
@@ -13,7 +13,7 @@ import { openRenameModal } from './modals/rename';
 import { openDeleteModal } from './modals/delete';
 import { openNewFolderModal } from './modals/folder';
 import { notify } from './notifications';
-import { navigateBack, navigateToFolder } from './navigation';
+import { navigateToFolder } from './navigation';
 import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop';
 import {
     getFileList,
@@ -1072,10 +1072,6 @@ function handleListClick(e: MouseEvent) {
     handleRowSelection(element, e, getInteractiveFileListRows());
 }
 
-// The parent-folder shortcut is Cmd+Up on a Mac and Alt+Up on Windows and
-// Linux, matching each platform's own file manager.
-const isMacLike = isApplePlatform();
-
 // Type-ahead: printable keys build a short buffer that jumps to the next
 // matching row, cleared after a pause so a new word starts fresh.
 const TYPE_AHEAD_IDLE_MS = 700;
@@ -1099,9 +1095,11 @@ function pageRowCount(list: HTMLElement, renderedRows: HTMLElement[]): number {
 }
 
 function handleListKeyDown(e: KeyboardEvent) {
+    if (e.defaultPrevented || e.isComposing) return;
     const target = e.target as HTMLElement | null;
     const action = target?.closest<HTMLButtonElement>('.row-actions button');
     if (action) {
+        if (e.altKey || e.ctrlKey || e.metaKey) return;
         if (e.key !== 'ArrowLeft' && e.key !== 'Escape') return;
         const row = action.closest<HTMLElement>('.drive-row');
         if (!row) return;
@@ -1133,13 +1131,9 @@ function handleListKeyDown(e: KeyboardEvent) {
         return;
     }
 
-    // Up to the parent folder.
-    if (e.key === 'ArrowUp' && ((isMacLike && e.metaKey) || (!isMacLike && e.altKey))) {
-        if (isTrashMode() || isSearchMode()) return;
-        e.preventDefault();
-        navigateBack();
-        return;
-    }
+    // Modified keys belong to dashboard shortcuts or native controls. In
+    // particular, let parent navigation bubble without moving the active row.
+    if (e.altKey || e.ctrlKey || e.metaKey) return;
 
     const extendsSelection = e.shiftKey && !isTrashMode();
     let targetIndex = -1;
