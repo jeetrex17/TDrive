@@ -45,7 +45,7 @@ library or take ownership of another layer's object URLs.
 
 ## Metadata: summary first, anchors second
 
-Gallery reads use the SQLite projection; opening Photos does not start a remote
+Gallery reads use the SQLite projection; opening Media does not start a remote
 original-library download. [Projection gallery tables](../../../../backend/projection/gallery_schema.go)
 maintain the media index, month counts and generation revisions.
 
@@ -154,7 +154,7 @@ end unreachable in browsers that clamp element height.
 [`MediaFolders`](../../../../backend/projection/gallery_folders.go) groups direct
 media children by parent folder. It returns counts and covers in one query;
 branch folders containing only subfolders do not become albums. More than one
-media folder selects the folder grid by default; otherwise Photos uses the
+media folder selects the folder grid by default; otherwise Media uses the
 single timeline. [AlbumGrid](AlbumGrid.svelte) windows rows through the shared
 [file-list row-window helper](../file-list/row-window.ts).
 
@@ -414,3 +414,7 @@ Profile long scrolling, rapid jumps, viewer navigation and background/foreground
 on Android and iPhone hardware, including memory pressure, constrained networking
 and vault lock. Measure cold anchor generation and large-folder jumps separately
 from warm scrolling so expensive setup is not hidden in a smooth-scroll result.
+
+The visible navigation label is **Media** on desktop and mobile because this
+view includes images and videos. Internal `photos` view keys and element IDs
+remain stable for navigation and existing stored state.

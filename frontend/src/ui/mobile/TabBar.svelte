@@ -28,7 +28,7 @@
 
     const tabs: Array<{ id: MobileTab; label: string; icon: Component }> = [
         { id: 'files', label: 'Files', icon: FolderIcon },
-        { id: 'photos', label: 'Photos', icon: ImagesIcon },
+        { id: 'photos', label: 'Media', icon: ImagesIcon },
         { id: 'transfers', label: 'Transfers', icon: ArrowDownUpIcon },
         { id: 'account', label: 'Account', icon: CircleUserIcon },
     ];

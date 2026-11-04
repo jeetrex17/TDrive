@@ -28,7 +28,8 @@
         registerFileThumbnail(node, { ...current, apply });
         return {
             update(next: FileThumbnailIdentity) {
-                if (next.channelId === current.channelId
+                if (next.accountId === current.accountId
+                    && next.channelId === current.channelId
                     && next.fileId === current.fileId
                     && next.revision === current.revision) return;
                 current = next;

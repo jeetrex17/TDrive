@@ -19,7 +19,7 @@ test('the gallery lightbox offers explicit Touch ID with password fallback and r
         ...galleryPlans([first, second], true), EncryptionStatus: resolves(locked),
         BiometricStatus: resolves({ ...biometric, enrolled: true }), UseBiometricUnlock: resolves({ ok: true }),
     });
-    await page.getByRole('button', { name: 'Photos', exact: true }).click();
+    await page.getByRole('button', { name: 'Media', exact: true }).click();
     await page.getByRole('button', { name: first.name, exact: true }).click();
     const photo = page.getByRole('dialog', { name: first.name });
     const card = photo.getByRole('group', { name: 'Locked photo' });
@@ -56,7 +56,7 @@ for (const platform of ['desktop', 'android'] as const) {
             UseBiometricUnlock: resolves({ ok: false, error: { code: 'biometric_failed', message: 'Private native diagnostic' } }),
             UseEncryptionPassword: resolves({ ok: true }),
         }, { url: platform === 'android' ? '/?mobile=android' : '/' });
-        await page.getByRole('button', { name: 'Photos', exact: true }).click();
+        await page.getByRole('button', { name: 'Media', exact: true }).click();
         await page.getByRole('button', { name: photo.name, exact: true }).click();
         const card = page.getByRole('group', { name: 'Locked photo' });
         const native = card.getByRole('button', { name: platform === 'android' ? 'Use biometrics' : 'Use Touch ID', exact: true });
@@ -116,7 +116,7 @@ for (const transition of ['close', 'navigation', 'scope reset'] as const) {
             BiometricStatus: resolves({ ...biometric, enrolled: true }),
             UseBiometricUnlock: deferred('old-gallery-auth', { ok: true }), CancelBiometricUnlock: resolves({ ok: true }),
         });
-        await page.getByRole('button', { name: 'Photos', exact: true }).click();
+        await page.getByRole('button', { name: 'Media', exact: true }).click();
         await page.getByRole('button', { name: first.name, exact: true }).click();
         await page.getByRole('group', { name: 'Locked photo' }).getByRole('button', { name: 'Use Touch ID', exact: true }).click();
         await expect.poll(async () => (await mock.calls('UseBiometricUnlock')).length).toBe(1);
@@ -144,7 +144,7 @@ test('the gallery lightbox discards late biometric capability from the previous 
         ...galleryPlans([first, second]), EncryptionStatus: resolves(locked),
         BiometricStatus: deferred('old-gallery-capability', { ...biometric, enrolled: true }),
     });
-    await page.getByRole('button', { name: 'Photos', exact: true }).click();
+    await page.getByRole('button', { name: 'Media', exact: true }).click();
     await page.getByRole('button', { name: first.name, exact: true }).click();
     await expect.poll(async () => (await mock.calls('BiometricStatus')).length).toBe(1);
     await mock.setPlan('BiometricStatus', resolves({ ...biometric, available: false, enrolled: false, reason: 'unsupported' }));

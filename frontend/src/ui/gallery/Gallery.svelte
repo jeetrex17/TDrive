@@ -1,6 +1,7 @@
 <script lang="ts">
     import { onMount, tick, untrack } from 'svelte';
     import ImageIcon from '@lucide/svelte/icons/image';
+    import { state as appState } from '../../state';
     import { isMobilePlatform } from '../../api';
     import { appActions } from '../../modules/app-actions';
     import { chooseFilesForCurrentFolder } from '../../modules/transfers';
@@ -19,6 +20,8 @@
     let focusedIndex = $state(0);
     let keyboardRequest = 0;
     let source = $derived($galleryView.status === 'ready' ? $galleryView.source : null);
+    // Auth resolves identity before publishing the refreshed gallery source.
+    const accountId = $derived(source ? appState.myUserID : 0);
     let layout = $derived(createGalleryLayout(source?.timeline.buckets ?? [], width, mobile));
     let scrollSpace = $derived(createGalleryScrollSpace(layout.height, height));
     let visible = $derived(galleryWindow(layout, scrollTop, height));
@@ -169,13 +172,13 @@
     </div>
 {:else}
     {#key $galleryView.source.timeline.channelId}
-    <div class="gallery-virtual" role="grid" aria-label="Photos" aria-rowcount={layout.rowCount} aria-colcount={layout.columns} style:height={`${scrollSpace.physicalHeight}px`}>
+    <div class="gallery-virtual" role="grid" aria-label="Media" aria-rowcount={layout.rowCount} aria-colcount={layout.columns} style:height={`${scrollSpace.physicalHeight}px`}>
         {#each rows as row (row.key)}
             <div class="gallery-grid gallery-virtual-row" role="row" aria-rowindex={row.rowIndex} style:top={`${scrollSpace.project(row.top, physicalScrollTop)}px`} style:height={`${layout.cellSize}px`} style:grid-template-columns={`repeat(${layout.columns}, minmax(0, 1fr))`}>
                 {#each row.cells as cell (cell.item?.msgId ?? `pending:${cell.index}`)}
                     <div role="gridcell" class="gallery-grid-cell">
                         {#if cell.item}
-                            <GalleryCell item={cell.item} index={cell.index} tabindex={cell.index === tabIndex ? 0 : -1} />
+                            <GalleryCell item={cell.item} {accountId} channelId={$galleryView.source.timeline.channelId} index={cell.index} tabindex={cell.index === tabIndex ? 0 : -1} />
                         {:else}
                             <div class="gallery-cell gallery-pending" aria-label="Loading photo" aria-busy="true"></div>
                         {/if}

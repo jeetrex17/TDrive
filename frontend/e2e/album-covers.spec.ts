@@ -25,7 +25,7 @@ test('a grid with no covers yet is still a grid', async ({ page }) => {
             cover_name: index % 2 === 0 ? 'clip.mp4' : FIRST_PHOTO.name,
         }))),
     });
-    await page.getByRole('button', { name: 'Photos' }).click();
+    await page.getByRole('button', { name: 'Media' }).click();
 
     const tiles = page.locator('button.album-tile');
     await expect(tiles.first()).toBeVisible();
@@ -75,8 +75,8 @@ for (const shape of [
             }))),
         });
         await (shape.phone
-            ? page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: /^Photos/ })
-            : page.getByRole('button', { name: 'Photos' })).click();
+            ? page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: /^Media/ })
+            : page.getByRole('button', { name: 'Media' })).click();
 
         const tiles = page.locator('button.album-tile');
         await expect(tiles.first()).toBeVisible();

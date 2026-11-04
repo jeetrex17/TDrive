@@ -1,4 +1,5 @@
 <script lang="ts">
+    import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
     import ListVideoIcon from '@lucide/svelte/icons/list-video';
     import VideoPlaylistPanel from "./VideoPlaylistPanel.svelte";
     import VideoSettingsPanel from "./VideoSettingsPanel.svelte";
@@ -63,6 +64,8 @@
                 <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M13 5h5v5" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M17.4 8.3A7 7 0 1012 19" stroke="currentColor" stroke-width="2" stroke-linecap="round"/><text x="12" y="15.2" text-anchor="middle" fill="currentColor" font-size="6.2" font-weight="800">10</text></svg>
             </button>
         </div>
+
+        <div id="video-mobile-feedback" class="video-mobile-feedback" role="status" aria-live="polite" hidden></div>
 
         <div id="video-skip-feedback" class="video-skip-feedback" aria-hidden="true"><span></span></div>
 
@@ -153,6 +156,10 @@
                     </div>
                 </div>
 
+                <button id="video-mobile-volume" class="video-icon-btn" type="button" aria-label="System volume" title="System volume" hidden>
+                    <Volume2Icon size={20} aria-hidden="true" />
+                </button>
+
                 <button id="video-time-display" class="video-time-display" type="button" aria-pressed="false" aria-label="Show estimated finish time" aria-describedby="video-time video-duration">
                     <span id="video-time" class="video-time">0:00</span><span class="video-time-separator"> / </span><span id="video-duration" class="video-time">--:--</span>
                     <span id="video-end-time" class="video-end-time" aria-hidden="true"><span></span></span>
@@ -188,6 +195,10 @@
                     <ListVideoIcon size={18} aria-hidden="true" />
                 </button>
 
+                <button id="video-rotate" class="video-icon-btn" type="button" aria-label="Rotate screen" title="Rotate screen" hidden>
+                    <RotateCwIcon size={20} aria-hidden="true" />
+                </button>
+
                 <button id="video-fullscreen" class="video-icon-btn video-fullscreen-btn" type="button" data-state="windowed" aria-label="Enter fullscreen" title="Enter fullscreen">
                     <MaximizeIcon class="video-fullscreen-symbol video-symbol-fullscreen-enter" aria-hidden="true" />
                     <MinimizeIcon class="video-fullscreen-symbol video-symbol-fullscreen-exit" aria-hidden="true" />
@@ -199,6 +210,23 @@
 
 
 <style>
+    .video-mobile-feedback {
+        position: absolute;
+        top: 18%;
+        left: 50%;
+        transform: translateX(-50%);
+        max-width: 80%;
+        padding: 10px 16px;
+        border-radius: 12px;
+        color: white;
+        background: rgb(0 0 0 / 75%);
+        pointer-events: none;
+        z-index: 8;
+        text-align: center;
+    }
+    .video-mobile-feedback[hidden],
+    #video-rotate[hidden],
+    #video-mobile-volume[hidden] { display: none; }
     .video-protected {
         color: var(--viewer-text-muted);
         font-size: var(--type-xs);

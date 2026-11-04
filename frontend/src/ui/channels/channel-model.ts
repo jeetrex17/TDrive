@@ -345,6 +345,7 @@ export function channelVideoQueue(
     const target = (post: ChannelMediaItem): VideoOpenTarget => ({
         id: post.msgId,
         key: `source:${sourceKey(source)}:${post.msgId}`,
+        resumeKey: `source:${source.accountId}:${source.peerKind}:${source.peerId}`,
         name: post.name,
         title: mediaTitle(post),
         size: post.size,

@@ -43,6 +43,8 @@ import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.content.FileProvider;
 import androidx.core.view.WindowCompat;
 import androidx.webkit.WebViewAssetLoader;
+import androidx.webkit.WebViewCompat;
+import androidx.webkit.WebViewFeature;
 
 import org.json.JSONArray;
 import org.json.JSONException;
@@ -329,6 +331,25 @@ public class MainActivity extends AppCompatActivity {
         // Add JavaScript interface for Go communication
         jsBridge = new WailsJSBridge(bridge, webView);
         webView.addJavascriptInterface(jsBridge, "wails");
+        // Unlike addJavascriptInterface, this channel verifies the sender's
+        // origin and main frame before granting control of device settings.
+        if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+            WebViewCompat.addWebMessageListener(webView, "tdrivePlayer",
+                    java.util.Collections.singleton(WAILS_SCHEME + "://" + WAILS_HOST),
+                    (view, message, sourceOrigin, isMainFrame, replyProxy) -> {
+                        if (!isMainFrame || !WAILS_SCHEME.equals(sourceOrigin.getScheme())
+                                || !WAILS_HOST.equals(sourceOrigin.getHost())) return;
+                        try {
+                            String raw = message.getData();
+                            if (raw == null || raw.length() > 4096) return;
+                            JSONObject request = new JSONObject(raw);
+                            jsBridge.mobilePlayer(request.getString("callbackId"), request.getJSONObject("request").toString());
+                        } catch (Exception error) {
+                            Log.w(TAG, "Invalid player controls message");
+                        }
+                    });
+        }
+
 
         registerBackHandler();
     }
@@ -2131,6 +2152,7 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onResume() {
         super.onResume();
+        if (jsBridge != null) jsBridge.resumePlayerControls();
         askForTransferNotificationsIfEarned();
         if (webView != null) {
             applySystemTextScale(webView.getSettings());
@@ -2148,6 +2170,7 @@ public class MainActivity extends AppCompatActivity {
 
     @Override
     protected void onPause() {
+        if (jsBridge != null) jsBridge.releasePlayerControls();
         super.onPause();
         if (bridge != null) {
             bridge.onPause();

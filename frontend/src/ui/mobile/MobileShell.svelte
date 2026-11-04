@@ -195,7 +195,7 @@
         <!-- Files and Photos share this region; the gallery controller toggles
              .photos-mode on it to swap the list for the grid. -->
         <main class="main-content mobile-panel" data-tab="files" hidden={!showMain}>
-            <div id="gallery-title" class="gallery-title">Photos</div>
+            <div id="gallery-title" class="gallery-title">Media</div>
             <PhotosModeBar albumInTopBar />
             <div
                 id="file-list"
@@ -216,7 +216,7 @@
                  portal that filled it from elsewhere is gone. Held back until the
                  dashboard is up so the grid's window listeners and resize observer
                  live no longer than the dashboard does. -->
-            <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Photos">
+            <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Media">
                 {#if dashboardVisible}
                     <PhotosSurface />
                 {/if}

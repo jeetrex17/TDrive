@@ -486,6 +486,36 @@ the session; native close also shuts down the native player. Closing a session
 cancels range work, thumbnail workers and decryptors. Vault lock closes encrypted
 sessions while preserving unrelated clear-media sessions.
 
+## Remembered playback and mobile controls
+
+The video controller captures the account at open and records positions through
+[`PlaybackResume`](../../frontend/src/modules/video/playback-resume.ts). Keys
+include the resolved drive/file/revision or the connected source's durable peer
+identity. Reconnecting a source does not lose its position; switching accounts
+or videos cannot reuse another recording. Records contain identifiers, seconds and duration,
+not filenames, media URLs or credentials.
+
+Positions persist in local WebView storage, bounded to the latest 500 recordings.
+Playback writes at most every five seconds, with additional flushes on pause,
+close, page hide and backgrounding. Metadata must be ready before restoring a
+seek, and startup zero-time events cannot overwrite a saved class position.
+Natural completion clears that video's position; stopping near the end retains
+it. Storage unavailable or full does not block playback. This is device-local
+history, not cross-device synchronization, and clearing app storage removes it.
+Media thumbnails and My Drive video rows show a progress bar from the same
+record, updated on saves without reloading the view. Older records without duration still
+resume playback and gain a progress bar after the next playback save.
+
+Mobile player controls use a session-scoped native bridge. A left-side vertical
+swipe changes brightness; Android right-side swipes adjust media-stream volume.
+iOS uses a visible native `MPVolumeView` slider, opened from the right-side gesture
+or volume control, because WKWebView cannot set system volume. The rotate button
+requests portrait or landscape through the native platform. Closing or
+backgrounding restores the original brightness and orientation and invalidates
+the control session; volume remains at the user's chosen level. Native callbacks
+and frontend updates reject stale sessions, and rapid gesture writes are coalesced.
+These controls require the updated native host, not just newer frontend assets.
+
 ## Seek previews and bandwidth sharing
 
 [Video thumbnails](../../backend/media/video_thumbnails.go) use a background

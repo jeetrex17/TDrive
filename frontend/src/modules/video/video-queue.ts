@@ -24,6 +24,8 @@ export interface VideoOpenTarget {
     /** What to show instead of the file name, such as a channel post's caption. */
     title?: string;
     key?: string;
+    /** Stable account/peer identity for resume, independent of connection generation. */
+    resumeKey?: string;
     size?: number;
     encrypted?: boolean;
     protected?: boolean;
@@ -73,6 +75,7 @@ export function normalizeVideoTarget(target: VideoOpenTarget): VideoOpenTarget |
     const title = String(target.title || "").trim();
     if (title) normalized.title = title;
     if (target.open) normalized.open = target.open;
+    if (target.resumeKey) normalized.resumeKey = target.resumeKey;
     const key = String(target.key || "").trim();
     return key ? { ...normalized, key } : normalized;
 }

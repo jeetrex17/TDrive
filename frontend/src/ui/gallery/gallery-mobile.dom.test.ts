@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import Gallery from './Gallery.svelte';
+import { state } from '../../state';
+import { PlaybackResume, playbackResumeKey } from '../../modules/video/playback-resume';
 import { galleryView } from './gallery-store';
 import { GallerySource } from './gallery-source';
 import { setSelectedFileRowKeys } from '../file-list/row-state-store';
@@ -36,6 +38,8 @@ afterEach(async () => {
     if (app) await unmount(app);
     app = null;
     host.remove();
+    vi.unstubAllGlobals();
+    state.myUserID = 0;
 });
 
 describe('Gallery on a phone', () => {
@@ -72,12 +76,12 @@ describe('Gallery on a phone', () => {
     });
 });
 
-async function makeSource(count: number): Promise<GallerySource> {
+async function makeSource(count: number, name?: string): Promise<GallerySource> {
     const source = new GallerySource({
         channelId: 1, generation: '1', totalCount: count, pageSize: 128,
         buckets: [{ key: '2026-07', startIndex: 0, count, uploadTime: 1 }],
         anchors: Array.from({ length: Math.ceil(count / 128) }, (_, page) => ({ startIndex: page * 128, cursor: String(page * 128) })),
-    }, { load: async (cursor) => ({ generation: '1', startIndex: Number(cursor), nextCursor: '', items: Array.from({ length: Math.min(128, count - Number(cursor)) }, (_, offset) => ({ ...makeItem(Number(cursor) + offset + 1), revision: 1, contentMsgId: offset + 1, contentHash: '' })) }) });
+    }, { load: async (cursor) => ({ generation: '1', startIndex: Number(cursor), nextCursor: '', items: Array.from({ length: Math.min(128, count - Number(cursor)) }, (_, offset) => ({ ...makeItem(Number(cursor) + offset + 1), ...(name ? { name } : {}), revision: 1, contentMsgId: offset + 1, contentHash: '' })) }) });
     await source.get(0);
     return source;
 }
@@ -121,4 +125,21 @@ describe('large library virtualization', () => {
         expect(host.querySelectorAll('.gallery-cell').length).toBeLessThan(60);
         source.dispose();
     });
+});
+
+
+it('reads the resolved account when the gallery source arrives after dashboard mount', async () => {
+    const data = new Map<string, string>();
+    vi.stubGlobal('localStorage', { getItem: (key: string) => data.get(key) ?? null, setItem: (key: string, value: string) => data.set(key, value) });
+    new PlaybackResume(playbackResumeKey(42, { channelId: 1, fileId: 1, revision: 1 }))
+        .observe({ currentTime: 25, duration: 100, paused: false, loading: false });
+    state.myUserID = 0;
+    galleryView.set({ status: 'loading' });
+    app = mount(Gallery, { target: host });
+    flushSync();
+    state.myUserID = 42;
+    const source = await makeSource(1, 'lesson.mp4');
+    galleryView.set({ status: 'ready', source });
+    flushSync();
+    expect(host.querySelector('.gallery-watch-progress-fill')?.getAttribute('style')).toContain('25%');
 });

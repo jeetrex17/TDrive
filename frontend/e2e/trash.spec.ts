@@ -186,7 +186,7 @@ test('leaving the trash returns the drive to the folder it was showing', async (
     await openTrash(page, 'desktop');
     await expect(page.locator('#trash-title')).toBeVisible();
 
-    // The sidebar drive is the way back, the same as it is out of Photos.
+    // The sidebar drive is the way back, the same as it is out of Media.
     await page.locator('.drive-item[data-channel-id]').first().click();
     await expect(page.locator('#trash-title')).toBeHidden();
     await expect(page.locator('.breadcrumb-path')).toBeVisible();
