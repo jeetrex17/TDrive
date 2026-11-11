@@ -22,6 +22,7 @@ export type {
     ChannelInfo,
     DownloadResult,
     EncryptionStatus,
+    FileSortPreference,
     GalleryItem,
     GalleryPage,
     GalleryStorage,

@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-const galleryMaterializationVersion = 3
+const galleryMaterializationVersion = 4
 
 // EnsureGallerySchema installs the local gallery projection. gallery_items is
 // derived from files and dirents by triggers, so replay, migrations, and direct
@@ -182,8 +182,15 @@ func installGalleryGenerationTriggers(tx *sql.Tx) error {
 
 func galleryRefreshDirentSQL(row string) string {
 	channel := row + ".channel_id"
-	msgID := `(SELECT f.msg_id FROM files f WHERE f.channel_id=` + channel + ` AND ` + row + `.object_id='f:' || f.msg_id)`
+	msgID := galleryDirentFileMsgIDSQL(row)
 	return galleryDeleteSQL(channel, msgID) + "\n" + galleryInsertSQL(`f.channel_id=`+channel+` AND f.msg_id=`+msgID)
+}
+
+func galleryDirentFileMsgIDSQL(row string) string {
+	// Seek the composite file key, then retain the exact check for noncanonical IDs.
+	return `(SELECT f.msg_id FROM files f WHERE f.channel_id=` + row + `.channel_id` +
+		` AND f.msg_id=CAST(substr(` + row + `.object_id,3) AS INTEGER)` +
+		` AND ` + row + `.object_id='f:' || f.msg_id)`
 }
 
 func galleryRefreshSQL(channel, msgID string) string {

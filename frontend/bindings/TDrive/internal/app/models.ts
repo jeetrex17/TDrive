@@ -86,6 +86,11 @@ export interface EncryptionStatus {
     "hint": string;
 }
 
+export interface FileSortPreference {
+    "key": string;
+    "direction": string;
+}
+
 /**
  * GalleryItem keeps existing file wire fields while adding immutable content
  * identity. Pixel caches must use content identity, never a filename alone.

@@ -1,6 +1,6 @@
 module TDrive
 
-go 1.26.10
+go 1.26.11
 
 require (
 	github.com/Eyevinn/mp4ff v0.56.0

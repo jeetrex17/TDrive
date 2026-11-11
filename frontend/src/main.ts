@@ -1,4 +1,4 @@
-import { RuntimeUnavailableError, waitForGatewayReady } from './api';
+import { loadFileSortPreference, RuntimeUnavailableError, saveFileSortPreference, waitForGatewayReady } from './api';
 import { state } from './state';
 import { configureAppActions } from './modules/app-actions';
 import { mountApplication } from './modules/app-shell';
@@ -10,6 +10,7 @@ import { renderSidebar } from './modules/sidebar';
 import { appView, type AppLifecycle } from './ui/app/app-store';
 import { applyMobilePlatformClasses } from './ui/mobile/platform-classes';
 import { activateSystemTextScale } from './ui/mobile/system-text-scale';
+import { initializeFileSortPersistence } from './ui/file-list/file-sort-store';
 import { initializeNativeTheme } from './ui/theme/native-theme';
 import { initializeTheme } from './ui/theme/theme-controller';
 import { deriveVideoPlaylist } from './modules/video/video-playlist';
@@ -117,6 +118,7 @@ const lifecycle: AppLifecycle = {
         // recovery screens are just as important to scale as the dashboard.
         registerDisposer(activateSystemTextScale());
 
+        void initializeFileSortPersistence(loadFileSortPreference, saveFileSortPreference);
         registerDisposer(await initializeNativeTheme());
         if (stopped) return;
 
