@@ -59,8 +59,9 @@ install_fixture() {
   local version="$1"
   mkdir -p "$TMP_ROOT/$version/lib"
   ar rcs "$TMP_ROOT/$version/lib/libtdrivefixture.a" "$TMP_ROOT/fixture.o"
-  # Runtime preparation only copies this mocked dylib; the Go fixture links the archive.
-  touch "$TMP_ROOT/$version/lib/libmpv.2.dylib"
+  # cgo validates libraries in the pkg-config directory, including this dylib
+  # used by runtime preparation. The Go fixture still links the static archive.
+  cc -dynamiclib "$TMP_ROOT/fixture.o" -o "$TMP_ROOT/$version/lib/libmpv.2.dylib"
   cat > "$TMP_ROOT/pkgconfig/mpv.pc" <<EOF
 libdir=$TMP_ROOT/$version/lib
 Name: mpv
