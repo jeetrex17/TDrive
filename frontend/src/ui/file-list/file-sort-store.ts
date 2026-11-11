@@ -1,4 +1,4 @@
-import { writable } from 'svelte/store';
+import { get, writable } from 'svelte/store';
 import {
     DEFAULT_FILE_SORT,
     nextFileSortState,
@@ -7,48 +7,70 @@ import {
 } from './file-sort';
 
 const STORAGE_KEY = 'tdrive.fileListSort';
+const SORT_KEYS: readonly string[] = ['name', 'date', 'size', 'type'];
 
-function readInitialSort(): FileSortState {
-    if (typeof window === 'undefined') return DEFAULT_FILE_SORT;
+function isSortState(value: unknown): value is FileSortState {
+    return typeof value === 'object' && value !== null &&
+        'key' in value && typeof value.key === 'string' && SORT_KEYS.includes(value.key) &&
+        'direction' in value && (value.direction === 'asc' || value.direction === 'desc');
+}
+
+function readSavedSort(): FileSortState | null {
     try {
-        const raw = window.localStorage.getItem(STORAGE_KEY);
-        if (!raw) return DEFAULT_FILE_SORT;
-        const parsed = JSON.parse(raw) as Partial<FileSortState>;
-        if (!isSortState(parsed)) return DEFAULT_FILE_SORT;
-        return parsed;
+        const parsed: unknown = JSON.parse(window.localStorage.getItem(STORAGE_KEY) ?? 'null');
+        return isSortState(parsed) ? parsed : null;
     } catch {
-        return DEFAULT_FILE_SORT;
+        return null;
     }
 }
 
-export const fileSortState = writable<FileSortState>(readInitialSort());
+function rememberInWebView(state: FileSortState): void {
+    try {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    } catch {
+        // App storage can still persist the preference.
+    }
+}
 
-if (typeof window !== 'undefined') {
-    fileSortState.subscribe((state) => {
-        try {
-            window.localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-        } catch {
-            // Sorting is still usable without persistence.
+export const fileSortState = writable<FileSortState>(readSavedSort() ?? DEFAULT_FILE_SORT);
+
+let saveInApp: ((state: FileSortState) => void) | undefined;
+
+export async function initializeFileSortPersistence(
+    load: () => Promise<unknown>,
+    save: (state: FileSortState) => Promise<void>,
+): Promise<void> {
+    let pending = Promise.resolve();
+    const initial = get(fileSortState);
+    saveInApp = (state) => {
+        // Keep rapid clicks in order across asynchronous bridge calls.
+        pending = pending.then(() => save(state)).catch((error: unknown) => {
+            console.warn('Could not save file sort preference:', error);
+        });
+    };
+    try {
+        const saved = await load();
+        // A sort picked while the preference loads takes precedence.
+        if (get(fileSortState) !== initial) return;
+        if (isSortState(saved)) {
+            fileSortState.set(saved);
+            rememberInWebView(saved);
+        } else {
+            const legacy = readSavedSort();
+            if (legacy) saveInApp(legacy);
         }
-    });
+    } catch (error) {
+        console.warn('Could not load file sort preference:', error);
+    }
 }
 
 export function setFileSortKey(key: FileSortKey): void {
-    fileSortState.update((current) => nextFileSortState(current, key));
+    const next = nextFileSortState(get(fileSortState), key);
+    fileSortState.set(next);
+    rememberInWebView(next);
+    saveInApp?.(next);
 }
 
 export function resetFileSortState(): void {
     fileSortState.set(DEFAULT_FILE_SORT);
-}
-
-const SORT_KEYS: readonly FileSortKey[] = ['name', 'date', 'size', 'type'];
-
-function isSortState(value: Partial<FileSortState>): value is FileSortState {
-    // Guards against a stored preference from an older or newer build: an
-    // unrecognised key falls back to the default rather than sorting by
-    // nothing, which would look like the list quietly ignoring the choice.
-    return (
-        SORT_KEYS.includes(value.key as FileSortKey) &&
-        (value.direction === 'asc' || value.direction === 'desc')
-    );
 }

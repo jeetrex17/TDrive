@@ -184,6 +184,10 @@ export function GetFileList(): $CancellablePromise<$models.TDriveFile[] | null> 
     return $Call.ByID(563907866);
 }
 
+export function GetFileSortPreference(): $CancellablePromise<$models.FileSortPreference | null> {
+    return $Call.ByID(2057188447);
+}
+
 export function GetFolderContents(parentID: string): $CancellablePromise<backend$0.FileSystem> {
     return $Call.ByID(86663918, parentID);
 }
@@ -583,6 +587,10 @@ export function SetActiveChannel(channelID: number): $CancellablePromise<void> {
  */
 export function SetFileDropEnabled(enabled: boolean): $CancellablePromise<void> {
     return $Call.ByID(316244124, enabled);
+}
+
+export function SetFileSortPreference(preference: $models.FileSortPreference): $CancellablePromise<void> {
+    return $Call.ByID(2611395859, preference);
 }
 
 /**
