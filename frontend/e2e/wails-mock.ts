@@ -84,6 +84,8 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
     BiometricStatus: resolves({ available: false, enrolled: false, kind: 'biometric', reason: 'unsupported' }),
     GetAllFsMsgIDs: resolves([]),
     GetFileList: resolves([]),
+    GetFileSortPreference: resolves(null),
+    SetFileSortPreference: resolves(null),
     GetPhotoBackupState: resolves({ settings: { enabled: false }, sources: [], status: { phase: 'idle' } }),
     ListResumableUploads: resolves([]),
     ListResumableDownloads: resolves({ result: { ok: true }, jobs: [] }),
