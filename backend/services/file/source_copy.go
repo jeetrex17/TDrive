@@ -9,6 +9,7 @@ import (
 	"TDrive/backend/channelsource"
 	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
+	"github.com/google/uuid"
 )
 
 const SourceCopyBatchLimit = 50
@@ -27,6 +28,11 @@ type SourceCopyResult struct {
 	Message  string `json:"message"`
 }
 
+// SourceCopyPreflightError guarantees no copy intent was recorded.
+type SourceCopyPreflightError struct{ error }
+
+func (err SourceCopyPreflightError) Unwrap() error { return err.error }
+
 type SourceCopyDependencies struct {
 	Resolve func(context.Context, channelsource.CopySource) (tgclient.DocumentRef, error)
 	// Sync must reconcile the destination projection in Telegram message order.
@@ -42,27 +48,30 @@ func NormalizeSourceCopyName(name string) string {
 
 // StartSourceCopies records the selection before attempting any remote writes.
 // It only creates plaintext copies. The caller must first confirm that mode.
-func (s *Service) StartSourceCopies(ctx context.Context, channelID, accountID int64, parent string, items []SourceCopyInput, deps SourceCopyDependencies) ([]SourceCopyResult, error) {
+func (s *Service) StartSourceCopies(ctx context.Context, channelID, accountID int64, parent string, items []SourceCopyInput, deps SourceCopyDependencies, batchID string) ([]SourceCopyResult, error) {
+	if !validSourceCopyBatchID(batchID) {
+		return nil, SourceCopyPreflightError{errors.New("Invalid copy batch")}
+	}
 	if err := validateSourceCopySelection(accountID, items); err != nil {
-		return nil, err
+		return nil, SourceCopyPreflightError{err}
 	}
 	release, err := s.acquireSourceCopySlot(ctx)
 	if err != nil {
-		return nil, err
+		return nil, SourceCopyPreflightError{err}
 	}
 	defer release()
 	worker, err := s.newSourceCopyWorker(ctx, channelID, accountID, deps)
 	if err != nil {
-		return nil, err
+		return nil, SourceCopyPreflightError{err}
 	}
 	if err := worker.sync(ctx); err != nil {
-		return nil, err
+		return nil, SourceCopyPreflightError{err}
 	}
 	parent, err = s.validParent(channelID, parent, "target")
 	if err != nil {
-		return nil, err
+		return nil, SourceCopyPreflightError{err}
 	}
-	jobs, err := s.createSourceCopyJobs(ctx, channelID, accountID, parent, items)
+	jobs, err := s.createSourceCopyJobs(ctx, channelID, accountID, parent, items, batchID)
 	if err != nil {
 		return nil, err
 	}
@@ -82,6 +91,22 @@ func (s *Service) ListSourceCopies(ctx context.Context, channelID, accountID int
 		return nil, err
 	}
 	return s.listSourceCopyJobs(ctx, channelID, accountID)
+}
+
+// ListSourceCopyBatch recovers receipts for one attempted save.
+func (s *Service) ListSourceCopyBatch(ctx context.Context, channelID, accountID int64, batchID string) ([]SourceCopyResult, error) {
+	if !validSourceCopyBatchID(batchID) {
+		return nil, errors.New("Invalid copy batch")
+	}
+	if err := s.checkSourceCopyScope(ctx, channelID, accountID); err != nil {
+		return nil, err
+	}
+	return s.listSourceCopyBatch(ctx, channelID, accountID, batchID)
+}
+
+func validSourceCopyBatchID(batchID string) bool {
+	id, err := uuid.Parse(batchID)
+	return err == nil && id != uuid.Nil && id.String() == batchID
 }
 
 func (s *Service) RetrySourceCopy(ctx context.Context, channelID, accountID int64, id string, deps SourceCopyDependencies) (SourceCopyResult, error) {

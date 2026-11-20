@@ -42,8 +42,9 @@ func TestSourceCopyPickerKeepsMyDriveIndependentOfActiveDrive(t *testing.T) {
 	if _, err := app.drives.CreateSourceCopyFolder(accountID, sharedID, "", "New"); err == nil {
 		t.Fatal("picker accepted the active shared drive as a destination")
 	}
-	if _, err := app.drives.SaveSourceCopies(t.Context(), accountID, personalID, "", nil, false); err == nil {
-		t.Fatal("save accepted a request without plain-storage consent")
+	response, err := app.drives.SaveSourceCopies(t.Context(), accountID, personalID, "", nil, false, projection.NewUploadUUID())
+	if err != nil || response.NotStarted != "confirm saving files without vault encryption" || len(response.Results) != 0 {
+		t.Fatalf("save without consent returned %+v, %v", response, err)
 	}
 }
 
@@ -105,9 +106,20 @@ func TestSaveSourceCopyOpensAfterSourceDisconnect(t *testing.T) {
 			MsgID: sourceMsgID, Identity: page.Items[0].CopyIdentity,
 		},
 	}
-	copies, err := app.drives.SaveSourceCopies(t.Context(), accountID, personalID, "", []fileservice.SourceCopyInput{item}, true)
-	if err != nil || len(copies) != 1 || copies[0].Status != "saved" || copies[0].FileID <= 0 {
-		t.Fatalf("copy results = %+v, err = %v", copies, err)
+	input := []fileservice.SourceCopyInput{item}
+	rejected, err := app.drives.SaveSourceCopies(t.Context(), accountID, personalID, "d:missing", input, true, projection.NewUploadUUID())
+	if err != nil || rejected.NotStarted == "" || len(rejected.Results) != 0 {
+		t.Fatalf("save to missing folder returned %+v, %v", rejected, err)
+	}
+	batchID := projection.NewUploadUUID()
+	saved, err := app.drives.SaveSourceCopies(t.Context(), accountID, personalID, "", input, true, batchID)
+	copies := saved.Results
+	if err != nil || saved.NotStarted != "" || len(copies) != 1 || copies[0].Status != "saved" || copies[0].FileID <= 0 {
+		t.Fatalf("save returned %+v, %v", saved, err)
+	}
+	receipts, err := app.drives.ListSourceCopyBatch(accountID, personalID, batchID)
+	if err != nil || len(receipts) != 1 || receipts[0] != copies[0] {
+		t.Fatalf("batch receipts = %+v, err = %v", receipts, err)
 	}
 	if err := app.drives.DisconnectChannelSource(source.PeerKind, groupID, accountID, source.Generation); err != nil {
 		t.Fatal(err)

@@ -417,6 +417,14 @@ export interface SourceCopyFolderPage {
     "folders": backend$0.Folder[] | null;
 }
 
+/**
+ * SourceCopySaveResponse carries a definitive preflight failure on every native bridge.
+ */
+export interface SourceCopySaveResponse {
+    "results": file$0.SourceCopyResult[] | null;
+    "not_started": string;
+}
+
 export interface TDriveFile {
     "id": number;
     "name": string;

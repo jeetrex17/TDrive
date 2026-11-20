@@ -397,7 +397,7 @@ test('a Shared Drive file can be copied to a subfolder in My Drive', async ({ pa
         ResolveUsernames: resolves({ '8': 'Uploader' }),
         ListSourceCopyFolders: resolves({ drive_id: 1, folders: [parent] }),
         PreviewSourceCopyNames: resolves([file.name]),
-        SaveSourceCopies: resolves([{ id: 'copy-1', name: file.name, parent_id: child.id, status: 'saved', file_id: 400, message: '' }]),
+        SaveSourceCopies: resolves({ results: [{ id: 'copy-1', name: file.name, parent_id: child.id, status: 'saved', file_id: 400, message: '' }], not_started: '' }),
     });
     const row = page.getByRole('row', { name: 'File: shared.pdf' });
     await row.click({ button: 'right' });
@@ -419,7 +419,7 @@ test('a Shared Drive file can be copied to a subfolder in My Drive', async ({ pa
     expect((await mock.calls('SaveSourceCopies')).map((call) => call.args)).toEqual([
         [7, 1, child.id, [{ name: file.name, source: {
             account_id: 7, peer_kind: 'shared-drive', peer_id: 2, msg_id: file.msg_id, generation: '3', identity: 'managed',
-        } }], true],
+        } }], true, expect.any(String)],
     ]);
     expect(await mock.calls('SetActiveChannel')).toEqual([]);
 });
@@ -438,7 +438,7 @@ test('the phone can copy a forwarded Shared Drive file from its overflow menu', 
         ResolveUsernames: resolves({ '8': 'Uploader' }),
         ListSourceCopyFolders: resolves({ drive_id: 1, folders: [folder] }),
         PreviewSourceCopyNames: resolves([file.name]),
-        SaveSourceCopies: resolves([{ id: 'copy-1', name: file.name, parent_id: '', status: 'saved', file_id: 400, message: '' }]),
+        SaveSourceCopies: resolves({ results: [{ id: 'copy-1', name: file.name, parent_id: '', status: 'saved', file_id: 400, message: '' }], not_started: '' }),
     }, { url: '/?mobile=ios' });
     await page.getByRole('button', { name: `More actions for ${file.name}` }).click();
     await page.getByRole('button', { name: 'Copy to My Drive', exact: true }).click();
@@ -455,7 +455,7 @@ test('the phone can copy a forwarded Shared Drive file from its overflow menu', 
     expect((await mock.calls('SaveSourceCopies')).map((call) => call.args)).toEqual([
         [7, 1, '', [{ name: file.name, source: {
             account_id: 7, peer_kind: 'shared-drive', peer_id: 2, msg_id: file.id, generation: '0', identity: file.copy_identity,
-        } }], true],
+        } }], true, expect.any(String)],
     ]);
 });
 

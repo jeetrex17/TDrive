@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"TDrive/backend/projection"
 	"TDrive/backend/tgclient"
 )
 
@@ -19,7 +20,7 @@ func TestSourceCopyFailsWhenKnownUncommittedBodyWasDeleted(t *testing.T) {
 			defer cancel()
 			telegram.afterBody = cancel
 			results, err := svc.StartSourceCopies(ctx, personalChannelID, 7, "",
-				[]SourceCopyInput{sourceCopyTestInput()}, deps)
+				[]SourceCopyInput{sourceCopyTestInput()}, deps, projection.NewUploadUUID())
 			if err != nil || len(results) != 1 || results[0].Status != sourceCopyPending || len(telegram.SentControls()) != 0 {
 				t.Fatalf("interrupted copy = %+v, %v, commits %v", results, err, telegram.SentControls())
 			}
@@ -46,7 +47,7 @@ func TestSourceCopyDoesNotAbandonMissingBodyWithUnknownCommit(t *testing.T) {
 	unknown := &sourceCopyUnknownCommit{sourceCopyTelegram: telegram}
 	svc.TG = unknown
 	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "",
-		[]SourceCopyInput{sourceCopyTestInput()}, deps)
+		[]SourceCopyInput{sourceCopyTestInput()}, deps, projection.NewUploadUUID())
 	if err != nil || len(results) != 1 || results[0].Status != sourceCopyPending || unknown.commitCalls != 1 {
 		t.Fatalf("copy with unknown commit = %+v, %v, commit calls %d", results, err, unknown.commitCalls)
 	}

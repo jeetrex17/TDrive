@@ -28,7 +28,7 @@ test('save selected source files to My Drive while a shared drive is active', as
         ListChannelMedia: resolves({ ...mediaPage, items: [first, blocked, second] }),
         ListSourceCopyFolders: resolves({ drive_id: 1, folders: [folder] }),
         PreviewSourceCopyNames: resolves([first.name, second.name]),
-        SaveSourceCopies: deferred('copy-results', [saved, canceled]),
+        SaveSourceCopies: deferred('copy-results', { results: [saved, canceled], not_started: '' }),
         CancelSourceCopies: resolves(true),
         SetActiveChannel: resolves(null),
     });
@@ -66,7 +66,7 @@ test('save selected source files to My Drive while a shared drive is active', as
             name: item.name,
             source: { account_id: 7, peer_kind: 'channel', peer_id: 50, generation: 'source-a', msg_id: item.msg_id, identity: item.copy_identity },
         })),
-        true,
+        true, expect.any(String),
     ]);
     await dialog.getByRole('button', { name: 'Stop saving' }).click();
     expect((await mock.calls('CancelSourceCopies')).map((entry) => entry.args)).toEqual([[7]]);
@@ -83,13 +83,14 @@ test('mobile can save a basic group attachment with no viewer or Telegram link',
     const group = { ...source, peer_kind: 'group', title: 'Private group', username: '' };
     const document = { ...media, name: 'archive.zip', kind: 'document', streamable: false, block_reason: 'unsupported_format', telegram_url: '', copy_identity: 'archive' };
     const folder = { id: 'd:private', name: 'Private group', parent_id: '' };
+    const saved = { id: 'copy-a', name: document.name, parent_id: folder.id, status: 'saved', file_id: 401, message: '' };
     const mock = await bootTDrive(page, {
         ListConnectedChannelSources: resolves([group]),
         ListChannelMedia: resolves({ ...mediaPage, peer_kind: 'group', items: [document] }),
         ListSourceCopyFolders: resolves({ drive_id: 1, folders: [] }),
         PreviewSourceCopyNames: resolves([document.name]),
         CreateSourceCopyFolder: resolves(folder),
-        SaveSourceCopies: resolves([{ id: 'copy-a', name: document.name, parent_id: folder.id, status: 'saved', file_id: 401, message: '' }]),
+        SaveSourceCopies: resolves({ results: [], not_started: 'target folder not found' }),
     }, { url: '/?mobile=ios' });
     await page.getByRole('button', { name: /Switch drive/ }).click();
     await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Group Private group', exact: true }).click();
@@ -102,7 +103,13 @@ test('mobile can save a basic group attachment with no viewer or Telegram link',
     await dialog.getByRole('button', { name: 'Create folder' }).click();
     await expect(dialog.getByRole('button', { name: folder.name })).toBeVisible();
     await mock.setPlan('PreviewSourceCopyNames', resolves([document.name]));
-    await dialog.getByRole('button', { name: 'Save here' }).click();
+    const save = dialog.getByRole('button', { name: 'Save here' });
+    await save.click();
+    await expect(dialog.getByText('Choose a valid destination folder.')).toBeVisible();
+    expect(await mock.calls('ListSourceCopyBatch')).toHaveLength(0);
+
+    await mock.setPlan('SaveSourceCopies', resolves({ results: [saved], not_started: '' }));
+    await save.click();
     await expect(dialog.getByText('Saved', { exact: true })).toBeVisible();
     expect((await mock.calls('CreateSourceCopyFolder')).map(({ args }) => args)).toEqual([[7, 1, '', 'Private group']]);
 });
@@ -148,10 +155,13 @@ test('Activity restores and checks a pending copy with the source disconnected',
 test('Activity shows a committed copy after the save response is lost', async ({ page }) => {
     const file = { ...media, copy_identity: 'source-file' };
     const committed = { id: 'copy-committed', name: file.name, parent_id: '', status: 'saved', file_id: 450, message: '' };
+    const older = { ...committed, id: 'older-copy', name: 'older.mp4', file_id: 400 };
     const mock = await bootTDrive(page, {
         ListConnectedChannelSources: resolves([source]),
         ListChannelMedia: resolves({ ...mediaPage, items: [file] }),
         ListSourceCopyFolders: resolves({ drive_id: 1, folders: [] }),
+        ListSourceCopies: resolves([older]),
+        ListSourceCopyBatch: resolves([committed]),
         PreviewSourceCopyNames: resolves([file.name]),
         SaveSourceCopies: rejects('The save response could not be received.'),
     });
@@ -162,13 +172,16 @@ test('Activity shows a committed copy after the save response is lost', async ({
     await page.getByRole('menuitem', { name: 'Save to My Drive…' }).click();
     const dialog = page.getByRole('dialog', { name: 'Save to My Drive' });
     await expect.poll(async () => (await mock.calls('ListSourceCopies')).length).toBe(1);
-    await mock.setPlan('ListSourceCopies', resolves([committed]));
     await dialog.getByRole('button', { name: 'Save here' }).click();
     await dialog.getByRole('button', { name: 'View Activity' }).click();
     const activity = page.getByRole('dialog', { name: 'Activity' });
     await expect(activity.getByRole('button', { name: 'View forest-dawn.mp4', exact: true })).toContainText('Saved to My Drive');
+    await expect(activity.getByRole('button', { name: 'View older.mp4', exact: true })).toHaveCount(0);
     await expect(activity.getByRole('button', { name: 'Check copy' })).toHaveCount(0);
-    expect(await mock.calls('SaveSourceCopies')).toHaveLength(1);
+    const saves = await mock.calls('SaveSourceCopies');
+    expect(saves).toHaveLength(1);
+    expect((await mock.calls('ListSourceCopyBatch')).map(({ args }) => args)).toEqual([[7, 1, saves[0].args[5]]]);
+    expect(await mock.calls('ListSourceCopies')).toHaveLength(1);
 });
 
 async function expectToastActionOnRight(toast: Locator): Promise<void> {

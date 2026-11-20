@@ -1,6 +1,7 @@
 import {
     CancelSourceCopies as cancel,
     CreateSourceCopyFolder as createFolder,
+    ListSourceCopyBatch as listBatch,
     ListSourceCopies as listCopies,
     ListSourceCopyFolders as listFolders,
     PreviewSourceCopyNames as previewNames,
@@ -54,9 +55,11 @@ export async function saveSourceCopies(
     parentId: string,
     items: readonly SourceCopyInput[],
     allowPlain: boolean,
-): Promise<SourceCopyResult[]> {
+    batchId: string,
+): Promise<{ results: SourceCopyResult[]; notStarted: string }> {
     const input = items.map(({ source, name }) => ({ source, name }));
-    return ((await invokeBackend(save, accountId, driveId, parentId, input, allowPlain)) ?? []).map(copyResult);
+    const response = await invokeBackend(save, accountId, driveId, parentId, input, allowPlain, batchId);
+    return { results: (response.results ?? []).map(copyResult), notStarted: response.not_started };
 }
 
 export async function cancelSourceCopies(accountId: number): Promise<boolean> {
@@ -65,6 +68,10 @@ export async function cancelSourceCopies(accountId: number): Promise<boolean> {
 
 export async function listSourceCopies(accountId: number): Promise<SourceCopyResult[]> {
     return ((await invokeBackend(listCopies, accountId)) ?? []).map(copyResult);
+}
+
+export async function listSourceCopyBatch(accountId: number, driveId: number, batchId: string): Promise<SourceCopyResult[]> {
+    return ((await invokeBackend(listBatch, accountId, driveId, batchId)) ?? []).map(copyResult);
 }
 
 export async function retrySourceCopy(accountId: number, id: string): Promise<SourceCopyResult> {

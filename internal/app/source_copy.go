@@ -112,23 +112,37 @@ func (s *DriveService) PreviewSourceCopyNames(names []string) ([]string, error) 
 	return normalized, nil
 }
 
-func (s *DriveService) SaveSourceCopies(ctx context.Context, expectedAccountID, expectedDriveID int64, parentID string, items []fileservice.SourceCopyInput, allowPlain bool) ([]fileservice.SourceCopyResult, error) {
+// SourceCopySaveResponse carries a definitive preflight failure on every native bridge.
+type SourceCopySaveResponse struct {
+	Results    []fileservice.SourceCopyResult `json:"results"`
+	NotStarted string                         `json:"not_started"`
+}
+
+func (s *DriveService) SaveSourceCopies(ctx context.Context, expectedAccountID, expectedDriveID int64, parentID string, items []fileservice.SourceCopyInput, allowPlain bool, batchID string) (SourceCopySaveResponse, error) {
 	if !allowPlain {
-		return nil, errors.New("confirm saving files without vault encryption")
+		return sourceCopyNotStarted(errors.New("confirm saving files without vault encryption"))
 	}
 	if expectedAccountID <= 0 || expectedDriveID <= 0 {
-		return nil, errors.New("choose a My Drive destination")
+		return sourceCopyNotStarted(errors.New("choose a My Drive destination"))
 	}
 	ctx, finish, err := s.sourceCopies.begin(ctx, expectedAccountID)
 	if err != nil {
-		return nil, err
+		return sourceCopyNotStarted(err)
 	}
 	defer finish()
 	engine, driveID, err := s.sourceCopyDrive(ctx, expectedAccountID, expectedDriveID)
 	if err != nil {
-		return nil, err
+		return sourceCopyNotStarted(err)
 	}
-	return engine.FileService().StartSourceCopies(ctx, driveID, expectedAccountID, parentID, items, sourceCopyDependencies(engine))
+	results, err := engine.FileService().StartSourceCopies(ctx, driveID, expectedAccountID, parentID, items, sourceCopyDependencies(engine), batchID)
+	if _, ok := errors.AsType[fileservice.SourceCopyPreflightError](err); ok {
+		return sourceCopyNotStarted(err)
+	}
+	return SourceCopySaveResponse{Results: results}, err
+}
+
+func sourceCopyNotStarted(err error) (SourceCopySaveResponse, error) {
+	return SourceCopySaveResponse{NotStarted: err.Error()}, nil
 }
 
 func (s *DriveService) CancelSourceCopies(expectedAccountID int64) (bool, error) {
@@ -152,6 +166,25 @@ func (s *DriveService) ListSourceCopies(expectedAccountID int64) ([]fileservice.
 		return nil, err
 	}
 	return engine.FileService().ListSourceCopies(ctx, driveID, expectedAccountID)
+}
+
+func (s *DriveService) ListSourceCopyBatch(expectedAccountID, expectedDriveID int64, batchID string) ([]fileservice.SourceCopyResult, error) {
+	if expectedDriveID <= 0 {
+		return nil, errors.New("choose a My Drive destination")
+	}
+	if s.host == nil {
+		return nil, errBackendUnavailable
+	}
+	ctx, finish, err := s.sourceCopies.begin(s.host.appContext(), 0)
+	if err != nil {
+		return nil, err
+	}
+	defer finish()
+	engine, driveID, err := s.sourceCopyDrive(ctx, expectedAccountID, expectedDriveID)
+	if err != nil {
+		return nil, err
+	}
+	return engine.FileService().ListSourceCopyBatch(ctx, driveID, expectedAccountID, batchID)
 }
 
 func (s *DriveService) RetrySourceCopy(ctx context.Context, expectedAccountID int64, id string) (fileservice.SourceCopyResult, error) {

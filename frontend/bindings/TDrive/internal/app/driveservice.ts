@@ -182,6 +182,10 @@ export function ListSourceCopies(expectedAccountID: number): $CancellablePromise
     return $Call.ByID(1815142798, expectedAccountID);
 }
 
+export function ListSourceCopyBatch(expectedAccountID: number, expectedDriveID: number, batchID: string): $CancellablePromise<file$0.SourceCopyResult[] | null> {
+    return $Call.ByID(2758274674, expectedAccountID, expectedDriveID, batchID);
+}
+
 export function ListSourceCopyFolders(expectedAccountID: number, parentID: string): $CancellablePromise<$models.SourceCopyFolderPage> {
     return $Call.ByID(72426239, expectedAccountID, parentID);
 }
@@ -226,8 +230,8 @@ export function RetrySourceCopy(expectedAccountID: number, id: string): $Cancell
     return $Call.ByID(15761096, expectedAccountID, id);
 }
 
-export function SaveSourceCopies(expectedAccountID: number, expectedDriveID: number, parentID: string, items: file$0.SourceCopyInput[] | null, allowPlain: boolean): $CancellablePromise<file$0.SourceCopyResult[] | null> {
-    return $Call.ByID(2540008563, expectedAccountID, expectedDriveID, parentID, items, allowPlain);
+export function SaveSourceCopies(expectedAccountID: number, expectedDriveID: number, parentID: string, items: file$0.SourceCopyInput[] | null, allowPlain: boolean, batchID: string): $CancellablePromise<$models.SourceCopySaveResponse> {
+    return $Call.ByID(2540008563, expectedAccountID, expectedDriveID, parentID, items, allowPlain, batchID);
 }
 
 export function SaveSourceGroup(expectedAccountID: number, groupID: string, name: string): $CancellablePromise<channelsource$0.SourceOrganization> {

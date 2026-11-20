@@ -3,6 +3,7 @@ import {
     cancelSourceCopies,
     createSourceCopyFolder,
     getMyUserId,
+    listSourceCopyBatch,
     listSourceCopies,
     listSourceCopyFolders,
     previewSourceCopyNames,
@@ -55,27 +56,49 @@ let session = 0;
 let active = false;
 let accountId = 0;
 let dialogVersion = 0;
-let activityVersion = 0;
+let activityClearVersion = 0;
+const activityReads = new Set<Set<string>>();
 
 function updateDialog(update: Partial<CopyDialog>): void {
     sourceCopyDialog.update((current) => current ? { ...current, ...update } : null);
 }
 
-function remember(results: readonly SourceCopyResult[]): void {
-    const recorded = results.filter(({ id }) => id);
-    const ids = new Set(recorded.map(({ id }) => id));
-    activityVersion += 1;
+function mergeActivity(results: readonly SourceCopyResult[], includeFinished = false): void {
+    const recorded = new Map(results.filter(({ id }) => id).map((result) => [result.id, result]));
     sourceCopyActivity.update((previous) => [
-        ...recorded.filter(({ status }) => status === 'pending'),
-        ...previous.filter(({ id }) => !ids.has(id)),
+        ...Array.from(recorded.values()).filter(({ status }) => includeFinished || status === 'pending'),
+        ...previous.filter(({ id }) => !recorded.has(id)),
     ]);
 }
 
-async function loadActivity(identity: number, activation: number, includeFinished = false): Promise<void> {
-    const version = activityVersion;
-    const results = await listSourceCopies(identity);
-    if (activation === session && version === activityVersion && identity === accountId) {
-        sourceCopyActivity.set(includeFinished ? results : results.filter(({ status }) => status === 'pending'));
+function remember(results: readonly SourceCopyResult[], includeFinished = false): void {
+    for (const changed of activityReads) {
+        for (const { id } of results) changed.add(id);
+    }
+    mergeActivity(results, includeFinished);
+}
+
+async function loadActivity(identity: number, activation: number, batch?: { driveId: number; id: string }): Promise<void> {
+    // Keep updates made during the read, including completed receipts removed
+    // from the list, while still admitting unrelated receipts in the response.
+    const changed = new Set<string>();
+    const clearVersion = activityClearVersion;
+    activityReads.add(changed);
+    try {
+        const results = await (batch
+            ? listSourceCopyBatch(identity, batch.driveId, batch.id)
+            : listSourceCopies(identity));
+        activityReads.delete(changed);
+        if (activation !== session || identity !== accountId) return;
+        const unchanged = results.filter(({ id }) => !changed.has(id));
+        if (batch) {
+            remember(unchanged, clearVersion === activityClearVersion);
+            if (unchanged.some(({ status }) => status === 'saved')) invalidateFolderIndex(batch.driveId);
+        } else {
+            mergeActivity(unchanged.filter(({ status }) => status === 'pending'));
+        }
+    } finally {
+        activityReads.delete(changed);
     }
 }
 
@@ -95,6 +118,7 @@ export function activateSourceCopies(): () => void {
         active = false;
         accountId = 0;
         dialogVersion += 1;
+        activityReads.clear();
         sourceCopyDialog.set(null);
         sourceCopyActivity.set([]);
         activeCopyChecks.set(new Set());
@@ -230,6 +254,7 @@ export async function confirmSourceCopy(): Promise<void> {
     if (current?.stage !== 'ready' || current.browseFailed || !current.driveId || current.items.some(({ name }) => !name.trim())) return;
     const version = dialogVersion;
     const activation = session;
+    let batchId: string | undefined;
     updateDialog({ stage: 'checking', error: '' });
     try {
         const names = await previewSourceCopyNames(current.items.map(({ name }) => name));
@@ -242,19 +267,28 @@ export async function confirmSourceCopy(): Promise<void> {
             });
             return;
         }
+        batchId = crypto.randomUUID();
         updateDialog({ stage: 'saving' });
-        const results = await saveSourceCopies(current.accountId, current.driveId, destination(current.path), current.items, true);
-        if (activation !== session) return;
+        const { results, notStarted } = await saveSourceCopies(current.accountId, current.driveId, destination(current.path), current.items, true, batchId);
+        if (activation !== session || current.accountId !== accountId) return;
+        if (notStarted) {
+            if (stillOpen(version)) updateDialog({ stage: 'ready', stopping: false, error: humanizeBackendError(notStarted) });
+            return;
+        }
         remember(results);
         if (results.some(({ status }) => status === 'saved')) invalidateFolderIndex(current.driveId);
         if (stillOpen(version)) updateDialog({ stage: 'done', stopping: false, results });
     } catch (error) {
         if (!stillOpen(version)) return;
-        const wasSaving = get(sourceCopyDialog)?.stage === 'saving';
-        // A lost call response can hide a committed save. Surface its journal
-        // in Activity and keep the dialog from starting a second publication.
-        updateDialog({ stage: wasSaving ? 'done' : 'ready', stopping: false, error: humanizeBackendError(error) });
-        if (wasSaving) void loadActivity(current.accountId, activation, true).catch(() => {});
+        const message = humanizeBackendError(error);
+        if (!batchId) {
+            updateDialog({ stage: 'ready', stopping: false, error: message });
+            return;
+        }
+        // A lost response can follow publication. Keep the picker from
+        // submitting another batch and recover only this batch's receipts.
+        updateDialog({ stage: 'done', stopping: false, error: message });
+        void loadActivity(current.accountId, activation, { driveId: current.driveId, id: batchId }).catch(() => {});
     }
 }
 
@@ -291,10 +325,11 @@ export async function checkSourceCopy(id: string): Promise<void> {
     const current = get(sourceCopyActivity).find((result) => result.id === id);
     if (!active || !accountId || current?.status !== 'pending' || get(activeCopyChecks).has(id)) return;
     const activation = session;
+    const identity = accountId;
     activeCopyChecks.update((previous) => new Set([...previous, id]));
     try {
-        const result = await retrySourceCopy(accountId, id);
-        if (activation !== session) return;
+        const result = await retrySourceCopy(identity, id);
+        if (activation !== session || identity !== accountId) return;
         remember([result]);
         if (result.status === 'saved') {
             const drive = state.channels.find(({ kind }) => kind === 'personal');
@@ -311,6 +346,6 @@ export async function checkSourceCopy(id: string): Promise<void> {
 }
 
 export function clearSourceCopyHistory(): void {
-    activityVersion += 1;
+    activityClearVersion += 1;
     sourceCopyActivity.update((results) => results.filter(({ status }) => status === 'pending'));
 }

@@ -24,6 +24,7 @@ type sourceCopyJob struct {
 	Result    SourceCopyResult
 	Source    channelsource.CopySource
 	ChannelID int64
+	BatchID   string
 	StartedAt int64
 
 	Parts []sourceCopyPart
@@ -81,7 +82,8 @@ func (s *Service) ensureSourceCopyJournal(ctx context.Context) error {
 			candidate TEXT NOT NULL DEFAULT '',
 			commit_id INTEGER NOT NULL DEFAULT 0,
 			cleaning_up INTEGER NOT NULL DEFAULT 0,
-			body_parts TEXT NOT NULL DEFAULT ''
+			body_parts TEXT NOT NULL DEFAULT '',
+			batch_id TEXT NOT NULL DEFAULT ''
 		);
 		CREATE INDEX IF NOT EXISTS source_copy_jobs_by_scope
 			ON source_copy_jobs (account_id, channel_id, status, started_at);
@@ -89,10 +91,11 @@ func (s *Service) ensureSourceCopyJournal(ctx context.Context) error {
 	if err != nil {
 		return fmt.Errorf("open local save history: %w", err)
 	}
-	var hasParts bool
-	err = tx.QueryRowContext(ctx, `SELECT EXISTS (
-		SELECT 1 FROM pragma_table_info('source_copy_jobs') WHERE name='body_parts'
-	)`).Scan(&hasParts)
+	var hasParts, hasBatch bool
+	err = tx.QueryRowContext(ctx, `SELECT
+		EXISTS (SELECT 1 FROM pragma_table_info('source_copy_jobs') WHERE name='body_parts'),
+		EXISTS (SELECT 1 FROM pragma_table_info('source_copy_jobs') WHERE name='batch_id')
+	`).Scan(&hasParts, &hasBatch)
 	if err != nil {
 		return fmt.Errorf("read local save history version: %w", err)
 	}
@@ -101,10 +104,19 @@ func (s *Service) ensureSourceCopyJournal(ctx context.Context) error {
 			return fmt.Errorf("upgrade local save history: %w", err)
 		}
 	}
+	if !hasBatch {
+		if _, err := tx.ExecContext(ctx, `ALTER TABLE source_copy_jobs ADD COLUMN batch_id TEXT NOT NULL DEFAULT ''`); err != nil {
+			return fmt.Errorf("upgrade local save batch history: %w", err)
+		}
+	}
+	if _, err := tx.ExecContext(ctx, `CREATE INDEX IF NOT EXISTS source_copy_jobs_by_batch
+		ON source_copy_jobs (account_id, channel_id, batch_id) WHERE batch_id <> ''`); err != nil {
+		return fmt.Errorf("index local save batches: %w", err)
+	}
 	return tx.Commit()
 }
 
-func (s *Service) createSourceCopyJobs(ctx context.Context, channelID, accountID int64, parent string, items []SourceCopyInput) ([]sourceCopyJob, error) {
+func (s *Service) createSourceCopyJobs(ctx context.Context, channelID, accountID int64, parent string, items []SourceCopyInput, batchID string) ([]sourceCopyJob, error) {
 	if err := s.ensureSourceCopyJournal(ctx); err != nil {
 		return nil, err
 	}
@@ -113,12 +125,24 @@ func (s *Service) createSourceCopyJobs(ctx context.Context, channelID, accountID
 		return nil, err
 	}
 	defer tx.Rollback()
+	var exists bool
+	err = tx.QueryRowContext(ctx, `
+		SELECT EXISTS (SELECT 1 FROM source_copy_jobs
+		WHERE channel_id=? AND account_id=? AND batch_id=? AND batch_id<>'')
+	`, channelID, accountID, batchID).Scan(&exists)
+	if err != nil {
+		return nil, fmt.Errorf("check local save batch: %w", err)
+	}
+	if exists {
+		return nil, errors.New("This copy batch is already recorded. Check its results in Activity")
+	}
 	jobs := make([]sourceCopyJob, 0, len(items))
 	for _, item := range items {
 		job := sourceCopyJob{
 			Result:    SourceCopyResult{ID: projection.NewUploadUUID(), Name: item.Name, ParentID: parent, Status: sourceCopyPending},
 			Source:    item.Source,
 			ChannelID: channelID,
+			BatchID:   batchID,
 			StartedAt: s.now().Unix(),
 		}
 		if job.Result.Name != "" {
@@ -126,10 +150,10 @@ func (s *Service) createSourceCopyJobs(ctx context.Context, channelID, accountID
 		}
 		_, err := tx.ExecContext(ctx, `
 			INSERT INTO source_copy_jobs(id, channel_id, account_id, peer_kind, peer_id, generation,
-				message_id, identity, parent_id, started_at, name, status)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+				message_id, identity, parent_id, started_at, name, status, batch_id)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		`, job.Result.ID, channelID, accountID, job.Source.PeerKind, job.Source.PeerID, job.Source.Generation,
-			job.Source.MsgID, job.Source.Identity, parent, job.StartedAt, job.Result.Name, job.Result.Status)
+			job.Source.MsgID, job.Source.Identity, parent, job.StartedAt, job.Result.Name, job.Result.Status, batchID)
 		if err != nil {
 			return nil, fmt.Errorf("record selected Telegram file: %w", err)
 		}
@@ -144,7 +168,7 @@ func (s *Service) createSourceCopyJobs(ctx context.Context, channelID, accountID
 const sourceCopyJobColumns = `
 	id, channel_id, account_id, peer_kind, peer_id, generation, message_id, identity,
 	parent_id, started_at, name, status, status_message, file_id,
-	document_id, size, body_id, attempt, candidate, commit_id, cleaning_up, body_parts
+	document_id, size, body_id, attempt, candidate, commit_id, cleaning_up, body_parts, batch_id
 `
 
 func scanSourceCopyJob(row interface{ Scan(...any) error }) (sourceCopyJob, error) {
@@ -155,7 +179,7 @@ func scanSourceCopyJob(row interface{ Scan(...any) error }) (sourceCopyJob, erro
 		&job.Result.ID, &job.ChannelID, &job.Source.AccountID, &job.Source.PeerKind, &job.Source.PeerID,
 		&job.Source.Generation, &job.Source.MsgID, &job.Source.Identity, &job.Result.ParentID, &job.StartedAt,
 		&job.Result.Name, &job.Result.Status, &job.Result.Message, &job.Result.FileID,
-		&singleton.DocumentID, &singleton.Size, &singleton.BodyID, &job.Attempt, &job.Candidate, &job.CommitID, &job.CleaningUp, &parts,
+		&singleton.DocumentID, &singleton.Size, &singleton.BodyID, &job.Attempt, &job.Candidate, &job.CommitID, &job.CleaningUp, &parts, &job.BatchID,
 	)
 	if err != nil {
 		return job, err
@@ -203,6 +227,22 @@ func (s *Service) listSourceCopyJobs(ctx context.Context, channelID, accountID i
 		)
 		ORDER BY rowid DESC
 	`, channelID, accountID, channelID, accountID)
+	return readSourceCopyResults(rows, err)
+}
+
+func (s *Service) listSourceCopyBatch(ctx context.Context, channelID, accountID int64, batchID string) ([]SourceCopyResult, error) {
+	if err := s.ensureSourceCopyJournal(ctx); err != nil {
+		return nil, err
+	}
+	rows, err := s.DB.QueryContext(ctx, `
+		SELECT id, name, parent_id, status, file_id, status_message, candidate FROM source_copy_jobs
+		WHERE channel_id=? AND account_id=? AND batch_id=? AND batch_id<>''
+		ORDER BY rowid
+	`, channelID, accountID, batchID)
+	return readSourceCopyResults(rows, err)
+}
+
+func readSourceCopyResults(rows *sql.Rows, err error) ([]SourceCopyResult, error) {
 	if err != nil {
 		return nil, err
 	}

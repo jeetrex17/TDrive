@@ -54,6 +54,7 @@ export type {
     SafeAreaInsets,
     SelfUser,
     SourceCopyFolderPage,
+    SourceCopySaveResponse,
     TDriveFile,
     TrashEntry,
     UploadResult

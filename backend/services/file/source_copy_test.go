@@ -25,7 +25,7 @@ func TestSourceCopyPublishesOrderedFileAndKeepsBothNames(t *testing.T) {
 		})
 		telegram.beforeCommit = nil
 	}
-	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{sourceCopyTestInput()}, deps)
+	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{sourceCopyTestInput()}, deps, projection.NewUploadUUID())
 	if err != nil || len(results) != 1 {
 		t.Fatalf("start source copy = %+v, %v", results, err)
 	}
@@ -48,7 +48,7 @@ func TestSourceCopyPublishesOrderedFileAndKeepsBothNames(t *testing.T) {
 func TestSourceCopyRecoversAcceptedBodyAfterSourceDisconnect(t *testing.T) {
 	svc, telegram, deps := newSourceCopyFixture(t)
 	telegram.loseBodyReceipt = true
-	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{sourceCopyTestInput()}, deps)
+	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{sourceCopyTestInput()}, deps, projection.NewUploadUUID())
 	if err != nil || len(results) != 1 || results[0].Status != "pending" {
 		t.Fatalf("uncertain body = %+v, %v", results, err)
 	}
@@ -74,7 +74,7 @@ func TestSourceCopyRecoversAcceptedBodyAfterSourceDisconnect(t *testing.T) {
 func TestSourceCopyRecoversAcceptedCommitWithoutRepublishing(t *testing.T) {
 	svc, telegram, deps := newSourceCopyFixture(t)
 	telegram.loseCommitReceipt = true
-	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{sourceCopyTestInput()}, deps)
+	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{sourceCopyTestInput()}, deps, projection.NewUploadUUID())
 	if err != nil || len(results) != 1 || results[0].Status != "pending" {
 		t.Fatalf("uncertain commit = %+v, %v", results, err)
 	}
@@ -87,7 +87,7 @@ func TestSourceCopyRecoversAcceptedCommitWithoutRepublishing(t *testing.T) {
 func TestSourceCopyAfterUncertainWriteStillRequiresSourceAccessToResend(t *testing.T) {
 	svc, telegram, deps := newSourceCopyFixture(t)
 	telegram.unknownBodyWithoutPublish = true
-	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{sourceCopyTestInput()}, deps)
+	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{sourceCopyTestInput()}, deps, projection.NewUploadUUID())
 	if err != nil || len(results) != 1 || results[0].Status != "pending" {
 		t.Fatalf("uncertain body = %+v, %v", results, err)
 	}
@@ -104,7 +104,7 @@ func TestSourceCopyAfterUncertainWriteStillRequiresSourceAccessToResend(t *testi
 func TestSourceCopyRetriesMissingBodyWithTheOriginalRandomID(t *testing.T) {
 	svc, telegram, deps := newSourceCopyFixture(t)
 	telegram.unknownBodyWithoutPublish = true
-	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{sourceCopyTestInput()}, deps)
+	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{sourceCopyTestInput()}, deps, projection.NewUploadUUID())
 	if err != nil || len(results) != 1 || results[0].Status != "pending" {
 		t.Fatalf("uncertain body = %+v, %v", results, err)
 	}
@@ -124,7 +124,7 @@ func TestSourceCopyRetriesMissingBodyWithTheOriginalRandomID(t *testing.T) {
 
 func TestSourceCopyReplaysInFreshMyDriveWithoutItsSourceOrJournal(t *testing.T) {
 	svc, telegram, deps := newSourceCopyFixture(t)
-	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{sourceCopyTestInput()}, deps)
+	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{sourceCopyTestInput()}, deps, projection.NewUploadUUID())
 	if err != nil || len(results) != 1 || results[0].Status != "saved" {
 		t.Fatalf("copy = %+v, %v", results, err)
 	}
@@ -166,7 +166,7 @@ func TestSourceCopyCancellationStopsNewFilesAndKeepsUncertainReceipt(t *testing.
 	telegram.loseBodyReceipt = true
 	second := sourceCopyTestInput()
 	second.Source.MsgID = 32
-	results, err := svc.StartSourceCopies(ctx, personalChannelID, 7, "", []SourceCopyInput{sourceCopyTestInput(), second}, deps)
+	results, err := svc.StartSourceCopies(ctx, personalChannelID, 7, "", []SourceCopyInput{sourceCopyTestInput(), second}, deps, projection.NewUploadUUID())
 	if err != nil || len(results) != 2 || results[0].Status != "pending" || results[1].Status != "canceled" {
 		t.Fatalf("canceled batch = %+v, %v", results, err)
 	}
@@ -189,7 +189,7 @@ func TestSourceCopyDeletedFolderCleansOnlyOwnedDestinationBody(t *testing.T) {
 		})
 		telegram.beforeCommit = nil
 	}
-	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, folder, []SourceCopyInput{sourceCopyTestInput()}, deps)
+	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, folder, []SourceCopyInput{sourceCopyTestInput()}, deps, projection.NewUploadUUID())
 	if err != nil || len(results) != 1 || results[0].Status != "failed" {
 		t.Fatalf("deleted folder result = %+v, %v", results, err)
 	}
@@ -202,10 +202,10 @@ func TestSourceCopyDeletedFolderCleansOnlyOwnedDestinationBody(t *testing.T) {
 func TestSourceCopyRejectsWrongAccountAndNonpersonalTarget(t *testing.T) {
 	svc, telegram, deps := newSourceCopyFixture(t)
 	items := []SourceCopyInput{sourceCopyTestInput()}
-	if _, err := svc.StartSourceCopies(t.Context(), personalChannelID, 8, "", items, deps); err == nil {
+	if _, err := svc.StartSourceCopies(t.Context(), personalChannelID, 8, "", items, deps, projection.NewUploadUUID()); err == nil {
 		t.Fatal("wrong account should fail")
 	}
-	if _, err := svc.StartSourceCopies(t.Context(), sharedChannelID, 7, "", items, deps); err == nil {
+	if _, err := svc.StartSourceCopies(t.Context(), sharedChannelID, 7, "", items, deps, projection.NewUploadUUID()); err == nil {
 		t.Fatal("shared target should fail")
 	}
 	if telegram.bodyCalls != 0 || len(telegram.SentControls()) != 0 {
@@ -230,7 +230,7 @@ func TestSourceCopySharedMultipartReconcilesAcceptedPartsAfterRestart(t *testing
 			telegram.loseBodyReceipt = true
 		}
 	}
-	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{input}, deps)
+	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{input}, deps, projection.NewUploadUUID())
 	if err != nil || len(results) != 1 || results[0].Status != "pending" || telegram.bodyCalls != 2 {
 		t.Fatalf("lost second receipt = %+v, %v, %d sends", results, err, telegram.bodyCalls)
 	}
@@ -272,7 +272,7 @@ func TestSourceCopySharedMultipartRetriesOnlyMissingPart(t *testing.T) {
 			telegram.unknownBodyWithoutPublish = true
 		}
 	}
-	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{input}, deps)
+	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{input}, deps, projection.NewUploadUUID())
 	if err != nil || len(results) != 1 || results[0].Status != sourceCopyPending || telegram.bodyCalls != 2 {
 		t.Fatalf("uncertain second body = %+v, %v, %d sends", results, err, telegram.bodyCalls)
 	}
@@ -294,7 +294,7 @@ func TestSourceCopySharedMultipartRevokedSourceCleansKnownPrefix(t *testing.T) {
 			Kind: tgclient.PeerSupergroup, ID: sharedChannelID, AccessHash: 88, Title: "Shared", Protected: true,
 		})
 	}
-	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{input}, deps)
+	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{input}, deps, projection.NewUploadUUID())
 	if err != nil || len(results) != 1 || results[0].Status != sourceCopyFailed || telegram.bodyCalls != 1 {
 		t.Fatalf("revoked source result = %+v, %v, %d sends", results, err, telegram.bodyCalls)
 	}
@@ -322,7 +322,7 @@ func TestSourceCopySharedMultipartDeletedFolderCleansOnlyDestinationParts(t *tes
 			})
 		}
 	}
-	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, folder, []SourceCopyInput{input}, deps)
+	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, folder, []SourceCopyInput{input}, deps, projection.NewUploadUUID())
 	if err != nil || len(results) != 1 || results[0].Status != sourceCopyFailed {
 		t.Fatalf("deleted folder result = %+v, %v", results, err)
 	}
@@ -395,7 +395,7 @@ func TestSourceCopyRejectsPersonalDriveAsSharedSourceBeforeSync(t *testing.T) {
 		AccountID: 7, PeerKind: SharedCopyPeerKind, PeerID: personalChannelID, MsgID: 15,
 		Generation: "1", Identity: "managed",
 	}}
-	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{input}, deps)
+	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{input}, deps, projection.NewUploadUUID())
 	if err != nil || len(results) != 1 || results[0].Status != sourceCopyFailed || telegram.bodyCalls != 0 {
 		t.Fatalf("invalid shared source = %+v, %v, %d sends", results, err, telegram.bodyCalls)
 	}

@@ -134,7 +134,7 @@ test('reduced motion keeps the busy copy sheet reachable after a swipe', async (
     const mock = await bootTDrive(page, {
         ...copyPlans(['recording.mkv']),
         Haptic: resolves(null),
-        SaveSourceCopies: deferred('save', [saved]),
+        SaveSourceCopies: deferred('save', { results: [saved], not_started: '' }),
     }, { url: '/?mobile=ios' });
     await page.getByRole('button', { name: /Switch drive/ }).click();
     await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();

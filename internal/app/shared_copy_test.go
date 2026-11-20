@@ -57,9 +57,10 @@ func TestSharedDriveFileCopiesIntoMyDriveFolder(t *testing.T) {
 			Generation: "0", Identity: files[0].CopyIdentity,
 		},
 	}
-	copies, err := app.drives.SaveSourceCopies(t.Context(), accountID, personalID, parent, []fileservice.SourceCopyInput{item}, true)
-	if err != nil || len(copies) != 1 || copies[0].Status != "saved" || copies[0].FileID <= 0 || copies[0].ParentID != parent {
-		t.Fatalf("copy results = %+v, error = %v", copies, err)
+	response, err := app.drives.SaveSourceCopies(t.Context(), accountID, personalID, parent, []fileservice.SourceCopyInput{item}, true, projection.NewUploadUUID())
+	copies := response.Results
+	if err != nil || response.NotStarted != "" || len(copies) != 1 || copies[0].Status != "saved" || copies[0].FileID <= 0 || copies[0].ParentID != parent {
+		t.Fatalf("save returned %+v, %v", response, err)
 	}
 	if app.engine.ActiveChannelID() != sharedID || len(fake.DeletedBatches()) != 0 {
 		t.Fatal("copy changed the source drive or deleted a message")

@@ -46,7 +46,7 @@ func TestSourceCopyKeepsBodyWhileLaterTrashIsAheadOfSync(t *testing.T) {
 			}
 			deps.Sync = tdsync.NewEngine(svc.DB, history, svc.Peers).EnsureAuthoritative
 
-			results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, folder, []SourceCopyInput{sourceCopyTestInput()}, deps)
+			results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, folder, []SourceCopyInput{sourceCopyTestInput()}, deps, projection.NewUploadUUID())
 			if err != nil || len(results) != 1 || results[0].Status != sourceCopyPending || len(telegram.DeletedBatches()) != 0 {
 				t.Fatalf("copy before ordered replay = %+v, %v, deleted %v", results, err, telegram.DeletedBatches())
 			}
@@ -88,7 +88,7 @@ func TestSourceCopyWaitsForOrderedReplayBeforeResendingUnknownCommit(t *testing.
 	unknown := &sourceCopyUnknownCommit{sourceCopyTelegram: telegram}
 	svc.TG = unknown
 
-	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{sourceCopyTestInput()}, deps)
+	results, err := svc.StartSourceCopies(t.Context(), personalChannelID, 7, "", []SourceCopyInput{sourceCopyTestInput()}, deps, projection.NewUploadUUID())
 	if err != nil || len(results) != 1 || results[0].Status != sourceCopyPending || unknown.commitCalls != 1 {
 		t.Fatalf("original copy = %+v, %v, commit calls %d", results, err, unknown.commitCalls)
 	}
