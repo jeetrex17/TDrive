@@ -2,6 +2,7 @@
 set -euo pipefail
 
 readonly EXIT_DEPLOYMENT_TARGET_INCOMPATIBLE=78
+readonly UNPINNED_ARCHIVE_SHA256=0000000000000000000000000000000000000000000000000000000000000000
 
 if [ "${1:-}" = "--deployment-incompatible-exit-code" ]; then
   printf '%s\n' "$EXIT_DEPLOYMENT_TARGET_INCOMPATIBLE"
@@ -46,6 +47,13 @@ EXPECTED_MPV_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
 if [ -z "$EXPECTED_MPV_VERSION" ]; then
   echo "package-mpv-darwin: expected mpv version is empty" >&2
   exit 1
+fi
+# The CI fallback follows Homebrew. Release and pinned runtimes use the checked-in version.
+if [ "${2:-}" = "--allow-homebrew-fixture" ] &&
+  [ "${TDRIVE_MPV_RUNTIME_PINNED:-}" = "0" ] &&
+  [ "${TDRIVE_MPV_PACKAGE_SOURCE:-}" = "homebrew-ci-system-mpv-not-release-runtime" ] &&
+  [ "${TDRIVE_MPV_ARCHIVE_SHA256:-}" = "$UNPINNED_ARCHIVE_SHA256" ]; then
+  EXPECTED_MPV_VERSION=""
 fi
 
 mkdir -p "$FRAMEWORKS_DIR" "$MEDIA_DIR"
@@ -254,9 +262,11 @@ read_runtime_metadata() {
   local output
   output="$("$mpv_bin" --no-config --version)" || die "could not execute mpv runtime: $mpv_bin"
   tdrive_parse_mpv_metadata "$output" || die "could not read mpv/FFmpeg metadata from $mpv_bin"
-  if [ "$MPV_VERSION" != "$EXPECTED_MPV_VERSION" ]; then
+  if [ -n "$EXPECTED_MPV_VERSION" ] && [ "$MPV_VERSION" != "$EXPECTED_MPV_VERSION" ]; then
     die "mpv version mismatch: expected $EXPECTED_MPV_VERSION, got $MPV_VERSION"
   fi
+  # In fixture mode the first probe establishes the version the bundled copy must report.
+  EXPECTED_MPV_VERSION="$MPV_VERSION"
 }
 
 qualify_runtime() {
@@ -287,7 +297,7 @@ write_runtime_metadata() {
   local ci_fixture release_runtime
   ci_fixture="false"
   release_runtime="true"
-  if [ "$archive_sha256" = "0000000000000000000000000000000000000000000000000000000000000000" ] ||
+  if [ "$archive_sha256" = "$UNPINNED_ARCHIVE_SHA256" ] ||
     printf '%s' "$source_reference" | grep -Fq 'not-release-runtime'; then
     ci_fixture="true"
     release_runtime="false"

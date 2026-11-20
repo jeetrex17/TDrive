@@ -56,4 +56,40 @@ if [ "$generic_status" -eq 0 ] || [ "$generic_status" -eq "$deployment_incompati
   fail "ordinary packaging failure returned reserved status $generic_status"
 fi
 
-printf 'package-mpv-darwin exit-code contract tests passed\n'
+printf '#!/usr/bin/env bash\nprintf "minos 15.0\\n"\n' > "$stub_bin/xcrun"
+printf '#!/usr/bin/env bash\nprintf "%%s:\\n" "$2"\n' > "$stub_bin/otool"
+for command in install_name_tool codesign; do
+  printf '#!/usr/bin/env bash\nexit 0\n' > "$stub_bin/$command"
+done
+chmod 755 "$stub_bin/"*
+cat > "$runtime_root/bin/mpv" <<'EOF'
+#!/usr/bin/env bash
+if [ "${2:-}" = "--version" ]; then
+  printf 'mpv 99.0.0\nFFmpeg version: 9.0.0\n'
+fi
+EOF
+
+export PATH="$stub_bin:$PATH"
+export TDRIVE_MPV_RUNTIME_DIR="$runtime_root"
+export TDRIVE_MPV_RUNTIME_PINNED=0
+export TDRIVE_MPV_PACKAGE_SOURCE=homebrew-ci-system-mpv-not-release-runtime
+export TDRIVE_MPV_ARCHIVE_SHA256=0000000000000000000000000000000000000000000000000000000000000000
+
+if "$PACKAGE_SCRIPT" "$app_path" > "$TMP_ROOT/release.out" 2>&1 ||
+  ! grep -q 'mpv version mismatch' "$TMP_ROOT/release.out"; then
+  cat "$TMP_ROOT/release.out" >&2
+  fail "packaging without the CI flag must enforce the pinned version"
+fi
+if TDRIVE_MPV_RUNTIME_PINNED=1 "$PACKAGE_SCRIPT" "$app_path" --allow-homebrew-fixture > "$TMP_ROOT/pinned.out" 2>&1 ||
+  ! grep -q 'mpv version mismatch' "$TMP_ROOT/pinned.out"; then
+  cat "$TMP_ROOT/pinned.out" >&2
+  fail "the CI flag must not override a pinned runtime"
+fi
+
+"$PACKAGE_SCRIPT" "$app_path" --allow-homebrew-fixture
+manifest="$app_path/Contents/Resources/media/media-runtime.manifest"
+grep -Fxq 'mpv_version=99.0.0' "$manifest" || fail "CI fixture version was not recorded"
+grep -Fxq 'ci_fixture=true' "$manifest" || fail "Homebrew runtime must be marked as a CI fixture"
+grep -Fxq 'release_runtime=false' "$manifest" || fail "Homebrew runtime must not be marked for release"
+
+printf 'package-mpv-darwin contract tests passed\n'
