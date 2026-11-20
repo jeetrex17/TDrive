@@ -26,7 +26,7 @@
         showPostActions,
     } from '../modules/channel-sources';
     import { openSourceCopy } from '../modules/source-copies';
-    import { clearSelection, openSelectedItemsDelete, openSelectedItemsDownload, openSelectedItemsMove } from '../modules/selection';
+    import { clearSelection, trashSelectedItems, openSelectedItemsDownload, openSelectedItemsMove } from '../modules/selection';
     import { chooseFilesForCurrentFolder, chooseFolderForCurrentFolder } from '../modules/transfers';
     import { openNewFolderModal } from '../modules/modals/folder';
     import {
@@ -321,7 +321,7 @@
                         <SelectionBar
                             onDownload={openSelectedItemsDownload}
                             onMove={openSelectedItemsMove}
-                            onDelete={openSelectedItemsDelete}
+                            onDelete={trashSelectedItems}
                             onClear={clearSelection}
                         />
                     {/if}

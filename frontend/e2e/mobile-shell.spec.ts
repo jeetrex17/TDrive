@@ -118,7 +118,7 @@ test('an empty folder offers file upload, folder upload, and folder creation', a
 });
 
 for (const name of ['TDrive-v1.6.0-linux-amd64.zip', 'notes.txt']) {
-    test(`a trailing file swipe keeps ${name} identifiable and confirms Delete`, async ({ page }) => {
+    test(`a trailing file swipe keeps ${name} identifiable and moves it to Trash with Undo`, async ({ page }) => {
         await page.addInitScript(() => history.replaceState(null, '', '/?mobile=android'));
         const mock = await bootTDrive(page, {
             ...overrides,
@@ -128,6 +128,7 @@ for (const name of ['TDrive-v1.6.0-linux-amd64.zip', 'notes.txt']) {
                 size: 63_650_000,
                 encrypted: true,
             })) }),
+            DeleteFile: resolves({ ok: true }),
         });
         const row = page.locator('#file-list .drive-row').filter({ has: page.locator(`[title="${name}"]`) });
         await expect(row).toBeVisible();
@@ -171,15 +172,9 @@ for (const name of ['TDrive-v1.6.0-linux-amd64.zip', 'notes.txt']) {
         await expect(row.locator('.row-more')).toHaveCSS('opacity', '0');
         await row.locator('[data-swipe-action="delete"]').click();
 
-        const confirmation = page.getByRole('dialog', { name: 'Move file to Trash?' });
-        await expect(confirmation).toContainText(name);
-        expect(await mock.calls('DeleteFile')).toHaveLength(0);
-        await confirmation.getByRole('button', { name: 'Cancel' }).click();
-        await expect(confirmation).toBeHidden();
-        await expect(row).toBeVisible();
-        await row.locator('.row-more').focus();
-        await expect(row).not.toHaveClass(/is-swiped/);
-        await expect(row.locator('.row-more')).toHaveCSS('opacity', '1');
+        await expect(page.locator('.toast').filter({ hasText: 'Moved to Trash' }).getByRole('button', { name: 'Undo' })).toBeVisible();
+        expect(await mock.calls('DeleteFile')).toMatchObject([{ args: [101] }]);
+        await expect(page.getByRole('dialog', { name: /Trash/ })).toHaveCount(0);
     });
 }
 

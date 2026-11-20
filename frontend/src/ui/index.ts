@@ -6,7 +6,6 @@ export { default as ContextMenu } from './menus/ContextMenu.svelte';
 export { default as FileList } from './file-list/FileList.svelte';
 export { default as FileState } from './file-list/FileState.svelte';
 export { default as DriveList } from './sidebar/DriveList.svelte';
-export { default as DeleteModal } from './modals/DeleteModal.svelte';
 export { default as EncryptionPasswordModal } from './modals/EncryptionPasswordModal.svelte';
 export { default as EncryptionSettingsModal } from './modals/EncryptionSettingsModal.svelte';
 export { default as EncryptionSetupModal } from './modals/EncryptionSetupModal.svelte';

@@ -22,7 +22,7 @@ vi.mock('./selection', () => ({
     ensureRowSelectedForContextMenu: vi.fn(),
     getSelectionPayload: selectedItems,
 }));
-vi.mock('./modals/delete', () => ({ openDeleteModal: vi.fn() }));
+vi.mock('./modals/delete', () => ({ moveToTrash: vi.fn() }));
 vi.mock('./modals/rename', () => ({ openRenameModal: vi.fn() }));
 vi.mock('./modals/move', () => ({ openMoveModal: vi.fn() }));
 vi.mock('./modals/folder', () => ({ openNewFolderModal: vi.fn() }));
@@ -36,7 +36,7 @@ vi.mock('./app-actions', () => ({ appActions: () => ({ triggerRefresh: vi.fn() }
 vi.mock('../ui/menus/context-menu-store', () => menu);
 
 import { activateContextMenu, showRowContextMenu } from './context-menu';
-import { openDeleteModal } from './modals/delete';
+import { moveToTrash } from './modals/delete';
 import { showFileListRows, showFileListState } from '../ui/file-list/file-list-store';
 import { state } from '../state';
 import type { FileCommandItem, FileListFileRow } from '../ui/file-list/types';
@@ -145,7 +145,7 @@ describe('the row context menu', () => {
                 item.type !== 'divider' && item.label === 'Delete');
         deletion?.action();
 
-        expect(openDeleteModal).toHaveBeenCalledWith(expect.objectContaining({
+        expect(moveToTrash).toHaveBeenCalledWith(expect.objectContaining({
             type: 'file', id: 42, channelId: 5,
         }));
     });

@@ -7,7 +7,7 @@
     import { navigateToIndex } from '../../modules/navigation';
     import { enterPhotos, exitPhotos } from '../../modules/gallery';
     import { closeTrash } from '../../modules/trash/controller';
-    import { clearSelection, openSelectedItemsDelete, openSelectedItemsDownload, openSelectedItemsMove } from '../../modules/selection';
+    import { clearSelection, trashSelectedItems, openSelectedItemsDownload, openSelectedItemsMove } from '../../modules/selection';
     import { selectedSharedDriveCopyAction } from '../../modules/context-menu';
     import { selectionBarState } from '../selection/selection-bar-store';
     import FeatureLayer from '../app/FeatureLayer.svelte';
@@ -273,7 +273,7 @@
                 onDownload={openSelectedItemsDownload}
                 onMove={openSelectedItemsMove}
                 onCopy={selectionCopy?.action}
-                onDelete={openSelectedItemsDelete}
+                onDelete={trashSelectedItems}
                 onClear={clearSelection}
             />
         {/if}

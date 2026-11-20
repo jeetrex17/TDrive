@@ -2,7 +2,7 @@
 
 import { state } from '../state';
 import { getInteractiveFileListRows } from '../ui/file-list/file-list-store';
-import { openDeleteModal } from './modals/delete';
+import { moveToTrash } from './modals/delete';
 import { openMoveModal } from './modals/move';
 import { enqueueDownload, enqueueFolderDownload } from './transfers';
 import { notify } from './notifications';
@@ -309,9 +309,9 @@ export function getSelectionPayload(): FileCommandItem[] {
     return Array.from(state.selectedItems.values(), ({ row: _row, ...payload }) => payload);
 }
 
-export function openSelectedItemsDelete(): void {
+export function trashSelectedItems(): void {
     if (state.selectedItems.size === 0) return;
-    openDeleteModal({ type: 'bulk', items: getSelectionPayload(), parentId: state.currentFolderId });
+    void moveToTrash({ type: 'bulk', items: getSelectionPayload(), parentId: state.currentFolderId });
 }
 
 export function openSelectedItemsMove(): void {

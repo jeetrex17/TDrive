@@ -8,9 +8,9 @@ import { tick } from 'svelte';
 import { get } from 'svelte/store';
 import { breadcrumbPath } from '../ui/chrome/breadcrumb-store';
 import type { ContextMenuDetail } from '../ui/menus/context-menu-store';
-import { clearSelection, deselectRow, extendSelectionToIndex, handleRowSelection, isRowSelected, openSelectedItemsDelete, reconcileSelection, selectAllRows, selectRow, getRowKey } from './selection';
+import { clearSelection, deselectRow, extendSelectionToIndex, handleRowSelection, isRowSelected, trashSelectedItems, reconcileSelection, selectAllRows, selectRow, getRowKey } from './selection';
 import { openRenameModal } from './modals/rename';
-import { openDeleteModal } from './modals/delete';
+import { moveToTrash } from './modals/delete';
 import { openNewFolderModal } from './modals/folder';
 import { notify } from './notifications';
 import { navigateToFolder } from './navigation';
@@ -547,7 +547,7 @@ function deleteRow(row: InteractiveFileListRow) {
     if (isTrashMode()) return;
 
     if (row.kind === "folder") {
-        openDeleteModal({
+        void moveToTrash({
             type: "folder",
             id: row.id,
             name: row.name,
@@ -560,7 +560,7 @@ function deleteRow(row: InteractiveFileListRow) {
         notify({ level: 'info', title: 'You can only delete files you uploaded' });
         return;
     }
-    openDeleteModal({
+    void moveToTrash({
         ...fileCommandFor(row, row.parentId),
         canDelete: row.canDelete,
         channelId: row.channelId,
@@ -1193,7 +1193,7 @@ function handleListKeyDown(e: KeyboardEvent) {
             // A focused row inside a multi-selection deletes the selection,
             // which is what the context menu offers under the same shortcut.
             if (state.selectedItems.size > 1 && isRowSelected(current)) {
-                if (!isTrashMode()) openSelectedItemsDelete();
+                if (!isTrashMode()) trashSelectedItems();
             } else if (currentRow) {
                 deleteRow(currentRow);
             }
