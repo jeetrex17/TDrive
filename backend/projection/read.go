@@ -66,7 +66,7 @@ func ListFolderContentsContext(ctx context.Context, db *sql.DB, channelID int64,
 	if err := validateContext(ctx, "list folder contents"); err != nil {
 		return nil, nil, err
 	}
-	folders, err := listChildFoldersContext(ctx, db, channelID, parentID)
+	folders, err := ListChildFoldersContext(ctx, db, channelID, parentID)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -77,7 +77,11 @@ func ListFolderContentsContext(ctx context.Context, db *sql.DB, channelID int64,
 	return folders, files, nil
 }
 
-func listChildFoldersContext(ctx context.Context, db *sql.DB, channelID int64, parentID string) ([]FolderSlim, error) {
+// ListChildFoldersContext lists only folders in a directory without loading its files.
+func ListChildFoldersContext(ctx context.Context, db *sql.DB, channelID int64, parentID string) ([]FolderSlim, error) {
+	if err := validateContext(ctx, "list child folders"); err != nil {
+		return nil, err
+	}
 	rows, err := db.QueryContext(ctx, `
 		SELECT f.id, d.display_name, f.parent_id, d.revision
 		FROM dirents d
