@@ -11,13 +11,16 @@ const transfers = vi.hoisted(() => ({
     importFolderWithParentID: vi.fn(),
     uploadWithParentID: vi.fn(),
 }));
+const sourceCopies = vi.hoisted(() => ({ openSharedDriveCopy: vi.fn() }));
+const selectedItems = vi.hoisted(() => vi.fn<() => FileCommandItem[]>(() => []));
 
 vi.mock('../api', () => ({ isMobilePlatform: () => false }));
 vi.mock('./transfers', () => transfers);
+vi.mock('./source-copies', () => sourceCopies);
 vi.mock('./selection', () => ({
     clearSelection: vi.fn(),
     ensureRowSelectedForContextMenu: vi.fn(),
-    getSelectionPayload: vi.fn(() => []),
+    getSelectionPayload: selectedItems,
 }));
 vi.mock('./modals/delete', () => ({ openDeleteModal: vi.fn() }));
 vi.mock('./modals/rename', () => ({ openRenameModal: vi.fn() }));
@@ -32,11 +35,11 @@ vi.mock('./media-types', () => ({
 vi.mock('./app-actions', () => ({ appActions: () => ({ triggerRefresh: vi.fn() }) }));
 vi.mock('../ui/menus/context-menu-store', () => menu);
 
-import { showRowContextMenu } from './context-menu';
+import { activateContextMenu, showRowContextMenu } from './context-menu';
 import { openDeleteModal } from './modals/delete';
 import { showFileListRows, showFileListState } from '../ui/file-list/file-list-store';
 import { state } from '../state';
-import type { FileListFileRow } from '../ui/file-list/types';
+import type { FileCommandItem, FileListFileRow } from '../ui/file-list/types';
 
 let list: HTMLElement | null = null;
 
@@ -88,13 +91,19 @@ function shownLabels(): string[] {
 beforeEach(() => {
     vi.clearAllMocks();
     state.activeChannel = { id: 9, title: 'Another drive', kind: 'personal' };
+    state.channels = [{ id: 5, title: 'Shared files', kind: 'shared', isActive: false, inviteLink: '' }];
+    state.myUserID = 7;
     state.currentFolderId = '';
+    selectedItems.mockReturnValue([]);
 });
 
 afterEach(() => {
     showFileListState({ stateKind: 'loading', title: 'Loading files' });
     list?.remove();
     list = null;
+    state.channels = [];
+    state.myUserID = 0;
+    state.selectedItems.clear();
 });
 
 describe('the row context menu', () => {
@@ -139,6 +148,64 @@ describe('the row context menu', () => {
         expect(openDeleteModal).toHaveBeenCalledWith(expect.objectContaining({
             type: 'file', id: 42, channelId: 5,
         }));
+    });
+
+    it('copies a Shared Drive member’s file using its captured drive and revision', () => {
+        showFileListRows([publishedFileRow({ channelId: 5, revision: 3, canDelete: false, canRename: false })]);
+        showRowContextMenu(renderRow('file:42'), 10, 20);
+        const copy = (menu.showContextMenu.mock.calls[0]?.[2] as ContextMenuItem[])
+            .find((item): item is Extract<ContextMenuItem, { label: string }> =>
+                item.type !== 'divider' && item.label === 'Copy to My Drive…');
+        expect(copy).toBeDefined();
+        copy?.action();
+
+        expect(sourceCopies.openSharedDriveCopy).toHaveBeenCalledWith(7, { id: 5, title: 'Shared files' }, [
+            { id: 42, name: 'notes.txt', revision: 3, identity: 'managed' },
+        ]);
+    });
+
+    it.each([
+        { channelId: 9, revision: 2 },
+        { channelId: 5, revision: 2, encrypted: true },
+        { channelId: 5, revision: 0 },
+        { channelId: 5, source: 'tg' } as const,
+    ])('withholds shared copying where the row has no usable shared identity', (overrides) => {
+        showFileListRows([publishedFileRow(overrides)]);
+        showRowContextMenu(renderRow('file:42'), 10, 20);
+        expect(shownLabels()).not.toContain('Copy to My Drive…');
+    });
+
+    it('keeps managed and forwarded identities in a bulk copy', () => {
+        const notes = publishedFileRow({ id: '42', revision: 3 });
+        const forward = publishedFileRow({
+            id: '43', key: 'file:tg:43', selectionKey: 'file:43', name: 'forwarded.pdf',
+            source: 'tg', copyIdentity: 'raw:forwarded-file',
+        });
+        showFileListRows([notes, forward]);
+        const items: FileCommandItem[] = [
+            { type: 'file', id: 42, name: notes.name, source: 'fs', channelId: 5 },
+            { type: 'file', id: 43, name: forward.name, source: 'tg', size: 2048, channelId: 5, parentId: '' },
+        ];
+        selectedItems.mockReturnValue(items);
+        state.selectedItems.set(notes.selectionKey, items[0]);
+        state.selectedItems.set(forward.selectionKey, items[1]);
+        const row = renderRow(notes.selectionKey);
+        const dispose = activateContextMenu();
+        try {
+            row.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+        } finally {
+            dispose();
+        }
+        const copy = (menu.showContextMenu.mock.calls[0]?.[2] as ContextMenuItem[])
+            .find((item): item is Extract<ContextMenuItem, { label: string }> =>
+                item.type !== 'divider' && item.label === 'Copy 2 files to My Drive…');
+        expect(copy).toBeDefined();
+        copy?.action();
+
+        expect(sourceCopies.openSharedDriveCopy).toHaveBeenCalledWith(7, { id: 5, title: 'Shared files' }, [
+            { id: 42, name: 'notes.txt', revision: 3, identity: 'managed' },
+            { id: 43, name: 'forwarded.pdf', revision: 0, identity: 'raw:forwarded-file' },
+        ]);
     });
 
     it('opens nothing for a row the list has already dropped', () => {

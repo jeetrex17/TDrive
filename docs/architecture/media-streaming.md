@@ -110,6 +110,12 @@ the app routes all source actions through the typed methods and table. This
 keeps the existing channel API compatible while the migration preserves its
 connections.
 
+Desktop and mobile can organize connected sources in named local groups.
+Membership is keyed by signed-in account and typed Telegram peer. Moving a
+source between groups does not change Telegram membership or topics.
+Disconnecting a source removes its group assignment when the removal becomes
+final.
+
 [`channelsource.Service`](../../backend/channelsource/sources.go) pages newest
 first through at most four batches of 100 Telegram messages. Empty batches
 end history; short batches do not, because Telegram omits deleted and withheld
@@ -474,7 +480,9 @@ sequenceDiagram
     UI->>App: AttachNativeMedia(existing token, geometry)
     App->>MPV: Open existing loopback URL
     App-->>UI: Same token and native state
-    UI->>UI: Install adapter, restore intent, remember preference
+    UI->>UI: Install adapter and restore intent
+    MPV-->>UI: File ready for playback
+    UI->>UI: Remember native preference
     Note over UI,MPV: Stale or failed handoffs close the resource they acquired
 ```
 
@@ -485,6 +493,12 @@ is installed. HTML close removes listeners/source, destroys hls.js and closes
 the session; native close also shuts down the native player. Closing a session
 cancels range work, thumbnail workers and decryptors. Vault lock closes encrypted
 sessions while preserving unrelated clear-media sessions.
+
+The controller remembers native playback for a direct webview format once mpv
+reports a playable state. The bounded cache keys each preference by account,
+drive or typed Telegram peer, and file ID, name and size. If the native route
+fails, Retry opens the same file in the webview even when local storage cannot
+remove the saved preference.
 
 ## Remembered playback and mobile controls
 

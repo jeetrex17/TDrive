@@ -166,7 +166,7 @@ function renderSearchResults(results: SearchHit[], query: string) {
                     className: "play-video",
                     title: "Play",
                     label: "Play video",
-                    onClick: () => { void appActions().playVideo({ id, name, size, encrypted }); },
+                    onClick: () => { void appActions().playVideo({ id, channelId: sourceChannelId, name, size, encrypted }); },
                 });
             } else if (canOpenFileViewer(name)) {
                 actions.push({
@@ -192,6 +192,8 @@ function renderSearchResults(results: SearchHit[], query: string) {
                 uploaderID: Number(result.uploaderId || 0),
                 date: Number(result.uploadTime || 0),
                 encrypted,
+                ...(result.revision !== undefined ? { revision: result.revision } : {}),
+                ...(result.copyIdentity ? { copyIdentity: result.copyIdentity } : {}),
                 canDelete: ownerOnly,
                 canRename: ownerOnly,
             }, String(result.parentId || ""), {
@@ -202,7 +204,7 @@ function renderSearchResults(results: SearchHit[], query: string) {
                 actions,
                 onDoubleClick: () => {
                     if (isVideoFile(name)) {
-                        void appActions().playVideo({ id, name, size, encrypted });
+                        void appActions().playVideo({ id, channelId: sourceChannelId, name, size, encrypted });
                         return;
                     }
                     if (canOpenFileViewer(name)) {
@@ -221,7 +223,7 @@ function renderSearchResults(results: SearchHit[], query: string) {
                         if (state.selectedItems.size === 0) {
                             event.stopPropagation();
                             if (isVideoFile(name)) {
-                                void appActions().playVideo({ id, name, size, encrypted });
+                                void appActions().playVideo({ id, channelId: sourceChannelId, name, size, encrypted });
                             } else if (canOpenFileViewer(name)) {
                                 void appActions().openFile({ id, name, size, encrypted });
                             } else {
@@ -377,6 +379,7 @@ export async function runGlobalSearch() {
                 plaintextSize: 0,
                 path: 'My Drive',
                 source: 'tg',
+                ...(file.copyIdentity ? { copyIdentity: file.copyIdentity } : {}),
             }));
 
         renderSearchResults([...fs, ...tgMatches], query);

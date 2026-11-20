@@ -5,5 +5,7 @@ export type {
     ImportPlan,
     ResumableDownload,
     ResumableUpload,
+    SourceCopyInput,
+    SourceCopyResult,
     UploadFailure
 } from "./models.js";

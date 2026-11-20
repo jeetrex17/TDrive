@@ -8,6 +8,7 @@
     import { enterPhotos, exitPhotos } from '../../modules/gallery';
     import { closeTrash } from '../../modules/trash/controller';
     import { clearSelection, openSelectedItemsDelete, openSelectedItemsDownload, openSelectedItemsMove } from '../../modules/selection';
+    import { selectedSharedDriveCopyAction } from '../../modules/context-menu';
     import { selectionBarState } from '../selection/selection-bar-store';
     import FeatureLayer from '../app/FeatureLayer.svelte';
     import PhotosModeBar from '../gallery/PhotosModeBar.svelte';
@@ -33,6 +34,7 @@
     import { sourceKey } from '../channels/channel-model';
     import { closeChannel, openChannel } from '../channels/channel-store';
     import { openChannelPost, openInTelegram, recentChannelPages, showChannelActions, showPostActions } from '../../modules/channel-sources';
+    import { openSourceCopy } from '../../modules/source-copies';
     import { listChannelSourceTopics, listChannelMedia } from '../../api';
 
     interface Props {
@@ -44,6 +46,9 @@
     // Selecting rows swaps the tab bar for the selection bar (spec 2.5); the
     // count comes from the shared selection store the controller feeds.
     const selecting = $derived(Boolean($selectionBarState.active || $selectionBarState.count > 0));
+    const selectionCopy = $derived(
+        $selectionBarState.count > 0 && $fileListView.kind === 'rows' ? selectedSharedDriveCopyAction() : undefined,
+    );
     // A Telegram channel is a place the Files tab shows, like the trash, but
     // it brings its own top bar and list, so it replaces the drive's.
     const inChannel = $derived($activeTab === 'files' && $openChannel !== null);
@@ -235,6 +240,7 @@
                         onOpenTelegram={openInTelegram}
                         onActions={showChannelActions}
                         onPostActions={showPostActions}
+                        onSavePosts={openSourceCopy}
                         onBack={closeChannel}
                         recentPages={recentChannelPages}
                     />
@@ -266,6 +272,7 @@
             <SelectionBar
                 onDownload={openSelectedItemsDownload}
                 onMove={openSelectedItemsMove}
+                onCopy={selectionCopy?.action}
                 onDelete={openSelectedItemsDelete}
                 onClear={clearSelection}
             />

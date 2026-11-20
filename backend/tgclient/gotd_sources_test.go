@@ -2,9 +2,10 @@ package tgclient
 
 import (
 	"context"
-	"github.com/gotd/td/bin"
+	"errors"
 	"testing"
 
+	"github.com/gotd/td/bin"
 	tgpeer "github.com/gotd/td/telegram/message/peer"
 	"github.com/gotd/td/tg"
 )
@@ -40,6 +41,66 @@ func TestDialogSourcesClassifyUserBotGroupSupergroupChannelAndSelf(t *testing.T)
 		if !ok || actual.Kind != test.kind || actual.ID != test.id || actual.Protected != test.protected || actual.Forum != (test.kind == PeerSupergroup) {
 			t.Errorf("%T = %#v, ok %v", test.input, actual, ok)
 		}
+	}
+}
+
+func TestJoinedDrivePeerUsesLiveChannelKindAndMembership(t *testing.T) {
+	peer := InputPeer{ChannelID: 31, AccessHash: 88}
+	broadcast := tg.Channel{ID: peer.ChannelID, Broadcast: true, Photo: &tg.ChatPhotoEmpty{}}
+	broadcast.SetAccessHash(99)
+	broadcast.SetUsername("shared")
+	supergroup := broadcast
+	supergroup.Broadcast, supergroup.Megagroup = false, true
+	left := broadcast
+	left.Left = true
+	minimal := broadcast
+	minimal.Min = true
+	other := broadcast
+	other.ID++
+
+	for _, test := range []struct {
+		name string
+		chat tg.ChatClass
+		kind PeerKind
+	}{
+		{"broadcast member", &broadcast, PeerChannel},
+		{"supergroup member", &supergroup, PeerSupergroup},
+		{"left public broadcast", &left, ""},
+		{"partial channel", &minimal, ""},
+		{"different channel", &other, ""},
+		{"forbidden channel", &tg.ChannelForbidden{ID: peer.ChannelID, Broadcast: true}, ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			calls := 0
+			api := tg.NewClient(invokerFunc(func(_ context.Context, input bin.Encoder, output bin.Decoder) error {
+				calls++
+				req, ok := input.(*tg.ChannelsGetChannelsRequest)
+				if !ok || len(req.ID) != 1 {
+					t.Fatalf("channel lookup request = %#v", input)
+				}
+				if id, ok := req.ID[0].(*tg.InputChannel); !ok || id.ChannelID != peer.ChannelID || id.AccessHash != peer.AccessHash {
+					t.Fatalf("channel lookup peer = %#v", req.ID[0])
+				}
+				var response bin.Buffer
+				if err := (&tg.MessagesChats{Chats: []tg.ChatClass{test.chat}}).Encode(&response); err != nil {
+					return err
+				}
+				return output.Decode(&response)
+			}))
+			source, err := requestJoinedDrivePeer(t.Context(), api, peer)
+			if calls != 1 {
+				t.Fatalf("channel lookups = %d, want 1", calls)
+			}
+			if test.kind == "" {
+				if !errors.Is(err, ErrChannelUnavailable) {
+					t.Fatalf("unavailable drive = %+v, %v", source, err)
+				}
+				return
+			}
+			if err != nil || source.Kind != test.kind || source.ID != peer.ChannelID || source.AccessHash != broadcast.AccessHash {
+				t.Fatalf("joined drive = %+v, %v, want %s", source, err, test.kind)
+			}
+		})
 	}
 }
 

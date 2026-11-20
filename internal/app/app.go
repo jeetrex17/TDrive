@@ -186,12 +186,13 @@ func (a *App) SetActiveChannel(channelID int64) error {
 }
 
 type TDriveFile struct {
-	ID         int    `json:"id"`
-	Name       string `json:"name"`
-	Size       int64  `json:"size"`
-	AccessHash int64  `json:"access_hash"`
-	Date       int    `json:"date"`
-	UploaderID int64  `json:"uploader_id"`
+	ID           int    `json:"id"`
+	Name         string `json:"name"`
+	Size         int64  `json:"size"`
+	AccessHash   int64  `json:"access_hash"`
+	Date         int    `json:"date"`
+	UploaderID   int64  `json:"uploader_id"`
+	CopyIdentity string `json:"copy_identity,omitempty"`
 }
 
 type PreviewPayload struct {
@@ -580,12 +581,13 @@ func (a *App) GetFileList() []TDriveFile {
 	out := make([]TDriveFile, 0, len(files))
 	for _, f := range files {
 		out = append(out, TDriveFile{
-			ID:         f.ID,
-			Name:       f.Name,
-			Size:       f.Size,
-			AccessHash: f.AccessHash,
-			Date:       f.Date,
-			UploaderID: f.UploaderID,
+			ID:           f.ID,
+			Name:         f.Name,
+			Size:         f.Size,
+			AccessHash:   f.AccessHash,
+			Date:         f.Date,
+			UploaderID:   f.UploaderID,
+			CopyIdentity: f.CopyIdentity,
 		})
 	}
 	return out
@@ -769,6 +771,9 @@ func (a *App) ServiceShutdown() error {
 	a.backendStopped = true
 	a.backendStartupMu.Unlock()
 	a.finishBackendStartup(context.Canceled)
+	if a.drives != nil {
+		a.drives.sourceCopies.suspend()
+	}
 	mountCtx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
 	if err := a.shutdownMountController(mountCtx); err != nil {
 		fmt.Printf("Warning: Failed to disconnect TDrive mount: %v\n", err)
@@ -965,6 +970,7 @@ func (a *App) Search(query string, limit int) ([]backend.SearchResult, error) {
 			UploaderID:    h.UploaderID,
 			Encrypted:     h.Encrypted,
 			PlaintextSize: h.PlaintextSize,
+			Revision:      h.Revision,
 			Path:          h.Path,
 		})
 	}

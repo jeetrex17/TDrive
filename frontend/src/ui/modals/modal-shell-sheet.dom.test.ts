@@ -5,7 +5,9 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRawSnippet, flushSync, mount, tick, unmount } from 'svelte';
+import { fromStore, writable } from 'svelte/store';
 import ModalShell from './ModalShell.svelte';
+import { closeTopSheet } from './sheet-stack';
 
 // modal-a11y only treats elements with a layout box as focusable; happy-dom has
 // no layout, so approximate offsetParent with the DOM parent.
@@ -31,15 +33,21 @@ const actions = createRawSnippet(() => ({
     render: () => `<button id="sheet-primary" class="primary-btn" type="button">Save</button>`,
 }));
 
-function mountShell(presentation: 'dialog' | 'sheet', onClose = vi.fn()) {
+function mountShell(
+    presentation: 'dialog' | 'sheet',
+    onClose = vi.fn(),
+    canDismiss = () => true,
+    isOpen = () => true,
+) {
     app = mount(ModalShell, {
         target: host,
         props: {
             hostId: 'sheet-host',
-            open: true,
+            get open() { return isOpen(); },
             title: 'Rename file',
             titleId: 'sheet-title',
             presentation,
+            get dismissible() { return canDismiss(); },
             initialFocus: '#sheet-input',
             onClose,
             children,
@@ -99,6 +107,73 @@ describe('ModalShell sheet presentation', () => {
 
         drag(handle, 0, 320);
         await vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    });
+
+    it('keeps a busy sheet in place when dismissal is disabled', async () => {
+        const onClose = mountShell('sheet', vi.fn(), () => false);
+        await tick();
+
+        const sheet = host.querySelector<HTMLElement>('.modal-sheet')!;
+        const handle = host.querySelector<HTMLElement>('.sheet-handle')!;
+        host.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true }));
+        expect(closeTopSheet()).toBe(true);
+        drag(handle, 0, 320);
+
+        expect(onClose).not.toHaveBeenCalled();
+        expect(sheet.style.transform).toBe('');
+        expect(host.style.getPropertyValue('--sheet-scrim')).toBe('1');
+    });
+
+    it('cancels a drag when the sheet becomes busy', async () => {
+        const enabled = fromStore(writable(true));
+        const onClose = mountShell('sheet', vi.fn(), () => enabled.current);
+        const sheet = host.querySelector<HTMLElement>('.modal-sheet')!;
+        const handle = host.querySelector<HTMLElement>('.sheet-handle')!;
+
+        handle.dispatchEvent(new MouseEvent('pointerdown', { clientY: 0, bubbles: true }));
+        handle.dispatchEvent(new MouseEvent('pointermove', { clientY: 160, bubbles: true }));
+        expect(sheet.style.transform).toBe('translateY(160px)');
+
+        enabled.current = false;
+        flushSync();
+        await vi.waitFor(() => expect(sheet.style.transform).toBe(''));
+        expect(host.style.getPropertyValue('--sheet-scrim')).toBe('1');
+
+        enabled.current = true;
+        flushSync();
+        handle.dispatchEvent(new MouseEvent('pointermove', { clientY: 320, bubbles: true }));
+        expect(sheet.style.transform).toBe('');
+        expect(onClose).not.toHaveBeenCalled();
+    });
+
+    it('clears gesture styles when the sheet closes during a drag', () => {
+        const opened = fromStore(writable(true));
+        mountShell('sheet', vi.fn(), undefined, () => opened.current);
+        const sheet = host.querySelector<HTMLElement>('.modal-sheet')!;
+        const handle = host.querySelector<HTMLElement>('.sheet-handle')!;
+
+        handle.dispatchEvent(new MouseEvent('pointerdown', { clientY: 0, bubbles: true }));
+        handle.dispatchEvent(new MouseEvent('pointermove', { clientY: 160, bubbles: true }));
+        expect(sheet.style.transform).toBe('translateY(160px)');
+
+        opened.current = false;
+        flushSync();
+        expect(sheet.style.transform).toBe('');
+        expect(sheet.style.transition).toBe('');
+    });
+
+    it('returns the sheet to rest when the close callback leaves it open', async () => {
+        const onClose = mountShell('sheet');
+        const sheet = host.querySelector<HTMLElement>('.modal-sheet')!;
+        const handle = host.querySelector<HTMLElement>('.sheet-handle')!;
+
+        drag(handle, 0, 320);
+        await vi.waitFor(() => {
+            expect(onClose).toHaveBeenCalledTimes(1);
+            expect(sheet.style.transform).toBe('');
+            expect(host.style.getPropertyValue('--sheet-scrim')).toBe('1');
+        });
     });
 
     it('springs back on a short drag and does not dismiss', () => {

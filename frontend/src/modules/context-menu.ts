@@ -13,13 +13,15 @@ import { enqueueDownload, enqueueFolderDownload, importFolderWithParentID, uploa
 import { canOpenFileViewer, isImageFile, isVideoFile } from './media-types';
 import { openImagePreview } from './image-preview';
 import { appActions } from './app-actions';
+import { openSharedDriveCopy, type SharedCopyFile } from './source-copies';
 import {
     hideContextMenu,
     showContextMenu,
     type ContextMenuHeader,
     type ContextMenuItem,
 } from '../ui/menus/context-menu-store';
-import { fileListRowForElement } from '../ui/file-list/row-lookup';
+import { fileListRowForElement, fileListRowForKey } from '../ui/file-list/row-lookup';
+import { MAX_SOURCE_COPY_SELECTION } from '../ui/channels/channel-model';
 import type { FileCommandItem, FileListFileRow } from '../ui/file-list/types';
 
 // folderGroup appends the folder-scoped upload actions that make sense in the
@@ -33,6 +35,43 @@ interface RowMenuOptions {
 // Backspace, which the file list already treats as delete; the glyph matches
 // what the user actually presses.
 const DELETE_SHORTCUT = isApplePlatform() ? '⌫' : 'Del';
+
+function sharedDriveCopyAction(rows: readonly FileListFileRow[], primary = false) {
+    if (!rows.length || rows.length > MAX_SOURCE_COPY_SELECTION || state.myUserID <= 0) return;
+    const drive = state.channels.find(({ id }) => id === rows[0].channelId);
+    if (drive?.kind !== 'shared') return;
+    const accountId = state.myUserID;
+    const files: SharedCopyFile[] = [];
+    for (const row of rows) {
+        const id = Number(row.id);
+        const revision = row.source === 'tg' ? 0 : row.revision;
+        const identity = row.source === 'tg' ? row.copyIdentity : 'managed';
+        if (row.channelId !== drive.id || row.encrypted || !Number.isSafeInteger(id) || id <= 0 ||
+            !identity || revision === undefined || !Number.isSafeInteger(revision) || (row.source === 'fs' && revision <= 0)) return;
+        files.push({ id, name: row.name, revision, identity });
+    }
+    const sourceDrive = { id: drive.id, title: drive.title };
+    return {
+        label: rows.length === 1 ? 'Copy to My Drive…' : `Copy ${rows.length} files to My Drive…`,
+        icon: 'copy',
+        primary,
+        action: () => openSharedDriveCopy(accountId, sourceDrive, files),
+    } satisfies ContextMenuItem;
+}
+
+export function selectedSharedDriveCopyAction() {
+    const selected = state.selectedItems;
+    if (!selected.size || selected.size > MAX_SOURCE_COPY_SELECTION) return;
+
+    const rows: FileListFileRow[] = [];
+    for (const [key, item] of selected) {
+        if (item.type !== 'file') return;
+        const row = fileListRowForKey(key);
+        if (row?.kind !== 'file' || row.channelId !== item.channelId) return;
+        rows.push(row);
+    }
+    return sharedDriveCopyAction(rows);
+}
 
 export function buildFolderContextMenuItems(
     folderID: string,
@@ -77,7 +116,7 @@ export function buildFileContextMenuItems(row: FileListFileRow, { folderGroup = 
 
     const items: ContextMenuItem[] = [];
     if (isVideoFile(fileName)) {
-        items.push({ label: "Play", icon: 'play', primary: tile, shortcut: 'Enter', action: () => { void appActions().playVideo({ id: fileID, name: fileName, size: fileSize, encrypted }); } });
+        items.push({ label: "Play", icon: 'play', primary: tile, shortcut: 'Enter', action: () => { void appActions().playVideo({ id: fileID, channelId: sourceChannelId, name: fileName, size: fileSize, encrypted }); } });
     } else if (isImageFile(fileName)) {
         items.push({ label: "Open", icon: 'open', primary: tile, shortcut: 'Enter', action: () => { void openImagePreview(row); } });
     } else if (canOpenFileViewer(fileName)) {
@@ -90,6 +129,8 @@ export function buildFileContextMenuItems(row: FileListFileRow, { folderGroup = 
         : { type: 'file', id: fileID, name: fileName, size: fileSize, parentId: state.currentFolderId, source: 'fs' };
     if (canRename) items.push({ label: 'Rename…', icon: 'rename', primary: tile, shortcut: 'F2', action: () => openRenameModal(fileTarget) });
     items.push({ label: 'Move to…', icon: 'move', primary: tile, action: () => openMoveModal(fileTarget) });
+    const copy = sharedDriveCopyAction([row], tile);
+    if (copy) items.push(copy);
 
     // Upload/new-folder/refresh belong to the folder background, not to the
     // item's own menu; Delete sits apart behind a quiet separator.
@@ -163,8 +204,10 @@ export function activateContextMenu(): () => void {
 
         if (state.selectedItems.size > 1) {
             const count = state.selectedItems.size;
+            const copy = selectedSharedDriveCopyAction();
             showContextMenu(e.clientX, e.clientY, [
                 { label: `Move ${count} items…`, icon: 'move', action: () => openMoveModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId }) },
+                ...(copy ? [copy] : []),
                 { type: "divider" },
                 { label: `Delete ${count} items`, icon: 'delete', danger: true, shortcut: DELETE_SHORTCUT, action: () => openDeleteModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId }) },
                 { type: "divider" },

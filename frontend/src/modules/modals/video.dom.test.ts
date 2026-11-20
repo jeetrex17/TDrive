@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { flushSync, mount, unmount } from "svelte";
 import VideoModal from '../../ui/video/VideoModal.svelte';
 import { DEFAULT_PLAYBACK_PREFERENCES } from '../video/playback-preferences';
+import { prefersNativePlayer, rememberNativePlayer } from '../video/native-memory';
+import { state as appState } from '../../state';
 import { VideoGeometryController } from '../video/video-geometry';
 import { collectVideoDOM, type VideoDOM } from '../video/video-dom';
 import { AUTO_NEXT_STORAGE_KEY } from '../video/video-playlist';
@@ -1875,6 +1877,78 @@ describe("fatal video error card", () => {
         expect(apiMocks.closeMedia).toHaveBeenCalledWith(retried.token);
     });
 
+    it("retries a webview format when a stale native hint cannot be removed from storage", async () => {
+        const previousState = { activeChannel: appState.activeChannel, myUserID: appState.myUserID };
+        appState.activeChannel = { id: 1, title: "Shared Drive", kind: "shared" };
+        appState.myUserID = 7;
+        const target = { id: 44, name: "retry.mp4", size: 1024 };
+        const hint = { ...target, accountId: 7, channelId: 1 };
+        rememberNativePlayer(hint);
+        vi.spyOn(localStorage, "setItem").mockImplementation(() => { throw new Error("storage full"); });
+        apiMocks.openNativeMedia.mockRejectedValue(new Error("mpv could not start"));
+        const opened = mediaOpenResult(44, "retry-webview");
+        apiMocks.openMedia.mockResolvedValue(opened);
+        vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const controller = await import("./video");
+        deactivateVideo = controller.activateVideoModal();
+
+        try {
+            await controller.openVideoModal(target);
+            expect(apiMocks.openNativeMedia).toHaveBeenCalledOnce();
+            expect(apiMocks.openMedia).not.toHaveBeenCalled();
+            expect(prefersNativePlayer(hint)).toBe(true);
+            document.querySelector<HTMLButtonElement>("#video-error-retry")?.click();
+
+            await vi.waitFor(() => expect(document.querySelector<HTMLVideoElement>("#video-player")?.getAttribute("src")).toBe(opened.url));
+            expect(apiMocks.openNativeMedia).toHaveBeenCalledOnce();
+            expect(apiMocks.openMedia).toHaveBeenCalledWith(44);
+        } finally {
+            Object.assign(appState, previousState);
+        }
+    });
+
+    it.each(["drive", "account"] as const)("keeps Retry scoped when the active %s changes", async (change) => {
+        const previousState = { activeChannel: appState.activeChannel, myUserID: appState.myUserID };
+        appState.activeChannel = { id: 1, title: "Shared Drive", kind: "shared" };
+        appState.myUserID = 7;
+        apiMocks.openMedia.mockRejectedValueOnce(new Error("temporary media failure"));
+        vi.spyOn(console, "error").mockImplementation(() => undefined);
+        const controller = await import("./video");
+        deactivateVideo = controller.activateVideoModal();
+
+        try {
+            await controller.openVideoModal({ id: 44, name: "retry.mp4" });
+            if (change === "drive") appState.activeChannel = { id: 2, title: "Other Drive", kind: "shared" };
+            else appState.myUserID = 8;
+            document.querySelector<HTMLButtonElement>("#video-error-retry")?.click();
+
+            await vi.waitFor(() => expect(document.querySelector("#video-error-message")?.textContent)
+                .toContain("Open it again from its original location."));
+            expect(apiMocks.openMedia).toHaveBeenCalledOnce();
+        } finally {
+            Object.assign(appState, previousState);
+        }
+    });
+
+    it("closes a session returned for a different drive before loading its URL", async () => {
+        const previousDrive = appState.activeChannel;
+        appState.activeChannel = { id: 1, title: "Shared Drive", kind: "shared" };
+        const opened = mediaOpenResult(44, "wrong-drive");
+        apiMocks.openMedia.mockResolvedValueOnce({ ...opened, info: { ...opened.info, channelId: 2 } });
+        const controller = await import("./video");
+        deactivateVideo = controller.activateVideoModal();
+
+        try {
+            await controller.openVideoModal({ id: 44, name: "retry.mp4" });
+
+            expect(apiMocks.closeMedia).toHaveBeenCalledWith(opened.token);
+            expect(document.querySelector<HTMLVideoElement>("#video-player")?.getAttribute("src")).toBeNull();
+            expect(document.querySelector("#video-error-message")?.textContent).toContain("Open it again from its original location.");
+        } finally {
+            appState.activeChannel = previousDrive;
+        }
+    });
+
     it("retries the failed native target through its native lifecycle", async () => {
         const retried = nativeOpenResult(45, "retry-native-token");
         apiMocks.openNativeMedia
@@ -1965,7 +2039,8 @@ describe("folder video playlist", () => {
         trigger.click();
         await nextTasks();
         panel.querySelector<HTMLButtonElement>('[data-playlist-index="1"]')?.click();
-        await vi.waitFor(() => expect(apiMocks.openMedia).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => expect(player.getAttribute("src")).toBe(mediaOpenResult(48, "playlist-48").url));
+        expect(apiMocks.openMedia).toHaveBeenCalledTimes(2);
         expect(apiMocks.openMedia).toHaveBeenNthCalledWith(2, 48);
         expect(player.volume).toBe(0.42);
         expect(player.muted).toBe(true);

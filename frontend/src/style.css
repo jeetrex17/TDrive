@@ -1,6 +1,7 @@
 @import './ui/theme/theme-palettes.css';
 @import './styles/tokens.css';
 @import './styles/base.css';
+@import './styles/scrollbars.css';
 @import './styles/auth.css';
 @import './styles/controls.css';
 @import './styles/chrome.css';

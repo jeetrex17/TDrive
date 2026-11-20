@@ -28,12 +28,11 @@ export default defineConfig({
                 viewport: { width: 1280, height: 800 },
             },
         },
-        // WebKit covers platform media selection and the biometric dialog's
-        // cancellation/password-fallback journey in the engine Apple apps use.
-        // Keep this focused instead of repeating every browser contract.
+        // Cover platform media selection, biometric fallback, and scrollbar
+        // visibility in the engine Apple apps use.
         {
             name: 'webkit-media',
-            testMatch: /(video|biometric)\.spec\.ts/,
+            testMatch: /(video|biometric|scrollbars)\.spec\.ts/,
             use: {
                 ...devices['Desktop Safari'],
                 viewport: { width: 1280, height: 800 },

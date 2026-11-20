@@ -10,21 +10,17 @@ import (
 
 // DriveService owns the set of drives themselves: which ones this client knows
 // about, how a shared one is created, joined, approved or left, and how the
-// personal one is first chosen or made.
+// personal one is first chosen or made. It also owns connected Telegram
+// sources and their explicitly scoped save-to-My-Drive flow.
 //
-// The line it draws is between a drive and its contents. Everything here
-// changes *which* drives exist or who may reach them; nothing here reads or
-// writes a file inside one. That matters because these are the only calls that
-// can run before a drive is selected at all -- a fresh install has no personal
-// channel, and a user recovering an old one has no projection yet -- so they
-// must not share a type with methods that assume an active drive is already
-// scoped. They are also the only calls that go to Telegram's channel and invite
-// APIs rather than to the local projection, which is why they fail in ways
-// (approval pending, admin-only, flood wait) no file operation ever produces.
+// Drive setup can run before a personal channel or projection exists. Source
+// actions scope themselves to the signed-in account and a connection or an
+// explicit destination drive.
 type DriveService struct {
 	host               serviceHost
 	closeExternalMedia func([]string)
 	connectSourceGate  func(func() error) error
+	sourceCopies       sourceCopyWork
 }
 
 func newDriveService(host serviceHost) *DriveService {

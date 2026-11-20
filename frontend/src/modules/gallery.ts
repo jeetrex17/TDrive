@@ -352,6 +352,7 @@ function onGalleryClick(event: MouseEvent): void {
 async function openGalleryVideo(item: GalleryItem): Promise<void> {
     const source = currentSource;
     const channelId = currentChannelId;
+    const accountId = state.myUserID;
     const video = await import('./modals/video');
     // Dynamic module loading can finish after a drive switch. Identity rather
     // than a message ID prevents opening another drive's same-numbered file.
@@ -361,7 +362,7 @@ async function openGalleryVideo(item: GalleryItem): Promise<void> {
         name: item.name,
         size: item.encrypted && item.plaintextSize > 0 ? item.plaintextSize : item.size,
         encrypted: item.encrypted,
-    });
+    }, undefined, { accountId, channelId });
 }
 
 function previewItem(item: GalleryItem, channelId: number): PreviewNavigationItem {

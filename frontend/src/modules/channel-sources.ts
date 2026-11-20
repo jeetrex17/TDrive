@@ -20,6 +20,7 @@ import {
     openChannelKey,
 } from '../ui/channels/channel-store';
 import {
+    canSaveSourceMedia,
     channelTelegramUrl,
     channelVideoQueue,
     isOpenable,
@@ -28,15 +29,18 @@ import {
     mediaTitle,
     type ChannelMediaItem,
     type ChannelPageMemory,
+    type ChannelPostActions,
     type ChannelSource,
     sourceKey,
 } from '../ui/channels/channel-model';
+import { openSourceOrganization } from '../ui/channels/source-organization-state';
 import { showContextMenu, type ContextMenuItem } from '../ui/menus/context-menu-store';
 import { pushHistoryEvent } from './notif-bell';
 import { splitNameAndExt } from '../utils';
 import { exitPhotos } from './gallery';
 import { dismissNotification, notify, notifyAppError } from './notifications';
 import { closeTrash } from './trash/controller';
+import { openSourceCopy } from './source-copies';
 
 let loadVersion = 0;
 let activationVersion = 0;
@@ -270,6 +274,7 @@ export function showChannelActions(x: number, y: number, source: ChannelSource):
     const url = channelTelegramUrl(source);
     const items: ContextMenuItem[] = [
         ...(url ? [{ label: 'Open in Telegram', icon: 'external' as const, action: () => openInTelegram(url) }, { type: 'divider' as const }] : []),
+        { label: 'Move to group…', icon: 'move', action: () => openSourceOrganization(source) },
         { label: 'Remove from TDrive', icon: 'clear', danger: true, action: () => removeChannel(source) },
     ];
     showContextMenu(x, y, items);
@@ -282,9 +287,13 @@ export function showPostActions(
     item: ChannelMediaItem,
     source: ChannelSource,
     posts: readonly ChannelMediaItem[],
+    { suggestedFolder, select, selection }: ChannelPostActions,
 ): void {
+    const saveLabel = selection ? `Save ${selection.count} files to My Drive…` : 'Save to My Drive…';
     const items: ContextMenuItem[] = [
         ...(isOpenable(item) ? [{ label: mediaActionLabel(item), icon: (mediaActionLabel(item) === 'Play' ? 'play' : 'open') as 'play' | 'open', primary: true, action: () => openChannelPost(item, source, posts) }] : []),
+        ...(canSaveSourceMedia(source, item) ? [{ label: saveLabel, icon: 'folder-new' as const, primary: true, action: selection?.save ?? (() => openSourceCopy(source, [item], suggestedFolder)) }] : []),
+        ...(select ? [{ label: 'Select', icon: 'select' as const, action: select }] : []),
         ...(item.telegramUrl ? [{ label: 'Open in Telegram', icon: 'external' as const, action: () => openInTelegram(item.telegramUrl) }] : []),
     ];
     if (items.length === 0) return;
@@ -318,5 +327,5 @@ export async function openChannelPost(
     const { target, playlist } = channelVideoQueue(item, source, posts, open);
     const { activateVideoModal, openVideoModal } = await import('./modals/video');
     activateVideoModal();
-    await openVideoModal(target, playlist);
+    await openVideoModal(target, playlist, { accountId: Number(source.accountId), channelId: 0 });
 }

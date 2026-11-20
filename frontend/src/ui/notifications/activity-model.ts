@@ -1,5 +1,6 @@
 import type { ResumableUpload } from '../../api/resumable-uploads';
 import type { ResumableDownload } from '../../api/resumable-downloads';
+import type { SourceCopyResult } from '../../api/source-copies';
 import { isUnfinishedTransfer, type HistoryEvent, type TransferEvent } from './notif-store';
 import type { UploadActivity, UploadActivityFile } from './upload-activity-store';
 import { formatAge, transferDetailParts, transferPercent } from './transfer-view';
@@ -11,7 +12,8 @@ export type ActivityEntry =
     | EntryBase & { kind: 'batch'; batch: UploadActivity; transfer?: TransferEvent }
     | EntryBase & { kind: 'transfer'; transfer: TransferEvent }
     | EntryBase & { kind: 'upload'; job: ResumableUpload }
-    | EntryBase & { kind: 'download'; job: ResumableDownload };
+    | EntryBase & { kind: 'download'; job: ResumableDownload }
+    | EntryBase & { kind: 'sourceCopy'; copy: SourceCopyResult };
 
 export function fileCountLabel(count: number): string {
     return `${count.toLocaleString()} ${count === 1 ? 'file' : 'files'}`;
@@ -69,8 +71,15 @@ function compareEntries(a: ActivityEntry, b: ActivityEntry): number {
     return a.status === 'Queued' ? a.at - b.at : b.at - a.at;
 }
 
-export function activityEntries(batches: readonly UploadActivity[], events: readonly HistoryEvent[], uploads: readonly ResumableUpload[], downloads: readonly ResumableDownload[], options: { allEvents?: readonly HistoryEvent[]; activeDriveId?: number | null; now?: number; uploadsPaused?: boolean } = {}): ActivityEntry[] {
-    const { allEvents = events, activeDriveId, now = Date.now(), uploadsPaused = false } = options;
+export function activityEntries(batches: readonly UploadActivity[], events: readonly HistoryEvent[], uploads: readonly ResumableUpload[], downloads: readonly ResumableDownload[], options: {
+    allEvents?: readonly HistoryEvent[];
+    activeDriveId?: number | null;
+    now?: number;
+    uploadsPaused?: boolean;
+    sourceCopies?: readonly SourceCopyResult[];
+    checkingCopies?: ReadonlySet<string>;
+} = {}): ActivityEntry[] {
+    const { allEvents = events, activeDriveId, now = Date.now(), uploadsPaused = false, sourceCopies = [], checkingCopies } = options;
     const entries: ActivityEntry[] = batches.map((batch) => {
         const transfer = allEvents.find((event): event is TransferEvent => event.kind === 'transfer' && event.id === batch.transferId);
         return {
@@ -94,6 +103,20 @@ export function activityEntries(batches: readonly UploadActivity[], events: read
         status: ['downloading', 'verifying', 'saving'].includes(job.status) ? 'Active' : 'Needs attention',
         summary: job.status.replace(/_/g, ' '), at: now, job,
     });
+    for (const copy of sourceCopies) {
+        const checking = checkingCopies?.has(copy.id);
+        const summary = {
+            saved: 'Saved to My Drive',
+            pending: 'Copy to My Drive pending',
+            failed: 'Could not save to My Drive',
+            canceled: 'Copy canceled',
+        }[copy.status];
+        entries.push({
+            kind: 'sourceCopy', id: `source-copy:${copy.id}`, name: copy.name,
+            status: checking ? 'Active' : copy.status === 'pending' ? 'Needs attention' : 'History',
+            summary: checking ? 'Checking copy…' : summary, at: now, copy,
+        });
+    }
     for (const transfer of events) {
         if (transfer.kind !== 'transfer' || batchTransfers.has(transfer.id)) continue;
         entries.push({

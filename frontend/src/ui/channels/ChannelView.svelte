@@ -17,13 +17,16 @@
     import { mergeTopicMetadata, type ChannelTopic, type ChannelTopicFetcher } from './channel-topics';
     import ChannelSortMenu from './ChannelSortMenu.svelte';
     import { fileTypeFamily, fileTypeIcon, type FileTypeFamily } from '../file-list/file-type';
+    import { activeTab, driveSwitcherOpen } from '../mobile/mobile-shell-store';
     import { pushSheet } from '../modals/sheet-stack';
     import { toAppError } from '../../modules/errors';
     import { splitNameAndExt } from '../../utils';
     import {
+        canSaveSourceMedia,
         createChannelMediaPager,
         isOpenable,
         MAX_CHANNEL_ITEMS,
+        MAX_SOURCE_COPY_SELECTION,
         mediaDetails,
         mediaMeta,
         mediaActionLabel,
@@ -36,6 +39,7 @@
         type ChannelMediaKind,
         type ChannelMediaView,
         type ChannelPageMemory,
+        type ChannelPostActions,
         type ChannelSort,
         type ChannelSource,
     } from './channel-model';
@@ -49,7 +53,8 @@
         onOpenTelegram: (url: string) => void;
         /** The phone top bar's ⋯. Desktop offers the same actions on the sidebar row. */
         onActions?: (x: number, y: number, source: ChannelSource) => void;
-        onPostActions: (x: number, y: number, item: ChannelMediaItem, source: ChannelSource, posts: readonly ChannelMediaItem[]) => void;
+        onPostActions: (x: number, y: number, item: ChannelMediaItem, source: ChannelSource, posts: readonly ChannelMediaItem[], actions: ChannelPostActions) => void;
+        onSavePosts?: (source: ChannelSource, items: readonly ChannelMediaItem[], suggestedFolder: string) => void;
         /** Phone only: its top bar needs a way back, desktop leaves by the sidebar. */
         onBack?: () => void;
         /** The first page from an earlier visit, shown while the fresh one loads. */
@@ -57,7 +62,7 @@
         mobile?: boolean;
     }
 
-    let { source, fetchMedia, fetchTopics, onOpenPost, onOpenTelegram, onActions, onPostActions, onBack, recentPages, mobile = false }: Props = $props();
+    let { source, fetchMedia, fetchTopics, onOpenPost, onOpenTelegram, onActions, onPostActions, onSavePosts, onBack, recentPages, mobile = false }: Props = $props();
 
     const KINDS: ReadonlyArray<{ value: ChannelMediaKind; label: string }> = [
         { value: 'all', label: 'All' },
@@ -85,6 +90,8 @@
     let searchInput = $state<HTMLInputElement | null>(null);
     let searchOpen = $state(false);
     let scrolled = $state(false);
+    let selected = $state<ReadonlySet<string>>(new Set());
+    let selectionAnchor: string | undefined;
     // Reaching the end loads older posts only while they keep adding rows. In
     // a channel with few videos the end stays in view, so without this it
     // would page through the whole history, request after request.
@@ -95,6 +102,10 @@
     const items = $derived('items' in view ? view.items : []);
     // What the list shows, and so what a video queues, in the chosen order.
     const shown = $derived(sortPosts(items, sort));
+    const selectedItems = $derived(shown.filter((item) => canSaveSourceMedia(source, item) && selected.has(selectionKey(item))));
+    const touchSelecting = $derived(mobile && selectedItems.length > 0);
+    const handlesMobileBack = $derived(mobile && $activeTab === 'files' && !$driveSwitcherOpen);
+    const suggestedFolder = $derived(selectedTopic?.title ?? source.title);
     const browsingSource = $derived(selectedTopic ? { ...source, title: `${source.title} · ${selectedTopic.title}` } : source);
     const searchLabel = $derived(selectedTopic ? `Search files in ${selectedTopic.title}` : 'Search files');
     const topicUnavailable = $derived(view.status === 'error' && typeof view.error === 'object' && view.error !== null && 'code' in view.error && ['topic_unavailable', 'forum_unavailable'].includes(String(view.error.code)));
@@ -163,6 +174,7 @@
     }
 
     function reload(): void {
+        endSelection();
         pager.setFilter(appliedQuery, kind);
         scroller?.scrollTo({ top: 0 });
         void load();
@@ -248,9 +260,80 @@
         return item.telegramUrl ? `Open in Telegram: ${parts}` : `Unavailable in TDrive: ${parts}`;
     }
 
+    function selectionKey(item: ChannelMediaItem): string {
+        return `${item.msgId}:${item.copyIdentity}`;
+    }
+
+    function selectItem(item: ChannelMediaItem, toggle = false): void {
+        if (!onSavePosts || !canSaveSourceMedia(source, item)) {
+            if (!toggle) endSelection();
+            return;
+        }
+        const key = selectionKey(item);
+        selectionAnchor = key;
+        if (!toggle) selected = new Set([key]);
+        else if (selected.has(key)) selected = new Set([...selected].filter((entry) => entry !== key));
+        else if (selectedItems.length < MAX_SOURCE_COPY_SELECTION) selected = new Set([...selectedItems.map(selectionKey), key]);
+    }
+
+    function selectRange(item: ChannelMediaItem, from = selectionAnchor): void {
+        if (!onSavePosts) return;
+        const end = shown.indexOf(item);
+        const anchor = shown.findIndex((entry) => selectionKey(entry) === from);
+        if (anchor < 0) {
+            selectItem(item);
+            return;
+        }
+        selectionAnchor = from;
+        const range = shown.slice(Math.min(anchor, end), Math.max(anchor, end) + 1);
+        if (end < anchor) range.reverse();
+        selected = new Set(range.filter((entry) => canSaveSourceMedia(source, entry)).slice(0, MAX_SOURCE_COPY_SELECTION).map(selectionKey));
+    }
+
+    function endSelection(): void {
+        selectionAnchor = undefined;
+        selected = new Set();
+    }
+
+    function focusSelectedRow(): void {
+        list?.querySelector<HTMLButtonElement>('.channel-row-main[aria-pressed="true"]')?.focus({ preventScroll: true });
+    }
+
+    function cancelSelection(): void {
+        focusSelectedRow();
+        endSelection();
+    }
+
+    function onCopyActionKeydown(event: KeyboardEvent): void {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        event.stopPropagation();
+        cancelSelection();
+    }
+
+    function saveSelection(): void {
+        if (!selectedItems.length) return;
+        focusSelectedRow();
+        onSavePosts?.(source, selectedItems, suggestedFolder);
+        endSelection();
+    }
+
     function openPostActions(event: MouseEvent, item: ChannelMediaItem): void {
         event.preventDefault();
-        onPostActions(event.clientX, event.clientY, item, browsingSource, shown);
+        showRowActions(event.clientX, event.clientY, item);
+    }
+
+    function showRowActions(x: number, y: number, item: ChannelMediaItem): void {
+        const copyable = canSaveSourceMedia(source, item);
+        const select = mobile && onSavePosts && copyable ? () => {
+            selectItem(item);
+            // The row's action button is removed in selection mode.
+            void tick().then(focusSelectedRow);
+        } : undefined;
+        const selection = copyable && selected.has(selectionKey(item)) && selectedItems.length > 1
+            ? { count: selectedItems.length, save: saveSelection }
+            : undefined;
+        onPostActions(x, y, item, browsingSource, shown, { suggestedFolder, select, selection });
     }
 
     // The phone row's trailing "…": a visible way into the same actions the long
@@ -258,18 +341,77 @@
     function openRowActions(event: MouseEvent, item: ChannelMediaItem): void {
         event.stopPropagation();
         const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
-        onPostActions(rect.left, rect.bottom + 4, item, browsingSource, shown);
+        showRowActions(rect.left, rect.bottom + 4, item);
+    }
+
+    function handleRowKeydown(event: KeyboardEvent, item: ChannelMediaItem): void {
+        if (event.key !== 'ContextMenu' && !(event.shiftKey && event.key === 'F10')) return;
+        event.preventDefault();
+        const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+        showRowActions(rect.left, rect.bottom + 4, item);
+    }
+
+    function activateRow(event: MouseEvent, item: ChannelMediaItem): void {
+        if (!isOpenable(item) && !item.telegramUrl && canSaveSourceMedia(source, item)) {
+            openRowActions(event, item);
+        } else {
+            void onOpenPost(item, browsingSource, shown);
+        }
+    }
+
+    function clickedChip(event: MouseEvent): boolean {
+        return event.target instanceof Element && !!event.target.closest('.channel-chip');
+    }
+
+    function handleRowClick(event: MouseEvent, item: ChannelMediaItem): void {
+        if (mobile) {
+            if (touchSelecting) selectItem(item, true);
+            else activateRow(event, item);
+            return;
+        }
+        if (event.detail === 0) {
+            activateRow(event, item);
+            return;
+        }
+        (event.currentTarget as HTMLButtonElement).focus({ preventScroll: true });
+        if (event.shiftKey) selectRange(item);
+        else if (event.metaKey || event.ctrlKey) selectItem(item, true);
+        else if (clickedChip(event)) {
+            if (event.detail === 1) activateRow(event, item);
+        } else {
+            selectItem(item);
+        }
+    }
+
+    function handleRowDoubleClick(event: MouseEvent, item: ChannelMediaItem): void {
+        if (!mobile && !event.shiftKey && !event.metaKey && !event.ctrlKey && !clickedChip(event)) activateRow(event, item);
     }
 
     // Arrow keys walk the rows the way they walk the file list.
     function onListKeydown(event: KeyboardEvent): void {
+        if (event.key === 'Escape' && selectedItems.length) {
+            event.preventDefault();
+            event.stopPropagation();
+            endSelection();
+            return;
+        }
+        if (event.altKey) return;
         const rows = Array.from((event.currentTarget as HTMLElement).querySelectorAll<HTMLButtonElement>('.channel-row-main'));
         const index = rows.indexOf(document.activeElement as HTMLButtonElement);
         if (index < 0) return;
+        if (event.key === ' ' && onSavePosts && canSaveSourceMedia(source, shown[index])) {
+            event.preventDefault();
+            if (event.shiftKey) selectRange(shown[index]);
+            else if (!event.repeat) selectItem(shown[index], true);
+            return;
+        }
+        if (event.metaKey || event.ctrlKey) return;
         const next = { ArrowDown: index + 1, ArrowUp: index - 1, Home: 0, End: rows.length - 1 }[event.key];
         if (next === undefined) return;
         event.preventDefault();
-        rows[Math.max(0, Math.min(rows.length - 1, next))]?.focus();
+        const target = Math.max(0, Math.min(rows.length - 1, next));
+        if (event.shiftKey) selectRange(shown[target], selectionAnchor ?? selectionKey(shown[index]));
+        rows[target]?.focus();
     }
 
     $effect(() => {
@@ -292,14 +434,19 @@
         if (!mobile || !list) return;
         return bindLongPress(list, '.channel-row', (row, x, y) => {
             const item = items.find((entry) => String(entry.msgId) === row.dataset.msgId);
-            if (item) onPostActions(x, y, item, browsingSource, shown);
+            if (item && !touchSelecting) showRowActions(x, y, item);
         });
     });
 
-    // Android BACK closes the phone's search field before it leaves the channel.
     $effect(() => {
-        if (!searchOpen) return;
+        if (!handlesMobileBack || !searchOpen) return;
         const back = pushSheet(closeSearch);
+        return () => back.release();
+    });
+
+    $effect(() => {
+        if (!handlesMobileBack || !touchSelecting) return;
+        const back = pushSheet(cancelSelection);
         return () => back.release();
     });
 
@@ -337,18 +484,32 @@
     </div>
 {/snippet}
 
+{#snippet copyActions()}
+    <div class="channel-copy-actions" role="group" aria-label="Save source files">
+        <button type="button" class="secondary-btn" onclick={cancelSelection} onkeydown={onCopyActionKeydown}>Cancel selection</button>
+        <button type="button" class="primary-btn" onclick={saveSelection} onkeydown={onCopyActionKeydown}>
+            {selectedItems.length === 1 ? 'Save 1 file to My Drive' : `Save ${selectedItems.length} files to My Drive`}
+        </button>
+    </div>
+{/snippet}
+
 {#snippet row(item: ChannelMediaItem)}
     {@const openable = isOpenable(item)}
+    {@const copyable = canSaveSourceMedia(source, item)}
+    {@const isSelected = copyable && selected.has(selectionKey(item))}
     {@const TypeIcon = fileTypeIcon(family(item))}
     {@const label = badge(item)}
-    <li class="channel-row" class:is-locked={!openable} class:is-protected={source.protected || item.protected} use:bindProtectedPost={Boolean(source.protected || item.protected)} data-msg-id={item.msgId}>
+    <li class="channel-row" class:is-selected={isSelected} class:is-locked={!openable && !copyable} class:is-protected={source.protected || item.protected} use:bindProtectedPost={Boolean(source.protected || item.protected)} data-msg-id={item.msgId}>
         <button
             class="channel-row-main"
             type="button"
             title={mediaDetails(item) || undefined}
             aria-label={rowLabel(item)}
-            onclick={() => void onOpenPost(item, browsingSource, shown)}
+            aria-pressed={onSavePosts && copyable && (!mobile || touchSelecting) ? isSelected : undefined}
+            onclick={(event) => handleRowClick(event, item)}
+            ondblclick={(event) => handleRowDoubleClick(event, item)}
             oncontextmenu={mobile ? undefined : (event) => openPostActions(event, item)}
+            onkeydown={(event) => handleRowKeydown(event, item)}
         >
             <span class="file-type-icon channel-chip" aria-hidden="true">
                 <span class="chip-layer chip-type"><TypeIcon size={20} strokeWidth={1.5} /></span>
@@ -373,7 +534,7 @@
                 <ExternalLinkIcon size={16} strokeWidth={2} aria-hidden="true" />
             </button>
         {/if}
-        {#if mobile && (openable || item.telegramUrl)}
+        {#if mobile && !touchSelecting && (openable || item.telegramUrl || copyable)}
             <button
                 class="channel-row-actions"
                 type="button"
@@ -391,7 +552,7 @@
     {#if mobile}
         <header class="channel-topbar" class:is-scrolled={scrolled}>
             <div class="topbar-row">
-                <button type="button" class="topbar-back" aria-label="Back" onclick={onBack}>
+                <button type="button" class="topbar-back" aria-label="Back" onclick={touchSelecting ? cancelSelection : onBack}>
                     <ChevronLeftIcon size={24} strokeWidth={2} aria-hidden="true" />
                 </button>
                 <div class="topbar-folder-titles">
@@ -447,28 +608,31 @@
                 {/if}
             </div>
             <div class="channel-bar-tools">
-                {#if forum && fetchTopics}<ChannelTopicPicker {source} fetchTopics={fetchTopics} selected={selectedTopic} onChoose={chooseTopic} onTopics={rememberTopics} />{/if}
-                {@render kindPicker()}
-                <ChannelSortMenu value={sort} onChange={chooseSort} />
-                <label class="search-field channel-search">
-                    <SearchIcon size={15} strokeWidth={2} aria-hidden="true" />
-                    <input
-                        bind:value={query}
-                        oninput={onQueryInput}
-                        onkeydown={onSearchKeydown}
-                        type="text"
-                        maxlength="120"
-                        placeholder={searchLabel}
-                        autocomplete="off"
-                        spellcheck="false"
-                        aria-label={selectedTopic ? searchLabel : `Search files in ${source.title}`}
-                    />
-                    {#if query}
-                        <button class="channel-search-clear" type="button" aria-label="Clear search" onclick={clearQuery}>
-                            <XIcon size={13} strokeWidth={2.5} aria-hidden="true" />
-                        </button>
-                    {/if}
-                </label>
+                <div class="channel-browse-tools" inert={selectedItems.length > 0}>
+                    {#if forum && fetchTopics}<ChannelTopicPicker {source} fetchTopics={fetchTopics} selected={selectedTopic} onChoose={chooseTopic} onTopics={rememberTopics} />{/if}
+                    {@render kindPicker()}
+                    <ChannelSortMenu value={sort} onChange={chooseSort} />
+                    <label class="search-field channel-search">
+                        <SearchIcon size={15} strokeWidth={2} aria-hidden="true" />
+                        <input
+                            bind:value={query}
+                            oninput={onQueryInput}
+                            onkeydown={onSearchKeydown}
+                            type="text"
+                            maxlength="120"
+                            placeholder={searchLabel}
+                            autocomplete="off"
+                            spellcheck="false"
+                            aria-label={selectedTopic ? searchLabel : `Search files in ${source.title}`}
+                        />
+                        {#if query}
+                            <button class="channel-search-clear" type="button" aria-label="Clear search" onclick={clearQuery}>
+                                <XIcon size={13} strokeWidth={2.5} aria-hidden="true" />
+                            </button>
+                        {/if}
+                    </label>
+                </div>
+                {#if selectedItems.length}{@render copyActions()}{/if}
             </div>
         </header>
     {/if}
@@ -541,9 +705,25 @@
             {/if}
         {/if}
     </div>
+
+    {#if touchSelecting}{@render copyActions()}{/if}
 </section>
 
 <style>
+    .channel-copy-actions {
+        display: flex;
+        justify-content: flex-end;
+        align-items: center;
+        gap: var(--space-2);
+    }
+    .channel-copy-actions button { min-height: var(--control-md); }
+    .is-mobile .channel-copy-actions {
+        flex: 0 0 auto;
+        flex-wrap: wrap;
+        padding: var(--space-2) calc(var(--space-4) + var(--inset-right)) var(--space-2) calc(var(--space-4) + var(--inset-left));
+        border-top: 1px solid var(--border);
+    }
+    .is-mobile .channel-copy-actions button { min-height: var(--touch-target); }
     .channel-view {
         flex: 1 1 auto;
         min-width: 0;
@@ -622,6 +802,10 @@
     .channel-bar-tools {
         flex: 0 1 auto;
         min-width: 0;
+        position: relative;
+    }
+
+    .channel-browse-tools {
         display: flex;
         flex-wrap: wrap;
         justify-content: flex-end;
@@ -629,10 +813,18 @@
         gap: var(--space-2);
     }
 
+    /* Keep the same header and list geometry throughout a double-click. */
+    .channel-browse-tools[inert] { visibility: hidden; }
+    .channel-bar-tools .channel-copy-actions {
+        position: absolute;
+        inset: 0 0 0 auto;
+        white-space: nowrap;
+    }
+
     .channel-kinds { flex: 0 0 auto; }
 
     /* More file types fit without squeezing labels or shrinking touch targets. */
-    .channel-topbar-kinds { overflow-x: auto; scrollbar-width: none; }
+    .channel-topbar-kinds { overflow-x: auto; }
 
     .channel-search { width: clamp(150px, 18vw, 220px); }
 
@@ -683,6 +875,9 @@
     .channel-row:hover,
     .channel-row:focus-within { background: var(--bg-panel); }
 
+    .channel-row.is-selected { background: var(--overlay-accent-1); }
+    .channel-row.is-selected:hover { background: var(--overlay-accent-2); }
+
     .channel-row-main {
         flex: 1 1 auto;
         min-width: 0;
@@ -697,6 +892,8 @@
         font: inherit;
         text-align: left;
         cursor: pointer;
+        user-select: none;
+        -webkit-user-select: none;
     }
 
     .channel-row-main:focus-visible {
@@ -704,8 +901,7 @@
         box-shadow: inset 0 0 0 1px var(--color-accent), var(--focus-ring);
     }
 
-    /* The type chip doubles as the row's action: hovering turns the glyph into
-       the thing a click will do, so no row needs a button of its own. */
+    /* The leading chip still opens the file with a single click. */
     .channel-chip {
         position: relative;
         margin-right: 0; /* the row's gap spaces it */
@@ -920,7 +1116,6 @@
            keyboard as well as the tab bar; otherwise the last posts sit under
            the keys while the user is typing to filter them. */
         padding: var(--space-2) 0 calc(var(--space-6) + var(--inset-keyboard));
-        scrollbar-width: none;
         overscroll-behavior-y: contain;
         -webkit-overflow-scrolling: touch;
     }
@@ -942,6 +1137,7 @@
     .is-mobile .channel-row:last-child { border-bottom-left-radius: var(--radius-xl); border-bottom-right-radius: var(--radius-xl); }
     .is-mobile .channel-row:only-child { border-radius: var(--radius-xl); }
     .is-mobile .channel-row:active { background: var(--color-surface-2); }
+    .is-mobile .channel-row.is-selected { background: color-mix(in srgb, var(--color-accent) 14%, var(--color-surface-0)); }
 
     .is-mobile .channel-row + .channel-row::before {
         position: absolute;

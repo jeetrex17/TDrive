@@ -660,7 +660,8 @@ jobs:
             app_path="$(find build/bin -maxdepth 1 -type d -name '*.app' -print -quit)"
           fi
           [ -n "$app_path" ] || { echo "no macOS app bundle found" >&2; exit 1; }
-          ./scripts/package-mpv-darwin.sh "$app_path"
+          # Runtime preparation sets a test version for the unpinned Homebrew fixture.
+          ./scripts/package-mpv-darwin.sh "$app_path" "${TDRIVE_MPV_TEST_VERSION:-}"
 
       - name: Verify Windows media bundle
         if: runner.os == 'Windows'

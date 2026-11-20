@@ -98,6 +98,7 @@ mocks.renderFileListRows.mockImplementation((_list: HTMLElement, rows: unknown[]
 mocks.buildFolderRow.mockImplementation((folder: { id?: string }, _parent: string, overrides: Record<string, unknown>) => ({
     kind: 'folder', selectionKey: `folder:${folder.id ?? ''}`, ...overrides,
 }));
+mocks.buildFileRow.mockClear();
 mocks.buildFileRow.mockImplementation((file: { id?: string | number }, _parent: string, overrides: Record<string, unknown>) => ({
     kind: 'file', selectionKey: `file:${file.id ?? ''}`, ...overrides,
 }));
@@ -121,6 +122,36 @@ describe('search scheduling', () => {
 
         await vi.runAllTimersAsync();
         expect(mocks.search).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the Shared Drive and file revision on a managed search result', async () => {
+        state.activeChannel = { id: 42, title: 'Team files', kind: 'shared' };
+        state.searchQuery = 'report';
+        mocks.search.mockResolvedValueOnce([{
+            type: 'file', id: '701', name: 'report.pdf', source: 'fs', revision: 9, parentId: 'd:reports',
+        }]);
+
+        await runGlobalSearch();
+
+        expect(mocks.buildFileRow).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 701, revision: 9, source: 'fs' }),
+            'd:reports',
+            expect.objectContaining({ channelId: 42 }),
+        );
+    });
+
+    it('keeps the Shared Drive attachment identity when searching raw files', async () => {
+        state.activeChannel = { id: 42, title: 'Team files', kind: 'shared' };
+        state.searchQuery = 'invoice';
+        mocks.getFileList.mockResolvedValueOnce([{ msgId: 701, name: 'invoice.pdf', copyIdentity: 'raw:forwarded-file' }]);
+
+        await runGlobalSearch();
+
+        expect(mocks.buildFileRow).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 701, copyIdentity: 'raw:forwarded-file', source: 'tg' }),
+            '',
+            expect.objectContaining({ channelId: 42 }),
+        );
     });
 
     it('blurs the phone search field on Enter so results are not under the keyboard', async () => {

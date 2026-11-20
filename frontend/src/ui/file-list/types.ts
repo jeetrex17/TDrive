@@ -77,6 +77,8 @@ export type FileListFileRow = BaseInteractiveRow & {
     uploaderID: number;
     uploadTime: number;
     encrypted: boolean;
+    revision?: number;
+    copyIdentity?: string;
     canDelete: boolean;
     canRename: boolean;
     // Present only for projected media in the folder currently being viewed.

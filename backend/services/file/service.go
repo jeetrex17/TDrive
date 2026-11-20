@@ -9,8 +9,7 @@
 // supplies only policy: what to split, when to encrypt, what to retry, and when
 // a write becomes visible.
 //
-// Visibility differs per upload shape and is the easiest thing here to get
-// wrong:
+// File visibility depends on the storage path.
 //
 //  1. A file's identity is the msg_id of its header-carrying message — the
 //     document for a single-part upload, the manifest text message for a
@@ -25,17 +24,16 @@
 //     manifest Telegram accepted.
 //  4. Hidden (mount) uploads never commit here at all. UploadHidden returns a
 //     body and mountwrite publishes it with OpFileCommit.
-//  5. Delete never touches Telegram. It publishes a trash operation and stops;
-//     the bytes are destroyed only by an explicit purge or by the retention
-//     sweep, both of which delete exactly the messages the projection's
-//     immutable hard-delete plan lists.
+//  5. A My Drive copy reuses stored documents through Telegram. It records
+//     each hidden body before sending and becomes visible when ordered replay
+//     accepts its file commit, even for a single document. The copy journal
+//     retains uncertain writes for recovery.
+//  6. Delete publishes a trash operation. Explicit purges and the retention
+//     sweep delete the messages listed in the projection's hard-delete plan.
 //
-// Retrying is only safe because every send derives a stable Telegram random id
-// from the upload UUID plus a step label, and because every body is an
-// io.ReadSeeker that is rewound before a resend rather than resumed mid-stream.
-// Without an idempotent sender a multipart upload refuses to start and an
-// unknown single-part outcome becomes terminal: failing is better than
-// publishing a duplicate nobody can tell apart.
+// Upload and copy steps derive stable Telegram random IDs from their job IDs.
+// Upload retries rewind the body. Copy retries check source access and resolve
+// a fresh reference to the journaled document before each send.
 //
 // The split decision uses the stored (ciphertext) size rather than the
 // plaintext size, so encrypting a file near a boundary can make it multipart.
@@ -158,6 +156,8 @@ type Service struct {
 	downloadResumeErr  error
 	downloadResumeMu   sync.Mutex
 	downloadRuns       map[string]*downloadRun
+	sourceCopyOnce     sync.Once
+	sourceCopySlot     chan struct{}
 	downloadDiscards   map[string]bool
 	// DownloadStagingDir overrides the private download staging root in tests.
 	// Production leaves it empty and uses the app data directory.

@@ -1,17 +1,19 @@
 <script lang="ts">
     import FolderInputIcon from '@lucide/svelte/icons/folder-input';
     import DownloadIcon from '@lucide/svelte/icons/download';
+    import CopyIcon from '@lucide/svelte/icons/copy';
     import Trash2Icon from '@lucide/svelte/icons/trash-2';
     import { selectionBarState } from './selection-bar-store';
 
     interface SelectionBarProps {
         onDownload: () => void;
         onMove: () => void;
+        onCopy?: () => void;
         onDelete: () => void;
         onClear: () => void;
     }
 
-    let { onDownload, onMove, onDelete, onClear }: SelectionBarProps = $props();
+    let { onDownload, onMove, onCopy, onDelete, onClear }: SelectionBarProps = $props();
 
     const label = $derived($selectionBarState.count === 1
         ? '1 selected'
@@ -24,7 +26,7 @@
      calls clearSelection), so the count and Clear are hidden here and the bulk
      actions show as labelled icons. -->
 <div id="selection-count" class="selection-count" aria-atomic="true">{label}</div>
-<div class="selection-actions">
+<div class="selection-actions" class:with-copy={Boolean(onCopy)}>
     <button id="selection-download" class="selection-btn" type="button" onclick={onDownload}>
         <span class="selection-btn-icon" aria-hidden="true">
             <DownloadIcon size={22} strokeWidth={1.75} />
@@ -37,6 +39,14 @@
         </span>
         <span class="selection-btn-label">Move</span>
     </button>
+    {#if onCopy}
+        <button class="selection-btn" type="button" onclick={onCopy}>
+            <span class="selection-btn-icon" aria-hidden="true">
+                <CopyIcon size={22} strokeWidth={1.75} />
+            </span>
+            <span class="selection-btn-label">Copy to My Drive</span>
+        </button>
+    {/if}
     <button id="selection-delete" class="selection-btn danger" type="button" onclick={onDelete}>
         <span class="selection-btn-icon" aria-hidden="true">
             <Trash2Icon size={22} strokeWidth={1.75} />
@@ -85,6 +95,12 @@
         border-radius: var(--radius-md);
         font-size: var(--type-xs);
         font-weight: 600;
+    }
+    :global(html.mobile) .selection-actions.with-copy .selection-btn {
+        flex: 1 1 0;
+        min-width: 0;
+        padding-inline: var(--space-1);
+        line-height: 1.15;
     }
     :global(html.mobile) .selection-btn:active { background: var(--overlay-neutral-2); transform: none; }
     :global(html.mobile) .selection-btn.danger { border: none; color: var(--color-danger); }

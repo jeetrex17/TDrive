@@ -187,13 +187,10 @@
         width: min(390px, calc(100vw - 32px));
         max-height: min(680px, calc(100vh - 92px));
         overflow: auto;
-        scrollbar-width: none;
         color: var(--color-text);
         --motion-enter-y: 4px;
         animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
     }
-
-    .appearance-panel::-webkit-scrollbar { display: none; }
 
     .appearance-header {
         display: flex;
