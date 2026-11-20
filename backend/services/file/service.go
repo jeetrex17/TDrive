@@ -158,6 +158,8 @@ type Service struct {
 	downloadResumeErr  error
 	downloadResumeMu   sync.Mutex
 	downloadRuns       map[string]*downloadRun
+	sourceCopyOnce     sync.Once
+	sourceCopySlot     chan struct{}
 	downloadDiscards   map[string]bool
 	// DownloadStagingDir overrides the private download staging root in tests.
 	// Production leaves it empty and uses the app data directory.
