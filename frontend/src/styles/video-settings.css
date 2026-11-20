@@ -66,7 +66,7 @@
 .video-overlay.is-video-native-fallback .video-settings-panel .video-menu.is-open { display: block; }
 .video-settings-panel .video-menu.is-open { display: block; }
 .video-settings-panel .video-menu:not(.is-open) { display: none; }
-.video-track-list { max-height: 240px; overflow: auto; scrollbar-width: thin; }
+.video-track-list { max-height: 240px; overflow: auto; }
 .video-track-list button { width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }
 .video-track-empty { font-size: 13px; color: #a8b2c5; padding: 8px; }
 .video-picture-options { display: grid; gap: 7px; }

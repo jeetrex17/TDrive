@@ -632,7 +632,7 @@
     .channel-kinds { flex: 0 0 auto; }
 
     /* More file types fit without squeezing labels or shrinking touch targets. */
-    .channel-topbar-kinds { overflow-x: auto; scrollbar-width: none; }
+    .channel-topbar-kinds { overflow-x: auto; }
 
     .channel-search { width: clamp(150px, 18vw, 220px); }
 
@@ -920,7 +920,6 @@
            keyboard as well as the tab bar; otherwise the last posts sit under
            the keys while the user is typing to filter them. */
         padding: var(--space-2) 0 calc(var(--space-6) + var(--inset-keyboard));
-        scrollbar-width: none;
         overscroll-behavior-y: contain;
         -webkit-overflow-scrolling: touch;
     }

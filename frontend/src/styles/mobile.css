@@ -77,13 +77,6 @@ html.mobile .album-tile {
     -webkit-touch-callout: none;
 }
 
-/* The desktop 8px scrollbar (styles/base.css) has no place on a phone; the file
-   list already hid its own, and every other phone scroller -- Transfers,
-   Account, the photo grid, the drive sheet, the sheet bodies -- hides it here. */
-html.mobile *,
-html.mobile *::-webkit-scrollbar { scrollbar-width: none; }
-html.mobile *::-webkit-scrollbar { width: 0; height: 0; }
-
 html.mobile .mobile-body {
     position: relative;
     flex: 1 1 auto;
