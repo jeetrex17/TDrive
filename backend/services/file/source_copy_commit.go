@@ -14,10 +14,21 @@ const sourceCopyNameAttempts = 200
 func (job sourceCopyJob) commitOp() projection.Op {
 	return projection.Op{
 		Type: projection.OpFileCommit, ProtocolVersion: 1,
-		OpID:   fmt.Sprintf("%s:%d", job.Result.ID, job.Attempt),
+		OpID:   job.commitOpID(job.Attempt),
 		Parent: job.Result.ParentID, Name: job.Candidate,
 		UploadUUID: job.bodyUUID(), PartCount: len(job.Parts), FileSize: job.size(), FileUploadTime: job.StartedAt,
 	}
+}
+
+func (job sourceCopyJob) commitOpID(attempt int) string {
+	return fmt.Sprintf("%s:%d", job.Result.ID, attempt)
+}
+
+func (job sourceCopyJob) copyCandidateName(attempt int) string {
+	if attempt == 1 {
+		return job.Result.Name
+	}
+	return projection.PortableFileName(job.Result.Name, attempt)
 }
 
 func (w sourceCopyWorker) publish(ctx context.Context, job sourceCopyJob) (SourceCopyResult, error) {
@@ -95,10 +106,7 @@ func (w sourceCopyWorker) newCopyCommit(ctx context.Context, job sourceCopyJob, 
 		return job, false, nil
 	}
 	for attempt := start; attempt <= sourceCopyNameAttempts; attempt++ {
-		name := job.Result.Name
-		if attempt > 1 {
-			name = projection.PortableFileName(name, attempt)
-		}
+		name := job.copyCandidateName(attempt)
 		_, found, err := projection.LiveDirentByName(w.DB, job.ChannelID, job.Result.ParentID, name)
 		if err != nil {
 			return job, false, err

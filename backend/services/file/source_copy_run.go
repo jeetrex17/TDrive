@@ -57,6 +57,13 @@ func (w *sourceCopyWorker) run(ctx context.Context, job sourceCopyJob) (SourceCo
 		if err := w.repairLegacyCopyReplay(ctx, job.ChannelID); err != nil {
 			return w.finish(ctx, job, sourceCopyPending, sourceCopyReceiptPending)
 		}
+		recovered, found, err := w.recoverEarlierCopyCommit(ctx, job)
+		if err != nil {
+			return w.finish(ctx, job, sourceCopyPending, sourceCopyReceiptPending)
+		}
+		if found {
+			return w.finish(ctx, recovered, sourceCopySaved, "")
+		}
 	}
 	if job.CleaningUp {
 		return w.cleanup(ctx, job)
