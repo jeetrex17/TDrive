@@ -1,0 +1,113 @@
+import { bootTDrive, expect, resolves, test } from './wails-mock';
+
+const source = {
+    peer_kind: 'channel',
+    peer_id: 50,
+    channel_id: 50,
+    title: 'Field Recordings',
+    username: 'fieldrec',
+    connected: true,
+    protected: false,
+    available: true,
+    account_id: 7,
+    generation: 'source-a',
+};
+
+const longStem = 'Estuary_Field_Recordings_S02E08_Late_Summer_Coast_2160p_Multilingual_Commentary_Directors_Cut';
+
+function copyPlans(names: readonly string[], plannedNames: readonly string[] = names) {
+    return {
+        ListConnectedChannelSources: resolves([source]),
+        ListChannelMedia: resolves({
+            ...source,
+            items: names.map((name, index) => ({
+                msg_id: 100 - index,
+                date: 1_735_689_600 - index,
+                name,
+                size: 2048,
+                duration: 754,
+                mime_type: 'video/x-matroska',
+                kind: 'video',
+                caption: '',
+                streamable: true,
+                block_reason: '',
+                telegram_url: '',
+                copy_identity: `copy-${index}`,
+            })),
+            next_offset_id: 0,
+            has_more: false,
+        }),
+        ListSourceCopyFolders: resolves({
+            drive_id: 1,
+            folders: [{ id: 'd:archive', name: 'Field archive', parent_id: '' }],
+        }),
+        PreviewSourceCopyNames: resolves(plannedNames),
+    };
+}
+
+test('expanded copy selection keeps long names compact and explains renames', async ({ page }) => {
+    const original = `${longStem}.mkv`;
+    const companion = 'Shoreline_Bonus_Interview.mkv';
+    const plannedStem = `${longStem} (2)`;
+    const plannedName = `${plannedStem}.mkv`;
+    await bootTDrive(page, copyPlans([original, companion], [plannedName, companion]));
+    await page.getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
+    await page.getByText(original, { exact: true }).click();
+    await page.getByText(companion, { exact: true }).click({ modifiers: ['Shift'] });
+    await page.getByRole('button', { name: 'Save 2 files to My Drive', exact: true }).click();
+
+    const dialog = page.getByRole('dialog', { name: 'Save to My Drive', exact: true });
+    const save = dialog.getByRole('button', { name: 'Save here', exact: true });
+    const toggle = dialog.getByText('2 files selected', { exact: true });
+    const selectedFiles = dialog.getByRole('list', { name: 'Selected files', exact: true });
+    await expect(save).toBeEnabled();
+    await expect(selectedFiles).toBeHidden();
+
+    await toggle.click();
+    const rows = selectedFiles.getByRole('listitem');
+    await expect(rows).toHaveCount(2);
+    const renamed = rows.filter({ has: page.getByTitle(plannedName, { exact: true }) });
+    const name = renamed.getByText(plannedStem, { exact: true });
+    await expect(name).toBeVisible();
+    await expect(renamed.getByText('.mkv', { exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(renamed).toContainText(`Renamed from ${original}`);
+    const nameLines = await name.evaluate((element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        return new Set(Array.from(range.getClientRects(), ({ top }) => top)).size;
+    });
+    expect(nameLines).toBe(1);
+    await expect(dialog.getByText('Copies are saved without vault encryption.', { exact: false })).toBeVisible();
+    await expect(save).toBeInViewport();
+
+    await toggle.press('Enter');
+    await expect(selectedFiles).toBeHidden();
+});
+
+test('the mobile copy sheet keeps its footer in view with a long selection', async ({ page }) => {
+    await page.setViewportSize({ width: 320, height: 640 });
+    const names = Array.from({ length: 12 }, (_, index) => `${index + 1}_${longStem}.mkv`);
+    await bootTDrive(page, { ...copyPlans(names), Haptic: resolves(null) }, { url: '/?mobile=ios' });
+    await page.getByRole('button', { name: /Switch drive/ }).click();
+    await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
+    await page.getByRole('button', { name: `Actions for ${names[0]}`, exact: true }).click();
+    await page.getByRole('dialog', { name: names[0], exact: true }).getByRole('button', { name: 'Select', exact: true }).click();
+    for (const name of names.slice(1)) await page.getByText(name, { exact: true }).click();
+    await page.getByRole('button', { name: 'Save 12 files to My Drive', exact: true }).click();
+
+    const dialog = page.getByRole('dialog', { name: 'Save to My Drive', exact: true });
+    await dialog.getByText('12 files selected', { exact: true }).click();
+    const selectedFiles = dialog.getByRole('list', { name: 'Selected files', exact: true });
+    await expect(selectedFiles.getByRole('listitem')).toHaveCount(12);
+    await expect(dialog.getByText('Copies are saved without vault encryption.', { exact: false })).toBeInViewport({ ratio: 1 });
+    await expect(dialog.getByRole('button', { name: 'Save here', exact: true })).toBeInViewport({ ratio: 1 });
+    await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeInViewport({ ratio: 1 });
+    expect(await dialog.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+
+    // All rows must still be reachable when the expanded list exceeds its height.
+    const lastName = selectedFiles.getByTitle(names[names.length - 1], { exact: true });
+    await selectedFiles.hover();
+    await page.mouse.wheel(0, 1000);
+    await expect(lastName).toBeInViewport();
+    await expect(dialog.getByRole('button', { name: 'Save here', exact: true })).toBeInViewport({ ratio: 1 });
+});
