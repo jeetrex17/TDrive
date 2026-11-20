@@ -44,24 +44,19 @@ test('the standalone PDF viewer scrolls in both directions with hidden scrollbar
     await expectHiddenScrollbars(page, page.locator('#viewerContainer'), true);
 });
 
-for (const { name, className, horizontal } of [
-    { name: 'video track list', className: 'video-track-list', horizontal: true },
-    { name: 'video popover', className: 'video-popover-body', horizontal: false },
-]) {
-    test(`the ${name} scrolls with hidden scrollbars`, async ({ page }) => {
-        await bootTDrive(page);
-        // Isolate the player styles without depending on video decoding or track availability.
-        await page.evaluate(className => {
-            const region = document.createElement('div');
-            region.className = className;
-            region.style.position = 'fixed';
-            region.style.top = '100px';
-            region.style.left = '400px';
-            region.style.width = '160px';
-            region.style.height = '100px';
-            region.style.zIndex = '10000';
-            document.body.append(region);
-        }, className);
-        await expectHiddenScrollbars(page, page.locator(`body > .${className}`), horizontal);
+test('the video track list scrolls in both directions with hidden scrollbars', async ({ page }) => {
+    await bootTDrive(page);
+    // Isolate the track list styles from the media codecs on this platform.
+    await page.evaluate(() => {
+        const region = document.createElement('div');
+        region.className = 'video-track-list';
+        region.style.position = 'fixed';
+        region.style.top = '100px';
+        region.style.left = '400px';
+        region.style.width = '160px';
+        region.style.height = '100px';
+        region.style.zIndex = '10000';
+        document.body.append(region);
     });
-}
+    await expectHiddenScrollbars(page, page.locator('body > .video-track-list'), true);
+});

@@ -149,6 +149,45 @@ test('plays a real file, and closing it releases the backend session', async ({ 
     await expect.poll(async () => (await mock.calls('CloseMedia')).length).toBeGreaterThan(0);
 });
 
+test('the mounted playlist scrolls with hidden scrollbars', async ({ page }) => {
+    await serveFixture(page);
+    await page.addInitScript(() => localStorage.setItem('tdrive.video.auto-next.v1', 'false'));
+    const files = [VIDEO_FILE, ...Array.from({ length: 20 }, (_, index) => ({
+        ...VIDEO_FILE,
+        name: `clip-${String(index).padStart(2, '0')}.mp4`,
+        msg_id: VIDEO_FILE.msg_id + index + 1,
+        upload_time: VIDEO_FILE.upload_time - index - 1,
+    }))];
+    await bootTDrive(page, {
+        GetMediaStats: resolves({ playback: {}, thumbnails: {} }),
+        UpdateMediaPlayback: resolves(null),
+        GetFolderContents: resolves({ folders: [], files }),
+        OpenMedia: resolves(opened()),
+    });
+    await openTheVideo(page);
+    await expect.poll(() => page.locator('#video-player')
+        .evaluate((element: HTMLVideoElement) => element.duration)).toBeGreaterThan(0);
+    await page.getByRole('button', { name: /^Playlist, / }).click();
+
+    const scroller = page.locator('#video-playlist-panel .video-popover-body');
+    const first = scroller.getByRole('button', { name: /^clip\.mp4,/ });
+    const last = scroller.getByRole('button', { name: /^clip-19\.mp4,/ });
+    await expect(scroller).toBeVisible();
+    await expect(first).toBeInViewport();
+    await expect(last).not.toBeInViewport();
+    await expect(scroller).toHaveCSS('scrollbar-width', 'none');
+
+    await first.hover();
+    expect(await scroller.evaluate(element => element.scrollTop)).toBe(0);
+    await page.mouse.wheel(0, 180);
+    await expect.poll(() => scroller.evaluate(element => element.scrollTop)).toBeGreaterThan(0);
+
+    await first.focus();
+    await page.keyboard.press('End');
+    await expect(last).toBeFocused();
+    await expect(last).toBeInViewport();
+});
+
 test('a forwarded video in a shared drive plays without a filesystem entry', async ({ page }) => {
     await serveFixture(page);
     const mock = await bootTDrive(page, {
