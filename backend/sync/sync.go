@@ -222,10 +222,9 @@ func (e *Engine) incrementalLocked(ctx context.Context, channelID int64) error {
 	return projection.RebuildProjection(e.db, channelID)
 }
 
-// incrementalLockedWithReplayStatus reports whether a message fetched above
-// the contiguous watermark was already present in replay_log. That can happen
-// when a local writable commit was projected ahead of sync, in which case the
-// caller must replay the completed log before reporting successful sync.
+// incrementalLockedWithReplayStatus reports whether the sync crossed any
+// operations already projected above the contiguous watermark. The caller
+// must replay them in message order before reporting a successful sync.
 func (e *Engine) incrementalLockedWithReplayStatus(ctx context.Context, channelID int64) (bool, error) {
 	channel, err := projection.GetChannel(e.db, channelID)
 	if err != nil {
@@ -595,7 +594,11 @@ func (e *Engine) applyHistoryPlan(ctx context.Context, channelID int64, peer tgc
 		if err != nil {
 			return false, fmt.Errorf("sync: begin projection: %w", err)
 		}
-		pageReplayOverlap := false
+		pageReplayOverlap, err := replayInNewlyCoveredRangeTx(tx, channelID, minID, pageWatermark)
+		if err != nil {
+			_ = tx.Rollback()
+			return false, err
+		}
 		for _, p := range parsed {
 			alreadySeen, err := projection.ProjectFromOpTx(tx, channelID, p.MsgID, p.Op, p.FromID, p.RawHeader)
 			if err != nil {
@@ -848,6 +851,25 @@ func markProjectionRebuildRequiredTx(tx *sql.Tx, channelID int64) error {
 		return fmt.Errorf("sync: channel %d not registered", channelID)
 	}
 	return nil
+}
+
+// A local operation may still be in the first-seen log after Telegram stops
+// returning its message. Detect overlap before processing the page so crossing
+// its ID can never certify an out-of-order projection without rebuilding.
+func replayInNewlyCoveredRangeTx(tx *sql.Tx, channelID, watermark, through int64) (bool, error) {
+	if through <= watermark {
+		return false, nil
+	}
+	var overlap bool
+	err := tx.QueryRow(`
+		SELECT EXISTS (
+			SELECT 1 FROM replay_log WHERE channel_id=? AND msg_id>? AND msg_id<=?
+		)
+	`, channelID, watermark, through).Scan(&overlap)
+	if err != nil {
+		return false, fmt.Errorf("sync: check replay range: %w", err)
+	}
+	return overlap, nil
 }
 
 func writeWatermarkTx(tx *sql.Tx, channelID int64, msgID int64) error {

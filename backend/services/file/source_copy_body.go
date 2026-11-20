@@ -234,8 +234,8 @@ func (w sourceCopyWorker) abandonConfirmedPrefix(ctx context.Context, job source
 	if err := w.sync(ctx); err != nil {
 		return w.stop(ctx, job, sourceCopyPending, sourceCopyReceiptPending)
 	}
-	channel, err := projection.GetChannel(w.DB, job.ChannelID)
-	if err != nil || !channel.InitialSyncDone || channel.NeedsProjectionRebuild || channel.LastSyncedMsg < job.lastBodyID() {
+	snapshot, err := projection.ReadOperationSnapshot(ctx, w.DB, job.ChannelID, "")
+	if err != nil || !snapshot.Ordered || snapshot.Watermark < job.lastBodyID() {
 		return w.stop(ctx, job, sourceCopyPending, sourceCopyReceiptPending)
 	}
 	result, err := w.abandonBody(ctx, job)

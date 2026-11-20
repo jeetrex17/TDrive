@@ -83,6 +83,22 @@ func (w sourceCopyWorker) cleanup(ctx context.Context, job sourceCopyJob) (Sourc
 	if err := w.checkSourceCopyScope(ctx, job.ChannelID, w.accountID); err != nil {
 		return w.finish(ctx, job, sourceCopyPending, sourceCopyReceiptPending)
 	}
+	// The persisted cleanup flag records intent. An interrupted cleanup may
+	// have based that intent on a projection that has since been repaired.
+	if job.Attempt > 0 {
+		outcome, found, err := w.copyCommitOutcome(ctx, job)
+		if err != nil || !found {
+			return w.finish(ctx, job, sourceCopyPending, sourceCopyReceiptPending)
+		}
+		switch outcome.Outcome {
+		case projection.OperationApplied:
+			job.Result.FileID = outcome.MsgID
+			return w.finish(ctx, job, sourceCopySaved, "")
+		case projection.OperationRejected:
+		default:
+			return w.finish(ctx, job, sourceCopyPending, sourceCopyReceiptPending)
+		}
+	}
 	ids, err := w.cleanableBodies(ctx, job)
 	if err != nil {
 		return w.finish(ctx, job, sourceCopyPending, "The save failed. Check again to finish cleanup.")

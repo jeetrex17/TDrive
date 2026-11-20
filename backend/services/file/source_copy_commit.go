@@ -63,16 +63,18 @@ func (w sourceCopyWorker) publish(ctx context.Context, job sourceCopyJob) (Sourc
 
 func (w sourceCopyWorker) copyCommitOutcome(ctx context.Context, job sourceCopyJob) (projection.ProjectionOperation, bool, error) {
 	op := job.commitOp()
-	outcome, found, err := projection.ProjectionOperationByID(w.DB, job.ChannelID, op.OpID)
-	if err != nil || !found {
-		return outcome, found, err
-	}
-	channel, err := projection.GetChannel(w.DB, job.ChannelID)
+	snapshot, err := projection.ReadOperationSnapshot(ctx, w.DB, job.ChannelID, op.OpID)
 	if err != nil {
-		return outcome, false, err
+		return projection.ProjectionOperation{}, false, err
+	}
+	outcome := snapshot.Operation
+	if !snapshot.Ordered || snapshot.Watermark < max(outcome.MsgID, job.lastBodyID()) {
+		return outcome, false, errors.New("Could not confirm ordered replay in My Drive")
+	}
+	if outcome.MsgID == 0 {
+		return outcome, false, nil
 	}
 	if outcome.OpType != op.Type || outcome.MsgID <= job.lastBodyID() ||
-		!channel.InitialSyncDone || channel.NeedsProjectionRebuild || channel.LastSyncedMsg < outcome.MsgID ||
 		(job.CommitID > 0 && job.CommitID != outcome.MsgID) {
 		return outcome, false, errors.New("Could not match the ordered My Drive commit")
 	}
