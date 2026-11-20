@@ -178,6 +178,73 @@ test('a forwarded video in a shared drive plays without a filesystem entry', asy
 });
 
 for (const platform of ['android', 'ios'] as const) {
+    test(`horizontal swipes on the video surface seek on ${platform}`, async ({ page, browserName }) => {
+        await page.setViewportSize({ width: 390, height: 844 });
+        await serveFixture(page);
+        await bootTDrive(page, {
+            GetMediaStats: resolves({ playback: {}, thumbnails: {} }),
+            UpdateMediaPlayback: resolves(null),
+            GetFolderContents: resolves({ folders: [], files: [VIDEO_FILE] }),
+            OpenMedia: resolves(opened()),
+        }, { url: `/?mobile=${platform}` });
+        await openTheVideo(page);
+
+        const player = page.locator('#video-player');
+        await expect.poll(() => player.evaluate((el: HTMLVideoElement) => el.duration)).toBeGreaterThan(0);
+        await player.evaluate((el: HTMLVideoElement) => { el.pause(); el.currentTime = el.duration / 2; });
+        const stage = page.locator('#video-stage');
+        await expect(stage).toHaveCSS('touch-action', 'none');
+        const rect = (await stage.boundingBox())!;
+        const left = rect.x + rect.width / 4;
+        const right = rect.x + rect.width * 3 / 4;
+        const topBar = (await page.locator('.video-topbar').boundingBox())!;
+        const controls = (await page.locator('.video-controls').boundingBox())!;
+        const client = browserName === 'chromium' ? await page.context().newCDPSession(page) : null;
+        await client?.send('Emulation.setTouchEmulationEnabled', { enabled: true });
+
+        async function swipe(from: number, to: number, y: number) {
+            await expect.poll(() => player.evaluate((el: HTMLVideoElement) => el.seeking)).toBe(false);
+            await expect.poll(() => page.evaluate(({ from, y }) => (
+                document.elementFromPoint(from, y)?.id
+            ), { from, y })).toMatch(/^video-(player|stage)$/);
+            if (client) {
+                await client.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: from, y }] });
+                for (let step = 1; step <= 4; step += 1) {
+                    const x = from + (to - from) * step / 4;
+                    await client.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y }] });
+                }
+                await client.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+                return;
+            }
+            // Playwright exposes touch injection through CDP on Chromium. On
+            // WebKit, keep hit testing real and dispatch touch PointerEvents.
+            await page.evaluate(({ from, to, y }) => {
+                const target = document.elementFromPoint(from, y);
+                const touch = { bubbles: true, pointerType: 'touch', pointerId: 1, clientY: y };
+                target?.dispatchEvent(new PointerEvent('pointerdown', { ...touch, clientX: from }));
+                target?.dispatchEvent(new PointerEvent('pointermove', { ...touch, clientX: to }));
+                target?.dispatchEvent(new PointerEvent('pointerup', { ...touch, clientX: to }));
+            }, { from, to, y });
+        }
+
+        try {
+            await swipe(left, right, topBar.y + topBar.height - 16);
+            await expect.poll(() => player.evaluate((el: HTMLVideoElement) => el.duration - el.currentTime)).toBeLessThan(0.05);
+            await swipe(right, left, controls.y + 16);
+            await expect.poll(() => player.evaluate((el: HTMLVideoElement) => el.currentTime)).toBeLessThan(0.05);
+
+            await expect(page.locator('#video-center-controls')).toHaveAttribute('aria-hidden', 'false');
+            const centerPlay = (await page.locator('#video-center-play').boundingBox())!;
+            const centerBack = (await page.locator('#video-center-skip-back').boundingBox())!;
+            const centerGap = (centerBack.x + centerBack.width + centerPlay.x) / 2;
+            await swipe(centerGap, right, centerPlay.y + centerPlay.height / 2);
+            await expect.poll(() => player.evaluate((el: HTMLVideoElement) => el.duration - el.currentTime)).toBeLessThan(0.05);
+            await expect.poll(() => player.evaluate((el: HTMLVideoElement) => el.paused)).toBe(true);
+        } finally {
+            await client?.detach();
+        }
+    });
+
     test(`a touch drag scrubs the mobile timeline on ${platform}`, async ({ page, browserName }) => {
         await page.setViewportSize({ width: 390, height: 844 });
         await serveFixture(page);
