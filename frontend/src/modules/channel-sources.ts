@@ -327,5 +327,5 @@ export async function openChannelPost(
     const { target, playlist } = channelVideoQueue(item, source, posts, open);
     const { activateVideoModal, openVideoModal } = await import('./modals/video');
     activateVideoModal();
-    await openVideoModal(target, playlist);
+    await openVideoModal(target, playlist, { accountId: Number(source.accountId), channelId: 0 });
 }

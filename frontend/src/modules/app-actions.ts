@@ -1,5 +1,6 @@
 export interface AppFileTarget {
     id: number;
+    channelId?: number;
     name: string;
     size: number;
     encrypted?: boolean;

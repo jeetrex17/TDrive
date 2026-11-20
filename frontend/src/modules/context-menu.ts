@@ -116,7 +116,7 @@ export function buildFileContextMenuItems(row: FileListFileRow, { folderGroup = 
 
     const items: ContextMenuItem[] = [];
     if (isVideoFile(fileName)) {
-        items.push({ label: "Play", icon: 'play', primary: tile, shortcut: 'Enter', action: () => { void appActions().playVideo({ id: fileID, name: fileName, size: fileSize, encrypted }); } });
+        items.push({ label: "Play", icon: 'play', primary: tile, shortcut: 'Enter', action: () => { void appActions().playVideo({ id: fileID, channelId: sourceChannelId, name: fileName, size: fileSize, encrypted }); } });
     } else if (isImageFile(fileName)) {
         items.push({ label: "Open", icon: 'open', primary: tile, shortcut: 'Enter', action: () => { void openImagePreview(row); } });
     } else if (canOpenFileViewer(fileName)) {

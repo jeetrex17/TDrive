@@ -494,9 +494,11 @@ the session; native close also shuts down the native player. Closing a session
 cancels range work, thumbnail workers and decryptors. Vault lock closes encrypted
 sessions while preserving unrelated clear-media sessions.
 
-The controller remembers native playback for a direct webview format only once
-mpv reports a playable state. If the native route fails, the next retry can open
-the file in the webview again.
+The controller remembers native playback for a direct webview format once mpv
+reports a playable state. The bounded cache keys each preference by account,
+drive or typed Telegram peer, and file ID, name and size. If the native route
+fails, Retry opens the same file in the webview even when local storage cannot
+remove the saved preference.
 
 ## Remembered playback and mobile controls
 

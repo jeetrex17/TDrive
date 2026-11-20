@@ -166,7 +166,7 @@ function renderSearchResults(results: SearchHit[], query: string) {
                     className: "play-video",
                     title: "Play",
                     label: "Play video",
-                    onClick: () => { void appActions().playVideo({ id, name, size, encrypted }); },
+                    onClick: () => { void appActions().playVideo({ id, channelId: sourceChannelId, name, size, encrypted }); },
                 });
             } else if (canOpenFileViewer(name)) {
                 actions.push({
@@ -204,7 +204,7 @@ function renderSearchResults(results: SearchHit[], query: string) {
                 actions,
                 onDoubleClick: () => {
                     if (isVideoFile(name)) {
-                        void appActions().playVideo({ id, name, size, encrypted });
+                        void appActions().playVideo({ id, channelId: sourceChannelId, name, size, encrypted });
                         return;
                     }
                     if (canOpenFileViewer(name)) {
@@ -223,7 +223,7 @@ function renderSearchResults(results: SearchHit[], query: string) {
                         if (state.selectedItems.size === 0) {
                             event.stopPropagation();
                             if (isVideoFile(name)) {
-                                void appActions().playVideo({ id, name, size, encrypted });
+                                void appActions().playVideo({ id, channelId: sourceChannelId, name, size, encrypted });
                             } else if (canOpenFileViewer(name)) {
                                 void appActions().openFile({ id, name, size, encrypted });
                             } else {

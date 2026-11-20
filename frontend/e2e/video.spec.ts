@@ -53,9 +53,9 @@ function opened(overrides: Record<string, unknown> = {}) {
         supports_range: true,
         info: {
             channel_id: 1,
-            msg_id: VIDEO_FILE.msg_id,
+            file_id: VIDEO_FILE.msg_id,
             name: VIDEO_FILE.name,
-            size: VIDEO_FILE.size,
+            stored_size: VIDEO_FILE.size,
         },
         ...overrides,
     };
@@ -303,7 +303,9 @@ test('retries a Shared Drive video in the webview when native attachment fails',
 test('clears a remembered native route when the native player cannot start', async ({ page }) => {
     await serveFixture(page);
     await page.addInitScript((video) => {
-        localStorage.setItem('tdrive.video.nativeOnly', JSON.stringify([`${video.msg_id}:${video.name}:${video.size}`]));
+        const scopeKey = JSON.stringify([7, 'drive', 1, video.msg_id, 0]);
+        const hint = JSON.stringify([scopeKey, video.name, video.size]);
+        localStorage.setItem('tdrive.video.nativeOnly.v2', JSON.stringify([hint]));
     }, VIDEO_FILE);
     const mock = await bootTDrive(page, {
         GetMediaStats: resolves({ playback: {}, thumbnails: {} }),
