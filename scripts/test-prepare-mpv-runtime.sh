@@ -17,6 +17,7 @@ export CGO_ENABLED=1
 export RUNNER_TEMP="$TMP_ROOT/runner"
 export GITHUB_ENV="$TMP_ROOT/github-env"
 export PKG_CONFIG_LIBDIR="$TMP_ROOT/pkgconfig"
+export TDRIVE_TEST_LIBARCHIVE_PREFIX="$TMP_ROOT/libarchive"
 unset PKG_CONFIG_PATH TDRIVE_MACOS_MPV_RUNTIME_URL TDRIVE_MACOS_MPV_RUNTIME_SHA256
 mkdir -p "$TMP_ROOT/project/native" "$TMP_ROOT/pkgconfig" "$TMP_ROOT/bin" \
   "$TMP_ROOT/repo/scripts" "$TMP_ROOT/repo/build/darwin"
@@ -73,7 +74,17 @@ EOF
 
 cat > "$TMP_ROOT/bin/brew" <<'EOF'
 #!/bin/sh
-echo 'mpv fixture'
+if [ "$*" = "--prefix libarchive" ]; then
+  printf '%s\n' "$TDRIVE_TEST_LIBARCHIVE_PREFIX"
+else
+  echo 'mpv fixture'
+fi
+EOF
+mkdir -p "$TDRIVE_TEST_LIBARCHIVE_PREFIX/lib/pkgconfig"
+cat > "$TDRIVE_TEST_LIBARCHIVE_PREFIX/lib/pkgconfig/libarchive.pc" <<'EOF'
+Name: libarchive
+Description: keg-only libarchive fixture
+Version: 3.8.11
 EOF
 cat > "$TMP_ROOT/bin/mpv" <<'EOF'
 #!/bin/sh
@@ -92,7 +103,7 @@ chmod +x "$TMP_ROOT/bin/"*
 cd "$TMP_ROOT/project"
 for runtime_mode in homebrew pinned; do
   export PKG_CONFIG_LIBDIR="$TMP_ROOT/pkgconfig"
-  unset MACOSX_DEPLOYMENT_TARGET
+  unset MACOSX_DEPLOYMENT_TARGET PKG_CONFIG_PATH
   if [ "$runtime_mode" = pinned ]; then
     export TDRIVE_MACOS_MPV_RUNTIME_URL=https://example.invalid/mpv.tar.gz
     export TDRIVE_MACOS_MPV_RUNTIME_SHA256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
@@ -117,10 +128,25 @@ for runtime_mode in homebrew pinned; do
     exit 1
   fi
 
+  if [ "$runtime_mode" = homebrew ]; then
+    printf 'Requires.private: libarchive\n' >> "$PKG_CONFIG_LIBDIR/mpv.pc"
+    if pkg-config --cflags --libs -- mpv >"$TMP_ROOT/pkg-config.log" 2>&1; then
+      echo "fixture did not reproduce the missing keg-only libarchive" >&2
+      exit 1
+    fi
+    if ! grep -q "libarchive.*not found" "$TMP_ROOT/pkg-config.log"; then
+      cat "$TMP_ROOT/pkg-config.log" >&2
+      exit 1
+    fi
+  fi
+
   PATH="$TMP_ROOT/bin:$PATH" bash "$TMP_ROOT/repo/scripts/prepare-mpv-runtime.sh"
   set -a
   source "$GITHUB_ENV"
   set +a
+  if [ "$runtime_mode" = homebrew ]; then
+    pkg-config --cflags --libs -- mpv >/dev/null
+  fi
   if ! go build -o "$TMP_ROOT/fresh-app" . >"$TMP_ROOT/fresh.log" 2>&1; then
     cat "$TMP_ROOT/fresh.log" >&2
     echo "runtime preparation retained stale cgo linker flags" >&2

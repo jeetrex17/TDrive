@@ -100,6 +100,12 @@ case "$PLATFORM" in
     ;;
   darwin)
     brew list mpv >/dev/null 2>&1 || brew install mpv
+    # mpv's pkg-config metadata can require libarchive, which Homebrew keeps keg-only.
+    if libarchive_prefix="$(brew --prefix libarchive)" && [ -f "$libarchive_prefix/lib/pkgconfig/libarchive.pc" ]; then
+      export PKG_CONFIG_PATH="$libarchive_prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+      emit "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
+    fi
+    pkg-config --cflags --libs -- mpv >/dev/null
     libmpv="$(pkg-config --variable=libdir mpv)/libmpv.2.dylib"
     mkdir -p "$runtime_root/bin" "$runtime_root/lib"
     cp -pL "$(command -v mpv)" "$runtime_root/bin/mpv"
