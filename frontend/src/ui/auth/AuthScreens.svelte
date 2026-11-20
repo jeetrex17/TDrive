@@ -19,6 +19,7 @@
         authSubmission,
         type AuthFlow,
     } from './auth-store';
+    import { pushSheet } from '../modals/sheet-stack';
     import { personalDriveSetup } from './personal-drive-store';
     import PersonalDriveSetup from './PersonalDriveSetup.svelte';
     import { installUpdate, openReleasePage } from '../../modules/updates';
@@ -55,6 +56,18 @@
     const mobile = isMobilePlatform();
     let welcomed = $state(false);
     const step = $derived(mobile && $authScreen === 'setup' && !welcomed ? 'welcome' : $authScreen);
+
+    // Phone BACK steps back through sign-in the way the on-screen links do,
+    // instead of falling through to the host and leaving the app.
+    $effect(() => {
+        if (!mobile) return;
+        const back = step === 'code' && !$authSubmission.code.busy ? onBackToPhone
+            : step === 'setup' ? () => { welcomed = false; }
+            : null;
+        if (!back) return;
+        const sheet = pushSheet(back);
+        return () => sheet.release();
+    });
 
     // Update discoverability for users who are stuck before login (e.g. a
     // Telegram API change breaks sign-in). The updater runs independently of

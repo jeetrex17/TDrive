@@ -4,10 +4,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import AuthScreens from './AuthScreens.svelte';
 import { showAuthView, showStartupView } from '../app/app-store';
-import { resetAuthSubmissions } from './auth-store';
+import { beginAuthSubmission, resetAuthSubmissions } from './auth-store';
+import { closeTopSheet, hasOpenSheet } from '../modals/sheet-stack';
 
 let host: HTMLElement;
 let app: Record<string, unknown>;
+let onBackToPhone: ReturnType<typeof vi.fn<() => void>>;
 
 function field(id: string): HTMLInputElement {
     const el = host.querySelector<HTMLInputElement>(`#${id}`);
@@ -21,6 +23,7 @@ beforeEach(() => {
     resetAuthSubmissions();
     host = document.createElement('div');
     document.body.appendChild(host);
+    onBackToPhone = vi.fn<() => void>();
     app = mount(AuthScreens, {
         target: host,
         props: {
@@ -28,7 +31,7 @@ beforeEach(() => {
             onPhone: vi.fn(),
             onCode: vi.fn(),
             onPassword: vi.fn(),
-            onBackToPhone: vi.fn(),
+            onBackToPhone,
         },
     });
 });
@@ -98,5 +101,32 @@ describe('AuthScreens on a phone', () => {
         flushSync();
         expect(host.querySelector('.auth-welcome')).toBeNull();
         expect(host.querySelector('form[aria-labelledby="auth-phone-title"]')).not.toBeNull();
+    });
+
+    it('steps BACK from the code page to the phone page', () => {
+        showAuthView('code');
+        flushSync();
+        expect(closeTopSheet()).toBe(true);
+        expect(onBackToPhone).toHaveBeenCalledOnce();
+    });
+
+    it('leaves BACK to the host while a code is being checked', () => {
+        showAuthView('code');
+        beginAuthSubmission('code');
+        flushSync();
+        expect(hasOpenSheet()).toBe(false);
+    });
+
+    it('steps BACK from credentials to the welcome page', () => {
+        showAuthView('setup');
+        flushSync();
+        expect(hasOpenSheet()).toBe(false);
+        host.querySelector<HTMLButtonElement>('.auth-welcome button')?.click();
+        flushSync();
+
+        expect(closeTopSheet()).toBe(true);
+        flushSync();
+        expect(host.querySelector('.auth-welcome')).not.toBeNull();
+        expect(hasOpenSheet()).toBe(false);
     });
 });
