@@ -1,24 +1,6 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ImageExif } from '../exif';
-
-const exif = vi.hoisted(() => ({
-    dataUrlToBytes: vi.fn(() => new Uint8Array([0xff, 0xd8, 0xff, 0xd9])),
-    parseExif: vi.fn<() => ImageExif>(() => ({ gps: { lat: 37.7749, lon: -122.4194 } })),
-}));
-
-vi.mock('../exif', () => ({
-    dataUrlToBytes: exif.dataUrlToBytes,
-    parseExif: exif.parseExif,
-}));
-
+import { afterEach, describe, expect, it } from 'vitest';
 import { renderImageInfoHTML } from './preview-info';
 import { state } from '../../state';
-
-beforeEach(() => {
-    vi.clearAllMocks();
-    exif.dataUrlToBytes.mockReturnValue(new Uint8Array([0xff, 0xd8, 0xff, 0xd9]));
-    exif.parseExif.mockReturnValue({ gps: { lat: 37.7749, lon: -122.4194 } });
-});
 
 afterEach(() => {
     state.activeChannel = null;
@@ -36,7 +18,7 @@ describe('renderImageInfoHTML location privacy', () => {
                 uploaderId: 0,
                 uploadTime: 0,
             },
-            fullSrc: 'data:image/jpeg;base64,/9j/2Q==',
+            exif: { gps: { lat: 37.7749, lon: -122.4194 } },
             naturalWidth: 0,
             naturalHeight: 0,
         });
@@ -60,15 +42,6 @@ describe('renderImageInfoHTML location privacy', () => {
         expect(mapUrl.searchParams.get('query')).toBe('37.7749,-122.4194');
     });
     it('omits all location traffic when the image has no GPS metadata', () => {
-        exif.parseExif.mockReturnValue({
-            make: '<img src=x onerror=alert(1)>',
-            model: 'Camera',
-            lens: '<script>alert(1)</script>',
-            fNumber: 2.8,
-            exposureTime: '1/60',
-            focalLength: 35,
-            iso: 100,
-        });
         state.activeChannel = { id: 1, title: 'Shared', kind: 'shared' };
         state.userNames.set('7', '<img src=x onerror=alert(2)>');
 
@@ -81,7 +54,15 @@ describe('renderImageInfoHTML location privacy', () => {
                 uploaderId: 7,
                 uploadTime: 1_700_000_000,
             },
-            fullSrc: 'data:image/jpeg;base64,/9j/2Q==',
+            exif: {
+                make: '<img src=x onerror=alert(1)>',
+                model: 'Camera',
+                lens: '<script>alert(1)</script>',
+                fNumber: 2.8,
+                exposureTime: '1/60',
+                focalLength: 35,
+                iso: 100,
+            },
             naturalWidth: 4000,
             naturalHeight: 3000,
         });
@@ -95,17 +76,15 @@ describe('renderImageInfoHTML location privacy', () => {
         expect(host.textContent).toContain('EncryptedYes');
     });
 
-    it('renders an empty state without requesting EXIF for an unloaded image', () => {
+    it('renders an empty state when nothing is known', () => {
         const host = document.createElement('div');
         host.innerHTML = renderImageInfoHTML({
             item: {},
-            fullSrc: '',
+            exif: {},
             naturalWidth: 0,
             naturalHeight: 0,
         });
 
         expect(host.querySelector('.info-empty')?.textContent).toBe('No details available.');
-        expect(exif.dataUrlToBytes).not.toHaveBeenCalled();
-        expect(exif.parseExif).not.toHaveBeenCalled();
     });
 });

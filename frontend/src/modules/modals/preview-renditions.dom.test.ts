@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
     reserveOriginal: vi.fn(),
     releaseOriginalBudget: vi.fn(),
     renderInfo: vi.fn(() => ''),
+    readExif: vi.fn(async () => ({})),
     resetListener: undefined as undefined | (() => void),
     policyListener: undefined as undefined | ((policy: { backgrounded: boolean }) => void),
 }));
@@ -28,6 +29,7 @@ vi.mock('../notifications', () => ({ notify: mocks.notify }));
 vi.mock('../encryption', () => ({ loadEncryptionStatus: vi.fn() }));
 vi.mock('../transfers', () => ({ enqueueDownload: mocks.download }));
 vi.mock('./preview-info', () => ({ renderImageInfoHTML: mocks.renderInfo }));
+vi.mock('../exif', () => ({ readExif: mocks.readExif }));
 vi.mock('./preview-transition', () => ({ capturePreviewTransitionSource: () => null, createPreviewTransitionController: () => ({ cancel: vi.fn(), isRunning: () => false, finishOpen: () => false, beginOpen: () => false, playClose: vi.fn() }) }));
 const item = { type: 'file' as const, id: 1, name: 'Photo.jpg', channel_id: 10, content_revision: 2 };
 
@@ -97,7 +99,7 @@ describe('bounded photo viewer', () => {
         expect(image.title).toBe('Resized preview. Download for original quality.');
         expect(document.getElementById('preview-error')?.textContent).toBe('');
         document.getElementById('preview-info-btn')!.click();
-        expect(mocks.renderInfo).toHaveBeenLastCalledWith(expect.objectContaining({ fullSrc: '', naturalWidth: 0, naturalHeight: 0 }));
+        expect(mocks.renderInfo).toHaveBeenLastCalledWith(expect.objectContaining({ exif: {}, naturalWidth: 0, naturalHeight: 0 }));
         document.getElementById('preview-download')!.click();
         expect(mocks.download).toHaveBeenCalledExactlyOnceWith(1, 'Photo.jpg', 12_345_678);
 
@@ -123,9 +125,26 @@ describe('bounded photo viewer', () => {
         expect(image.title).toBe('Original image');
         document.getElementById('preview-info-btn')!.click();
         expect(mocks.renderInfo).toHaveBeenLastCalledWith(expect.objectContaining({
-            fullSrc: 'http://127.0.0.1/media/original-1', naturalWidth: 3000, naturalHeight: 2000,
+            naturalWidth: 3000, naturalHeight: 2000,
         }));
         expect(mocks.close).toHaveBeenCalledWith('preview-1');
+    });
+
+    it('reads EXIF from the original once the info panel opens, and never from a resized preview', async () => {
+        mocks.openOriginal
+            .mockResolvedValueOnce({ token: 'preview-1', url: 'http://127.0.0.1/media/preview-1', kind: 'image', imagePreview: true })
+            .mockResolvedValueOnce({ token: 'original-2', url: 'http://127.0.0.1/media/original-2', kind: 'image' });
+        mocks.readExif.mockResolvedValue({ make: 'Canon' });
+        const preview = await import('./preview');
+        preview.activatePreviewModal();
+        await preview.openPreviewList([item, { ...item, id: 2 }], 0);
+        document.getElementById('preview-info-btn')!.click();
+        expect(mocks.readExif).not.toHaveBeenCalled();
+
+        document.getElementById('preview-next')!.click();
+        await vi.waitFor(() => expect(mocks.readExif).toHaveBeenCalledWith('http://127.0.0.1/media/original-2', expect.any(AbortSignal)));
+        await vi.waitFor(() => expect(mocks.renderInfo).toHaveBeenLastCalledWith(expect.objectContaining({ exif: { make: 'Canon' } })));
+        expect(mocks.readExif).toHaveBeenCalledOnce();
     });
 
     it('never prefetches neighbor originals', async () => {

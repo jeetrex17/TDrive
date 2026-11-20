@@ -4,6 +4,7 @@ import { notify } from '../notifications';
 import { isEncryptionPasswordRequired } from '../errors';
 import { enqueueDownload } from '../transfers';
 import { renderImageInfoHTML } from './preview-info';
+import { readExif, type ImageExif } from '../exif';
 import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from '../../ui/modals/modal-a11y';
 import { pushSheet, type SheetHandle } from '../../ui/modals/sheet-stack';
 import { bindTouchGestures, type TouchGestureHandlers } from '../../ui/preview/touch-gestures';
@@ -47,6 +48,10 @@ const PREVIEW_CHROME_HIDE_DELAY_MS = 1600;
 let els: PreviewElements | null = null;
 let unlockCard: UnlockCard | null = null;
 let activeFullSrc = "";
+// EXIF of the original at activeFullSrc, read once the info panel asks for it.
+let exifSrc = '';
+let activeExif: ImageExif = {};
+let exifRequest: AbortController | null = null;
 let infoOpen = false;
 // On a phone the info card is a sheet, so Android's BACK has to dismiss it
 // before the preview under it.
@@ -351,6 +356,7 @@ function releaseOriginalSession(): void {
     const session = activeOriginalSession;
     activeOriginalSession = null;
     activeFullSrc = '';
+    clearExif();
     releaseOriginalBudget?.();
     releaseOriginalBudget = null;
     if (session?.token) void Promise.resolve(closeMedia(session.token)).catch(() => {});
@@ -500,6 +506,7 @@ export function closePreviewModal() {
     hideLockedState();
     zoomPan.reset();
     activeFullSrc = "";
+    clearExif();
     clearChromeHideTimer();
 
     if (dom) {
@@ -733,12 +740,34 @@ function refreshInfoPanel() {
     const dom = els;
     if (!infoOpen || !dom?.infoBody || !activePreviewItem) return;
     const hasFull = Boolean(activeFullSrc);
+    if (hasFull && exifSrc !== activeFullSrc) loadExif(activeFullSrc);
     dom.infoBody.innerHTML = renderImageInfoHTML({
         item: activePreviewItem,
-        fullSrc: activeFullSrc,
+        exif: hasFull && exifSrc === activeFullSrc ? activeExif : {},
         naturalWidth: hasFull ? dom.image.naturalWidth || 0 : 0,
         naturalHeight: hasFull ? dom.image.naturalHeight || 0 : 0,
     });
+}
+
+function loadExif(src: string): void {
+    exifRequest?.abort();
+    const request = new AbortController();
+    exifRequest = request;
+    exifSrc = src;
+    activeExif = {};
+    void readExif(src, request.signal).then((exif) => {
+        if (exifRequest !== request || exifSrc !== src) return;
+        exifRequest = null;
+        activeExif = exif;
+        if (activeFullSrc === src) refreshInfoPanel();
+    });
+}
+
+function clearExif(): void {
+    exifRequest?.abort();
+    exifRequest = null;
+    exifSrc = '';
+    activeExif = {};
 }
 
 // --- encrypted "locked" state: an inline unlock card shown in place of the

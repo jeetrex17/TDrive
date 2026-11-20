@@ -1,5 +1,5 @@
-import { describe, it, expect } from "vitest";
-import { parseExif, dataUrlToBytes } from "./modules/exif";
+import { afterEach, describe, it, expect, vi } from "vitest";
+import { parseExif, readExif } from "./modules/exif";
 
 const u16 = (n: number) => [(n >> 8) & 0xff, n & 0xff];
 const u32 = (n: number) => [(n >> 24) & 0xff, (n >> 16) & 0xff, (n >> 8) & 0xff, n & 0xff];
@@ -47,13 +47,36 @@ describe("parseExif", () => {
     });
 });
 
-describe("dataUrlToBytes", () => {
-    it("decodes a base64 data URL", () => {
-        const bytes = dataUrlToBytes("data:image/jpeg;base64,QUJD");
-        expect(bytes && Array.from(bytes)).toEqual([65, 66, 67]);
+describe("readExif", () => {
+    afterEach(() => {
+        vi.unstubAllGlobals();
     });
 
-    it("rejects a non-data URL", () => {
-        expect(dataUrlToBytes("https://example.com/x.jpg")).toBeNull();
+    it("reads only the start of the original stream", async () => {
+        const fetchMock = vi.fn(async () => new Response(new Blob([syntheticExifJpeg().slice()]), { status: 206 }));
+        vi.stubGlobal("fetch", fetchMock);
+
+        const exif = await readExif("http://127.0.0.1/media/original-1");
+
+        expect(exif.make).toBe("Canon");
+        expect(fetchMock).toHaveBeenCalledWith("http://127.0.0.1/media/original-1", expect.objectContaining({
+            headers: { Range: "bytes=0-131071" },
+        }));
+    });
+
+    it("stops at the prefix when the server ignores the range", async () => {
+        const body = new Uint8Array(512 * 1024);
+        body.set(syntheticExifJpeg());
+        vi.stubGlobal("fetch", vi.fn(async () => new Response(new Blob([body]), { status: 200 })));
+
+        expect((await readExif("http://127.0.0.1/media/original-1")).fNumber).toBe(2.8);
+    });
+
+    it("returns nothing when the stream fails", async () => {
+        vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 410 })));
+        expect(await readExif("http://127.0.0.1/media/gone")).toEqual({});
+
+        vi.stubGlobal("fetch", vi.fn(async () => { throw new TypeError("network"); }));
+        expect(await readExif("http://127.0.0.1/media/gone")).toEqual({});
     });
 });
