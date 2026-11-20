@@ -23,24 +23,68 @@ type SharedCopyFile struct {
 	Parts []int64
 }
 
+// sharedCopySelection is the decoded identity of either a projected file
+// revision or a loose document in a Shared Drive.
+type sharedCopySelection struct {
+	accountID   int64
+	driveID     int64
+	fileID      int64
+	revision    int64
+	rawIdentity string
+}
+
+func parseSharedCopySelection(source channelsource.CopySource) (sharedCopySelection, error) {
+	if source.PeerKind != SharedCopyPeerKind || source.AccountID <= 0 || source.PeerID <= 0 ||
+		source.MsgID <= 0 || source.MsgID > math.MaxInt32 {
+		return sharedCopySelection{}, channelsource.ErrCopyNotAllowed
+	}
+
+	selection := sharedCopySelection{accountID: source.AccountID, driveID: source.PeerID, fileID: source.MsgID}
+	if source.Identity != "managed" {
+		if source.Generation != "0" || !tgclient.IsSharedRawCopyIdentity(source.Identity) {
+			return sharedCopySelection{}, channelsource.ErrCopyNotAllowed
+		}
+		selection.rawIdentity = source.Identity
+		return selection, nil
+	}
+
+	revision, err := strconv.ParseInt(source.Generation, 10, 64)
+	if err != nil || revision <= 0 || strconv.FormatInt(revision, 10) != source.Generation {
+		return sharedCopySelection{}, channelsource.ErrCopyNotAllowed
+	}
+	selection.revision = revision
+	return selection, nil
+}
+
+// ValidateSharedCopySource checks the persisted copy selection's shape without
+// contacting Telegram. Resolver calls still verify access and content.
+func ValidateSharedCopySource(source channelsource.CopySource) error {
+	_, err := parseSharedCopySelection(source)
+	return err
+}
+
 // ResolveSharedCopy captures the live file's ordered source message IDs. A
 // managed file pins the selected logical revision. A raw file pins its message.
 func (s *Service) ResolveSharedCopy(ctx context.Context, source channelsource.CopySource) (SharedCopyFile, error) {
-	if tgclient.IsSharedRawCopyIdentity(source.Identity) {
-		ref, err := s.ResolveSharedCopyPart(ctx, source, source.MsgID)
+	selection, err := parseSharedCopySelection(source)
+	if err != nil {
+		return SharedCopyFile{}, err
+	}
+	return s.resolveSharedCopy(ctx, selection)
+}
+
+func (s *Service) resolveSharedCopy(ctx context.Context, source sharedCopySelection) (SharedCopyFile, error) {
+	if source.rawIdentity != "" {
+		ref, err := s.resolveSharedCopyPart(ctx, source, source.fileID)
 		if err != nil {
 			return SharedCopyFile{}, err
 		}
-		return SharedCopyFile{Name: ref.Name, Parts: []int64{source.MsgID}}, nil
-	}
-	revision, err := sharedCopyRevision(source)
-	if err != nil {
-		return SharedCopyFile{}, err
+		return SharedCopyFile{Name: ref.Name, Parts: []int64{source.fileID}}, nil
 	}
 	if _, err := s.sharedCopyPeer(ctx, source); err != nil {
 		return SharedCopyFile{}, err
 	}
-	file, err := s.sharedCopyManagedFile(ctx, source, revision)
+	file, err := s.sharedCopyManagedFile(ctx, source)
 	if err != nil {
 		return SharedCopyFile{}, err
 	}
@@ -54,10 +98,14 @@ func (s *Service) ResolveSharedCopy(ctx context.Context, source channelsource.Co
 // ResolveSharedCopyPart rechecks membership, current revision, and the policy
 // on the exact attachment when a copy prepares or attempts a Telegram send.
 func (s *Service) ResolveSharedCopyPart(ctx context.Context, source channelsource.CopySource, msgID int64) (tgclient.DocumentRef, error) {
-	revision, err := sharedCopyRevision(source)
+	selection, err := parseSharedCopySelection(source)
 	if err != nil {
 		return tgclient.DocumentRef{}, err
 	}
+	return s.resolveSharedCopyPart(ctx, selection, msgID)
+}
+
+func (s *Service) resolveSharedCopyPart(ctx context.Context, source sharedCopySelection, msgID int64) (tgclient.DocumentRef, error) {
 	if msgID <= 0 || msgID > math.MaxInt32 {
 		return tgclient.DocumentRef{}, channelsource.ErrCopyChanged
 	}
@@ -65,61 +113,34 @@ func (s *Service) ResolveSharedCopyPart(ctx context.Context, source channelsourc
 	if err != nil {
 		return tgclient.DocumentRef{}, err
 	}
-	expected, err := s.sharedCopyPart(ctx, source, revision, msgID)
+	expected, err := s.sharedCopyPart(ctx, source, msgID)
 	if err != nil {
 		return tgclient.DocumentRef{}, err
 	}
-	raw := revision == 0
-	var identity string
-	if raw {
-		identity = source.Identity
-	}
-	ref, err := s.readSharedCopyDocument(ctx, peer, msgID, identity)
+	ref, err := s.readSharedCopyDocument(ctx, peer, msgID, source.rawIdentity)
 	if err != nil {
 		return tgclient.DocumentRef{}, err
 	}
-	if !raw && expected.Size != ref.Size {
+	if source.rawIdentity == "" && expected.Size != ref.Size {
 		return tgclient.DocumentRef{}, channelsource.ErrCopyChanged
 	}
 	if err := s.checkSharedCopyScope(ctx, source); err != nil {
 		return tgclient.DocumentRef{}, err
 	}
-	part, err := s.sharedCopyPart(ctx, source, revision, msgID)
+	part, err := s.sharedCopyPart(ctx, source, msgID)
 	if err != nil {
 		return tgclient.DocumentRef{}, err
 	}
 	if part != expected {
 		return tgclient.DocumentRef{}, channelsource.ErrCopyChanged
 	}
-	if !raw {
+	if source.rawIdentity == "" {
 		ref.Name = part.Name
 	}
 	return ref, nil
 }
 
-func sharedCopyRevision(source channelsource.CopySource) (int64, error) {
-	if source.PeerKind != SharedCopyPeerKind || source.AccountID <= 0 || source.PeerID <= 0 ||
-		source.MsgID <= 0 || source.MsgID > math.MaxInt32 {
-		return 0, channelsource.ErrCopyNotAllowed
-	}
-	revision, err := strconv.ParseInt(source.Generation, 10, 64)
-	if err != nil || strconv.FormatInt(revision, 10) != source.Generation {
-		return 0, channelsource.ErrCopyNotAllowed
-	}
-	if (source.Identity == "managed" && revision > 0) || (tgclient.IsSharedRawCopyIdentity(source.Identity) && revision == 0) {
-		return revision, nil
-	}
-	return 0, channelsource.ErrCopyNotAllowed
-}
-
-// ValidateSharedCopySource checks the persisted copy selection's shape without
-// contacting Telegram. Resolver calls still verify access and content.
-func ValidateSharedCopySource(source channelsource.CopySource) error {
-	_, err := sharedCopyRevision(source)
-	return err
-}
-
-func (s *Service) checkSharedCopyScope(ctx context.Context, source channelsource.CopySource) error {
+func (s *Service) checkSharedCopyScope(ctx context.Context, source sharedCopySelection) error {
 	if ctx == nil || s.DB == nil || s.TG == nil || s.Peers == nil || s.ActorID == nil {
 		return channelsource.ErrCopyNotAllowed
 	}
@@ -130,26 +151,26 @@ func (s *Service) checkSharedCopyScope(ctx context.Context, source channelsource
 	if err != nil {
 		return err
 	}
-	if account != source.AccountID {
+	if account != source.accountID {
 		return channelsource.ErrCopyNotAllowed
 	}
 	var kind string
-	err = s.DB.QueryRowContext(ctx, "SELECT kind FROM channels WHERE channel_id=?", source.PeerID).Scan(&kind)
+	err = s.DB.QueryRowContext(ctx, "SELECT kind FROM channels WHERE channel_id=?", source.driveID).Scan(&kind)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && kind != projection.KindShared) {
 		return channelsource.ErrCopyNotAllowed
 	}
 	return err
 }
 
-func (s *Service) sharedCopyPeer(ctx context.Context, source channelsource.CopySource) (tgclient.InputPeer, error) {
+func (s *Service) sharedCopyPeer(ctx context.Context, source sharedCopySelection) (tgclient.InputPeer, error) {
 	if err := s.checkSharedCopyScope(ctx, source); err != nil {
 		return tgclient.InputPeer{}, err
 	}
-	peer, err := s.Peers.ResolvePeer(ctx, source.PeerID)
+	peer, err := s.Peers.ResolvePeer(ctx, source.driveID)
 	if err != nil {
 		return tgclient.InputPeer{}, err
 	}
-	if peer.ChannelID != source.PeerID {
+	if peer.ChannelID != source.driveID {
 		return tgclient.InputPeer{}, channelsource.ErrCopyNotAllowed
 	}
 	live, err := s.TG.GetJoinedDrivePeer(ctx, peer)
@@ -166,12 +187,12 @@ func (s *Service) sharedCopyPeer(ctx context.Context, source channelsource.CopyS
 	return tgclient.InputPeer{ChannelID: peer.ChannelID, Kind: live.Kind, AccessHash: cmp.Or(live.AccessHash, peer.AccessHash)}, nil
 }
 
-func (s *Service) sharedCopyManagedFile(ctx context.Context, source channelsource.CopySource, revision int64) (projection.DownloadFile, error) {
-	file, found, err := projection.FileDownloadRefContext(ctx, s.DB, source.PeerID, source.MsgID)
+func (s *Service) sharedCopyManagedFile(ctx context.Context, source sharedCopySelection) (projection.DownloadFile, error) {
+	file, found, err := projection.FileDownloadRefContext(ctx, s.DB, source.driveID, source.fileID)
 	if err != nil {
 		return projection.DownloadFile{}, err
 	}
-	if !found || file.Revision != revision {
+	if !found || file.Revision != source.revision {
 		return projection.DownloadFile{}, channelsource.ErrCopyChanged
 	}
 	if file.Encrypted || file.EncryptionVersion != 0 || file.StoredSize <= 0 {
@@ -200,12 +221,12 @@ type sharedCopyPart struct {
 	Size int64
 }
 
-func (s *Service) sharedCopyPart(ctx context.Context, source channelsource.CopySource, revision, msgID int64) (sharedCopyPart, error) {
-	if revision == 0 {
-		if msgID != source.MsgID {
+func (s *Service) sharedCopyPart(ctx context.Context, source sharedCopySelection, msgID int64) (sharedCopyPart, error) {
+	if source.rawIdentity != "" {
+		if msgID != source.fileID {
 			return sharedCopyPart{}, channelsource.ErrCopyChanged
 		}
-		owned, err := projection.ManagedMsgIDsIn(ctx, s.DB, source.PeerID, []int64{msgID})
+		owned, err := projection.ManagedMsgIDsIn(ctx, s.DB, source.driveID, []int64{msgID})
 		if err != nil {
 			return sharedCopyPart{}, err
 		}
@@ -214,7 +235,7 @@ func (s *Service) sharedCopyPart(ctx context.Context, source channelsource.CopyS
 		}
 		return sharedCopyPart{}, nil
 	}
-	file, err := s.sharedCopyManagedFile(ctx, source, revision)
+	file, err := s.sharedCopyManagedFile(ctx, source)
 	if err != nil {
 		return sharedCopyPart{}, err
 	}

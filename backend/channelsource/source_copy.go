@@ -16,8 +16,10 @@ var (
 	ErrCopyChanged    = errors.New("This attachment changed. Refresh the source and choose the file again")
 )
 
-// CopySource pins one attachment to the account and source connection from
-// its listing. Identity is an opaque comparison value, not a permission grant.
+// CopySource carries the selected attachment between the UI and copy journal.
+// Generation is a connection generation for a connected source, and the
+// decimal file revision for a Shared Drive (zero for a loose attachment).
+// The resolver compares Identity and rechecks live copy permission.
 type CopySource struct {
 	AccountID  int64  `json:"account_id"`
 	PeerKind   string `json:"peer_kind"`
@@ -50,21 +52,22 @@ func (s *Service) ResolveCopyMedia(ctx context.Context, request CopySource) (tgc
 		request.MsgID <= 0 || request.MsgID > math.MaxInt32 || len(request.Identity) != sha256.Size*2 {
 		return tgclient.DocumentRef{}, ErrCopyNotAllowed
 	}
-	if err := s.checkSourceScope(ctx, SourceInfo{AccountID: request.AccountID, PeerKind: request.PeerKind,
-		PeerID: request.PeerID, Generation: request.Generation}); err != nil {
+	connection := SourceInfo{AccountID: request.AccountID, PeerKind: request.PeerKind,
+		PeerID: request.PeerID, Generation: request.Generation}
+	if err := s.checkSourceScope(ctx, connection); err != nil {
 		return tgclient.DocumentRef{}, err
 	}
-	stored, _, source, err := s.currentSource(ctx, request.PeerKind, request.PeerID)
+	stored, _, source, err := s.currentSource(ctx, connection.PeerKind, connection.PeerID)
 	if err != nil {
 		return tgclient.DocumentRef{}, err
 	}
-	if stored.AccountID != request.AccountID || stored.Generation != request.Generation {
+	if stored.AccountID != connection.AccountID || stored.Generation != connection.Generation {
 		return tgclient.DocumentRef{}, ErrNotConnected
 	}
 	if source.Protected {
 		return tgclient.DocumentRef{}, ErrCopyNotAllowed
 	}
-	ref, err := s.copyDocument(ctx, source, request)
+	ref, err := s.copyDocument(ctx, source, request.MsgID, request.Identity)
 	if err != nil {
 		return tgclient.DocumentRef{}, err
 	}
@@ -74,13 +77,13 @@ func (s *Service) ResolveCopyMedia(ctx context.Context, request CopySource) (tgc
 	return ref, nil
 }
 
-func (s *Service) copyDocument(ctx context.Context, source tgclient.SourcePeer, request CopySource) (tgclient.DocumentRef, error) {
+func (s *Service) copyDocument(ctx context.Context, source tgclient.SourcePeer, msgID int64, expectedIdentity string) (tgclient.DocumentRef, error) {
 	client, ok := s.tg.(tgclient.MessageDocumentResolver)
 	if !ok {
 		return tgclient.DocumentRef{}, ErrCopyNotAllowed
 	}
 	peer := tgclient.InputPeer{Kind: source.Kind, ChannelID: source.ID, AccessHash: source.AccessHash}
-	message, ref, err := client.ResolveMessageDocument(ctx, peer, request.MsgID)
+	message, ref, err := client.ResolveMessageDocument(ctx, peer, msgID)
 	switch {
 	case errors.Is(err, tgclient.ErrNotFile), errors.Is(err, tgclient.ErrEmptyDocument):
 		return tgclient.DocumentRef{}, ErrCopyNotAllowed
@@ -93,7 +96,7 @@ func (s *Service) copyDocument(ctx context.Context, source tgclient.SourcePeer, 
 	if identity == "" {
 		return tgclient.DocumentRef{}, ErrCopyNotAllowed
 	}
-	if identity != request.Identity || message.MsgID != request.MsgID || ref.MsgID != request.MsgID ||
+	if identity != expectedIdentity || message.MsgID != msgID || ref.MsgID != msgID ||
 		ref.Peer != peer || ref.DocumentID != message.DocumentID || ref.Size != message.MediaSize || ref.PhotoSizeType != "" {
 		return tgclient.DocumentRef{}, ErrCopyChanged
 	}
