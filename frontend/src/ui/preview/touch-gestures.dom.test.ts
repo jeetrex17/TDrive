@@ -83,10 +83,22 @@ describe('bindTouchGestures', () => {
         expect(handlers.drag).toHaveBeenLastCalledWith(30, 4, 'x');
         pointer('pointermove', 1, 180, 110);
         pointer('pointerup', 1, 180, 110);
-        const [dx, dy, axis, velocity] = (handlers.dragEnd as ReturnType<typeof vi.fn>).mock.calls[0];
+        const [dx, dy, axis, velocity, cancelled] = (handlers.dragEnd as ReturnType<typeof vi.fn>).mock.calls[0];
         expect([dx, dy, axis]).toEqual([80, 10, 'x']);
         expect(velocity).toBeGreaterThanOrEqual(0);
+        expect(cancelled).toBe(false);
         expect(handlers.tap).not.toHaveBeenCalled();
+    });
+
+    it.each(['pointercancel', 'second contact'])('marks a drag interrupted by %s as cancelled', (interruption) => {
+        const dragEnd = vi.fn();
+        bind({ dragEnd });
+        pointer('pointerdown', 1, 100, 100);
+        pointer('pointermove', 1, 140, 110);
+        if (interruption === 'pointercancel') pointer('pointercancel', 1, 140, 110);
+        else pointer('pointerdown', 2, 200, 100);
+        expect(dragEnd).toHaveBeenCalledOnce();
+        expect(dragEnd).toHaveBeenCalledWith(expect.any(Number), expect.any(Number), 'x', expect.any(Number), true);
     });
 
     it('leaves the pointer alone when the caller refuses the drag', () => {
