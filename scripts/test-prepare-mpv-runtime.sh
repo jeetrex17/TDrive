@@ -87,7 +87,7 @@ Version: 3.8.11
 EOF
 cat > "$TMP_ROOT/bin/mpv" <<'EOF'
 #!/bin/sh
-exit 0
+printf 'mpv v0.42.0\n'
 EOF
 cat > "$TMP_ROOT/bin/lipo" <<'EOF'
 #!/bin/sh
@@ -102,7 +102,7 @@ chmod +x "$TMP_ROOT/bin/"*
 cd "$TMP_ROOT/project"
 for runtime_mode in homebrew pinned; do
   export PKG_CONFIG_LIBDIR="$TMP_ROOT/pkgconfig"
-  unset MACOSX_DEPLOYMENT_TARGET PKG_CONFIG_PATH
+  unset MACOSX_DEPLOYMENT_TARGET PKG_CONFIG_PATH TDRIVE_MPV_TEST_VERSION
   if [ "$runtime_mode" = pinned ]; then
     export TDRIVE_MACOS_MPV_RUNTIME_URL=https://example.invalid/mpv.tar.gz
     export TDRIVE_MACOS_MPV_RUNTIME_SHA256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
@@ -154,6 +154,13 @@ for runtime_mode in homebrew pinned; do
       printf 'pkg-config path is %s, expected %s\n' "$PKG_CONFIG_PATH" "$expected_path" >&2
       exit 1
     fi
+    if [ "${TDRIVE_MPV_TEST_VERSION:-}" != 0.42.0 ]; then
+      echo 'Homebrew preparation did not record the fixture version' >&2
+      exit 1
+    fi
+  elif [ -n "${TDRIVE_MPV_TEST_VERSION:-}" ]; then
+    echo 'pinned runtime preparation recorded a fixture version' >&2
+    exit 1
   fi
   echo "PASS: $runtime_mode preparation invalidates stale cgo library paths"
 done

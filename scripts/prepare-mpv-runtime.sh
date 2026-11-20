@@ -109,6 +109,8 @@ case "$PLATFORM" in
     cp -pL "$(command -v mpv)" "$runtime_root/bin/mpv"
     cp -pL "$libmpv" "$runtime_root/lib/libmpv.2.dylib"
     chmod 755 "$runtime_root/bin/mpv"
+    mpv_version="$("$runtime_root/bin/mpv" --no-config --version | awk '$1 == "mpv" { sub(/^v/, "", $2); print $2; exit }')"
+    [ -n "$mpv_version" ] || die "could not read the Homebrew mpv version"
     write_fixture_notices "macOS media runtime assembled from Homebrew mpv." brew list --versions mpv
     # Homebrew builds for the runner's own macOS release. The app must promise
     # the same floor, or dyld would refuse the bundled libmpv on older systems.
@@ -124,6 +126,7 @@ case "$PLATFORM" in
     clear_darwin_build_cache
     emit "TDRIVE_MPV_RUNTIME_DIR=$runtime_root" \
       "TDRIVE_MPV_PACKAGE_SOURCE=homebrew-ci-system-mpv-not-release-runtime" \
+      "TDRIVE_MPV_TEST_VERSION=$mpv_version" \
       "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" \
       "MACOSX_DEPLOYMENT_TARGET=$minos" \
       "TDRIVE_MPV_RAISE_APP_MINOS=$minos"

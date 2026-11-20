@@ -2,6 +2,7 @@
 set -euo pipefail
 
 readonly EXIT_DEPLOYMENT_TARGET_INCOMPATIBLE=78
+readonly ZERO_SHA256=0000000000000000000000000000000000000000000000000000000000000000
 
 if [ "${1:-}" = "--deployment-incompatible-exit-code" ]; then
   printf '%s\n' "$EXIT_DEPLOYMENT_TARGET_INCOMPATIBLE"
@@ -46,6 +47,13 @@ EXPECTED_MPV_VERSION="$(tr -d '[:space:]' < "$VERSION_FILE")"
 if [ -z "$EXPECTED_MPV_VERSION" ]; then
   echo "package-mpv-darwin: expected mpv version is empty" >&2
   exit 1
+fi
+if [ -n "${2:-}" ]; then
+  if [ "${TDRIVE_MPV_ARCHIVE_SHA256:-}" != "$ZERO_SHA256" ]; then
+    echo "package-mpv-darwin: a test mpv version requires an unpinned runtime" >&2
+    exit 1
+  fi
+  EXPECTED_MPV_VERSION="$2"
 fi
 
 mkdir -p "$FRAMEWORKS_DIR" "$MEDIA_DIR"
@@ -287,7 +295,7 @@ write_runtime_metadata() {
   local ci_fixture release_runtime
   ci_fixture="false"
   release_runtime="true"
-  if [ "$archive_sha256" = "0000000000000000000000000000000000000000000000000000000000000000" ] ||
+  if [ "$archive_sha256" = "$ZERO_SHA256" ] ||
     printf '%s' "$source_reference" | grep -Fq 'not-release-runtime'; then
     ci_fixture="true"
     release_runtime="false"
