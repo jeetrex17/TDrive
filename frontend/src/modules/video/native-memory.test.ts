@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { prefersNativePlayer, rememberNativePlayer, type NativeMemoryStorage } from './native-memory';
+import { forgetNativePlayer, prefersNativePlayer, rememberNativePlayer, type NativeMemoryStorage } from './native-memory';
 
 const clip = { id: 42, name: 'holiday.mp4', size: 1234 };
 
@@ -27,6 +27,18 @@ describe('native player memory', () => {
         rememberNativePlayer(clip, storage);
         expect(prefersNativePlayer({ ...clip, name: 'holiday-cut.mp4' }, storage)).toBe(false);
         expect(prefersNativePlayer({ ...clip, size: 999 }, storage)).toBe(false);
+    });
+
+    it('clears a failed native preference without changing other videos', () => {
+        const storage = memoryStorage();
+        const other = { ...clip, id: 43 };
+        rememberNativePlayer(clip, storage);
+        rememberNativePlayer(other, storage);
+
+        forgetNativePlayer(clip, storage);
+
+        expect(prefersNativePlayer(clip, storage)).toBe(false);
+        expect(prefersNativePlayer(other, storage)).toBe(true);
     });
 
     it('keeps the newest files when the list is full', () => {

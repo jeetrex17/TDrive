@@ -25,7 +25,7 @@ import { formatBytes } from "../../utils";
 import { isIOSPlayableVideo, isRemuxableVideo, isWebviewDirectVideo, videoFormatLabel } from "../media-types";
 import { appActions } from "../app-actions";
 import { accessEncryptedResource } from "../encryption";
-import { prefersNativePlayer, rememberNativePlayer } from "../video/native-memory";
+import { forgetNativePlayer, prefersNativePlayer, rememberNativePlayer } from "../video/native-memory";
 import {
     SerialPlaybackTransitions,
     capturePlaybackIntent,
@@ -1019,7 +1019,6 @@ function handleHtmlMediaError(
     // Phones have no native player to promote to; the HTML error is final there.
     const undecodable = shouldFallbackFromHtmlMediaError(code);
     if (undecodable && !isMobilePlatform()) {
-        rememberNativePlayer(attempt.target);
         attempt.nativeFallbackRequested = true;
         const intent = capturePlaybackIntent(state, attempt.pausedByUser);
         setLoadingStatusOverride("Switching to a compatible player...");
@@ -1147,6 +1146,7 @@ async function openNativePlayback(
             await safelyCloseMedia(existing?.token || "");
         }
         if (!isCurrent()) return;
+        forgetNativePlayer(attempt.target);
         console.error(existing ? "AttachNativeMedia failed:" : "OpenNativeMedia failed:", err);
         geometry?.setNativeLayout("none");
         // A closed loopback session also surfaces as an HTML media error, so the
@@ -1169,6 +1169,7 @@ function handleNativeMediaError(attempt: VideoOpenAttempt, token: string, detail
     ) {
         return;
     }
+    forgetNativePlayer(attempt.target);
     console.error("Native media player failed:", detail);
     void playbackTransitions.run(attempt.generation, async (isCurrent) => {
         if (!isCurrent() || activeNative?.token !== token) return;
@@ -1229,6 +1230,10 @@ function activateNativePlayback(
     );
     unsubscribeState = adapter.subscribe((state) => {
         if (!playbackTransitions.isCurrent(attempt.generation) || activeAdapter !== adapter) return;
+        if (attempt.nativeFallbackRequested && state.duration > 0 && !state.loading) {
+            rememberNativePlayer(attempt.target);
+            attempt.nativeFallbackRequested = false;
+        }
         applyState(state);
     });
     setChromeVisible(true);

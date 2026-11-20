@@ -474,7 +474,9 @@ sequenceDiagram
     UI->>App: AttachNativeMedia(existing token, geometry)
     App->>MPV: Open existing loopback URL
     App-->>UI: Same token and native state
-    UI->>UI: Install adapter, restore intent, remember preference
+    UI->>UI: Install adapter and restore intent
+    MPV-->>UI: File ready for playback
+    UI->>UI: Remember native preference
     Note over UI,MPV: Stale or failed handoffs close the resource they acquired
 ```
 
@@ -485,6 +487,10 @@ is installed. HTML close removes listeners/source, destroys hls.js and closes
 the session; native close also shuts down the native player. Closing a session
 cancels range work, thumbnail workers and decryptors. Vault lock closes encrypted
 sessions while preserving unrelated clear-media sessions.
+
+The controller remembers native playback for a direct webview format only once
+mpv reports a playable state. If the native route fails, the next retry can open
+the file in the webview again.
 
 ## Remembered playback and mobile controls
 

@@ -256,25 +256,73 @@ test('surfaces a failed open instead of leaving a dead player on screen', async 
         .toBe('');
 });
 
-test('keeps playing in the webview when the native player refuses to start', async ({ page }) => {
+test('retries a Shared Drive video in the webview when native attachment fails', async ({ page }) => {
     await serveFixture(page);
-    await bootTDrive(page, {
+    let playable = false;
+    await page.route(FIXTURE_URL, (route) => {
+        if (playable) return route.fallback();
+        return route.fulfill({
+            contentType: 'video/mp4',
+            headers: { 'Cache-Control': 'no-store' },
+            body: 'The first stream failed before returning video bytes.',
+        });
+    });
+    const mock = await bootTDrive(page, {
+        ListChannels: resolves([
+            { id: 1, title: 'My Drive', kind: 'personal', is_active: false, invite_link: '' },
+            { id: 2, title: 'Shared files', kind: 'shared', is_active: true, invite_link: '' },
+        ]),
+        GetMediaStats: resolves({ playback: {}, thumbnails: {} }),
+        UpdateMediaPlayback: resolves(null),
+        GetFolderContents: resolves({ folders: [], files: [VIDEO_FILE] }),
+        OpenMedia: resolves(opened({ info: { channel_id: 2, file_id: VIDEO_FILE.msg_id } })),
+        AttachNativeMedia: rejects('mpv could not start'),
+        OpenNativeMedia: rejects('mpv could not start'),
+    });
+
+    await openTheVideo(page);
+    await expect(page.locator('#video-error')).toBeVisible();
+    expect(await mock.calls('AttachNativeMedia')).toMatchObject([{ args: ['test-token', expect.anything()], state: 'rejected' }]);
+    expect(await mock.calls('CloseMedia')).toMatchObject([{ args: ['test-token'], state: 'fulfilled' }]);
+
+    playable = true;
+    await page.locator('#video-error-retry').click();
+
+    const player = page.locator('#video-player');
+    await expect.poll(async () => (await mock.calls('OpenMedia')).length).toBe(2);
+    await expect
+        .poll(() => player.evaluate((el: HTMLVideoElement) => el.readyState), { timeout: 10_000 })
+        .toBeGreaterThanOrEqual(1);
+    expect(await mock.calls('OpenNativeMedia')).toHaveLength(0);
+    await expect(page.locator('#video-error')).toBeHidden();
+
+    await page.locator('#video-close').click();
+    await expect.poll(async () => (await mock.calls('CloseMedia')).length).toBe(2);
+});
+
+test('clears a remembered native route when the native player cannot start', async ({ page }) => {
+    await serveFixture(page);
+    await page.addInitScript((video) => {
+        localStorage.setItem('tdrive.video.nativeOnly', JSON.stringify([`${video.msg_id}:${video.name}:${video.size}`]));
+    }, VIDEO_FILE);
+    const mock = await bootTDrive(page, {
         GetMediaStats: resolves({ playback: {}, thumbnails: {} }),
         UpdateMediaPlayback: resolves(null),
         GetFolderContents: resolves({ folders: [], files: [VIDEO_FILE] }),
         OpenMedia: resolves(opened()),
-        // The promotion path: the backend opened the stream, then the
-        // out-of-process player failed to attach. The reader should not care.
-        OpenNativeMedia: rejects('mpv is not installed', 40),
+        OpenNativeMedia: rejects('mpv could not start'),
     });
 
     await openTheVideo(page);
+    await expect(page.locator('#video-error')).toBeVisible();
+    expect(await mock.calls('OpenNativeMedia')).toHaveLength(1);
+    expect(await mock.calls('OpenMedia')).toHaveLength(0);
 
+    await page.locator('#video-error-retry').click();
     const player = page.locator('#video-player');
-    await expect(player).toBeVisible();
-    await expect
-        .poll(() => player.evaluate((el: HTMLVideoElement) => el.readyState), { timeout: 10_000 })
-        .toBeGreaterThanOrEqual(1);
+    await expect.poll(() => player.evaluate((el: HTMLVideoElement) => el.duration)).toBeGreaterThan(0);
+    expect(await mock.calls('OpenMedia')).toHaveLength(1);
+    expect(await mock.calls('OpenNativeMedia')).toHaveLength(1);
     await expect(page.locator('#video-error')).toBeHidden();
 });
 

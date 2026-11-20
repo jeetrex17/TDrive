@@ -1,7 +1,7 @@
 /**
- * Remembers which files the webview player could not decode, so the next open
- * goes straight to the native player instead of paying for a failed HTML
- * attempt first. Files are keyed by message id, name and size: the same
+ * Remembers which files played after switching from the webview to native, so
+ * the next open can start with the player that worked. Files are keyed by
+ * message id, name and size: the same
  * message under a new name or size is a different upload.
  */
 const STORAGE_KEY = 'tdrive.video.nativeOnly';
@@ -37,14 +37,22 @@ function load(source: NativeMemoryStorage): string[] {
     }
 }
 
-/** prefersNativePlayer reports whether the webview already failed on target. */
+function save(source: NativeMemoryStorage, entries: string[]): void {
+    try {
+        source.setItem(STORAGE_KEY, JSON.stringify(entries));
+    } catch {
+        // Storage failures should not interrupt a playback transition.
+    }
+}
+
+/** prefersNativePlayer reports whether native playback has worked for target. */
 export function prefersNativePlayer(target: NativeMemoryTarget, storage?: NativeMemoryStorage | null): boolean {
     const source = resolveStorage(storage);
     return source ? load(source).includes(targetKey(target)) : false;
 }
 
 /**
- * rememberNativePlayer records that the webview could not decode target. The
+ * rememberNativePlayer records a successful native fallback for target. The
  * newest entries win when the list is full.
  */
 export function rememberNativePlayer(target: NativeMemoryTarget, storage?: NativeMemoryStorage | null): void {
@@ -53,9 +61,15 @@ export function rememberNativePlayer(target: NativeMemoryTarget, storage?: Nativ
     const key = targetKey(target);
     const entries = load(source).filter((entry) => entry !== key);
     entries.push(key);
-    try {
-        source.setItem(STORAGE_KEY, JSON.stringify(entries.slice(-MAX_ENTRIES)));
-    } catch {
-        // Storage can be full or disabled; forgetting only costs one HTML attempt.
-    }
+    save(source, entries.slice(-MAX_ENTRIES));
+}
+
+/** Let a direct-webview file retry there after its native route fails. */
+export function forgetNativePlayer(target: NativeMemoryTarget, storage?: NativeMemoryStorage | null): void {
+    const source = resolveStorage(storage);
+    if (!source) return;
+    const key = targetKey(target);
+    const entries = load(source);
+    const remaining = entries.filter((entry) => entry !== key);
+    if (remaining.length !== entries.length) save(source, remaining);
 }
