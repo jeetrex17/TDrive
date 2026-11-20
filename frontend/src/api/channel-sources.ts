@@ -47,6 +47,7 @@ function item(value: MediaItem): ChannelMediaItem {
         protected: Boolean(value.protected),
         blockReason: String(value.block_reason || ''),
         telegramUrl: String(value.telegram_url || ''),
+        ...(value.copy_identity ? { copyIdentity: value.copy_identity } : {}),
     };
 }
 

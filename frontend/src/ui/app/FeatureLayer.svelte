@@ -2,6 +2,7 @@
     import { listChannelSourceCandidates, resolvePublicChannelSource } from '../../api';
     import { activateLiveSyncEvents } from '../../modules/channels';
     import { activateChannelSources, addChannel, channelPhoto, closeChannelPicker, showChannel } from '../../modules/channel-sources';
+    import { activateSourceCopies } from '../../modules/source-copies';
     import { activateContextMenu } from '../../modules/context-menu';
     import { activateDropOverlay } from '../../modules/drop-overlay';
     import { renderEncryptionSettingsEntry } from '../../modules/encryption';
@@ -79,6 +80,7 @@
     import LeaveDriveModal from '../modals/LeaveDriveModal.svelte';
     import LogoutModal from '../modals/LogoutModal.svelte';
     import MoveModal from '../modals/MoveModal.svelte';
+    import SourceCopyModal from '../modals/SourceCopyModal.svelte';
     import NewDriveModal from '../modals/NewDriveModal.svelte';
     import RenameModal from '../modals/RenameModal.svelte';
     import ShareDriveModal from '../modals/ShareDriveModal.svelte';
@@ -119,6 +121,7 @@
             activateLiveSyncEvents(),
             activateUpdates(),
             activateChannelSources(),
+            activateSourceCopies(),
         ];
         let previewActivationCancelled = false;
         let deactivatePreview = () => {};
@@ -189,6 +192,9 @@
             onBack={navigateMoveBack}
             onConfirm={confirmMove}
         />
+    </div>
+    <div id="source-copy-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
+        <SourceCopyModal />
     </div>
     <div id="new-drive-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <NewDriveModal onSubmit={submitNewDrive} />

@@ -63,6 +63,21 @@ export interface ChannelMediaItem {
     protected?: boolean;
     blockReason: string;
     telegramUrl: string;
+    copyIdentity?: string;
+}
+
+export interface ChannelPostActions {
+    suggestedFolder: string;
+    select?: () => void;
+    selection?: { count: number; save: () => void };
+}
+
+export const MAX_SOURCE_COPY_SELECTION = 50;
+
+export function canSaveSourceMedia(source: ChannelSource, item: ChannelMediaItem): boolean {
+    // The media page provides eligibility, and the backend rechecks access
+    // when saving. The saved connection list only has local metadata.
+    return Boolean(source.connected && !source.protected && !item.protected && item.copyIdentity);
 }
 
 export interface ChannelMediaPage {
