@@ -45,7 +45,10 @@
     const activeDriveId = $derived($sidebarState.activeChannelId);
     const entries = $derived(activityEntries($uploadActivities, $visibleHistory, $resumableUploads, $resumableDownloads,
         { allEvents: $historyEvents, activeDriveId, now: $clock, uploadsPaused: $uploadsPaused, sourceCopies: $sourceCopyActivity, checkingCopies: $activeCopyChecks }));
-    const transfers = $derived(entries.filter((entry) => (filter === 'All' || entry.status === filter) && matchesActivity(entry, query)));
+    const transfers = $derived(entries.filter((entry) => (
+        filter === 'All' || entry.status === filter ||
+        (filter === 'Needs attention' && entry.kind === 'sourceCopy' && entry.copy.status === 'pending')
+    ) && matchesActivity(entry, query)));
     const notices = $derived($historyEvents.filter((entry): entry is NoticeEvent => entry.kind === 'event' && `${entry.title} ${entry.body}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())));
     // The bell's rows open a batch by its aggregate transfer id.
     const selectedTransfer = $derived(transfers.find((entry) => entry.id === selectedId || (entry.kind === 'batch' && entry.batch.transferId === selectedId)) ?? transfers[0]);
@@ -139,7 +142,7 @@
             </div>
         </div>
     {/snippet}
-    <div class="activity-body" class:showing-details={showingDetails}>
+    <div class="activity-body" class:showing-details={showingDetails && count > 0}>
         <div class="activity-toolbar">
             <div class="activity-tabs" role="tablist" tabindex="-1" aria-label="Activity type" onkeydown={tabKeydown}>
                 <button type="button" id="activity-tab-transfers" role="tab" aria-selected={tab === 'transfers'} aria-controls="activity-content" tabindex={tab === 'transfers' ? 0 : -1} onclick={() => selectTab('transfers')}>Transfers</button>

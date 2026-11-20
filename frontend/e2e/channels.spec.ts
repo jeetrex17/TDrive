@@ -146,14 +146,25 @@ test('Activity restores and checks a pending copy with the source disconnected',
     const pending = { id: 'copy-pending', name: 'interrupted.zip', parent_id: '', status: 'pending', file_id: 0, message: 'Waiting for Telegram receipt' };
     const mock = await bootTDrive(page, {
         ListSourceCopies: resolves([pending]),
-        RetrySourceCopy: resolves({ ...pending, status: 'saved', file_id: 401, message: '' }),
+        RetrySourceCopy: deferred('copy-check', { ...pending, status: 'saved', file_id: 401, message: '' }),
     });
     await page.locator('#notif-bell').click();
     const activity = page.getByRole('dialog', { name: 'Activity' });
-    await activity.getByRole('button', { name: 'View interrupted.zip' }).click();
+    await activity.getByRole('button', { name: 'Needs attention', exact: true }).click();
+    const row = activity.getByRole('button', { name: 'View interrupted.zip' });
+    await row.click();
     await expect(activity.getByText('Waiting for Telegram receipt')).toBeVisible();
     await activity.getByRole('button', { name: 'Check copy' }).click();
-    await expect(activity.getByRole('button', { name: 'View interrupted.zip' })).toHaveCount(0);
+    await expect(row).toContainText('Checking copy…');
+    await expect(row).toHaveAttribute('aria-pressed', 'true');
+    const checking = activity.getByRole('button', { name: 'Checking…' });
+    await expect(checking).toBeDisabled();
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(checking).toBeVisible();
+    await mock.release('copy-check');
+    await expect(row).toHaveCount(0);
+    await expect(activity.getByRole('heading', { name: 'No matching activity' })).toBeVisible();
     expect((await mock.calls('RetrySourceCopy')).map(({ args }) => args)).toEqual([[7, 'copy-pending']]);
     expect(await mock.calls('SaveSourceCopies')).toHaveLength(0);
 });
