@@ -14,10 +14,14 @@ type OperationSnapshot struct {
 	Ordered   bool
 }
 
+type operationSnapshotReader interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
 // ReadOperationSnapshot can certify outcomes only after an initial scan with
 // no repair pending and no locally projected operations beyond the watermark.
 // An empty opID reads the boundary without looking up a specific operation.
-func ReadOperationSnapshot(ctx context.Context, db *sql.DB, channelID int64, opID string) (OperationSnapshot, error) {
+func ReadOperationSnapshot(ctx context.Context, db operationSnapshotReader, channelID int64, opID string) (OperationSnapshot, error) {
 	snapshot := OperationSnapshot{
 		Operation: ProjectionOperation{ChannelID: channelID, OpID: opID},
 	}

@@ -53,6 +53,11 @@ func (w *sourceCopyWorker) run(ctx context.Context, job sourceCopyJob) (SourceCo
 	if ctx.Err() != nil && !job.startedBody() {
 		return w.finish(ctx, job, sourceCopyCanceled, "Save canceled")
 	}
+	if job.BatchID == "" && job.Attempt > 0 {
+		if err := w.repairLegacyCopyReplay(ctx, job.ChannelID); err != nil {
+			return w.finish(ctx, job, sourceCopyPending, sourceCopyReceiptPending)
+		}
+	}
 	if job.CleaningUp {
 		return w.cleanup(ctx, job)
 	}
