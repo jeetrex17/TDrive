@@ -771,6 +771,9 @@ func (a *App) ServiceShutdown() error {
 	a.backendStopped = true
 	a.backendStartupMu.Unlock()
 	a.finishBackendStartup(context.Canceled)
+	if a.drives != nil {
+		a.drives.sourceCopies.suspend()
+	}
 	mountCtx, cancel := context.WithTimeout(context.Background(), encryptionMountTransitionTimeout)
 	if err := a.shutdownMountController(mountCtx); err != nil {
 		fmt.Printf("Warning: Failed to disconnect TDrive mount: %v\n", err)

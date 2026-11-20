@@ -33,6 +33,10 @@ func (a *App) Logout(mode string) error {
 		return fmt.Errorf("logout: unknown mode %q", mode)
 	}
 	a.closePhotoBackup()
+	var resumeCopies func()
+	if a.drives != nil {
+		resumeCopies = a.drives.sourceCopies.suspend()
+	}
 	if err := a.runWithClosedMountForLogout(func() error {
 		if m == auth.LogoutFull {
 			a.revokeTelegramSession()
@@ -50,6 +54,9 @@ func (a *App) Logout(mode string) error {
 
 		return nil
 	}); err != nil {
+		if resumeCopies != nil {
+			resumeCopies()
+		}
 		return fmt.Errorf("logout: %w", err)
 	}
 	// Quit may synchronously invoke ServiceShutdown. The terminal lifecycle bit
