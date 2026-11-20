@@ -1,4 +1,5 @@
-import { closeMedia, isMobilePlatform, openExternalUrl, openOriginalImage } from '../../api';
+import { closeMedia, isAndroidPlatform, isMobilePlatform, openExternalUrl, openOriginalImage } from '../../api';
+import { EDGE_GUARD_PX, trailingEdgeGuard } from '../../ui/file-list/swipe-actions';
 import { state } from '../../state';
 import { notify } from '../notifications';
 import { isEncryptionPasswordRequired } from '../errors';
@@ -63,6 +64,7 @@ const zoomPan = createZoomPanController(() => els?.image ?? null);
 // Touch double taps go through the phone recogniser; the dblclick the browser
 // synthesises for them must not zoom a second time.
 let lastPointerType = "mouse";
+let lastPointerStartX = 0;
 
 // The broker owns thumbnails only. An original image is a short-lived loopback
 // session that exists solely for the current explicit viewer action.
@@ -884,6 +886,11 @@ function infoTouchHandlers(): TouchGestureHandlers {
     };
 }
 
+function inSystemEdge(x: number): boolean {
+    const trailing = trailingEdgeGuard(window.innerWidth, isAndroidPlatform());
+    return x <= EDGE_GUARD_PX || (trailing > 0 && x >= trailing);
+}
+
 function previewTouchHandlers(): TouchGestureHandlers {
     return {
         tap: () => {
@@ -904,7 +911,10 @@ function previewTouchHandlers(): TouchGestureHandlers {
         pinchStart: () => zoomPan.endPan(),
         pinch: (factor, x, y) => zoomAt(x, y, factor),
         // A zoomed picture pans instead; the pan handlers above own that pointer.
-        dragStart: () => zoomPan.scale === 1 && isPreviewVisible() && !els?.modal.classList.contains("is-preview-locked"),
+        // A sideways drag born in a system edge zone is the OS back gesture:
+        // taking it too would change photo and close the viewer at once.
+        dragStart: (axis) => zoomPan.scale === 1 && isPreviewVisible() && !els?.modal.classList.contains("is-preview-locked")
+            && (axis !== "x" || !inSystemEdge(lastPointerStartX)),
         drag: (dx, dy, axis) => {
             const dom = els;
             if (!dom) return;
@@ -1158,6 +1168,7 @@ export function activatePreviewModal(): () => void {
     if (isMobilePlatform()) {
         listenPreview(dom.stage, "pointerdown", ((event: PointerEvent) => {
             lastPointerType = event.pointerType;
+            lastPointerStartX = event.clientX;
         }) as EventListener, true);
         previewListenerCleanups.push(bindTouchGestures(dom.stage, previewTouchHandlers()));
         // The info sheet is optional markup, and binding gestures to nothing

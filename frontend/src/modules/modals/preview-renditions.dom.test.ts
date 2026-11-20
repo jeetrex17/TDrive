@@ -18,7 +18,7 @@ const mocks = vi.hoisted(() => ({
     resetListener: undefined as undefined | (() => void),
     policyListener: undefined as undefined | ((policy: { backgrounded: boolean }) => void),
 }));
-vi.mock('../../api', () => ({ closeMedia: mocks.close, isMobilePlatform: mocks.mobile, onRuntimeEvent: () => () => {}, openExternalUrl: mocks.external, openOriginalImage: mocks.openOriginal, requireOperationSuccess: vi.fn(), useEncryptionPassword: mocks.password }));
+vi.mock('../../api', () => ({ closeMedia: mocks.close, isAndroidPlatform: () => false, isMobilePlatform: mocks.mobile, onRuntimeEvent: () => () => {}, openExternalUrl: mocks.external, openOriginalImage: mocks.openOriginal, requireOperationSuccess: vi.fn(), useEncryptionPassword: mocks.password }));
 vi.mock('../renditions/runtime', () => ({ acquireRendition: mocks.acquire, subscribeRenditionReset: (listener: () => void) => { mocks.resetListener = listener; return () => {}; } }));
 vi.mock('../gallery-policy', () => ({
     acquireOriginalViewerBudget: mocks.reserveOriginal,
@@ -474,6 +474,24 @@ describe('bounded photo viewer', () => {
         expect(image.style.transform).toContain('scale(2)');
         pointer(stage, 'pointerup', 100, 100, 1);
         pointer(stage, 'pointerup', 300, 100, 2);
+    });
+
+    it('leaves a swipe from the screen edge to the system back gesture', async () => {
+        mocks.mobile.mockReturnValue(true);
+        const preview = await import('./preview');
+        preview.activatePreviewModal();
+        await preview.openPreviewList([item, { ...item, id: 2 }], 1);
+        const stage = document.getElementById('preview-stage')!;
+        const image = document.getElementById('preview-image')!;
+
+        pointer(stage, 'pointerdown', 8, 200);
+        pointer(stage, 'pointermove', 160, 200);
+        expect(image.style.transform).not.toContain('translate3d(152px');
+        pointer(stage, 'pointerup', 160, 200);
+
+        await Promise.resolve();
+        expect(mocks.openOriginal).toHaveBeenCalledOnce();
+        expect(document.getElementById('preview-counter')!.textContent).toBe('2 / 2');
     });
 
     it('navigates with horizontal swipes and dismisses with a downward swipe on mobile', async () => {
