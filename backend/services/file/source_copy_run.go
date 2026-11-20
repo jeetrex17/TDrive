@@ -2,9 +2,9 @@ package file
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"TDrive/backend/channelsource"
@@ -129,17 +129,13 @@ func (w sourceCopyWorker) cleanableBodies(ctx context.Context, job sourceCopyJob
 	if _, err := w.projectedBodies(ctx, job); err != nil {
 		return nil, err
 	}
+	if err := w.confirmUnreferencedBodies(ctx, job, job.bodyIDs()); err != nil {
+		return nil, err
+	}
 	var ids []int64
 	for index, part := range job.Parts {
 		if part.BodyID <= 0 {
 			continue
-		}
-		var one int
-		err := w.DB.QueryRowContext(ctx, `
-			SELECT 1 FROM file_revisions WHERE channel_id=? AND (upload_uuid=? OR content_msg_id=?) LIMIT 1
-		`, job.ChannelID, job.bodyUUID(), part.BodyID).Scan(&one)
-		if !errors.Is(err, sql.ErrNoRows) {
-			return nil, errors.New("Destination attachment ownership could not be confirmed")
 		}
 		switch err := w.verifyBody(ctx, job, index); {
 		case errors.Is(err, tgclient.ErrMessageNotFound):
@@ -150,6 +146,34 @@ func (w sourceCopyWorker) cleanableBodies(ctx context.Context, job sourceCopyJob
 		}
 	}
 	return ids, nil
+}
+
+func (w sourceCopyWorker) confirmUnreferencedBodies(ctx context.Context, job sourceCopyJob, ids []int64) error {
+	query := `SELECT EXISTS (
+		SELECT 1 FROM file_revisions WHERE channel_id=? AND upload_uuid=? AND upload_uuid != ''`
+	args := make([]any, 0, len(ids)+3)
+	for _, id := range ids {
+		args = append(args, id)
+	}
+	args = append(args, job.ChannelID, job.bodyUUID())
+	if len(ids) > 0 {
+		// SQLite can use both bounds of the partial content index when the
+		// range starts and ends at each known message ID.
+		query = "WITH known_bodies(msg_id) AS (VALUES " + strings.Repeat("(?),", len(ids)-1) + "(?)) " + query + `
+			UNION ALL
+			SELECT 1 FROM known_bodies CROSS JOIN file_revisions r
+			WHERE r.channel_id=? AND r.content_msg_id > 0
+				AND r.content_msg_id BETWEEN known_bodies.msg_id AND known_bodies.msg_id`
+		args = append(args, job.ChannelID)
+	}
+	var referenced bool
+	if err := w.DB.QueryRowContext(ctx, query+")", args...).Scan(&referenced); err != nil {
+		return fmt.Errorf("check destination attachment ownership: %w", err)
+	}
+	if referenced {
+		return errors.New("Destination attachment ownership could not be confirmed")
+	}
+	return nil
 }
 
 func (w sourceCopyWorker) finish(ctx context.Context, job sourceCopyJob, status, message string) (SourceCopyResult, error) {

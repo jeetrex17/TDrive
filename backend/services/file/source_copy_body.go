@@ -33,6 +33,16 @@ func (job sourceCopyJob) lastBodyID() int64 {
 	return result
 }
 
+func (job sourceCopyJob) bodyIDs() []int64 {
+	ids := make([]int64, 0, len(job.Parts))
+	for _, part := range job.Parts {
+		if part.BodyID > 0 {
+			ids = append(ids, part.BodyID)
+		}
+	}
+	return ids
+}
+
 func (job sourceCopyJob) startedBody() bool {
 	return slices.ContainsFunc(job.Parts, func(part sourceCopyPart) bool { return part.DocumentID != 0 })
 }
