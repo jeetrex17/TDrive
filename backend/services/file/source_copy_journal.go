@@ -85,8 +85,11 @@ func (s *Service) ensureSourceCopyJournal(ctx context.Context) error {
 			body_parts TEXT NOT NULL DEFAULT '',
 			batch_id TEXT NOT NULL DEFAULT ''
 		);
-		CREATE INDEX IF NOT EXISTS source_copy_jobs_by_scope
-			ON source_copy_jobs (account_id, channel_id, status, started_at);
+		DROP INDEX IF EXISTS source_copy_jobs_by_scope;
+		CREATE INDEX IF NOT EXISTS source_copy_jobs_pending_by_scope
+			ON source_copy_jobs (account_id, channel_id) WHERE status='pending';
+		CREATE INDEX IF NOT EXISTS source_copy_jobs_finished_by_scope
+			ON source_copy_jobs (account_id, channel_id) WHERE status<>'pending';
 	`)
 	if err != nil {
 		return fmt.Errorf("open local save history: %w", err)
@@ -213,20 +216,26 @@ func (s *Service) loadSourceCopyJob(ctx context.Context, channelID, accountID in
 	return job, err
 }
 
+// Select receipt row IDs first so only pending jobs and the newest finished
+// jobs reach the table lookup. Each scoped index orders ties by row ID.
+const sourceCopyHistoryQuery = `
+	SELECT id, name, parent_id, status, file_id, status_message, candidate FROM source_copy_jobs
+	WHERE rowid IN (
+		SELECT rowid FROM source_copy_jobs WHERE channel_id=? AND account_id=? AND status='pending'
+		UNION ALL
+		SELECT rowid FROM (
+			SELECT rowid FROM source_copy_jobs WHERE channel_id=? AND account_id=? AND status<>'pending'
+			ORDER BY rowid DESC LIMIT 100
+		)
+	)
+	ORDER BY rowid DESC
+`
+
 func (s *Service) listSourceCopyJobs(ctx context.Context, channelID, accountID int64) ([]SourceCopyResult, error) {
 	if err := s.ensureSourceCopyJournal(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.DB.QueryContext(ctx, `
-		SELECT id, name, parent_id, status, file_id, status_message, candidate FROM source_copy_jobs
-		WHERE channel_id=? AND account_id=? AND (
-			status='pending' OR id IN (
-				SELECT id FROM source_copy_jobs WHERE channel_id=? AND account_id=? AND status<>'pending'
-				ORDER BY rowid DESC LIMIT 100
-			)
-		)
-		ORDER BY rowid DESC
-	`, channelID, accountID, channelID, accountID)
+	rows, err := s.DB.QueryContext(ctx, sourceCopyHistoryQuery, channelID, accountID, channelID, accountID)
 	return readSourceCopyResults(rows, err)
 }
 
