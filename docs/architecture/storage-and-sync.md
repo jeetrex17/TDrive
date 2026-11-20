@@ -52,6 +52,37 @@ flowchart LR
     Rebuild --> View
 ```
 
+## Copying files into My Drive
+
+**Save to My Drive** copies eligible documents and image documents from a
+connected Telegram source. Telegram resends the existing media into the
+configured personal channel. The app transfers no attachment bytes during
+the save. Copy requests explicitly confirm plain storage. Telegram native
+photos and vault-encrypted saves are outside this path. Internal file parts and
+legacy encrypted or multipart attachments are ineligible as loose source files.
+
+**Copy to My Drive** uses the same folder picker and receipt flow for files in
+a Shared Drive. Members can copy eligible files uploaded by others. Managed
+files are scoped to the selected revision. Direct Telegram attachments are
+scoped to the document from the listing and pass the raw attachment checks.
+Multipart copies commit only after every part is
+available in the destination. The source drive stays open while the user
+browses or creates destination folders in My Drive.
+
+Each confirmed item has a local receipt scoped to its Telegram account and
+My Drive. The source resolver checks account, connection, message identity and
+copy permission on each send attempt. Shared Drive copies recheck membership,
+protection and the selected file's content references. The destination
+messages first appear as hidden parts with the item's stable upload ID. A
+separate file commit publishes the file into the chosen folder. The app
+confirms the ordered projection outcome before reporting completion.
+
+Activity can reconcile an interrupted save against the captured destination.
+If Telegram already accepted the body, the app can finish the file commit
+from its destination receipt. Retrying a body send requires current source
+access. Full logout drains copy work and clears the local journal. Committed
+files remain in My Drive and can be recovered by normal history sync.
+
 ## Ingestion, rejection and tamper evidence
 
 [`ProjectFromOp` and `ProjectFromOpTx`](../../backend/projection/log.go) insert
