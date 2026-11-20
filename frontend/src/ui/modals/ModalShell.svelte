@@ -140,6 +140,7 @@
         if (active) {
             active = false;
             a11y?.deactivate();
+            a11y = null;
         }
         if (host) host.setAttribute('aria-hidden', 'true');
 
