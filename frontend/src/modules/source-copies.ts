@@ -15,11 +15,8 @@ import {
 } from '../api';
 import { invalidateFolderIndex, state } from '../state';
 import { canSaveSourceMedia, MAX_SOURCE_COPY_SELECTION, type ChannelMediaItem, type ChannelSource } from '../ui/channels/channel-model';
-import { closeChannel } from '../ui/channels/channel-store';
-import { appActions } from './app-actions';
 import { switchActiveChannel } from './channels';
 import { humanizeBackendError } from './errors';
-import { renderBreadcrumb } from './navigation';
 import { notify, notifyAppError } from './notifications';
 
 interface CopyItem extends SourceCopyInput {
@@ -44,6 +41,7 @@ interface CopyDialog {
     stage: 'loading' | 'ready' | 'checking' | 'creating' | 'saving' | 'done';
     browseFailed: boolean;
     stopping: boolean;
+    openingFolder: boolean;
     error: string;
     results: readonly SourceCopyResult[];
 }
@@ -196,14 +194,14 @@ function openCopyDialog(identity: number, fromSharedDrive: boolean, suggestedFol
     sourceCopyDialog.set({
         accountId: identity, fromSharedDrive, suggestedFolder, items,
         path: [], folders: [], driveId: 0, stage: 'loading',
-        browseFailed: false, stopping: false, error: '', results: [],
+        browseFailed: false, stopping: false, openingFolder: false, error: '', results: [],
     });
     void browse([], true);
 }
 
 export function closeSourceCopy(): void {
-    const stage = get(sourceCopyDialog)?.stage;
-    if (stage === 'saving' || stage === 'creating') return;
+    const current = get(sourceCopyDialog);
+    if (current?.stage === 'saving' || current?.stage === 'creating' || current?.openingFolder) return;
     dialogVersion += 1;
     sourceCopyDialog.set(null);
 }
@@ -309,16 +307,14 @@ export async function stopSourceCopy(): Promise<void> {
 
 export async function openSavedSourceCopyFolder(): Promise<void> {
     const current = get(sourceCopyDialog);
-    if (current?.stage !== 'done' || !current.results.some(({ status }) => status === 'saved')) return;
-    const activation = session;
-    closeSourceCopy();
-    closeChannel();
-    if (state.activeChannel?.id !== current.driveId) await switchActiveChannel(current.driveId);
-    if (activation !== session || state.activeChannel?.id !== current.driveId || state.virtualView) return;
-    state.folderPath = current.path;
-    state.currentFolderId = destination(current.path);
-    renderBreadcrumb();
-    appActions().refreshFiles();
+    if (current?.stage !== 'done' || current.openingFolder || !current.results.some(({ status }) => status === 'saved')) return;
+    const version = dialogVersion;
+    const isCurrent = () => stillOpen(version) && current.accountId === accountId;
+    updateDialog({ openingFolder: true, error: '' });
+    const opened = await switchActiveChannel(current.driveId, { path: current.path, isCurrent });
+    if (!isCurrent()) return;
+    updateDialog({ openingFolder: false, error: opened ? '' : 'Could not open the folder in My Drive. Try again.' });
+    if (opened) closeSourceCopy();
 }
 
 export async function checkSourceCopy(id: string): Promise<void> {

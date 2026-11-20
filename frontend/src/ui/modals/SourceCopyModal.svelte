@@ -93,7 +93,7 @@
     actionsClass="modal-actions source-copy-actions"
     initialFocus="#source-copy-dismiss"
     restoreFocus={sharedCopy ? '#file-list' : '.channel-row-main'}
-    dismissible={stage !== 'saving' && stage !== 'creating'}
+    dismissible={stage !== 'saving' && stage !== 'creating' && !$dialog?.openingFolder}
     onClose={closeSourceCopy}
 >
     <div class="copy-body">
@@ -207,11 +207,15 @@
             {#if stage === 'saving'}
                 <button class="secondary-btn" type="button" disabled={$dialog?.stopping} onclick={() => void stopSourceCopy()}>{sharedCopy ? 'Stop copying' : 'Stop saving'}</button>
             {:else}
-                <button id="source-copy-dismiss" class="secondary-btn" type="button" disabled={stage === 'creating'} onclick={closeSourceCopy}>{stage === 'done' ? 'Done' : 'Cancel'}</button>
+                <button id="source-copy-dismiss" class="secondary-btn" type="button" disabled={stage === 'creating' || $dialog?.openingFolder} onclick={closeSourceCopy}>{stage === 'done' ? 'Done' : 'Cancel'}</button>
                 {#if stage === 'done'}
-                    {#if anySaved}<button class="primary-btn" type="button" onclick={() => void openSavedSourceCopyFolder()}>Open folder</button>{/if}
+                    {#if anySaved}
+                        <button class="primary-btn" type="button" disabled={$dialog?.openingFolder} onclick={() => void openSavedSourceCopyFolder()}>
+                            {$dialog?.openingFolder ? 'Opening folder…' : 'Open folder'}
+                        </button>
+                    {/if}
                     {#if !$dialog?.results.length || $dialog.results.some(({ status }) => status === 'pending')}
-                        <button class="secondary-btn" type="button" onclick={() => void viewActivity()}>View Activity</button>
+                        <button class="secondary-btn" type="button" disabled={$dialog?.openingFolder} onclick={() => void viewActivity()}>View Activity</button>
                     {/if}
                 {:else}
                     <button class="primary-btn" type="button" disabled={!editing || makingFolder || $dialog?.items.some(({ name }) => !name.trim())} aria-describedby={editing ? 'source-copy-name-hint' : undefined} onclick={() => void confirmSourceCopy()}>{sharedCopy ? 'Copy here' : 'Save here'}</button>

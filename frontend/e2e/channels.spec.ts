@@ -112,6 +112,12 @@ test('mobile can save a basic group attachment with no viewer or Telegram link',
     await save.click();
     await expect(dialog.getByText('Saved', { exact: true })).toBeVisible();
     expect((await mock.calls('CreateSourceCopyFolder')).map(({ args }) => args)).toEqual([[7, 1, '', 'Private group']]);
+    await dialog.getByRole('button', { name: 'Open folder' }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole('button', { name: 'Files', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('heading', { name: folder.name, exact: true })).toBeVisible();
+    await expect.poll(async () => (await mock.calls('GetFolderContents')).some(({ args }) => args[0] === folder.id)).toBe(true);
+    expect(await mock.calls('SetActiveChannel')).toHaveLength(0);
 });
 
 test('mobile selects source files from row actions and adds more files by tapping', async ({ page }) => {

@@ -393,12 +393,18 @@ test('a Shared Drive file can be copied to a subfolder in My Drive', async ({ pa
             { ...PERSONAL_CHANNEL, is_active: false },
             { id: 2, title: 'Shared files', kind: 'shared', is_active: true, invite_link: '' },
         ]),
-        GetFolderContents: resolves({ folders: [], files: [file] }),
+        GetFolderContents: byFirstArg({
+            [child.id]: resolves({ folders: [], files: [{ ...file, msg_id: 400 }] }),
+        }, resolves({ folders: [], files: [] })),
+        Search: resolves([{ ...file, id: String(file.msg_id), parent_id: '', path: 'Shared files' }]),
+        SetActiveChannel: rejects('My Drive is unavailable.'),
         ResolveUsernames: resolves({ '8': 'Uploader' }),
         ListSourceCopyFolders: resolves({ drive_id: 1, folders: [parent] }),
         PreviewSourceCopyNames: resolves([file.name]),
         SaveSourceCopies: resolves({ results: [{ id: 'copy-1', name: file.name, parent_id: child.id, status: 'saved', file_id: 400, message: '' }], not_started: '' }),
     });
+    const search = page.locator('#search-input');
+    await search.fill('shared');
     const row = page.getByRole('row', { name: 'File: shared.pdf' });
     await row.click({ button: 'right' });
     await page.getByRole('menuitem', { name: 'Copy to My Drive…' }).click();
@@ -422,6 +428,20 @@ test('a Shared Drive file can be copied to a subfolder in My Drive', async ({ pa
         } }], true, expect.any(String)],
     ]);
     expect(await mock.calls('SetActiveChannel')).toEqual([]);
+
+    const open = dialog.getByRole('button', { name: 'Open folder' });
+    await open.click();
+    await expect(dialog.getByRole('alert')).toContainText('Could not open the folder in My Drive.');
+    await expect(dialog.getByText('Copied', { exact: true })).toBeVisible();
+    await expect(search).toHaveValue('shared');
+
+    await mock.setPlan('SetActiveChannel', resolves(null));
+    await open.click();
+    await expect(dialog).toBeHidden();
+    await expect(search).toHaveValue('');
+    await expect(page.locator('#breadcrumb-path')).toContainText('Reports');
+    await expect(page.getByRole('row', { name: 'File: shared.pdf' })).toBeVisible();
+    await expect.poll(async () => (await mock.calls('GetFolderContents')).some(({ args }) => args[0] === child.id)).toBe(true);
 });
 
 test('the phone can copy a forwarded Shared Drive file from its overflow menu', async ({ page }) => {

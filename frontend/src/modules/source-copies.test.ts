@@ -15,7 +15,6 @@ const api = vi.hoisted(() => ({
 vi.mock('../api', () => api);
 vi.mock('../state', () => ({ invalidateFolderIndex: vi.fn(), state: { channels: [] } }));
 vi.mock('./channels', () => ({ switchActiveChannel: vi.fn() }));
-vi.mock('./navigation', () => ({ renderBreadcrumb: vi.fn() }));
 vi.mock('./notifications', () => ({ notify: vi.fn(), notifyAppError: vi.fn() }));
 
 import {

@@ -5,7 +5,7 @@
 // state.activeChannel in sync; tells the sidebar to re-render on every
 // change.
 
-import { state, invalidateFolderIndex, resetFolderCaches, resetSelection } from '../state';
+import { state, invalidateFolderIndex, resetFolderCaches, resetSelection, type DrivePathEntry } from '../state';
 import { resetRenditions } from './renditions/runtime';
 import {
     approveJoinRequest as approveJoinRequestApi,
@@ -28,7 +28,8 @@ import {
 } from '../api';
 import type { DriveChannel, JoinDriveResult, JoinRequest, PendingJoin } from '../types';
 import { closeChannel } from '../ui/channels/channel-store';
-import { runGlobalSearch } from './search';
+import { renderBreadcrumb } from './navigation';
+import { clearSearch, runGlobalSearch } from './search';
 import type { RefreshFilesOptions } from './app-actions';
 import { driveSyncStatus, type DriveSyncState } from '../ui/mobile/mobile-shell-store';
 
@@ -246,23 +247,44 @@ export async function leaveSharedDrive(channelId: number): Promise<void> {
     if (state.activeChannel) await switchActiveChannel(state.activeChannel.id);
 }
 
-export async function switchActiveChannel(channelId: number): Promise<void> {
-    if (!channelId) return;
-    // Every way into a drive, from the sidebar, the phone's Account tab or a
-    // drive just made or joined, leaves a Telegram channel the main area shows.
-    closeChannel();
-    if (state.channelSwitchInProgress) return;
-    // Invalidate an explicit refresh immediately, before the native switch
-    // resolves. Otherwise an older request for the drive we are leaving can
-    // still publish during the switch window.
-    driveRefreshGeneration += 1;
-    state.channelSwitchInProgress = true;
-    resetRenditions();
-    // Route intent changes immediately. A later Photos click must win while the
-    // native channel switch is still in flight.
+interface DriveFolderNavigation {
+    path: readonly DrivePathEntry[];
+    isCurrent: () => boolean;
+}
+
+function showDriveFolder(path: readonly DrivePathEntry[]): void {
+    clearSearch({ refresh: false });
     state.virtualView = null;
+    state.folderPath = [...path];
+    state.currentFolderId = path[path.length - 1]?.id ?? '';
+    renderBreadcrumb();
+    closeChannel();
+}
+
+export async function switchActiveChannel(channelId: number, folder?: DriveFolderNavigation): Promise<boolean> {
+    if (!channelId) return false;
+    if (!folder) closeChannel();
+    if (state.channelSwitchInProgress || (folder && !folder.isCurrent())) return false;
+
+    state.channelSwitchInProgress = true;
     try {
+        if (folder && state.activeChannel?.id === channelId) {
+            showDriveFolder(folder.path);
+            await refreshFilesView();
+            return true;
+        }
+
+        const previousView = state.virtualView;
+        // Invalidate an explicit refresh before the native switch resolves.
+        driveRefreshGeneration += 1;
+        if (!folder) {
+            resetRenditions();
+            // A later Photos click wins while the native switch is in flight.
+            state.virtualView = null;
+        }
         await setActiveChannel(channelId);
+        if (folder && !folder.isCurrent()) return false;
+        if (folder) resetRenditions();
 
         const target = state.channels.find((channel) => channel.id === channelId) ?? null;
         state.activeChannel = target
@@ -272,17 +294,25 @@ export async function switchActiveChannel(channelId: number): Promise<void> {
             channel.isActive = channel.id === channelId;
         }
 
-        state.currentFolderId = '';
-        state.folderPath = [];
         invalidateDriveCaches(channelId);
         resetFolderCaches();
         resetSelection();
 
+        const path = folder && target && state.virtualView === previousView ? folder.path : null;
+        if (path) {
+            showDriveFolder(path);
+        } else {
+            state.currentFolderId = '';
+            state.folderPath = [];
+            renderBreadcrumb();
+        }
         renderSidebar();
         await refreshFilesView();
         syncInBackground(channelId);
+        return folder ? path !== null : target !== null;
     } catch (error) {
         console.error('SetActiveChannel failed:', error);
+        return false;
     } finally {
         state.channelSwitchInProgress = false;
     }
