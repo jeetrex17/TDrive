@@ -110,6 +110,12 @@ the app routes all source actions through the typed methods and table. This
 keeps the existing channel API compatible while the migration preserves its
 connections.
 
+Desktop and mobile can organize connected sources in named local groups.
+Membership is keyed by signed-in account and typed Telegram peer. Moving a
+source between groups does not change Telegram membership or topics.
+Disconnecting a source removes its group assignment when the removal becomes
+final.
+
 [`channelsource.Service`](../../backend/channelsource/sources.go) pages newest
 first through at most four batches of 100 Telegram messages. Empty batches
 end history; short batches do not, because Telegram omits deleted and withheld

@@ -59,7 +59,7 @@ test('desktop channels sit beside the drives and keep the app header', async ({ 
     await expect(page.getByRole('menuitem', { name: 'Remove from TDrive' })).toBeVisible();
     await page.keyboard.press('Escape');
 
-    await page.locator('.channel-nav-add').click();
+    await page.locator('.channel-nav-title').getByRole('button', { name: 'Add a source', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Add a source' });
     await expect(dialog.getByRole('button', { name: 'Open Field Recordings, already connected' })).toBeVisible();
     await dialog.getByRole('button', { name: 'Connect Tech Talks' }).click();
@@ -155,7 +155,7 @@ test('the picker distinguishes joined chat types and verifies a public link befo
         ConnectChannelSource: resolves({ ...publicChannel, connected: true, generation: 'public-a' }),
     });
 
-    await page.locator('.channel-nav-add').click();
+    await page.locator('.channel-nav-title').getByRole('button', { name: 'Add a source', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Add a source' });
     await expect(dialog.getByRole('button', { name: 'Connect Mina' })).toBeVisible();
     await expect(dialog.getByText('Direct message', { exact: true })).toBeVisible();
@@ -169,7 +169,7 @@ test('the picker distinguishes joined chat types and verifies a public link befo
 test('desktop source picker has no horizontal overflow', async ({ page }) => {
     const direct = { peer_kind: 'user', peer_id: 50, channel_id: 0, title: 'Mina', username: '', connected: false, protected: false, available: true, account_id: 7, generation: '' };
     await bootTDrive(page, { ListChannelSourceCandidates: resolves([direct]) });
-    await page.locator('.channel-nav-add').click();
+    await page.locator('.channel-nav-title').getByRole('button', { name: 'Add a source', exact: true }).click();
     await page.screenshot({ path: 'test-results/source-picker-desktop.png', fullPage: true, animations: 'disabled' });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
@@ -182,7 +182,7 @@ test('390x844 mobile source picker has no sheet bleed', async ({ page }) => {
         ResolvePublicChannelSource: resolves(candidate),
     }, { url: '/?mobile=ios' });
     await page.getByRole('button', { name: /Switch drive/ }).click();
-    await page.locator('.channel-nav-add').click();
+    await page.locator('.channel-nav-title').getByRole('button', { name: 'Add a source', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Add a source' });
     const link = dialog.getByLabel('Public channel link');
     expect(await link.evaluate((input) => parseFloat(getComputedStyle(input).fontSize))).toBeGreaterThanOrEqual(16);

@@ -33,6 +33,7 @@ import {
     type ChannelSource,
     sourceKey,
 } from '../ui/channels/channel-model';
+import { openSourceOrganization } from '../ui/channels/source-organization-state';
 import { showContextMenu, type ContextMenuItem } from '../ui/menus/context-menu-store';
 import { pushHistoryEvent } from './notif-bell';
 import { splitNameAndExt } from '../utils';
@@ -273,6 +274,7 @@ export function showChannelActions(x: number, y: number, source: ChannelSource):
     const url = channelTelegramUrl(source);
     const items: ContextMenuItem[] = [
         ...(url ? [{ label: 'Open in Telegram', icon: 'external' as const, action: () => openInTelegram(url) }, { type: 'divider' as const }] : []),
+        { label: 'Move to group…', icon: 'move', action: () => openSourceOrganization(source) },
         { label: 'Remove from TDrive', icon: 'clear', danger: true, action: () => removeChannel(source) },
     ];
     showContextMenu(x, y, items);

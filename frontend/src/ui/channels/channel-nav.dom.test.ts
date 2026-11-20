@@ -2,6 +2,15 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import ChannelNav from './ChannelNav.svelte';
 import type { ChannelSource } from './channel-model';
+import { resetSourceOrganization } from './source-organization-state';
+
+const organizationAPI = vi.hoisted(() => ({
+    listSourceGroups: vi.fn(),
+    saveSourceGroup: vi.fn(),
+    deleteSourceGroup: vi.fn(),
+    moveSourceToGroup: vi.fn(),
+}));
+vi.mock('./source-organization-api', () => organizationAPI);
 
 const source = (peerId: number, title: string): ChannelSource => ({
     peerKind: 'channel', peerId, title, username: '', connected: true, protected: false, available: true, accountId: '7', generation: 'g',
@@ -26,6 +35,8 @@ afterEach(async () => {
     host?.remove();
     app = null;
     host = null;
+    resetSourceOrganization();
+    organizationAPI.listSourceGroups.mockReset().mockResolvedValue({ groups: [], assignments: [] });
 });
 
 describe('ChannelNav', () => {
@@ -108,6 +119,36 @@ describe('ChannelNav', () => {
         expect(rows[1].getAttribute('aria-current')).toBeNull();
         rows[1].click();
         expect(onSelect).toHaveBeenCalledWith(channel);
+    });
+
+    it('groups only the current typed connection and keeps other sources visible', async () => {
+        organizationAPI.listSourceGroups.mockResolvedValue({
+            groups: [{ id: 'work', name: 'Work' }],
+            assignments: [
+                { group_id: 'work', peer_id: 50, peer_kind: 'user', generation: 'g' },
+                { group_id: 'work', peer_id: 51, peer_kind: 'channel', generation: 'old' },
+            ],
+        });
+        const chat = { ...source(50, 'Mina'), peerKind: 'user' as const };
+        host = document.createElement('div');
+        document.body.append(host);
+        app = mount(ChannelNav, { target: host, props: {
+            sources: { status: 'ready', sources: [chat, source(50, 'Cinema Club'), source(51, 'Reconnected')] },
+            activeKey: null, loadPhoto: vi.fn(async () => ''),
+            onSelect: vi.fn(), onActions: vi.fn(), onAdd: vi.fn(), onRetry: vi.fn(),
+        } });
+        await settle();
+
+        expect(organizationAPI.listSourceGroups).toHaveBeenCalledWith('7');
+        const toggle = host.querySelector<HTMLButtonElement>('button[aria-expanded="true"]')!;
+        expect(toggle.textContent).toContain('Work');
+        expect(host.querySelector('[aria-label="Mina"]')).not.toBeNull();
+        toggle.click();
+        await settle();
+        expect(toggle.getAttribute('aria-expanded')).toBe('false');
+        expect(host.querySelector('[aria-label="Mina"]')).toBeNull();
+        expect(host.querySelector('[aria-label="Cinema Club"]')).not.toBeNull();
+        expect(host.querySelector('[aria-label="Reconnected"]')).not.toBeNull();
     });
 
     // Desktop shows no "…" on channel rows, so the keyboard reaches the same

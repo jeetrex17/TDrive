@@ -90,6 +90,8 @@
     import MountSelectionModal from '../mount/MountSelectionModal.svelte';
     import ChannelPickerModal from '../channels/ChannelPickerModal.svelte';
     import { channelPickerOpen, channelSources } from '../channels/channel-store';
+    import SourceOrganizationModal from '../channels/SourceOrganizationModal.svelte';
+    import { resetSourceOrganization } from '../channels/source-organization-state';
     import ToastStack from '../notifications/ToastStack.svelte';
     import ActivityView from '../notifications/ActivityView.svelte';
     import PreviewModal from '../preview/PreviewModal.svelte';
@@ -100,6 +102,9 @@
     import FeaturePortal from './FeaturePortal.svelte';
 
     $effect(() => activateNotificationEffects());
+    $effect(() => {
+        if ($appView.kind === 'dashboard') return resetSourceOrganization;
+    });
 
     $effect(() => {
         if ($appView.kind !== 'dashboard') return;
@@ -232,6 +237,9 @@
     </div>
     <div id="logout-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <LogoutModal onConfirm={confirmLogout} />
+    </div>
+    <div id="source-organization-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
+        <SourceOrganizationModal />
     </div>
     <div id="channel-picker-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <ChannelPickerModal
