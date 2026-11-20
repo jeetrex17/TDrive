@@ -31,6 +31,11 @@ let telegramRootRequest: Promise<RootFile[]> | null = null;
 let telegramRootRequestDriveKey: string | null = null;
 const inFlightSearches = new Map<string, Promise<SearchHit[]>>();
 
+/** The location shown for a hit at the drive root: the active drive's name. */
+function driveRootLabel(): string {
+    return state.activeChannel?.title?.trim() || 'My Drive';
+}
+
 function setHeaderMode(isSearch: boolean) {
 	fileListColumnMode.set(isSearch ? "location" : "date");
 }
@@ -102,7 +107,7 @@ function renderSearchResults(results: SearchHit[], query: string) {
             rows.push(buildFolderRow(result, String(result.parentId || ""), {
                 key: `search:folder:${id}`,
                 channelId: sourceChannelId,
-                metaLabel: String(result.path || "My Drive"),
+                metaLabel: String(result.path || driveRootLabel()),
                 sizeLabel: "—",
                 actions: [{
                     kind: "download",
@@ -199,7 +204,7 @@ function renderSearchResults(results: SearchHit[], query: string) {
             }, String(result.parentId || ""), {
                 key: `search:file:${String(result.source || "fs")}:${id}`,
                 channelId: sourceChannelId,
-                metaLabel: String(result.path || "My Drive"),
+                metaLabel: String(result.path || driveRootLabel()),
                 sizeLabel: formatBytes(size),
                 actions,
                 onDoubleClick: () => {
@@ -377,7 +382,7 @@ export async function runGlobalSearch() {
                 uploaderId: file.uploaderId ?? 0,
                 encrypted: false,
                 plaintextSize: 0,
-                path: 'My Drive',
+                path: driveRootLabel(),
                 source: 'tg',
                 ...(file.copyIdentity ? { copyIdentity: file.copyIdentity } : {}),
             }));

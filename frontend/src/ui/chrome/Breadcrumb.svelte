@@ -2,9 +2,10 @@
     import { isApplePlatform } from '../../utils';
     import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
     import { breadcrumbPath, type BreadcrumbDrag } from './breadcrumb-store';
+    import { sidebarState } from '../sidebar/sidebar-store';
 
     interface Props {
-        // index -1 targets the root ("My Drive"), otherwise a folderPath index.
+        // index -1 targets the drive root, otherwise a folderPath index.
         onNavigate: (index: number) => void;
         onBack: () => void;
         drag: BreadcrumbDrag;
@@ -18,8 +19,15 @@
         index: number;
     }
 
+    // The root is the active drive, named: a shared drive is not "My Drive".
+    const rootName = $derived.by(() => {
+        const { personal, shared, activeChannelId } = $sidebarState;
+        const active = [...personal, ...shared].find((drive) => drive.id === activeChannelId);
+        return active?.title?.trim() || 'My Drive';
+    });
+
     const items = $derived<CrumbItem[]>([
-        { id: '', name: 'My Drive', index: -1 },
+        { id: '', name: rootName, index: -1 },
         ...$breadcrumbPath.map((f, i) => ({ id: f.id, name: f.name, index: i })),
     ]);
     const atRoot = $derived($breadcrumbPath.length === 0);

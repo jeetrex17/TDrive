@@ -5,6 +5,7 @@ import Breadcrumb from './Breadcrumb.svelte';
 import ProfileMenu from './ProfileMenu.svelte';
 import UploadMenu from './UploadMenu.svelte';
 import { breadcrumbPath, type BreadcrumbDrag } from './breadcrumb-store';
+import { sidebarState } from '../sidebar/sidebar-store';
 import { encryptionEntryVisible, profileLoaded, profileUser } from './profile-store';
 
 const noop = () => {};
@@ -24,6 +25,7 @@ const uploadProps = { onFiles: noop, onFolder: noop };
 
 afterEach(() => {
     breadcrumbPath.set([]);
+    sidebarState.set({ personal: [], shared: [], pending: [], activeChannelId: null, virtualView: null });
     profileUser.set(null);
     profileLoaded.set(false);
     encryptionEntryVisible.set(false);
@@ -36,6 +38,21 @@ describe('Breadcrumb', () => {
         expect(body).toContain('My Drive');
         expect(body).not.toContain('breadcrumb-sep');
         expect(body).toContain('opacity: 0.35'); // back button dimmed
+    });
+
+    it('names the root after the active shared drive', () => {
+        sidebarState.set({
+            personal: [{ id: 1, title: 'My Drive', kind: 'personal' }],
+            shared: [{ id: 2, title: 'Team assets', kind: 'shared' }],
+            pending: [],
+            activeChannelId: 2,
+            virtualView: null,
+        } as never);
+
+        const { body } = render(Breadcrumb, { props: breadcrumbProps });
+
+        expect(body).toContain('Team assets');
+        expect(body).not.toContain('My Drive');
     });
 
     it('renders crumbs with separators and an enabled back button', () => {
