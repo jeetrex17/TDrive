@@ -129,6 +129,21 @@ describe('acting on a row from the keyboard', () => {
         });
     });
 
+    it('deletes the whole selection when the focused row is part of it', () => {
+        row('folder:design').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        row('file:41').dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true, ctrlKey: true }));
+        flushSync();
+        expect(state.selectedItems.size).toBe(2);
+
+        press(row('file:41'), 'Backspace');
+
+        expect(modals.openDeleteModal).toHaveBeenCalledOnce();
+        expect(modals.openDeleteModal).toHaveBeenCalledWith(expect.objectContaining({
+            type: 'bulk',
+            items: [expect.objectContaining({ id: 'design' }), expect.objectContaining({ id: 41 })],
+        }));
+    });
+
     it('refuses to delete a row the published row says cannot be deleted, and says why', () => {
         publish({ canDelete: false });
 

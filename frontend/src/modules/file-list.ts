@@ -8,7 +8,7 @@ import { tick } from 'svelte';
 import { get } from 'svelte/store';
 import { breadcrumbPath } from '../ui/chrome/breadcrumb-store';
 import type { ContextMenuDetail } from '../ui/menus/context-menu-store';
-import { clearSelection, deselectRow, extendSelectionToIndex, handleRowSelection, isRowSelected, reconcileSelection, selectAllRows, selectRow, getRowKey } from './selection';
+import { clearSelection, deselectRow, extendSelectionToIndex, handleRowSelection, isRowSelected, openSelectedItemsDelete, reconcileSelection, selectAllRows, selectRow, getRowKey } from './selection';
 import { openRenameModal } from './modals/rename';
 import { openDeleteModal } from './modals/delete';
 import { openNewFolderModal } from './modals/folder';
@@ -1190,7 +1190,13 @@ function handleListKeyDown(e: KeyboardEvent) {
         case 'Backspace':
             // A Mac keyboard's Delete key is Backspace.
             e.preventDefault();
-            if (currentRow) deleteRow(currentRow);
+            // A focused row inside a multi-selection deletes the selection,
+            // which is what the context menu offers under the same shortcut.
+            if (state.selectedItems.size > 1 && isRowSelected(current)) {
+                if (!isTrashMode()) openSelectedItemsDelete();
+            } else if (currentRow) {
+                deleteRow(currentRow);
+            }
             return;
         case 'ContextMenu':
             e.preventDefault();
