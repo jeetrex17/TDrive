@@ -17,6 +17,7 @@
     import { mergeTopicMetadata, type ChannelTopic, type ChannelTopicFetcher } from './channel-topics';
     import ChannelSortMenu from './ChannelSortMenu.svelte';
     import { fileTypeFamily, fileTypeIcon, type FileTypeFamily } from '../file-list/file-type';
+    import { activeTab, driveSwitcherOpen } from '../mobile/mobile-shell-store';
     import { pushSheet } from '../modals/sheet-stack';
     import { toAppError } from '../../modules/errors';
     import { splitNameAndExt } from '../../utils';
@@ -103,6 +104,7 @@
     const shown = $derived(sortPosts(items, sort));
     const selectedItems = $derived(shown.filter((item) => canSaveSourceMedia(source, item) && selected.has(selectionKey(item))));
     const touchSelecting = $derived(mobile && selectedItems.length > 0);
+    const handlesMobileBack = $derived(mobile && $activeTab === 'files' && !$driveSwitcherOpen);
     const suggestedFolder = $derived(selectedTopic?.title ?? source.title);
     const browsingSource = $derived(selectedTopic ? { ...source, title: `${source.title} · ${selectedTopic.title}` } : source);
     const searchLabel = $derived(selectedTopic ? `Search files in ${selectedTopic.title}` : 'Search files');
@@ -323,7 +325,11 @@
 
     function showRowActions(x: number, y: number, item: ChannelMediaItem): void {
         const copyable = canSaveSourceMedia(source, item);
-        const select = mobile && onSavePosts && copyable ? () => selectItem(item) : undefined;
+        const select = mobile && onSavePosts && copyable ? () => {
+            selectItem(item);
+            // The row's action button is removed in selection mode.
+            void tick().then(focusSelectedRow);
+        } : undefined;
         const selection = copyable && selected.has(selectionKey(item)) && selectedItems.length > 1
             ? { count: selectedItems.length, save: saveSelection }
             : undefined;
@@ -432,10 +438,15 @@
         });
     });
 
-    // Android BACK closes the phone's search field before it leaves the channel.
     $effect(() => {
-        if (!searchOpen) return;
+        if (!handlesMobileBack || !searchOpen) return;
         const back = pushSheet(closeSearch);
+        return () => back.release();
+    });
+
+    $effect(() => {
+        if (!handlesMobileBack || !touchSelecting) return;
+        const back = pushSheet(cancelSelection);
         return () => back.release();
     });
 
@@ -541,7 +552,7 @@
     {#if mobile}
         <header class="channel-topbar" class:is-scrolled={scrolled}>
             <div class="topbar-row">
-                <button type="button" class="topbar-back" aria-label="Back" onclick={onBack}>
+                <button type="button" class="topbar-back" aria-label="Back" onclick={touchSelecting ? cancelSelection : onBack}>
                     <ChevronLeftIcon size={24} strokeWidth={2} aria-hidden="true" />
                 </button>
                 <div class="topbar-folder-titles">
