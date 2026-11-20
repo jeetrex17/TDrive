@@ -74,14 +74,18 @@ My Drive. The source resolver checks account, connection, message identity and
 copy permission on each send attempt. Shared Drive copies recheck membership,
 protection and the selected file's content references. The destination
 messages first appear as hidden parts with the item's stable upload ID. A
-separate file commit publishes the file into the chosen folder. The app
-confirms the ordered projection outcome before reporting completion.
+separate file commit publishes the file into the chosen folder. Receipt checks
+read the commit outcome and channel watermark from the same SQLite snapshot.
+Local replay entries above that watermark can change the outcome when replay
+runs in order. Copy cleanup waits for a confirmed outcome before deleting any
+body from an attempted commit.
 
-Activity can reconcile an interrupted save against the captured destination.
-If Telegram already accepted the body, the app can finish the file commit
-from its destination receipt. Retrying a body send requires current source
-access. Full logout drains copy work and clears the local journal. Committed
-files remain in My Drive and can be recovered by normal history sync.
+Activity merges pending receipts by copy ID. When a save response is lost, the
+app looks up the original batch in the captured account and My Drive. An
+accepted body can finish from its destination receipt, and a body resend
+requires current source access. Full logout drains copy work and clears the
+local journal. Committed files remain in My Drive and can be recovered by
+normal history sync.
 
 ## Ingestion, rejection and tamper evidence
 
