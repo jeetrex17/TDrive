@@ -408,6 +408,15 @@ export interface SelfUser {
     "photo_base64"?: string;
 }
 
+/**
+ * SourceCopyFolderPage belongs to the configured My Drive, regardless of
+ * which drive or Telegram source is currently open in the dashboard.
+ */
+export interface SourceCopyFolderPage {
+    "drive_id": number;
+    "folders": backend$0.Folder[] | null;
+}
+
 export interface TDriveFile {
     "id": number;
     "name": string;
@@ -415,6 +424,7 @@ export interface TDriveFile {
     "access_hash": number;
     "date": number;
     "uploader_id": number;
+    "copy_identity"?: string;
 }
 
 /**

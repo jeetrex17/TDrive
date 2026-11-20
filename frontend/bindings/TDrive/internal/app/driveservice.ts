@@ -4,17 +4,12 @@
 /**
  * DriveService owns the set of drives themselves: which ones this client knows
  * about, how a shared one is created, joined, approved or left, and how the
- * personal one is first chosen or made.
+ * personal one is first chosen or made. It also owns connected Telegram
+ * sources and their explicitly scoped save-to-My-Drive flow.
  * 
- * The line it draws is between a drive and its contents. Everything here
- * changes *which* drives exist or who may reach them; nothing here reads or
- * writes a file inside one. That matters because these are the only calls that
- * can run before a drive is selected at all -- a fresh install has no personal
- * channel, and a user recovering an old one has no projection yet -- so they
- * must not share a type with methods that assume an active drive is already
- * scoped. They are also the only calls that go to Telegram's channel and invite
- * APIs rather than to the local projection, which is why they fail in ways
- * (approval pending, admin-only, flood wait) no file operation ever produces.
+ * Drive setup can run before a personal channel or projection exists. Source
+ * actions scope themselves to the signed-in account and a connection or an
+ * explicit destination drive.
  * @module
  */
 
@@ -24,7 +19,13 @@ import { Call as $Call, CancellablePromise as $CancellablePromise } from "@wails
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
+import * as backend$0 from "../../backend/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
 import * as channelsource$0 from "../../backend/channelsource/models.js";
+// eslint-disable-next-line @typescript-eslint/ban-ts-comment
+// @ts-ignore: Unused imports
+import * as file$0 from "../../backend/services/file/models.js";
 
 // eslint-disable-next-line @typescript-eslint/ban-ts-comment
 // @ts-ignore: Unused imports
@@ -32,6 +33,10 @@ import * as $models from "./models.js";
 
 export function ApproveJoinRequest(channelID: number, userID: number): $CancellablePromise<void> {
     return $Call.ByID(1493059448, channelID, userID);
+}
+
+export function CancelSourceCopies(expectedAccountID: number): $CancellablePromise<boolean> {
+    return $Call.ByID(6009356, expectedAccountID);
 }
 
 /**
@@ -67,6 +72,14 @@ export function CreatePersonalDrive(): $CancellablePromise<void> {
  */
 export function CreateSharedDrive(title: string, requireApproval: boolean): $CancellablePromise<$models.ChannelInfo> {
     return $Call.ByID(1236363253, title, requireApproval);
+}
+
+export function CreateSourceCopyFolder(expectedAccountID: number, expectedDriveID: number, parentID: string, name: string): $CancellablePromise<backend$0.Folder> {
+    return $Call.ByID(775384166, expectedAccountID, expectedDriveID, parentID, name);
+}
+
+export function DeleteSourceGroup(expectedAccountID: number, groupID: string): $CancellablePromise<channelsource$0.SourceOrganization> {
+    return $Call.ByID(2385836935, expectedAccountID, groupID);
 }
 
 export function DisconnectChannelSource(peerKind: string, peerID: number, expectedAccountID: number, expectedGeneration: string): $CancellablePromise<void> {
@@ -165,12 +178,32 @@ export function ListPendingJoins(): $CancellablePromise<$models.PendingJoinInfo[
     return $Call.ByID(3046106774);
 }
 
+export function ListSourceCopies(expectedAccountID: number): $CancellablePromise<file$0.SourceCopyResult[] | null> {
+    return $Call.ByID(1815142798, expectedAccountID);
+}
+
+export function ListSourceCopyFolders(expectedAccountID: number, parentID: string): $CancellablePromise<$models.SourceCopyFolderPage> {
+    return $Call.ByID(72426239, expectedAccountID, parentID);
+}
+
+export function ListSourceGroups(expectedAccountID: number): $CancellablePromise<channelsource$0.SourceOrganization> {
+    return $Call.ByID(3833861655, expectedAccountID);
+}
+
+export function MoveSourceToGroup(peerKind: string, peerID: number, expectedAccountID: number, expectedGeneration: string, groupID: string): $CancellablePromise<channelsource$0.SourceOrganization> {
+    return $Call.ByID(3733914666, peerKind, peerID, expectedAccountID, expectedGeneration, groupID);
+}
+
 /**
  * PreparePersonalDrive activates the saved personal drive, or reports that
  * the user has to choose one. It waits for startup and never contacts Telegram.
  */
 export function PreparePersonalDrive(): $CancellablePromise<$models.PersonalDriveSetupState> {
     return $Call.ByID(2364275863);
+}
+
+export function PreviewSourceCopyNames(names: string[] | null): $CancellablePromise<string[] | null> {
+    return $Call.ByID(2856351562, names);
 }
 
 export function RejectJoinRequest(channelID: number, userID: number): $CancellablePromise<void> {
@@ -187,6 +220,18 @@ export function RemovePendingJoin(inviteHash: string): $CancellablePromise<void>
 
 export function ResolvePublicChannelSource(input: string): $CancellablePromise<channelsource$0.SourceInfo> {
     return $Call.ByID(1743397531, input);
+}
+
+export function RetrySourceCopy(expectedAccountID: number, id: string): $CancellablePromise<file$0.SourceCopyResult> {
+    return $Call.ByID(15761096, expectedAccountID, id);
+}
+
+export function SaveSourceCopies(expectedAccountID: number, expectedDriveID: number, parentID: string, items: file$0.SourceCopyInput[] | null, allowPlain: boolean): $CancellablePromise<file$0.SourceCopyResult[] | null> {
+    return $Call.ByID(2540008563, expectedAccountID, expectedDriveID, parentID, items, allowPlain);
+}
+
+export function SaveSourceGroup(expectedAccountID: number, groupID: string, name: string): $CancellablePromise<channelsource$0.SourceOrganization> {
+    return $Call.ByID(3626099121, expectedAccountID, groupID, name);
 }
 
 export function SelectPersonalDrive(channelID: string): $CancellablePromise<void> {
