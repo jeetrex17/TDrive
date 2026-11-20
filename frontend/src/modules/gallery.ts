@@ -390,16 +390,17 @@ async function openGalleryLightbox(item: GalleryItem): Promise<void> {
             const index = source.indexOf(Number(active.id))
                 ?? (currentScope === null ? (await locateMedia(Number(active.id), source.timeline.generation)).index : undefined);
             if (index === undefined) return null;
-            // The image viewer must never attempt an original-image request for
-            // a video. Scan only one bounded neighbor window; this keeps a run
-            // of videos from turning a next/previous tap into an unbounded
-            // metadata walk through a large gallery.
-            for (let offset = 1; offset <= 128; offset += 1) {
-                const neighbor = await source.get(index + direction * offset);
-                if (!neighbor) return null;
-                if (!isVideoFile(neighbor.name)) return previewItem(neighbor, channelId);
+            const neighbor = await source.get(index + direction);
+            if (!neighbor || currentSource !== source || currentChannelId !== channelId) return null;
+            // The image viewer never requests an original for a video. The
+            // player takes over at that position instead, so a step lands on
+            // the item the counter names and a run of videos is no dead end.
+            if (isVideoFile(neighbor.name)) {
+                preview.closePreviewModal();
+                void openGalleryVideo(neighbor);
+                return null;
             }
-            return null;
+            return previewItem(neighbor, channelId);
         },
         getPosition(active) {
             if (!currentSource || currentChannelId !== channelId) return null;

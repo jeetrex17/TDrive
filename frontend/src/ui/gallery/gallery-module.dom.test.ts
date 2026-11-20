@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import type { MediaTimeline } from '../../api/gallery';
 
-const mocks = vi.hoisted(() => ({ timeline: vi.fn(), folderTimeline: vi.fn(), page: vi.fn(), folderPage: vi.fn(), folders: vi.fn(), locate: vi.fn(), preview: vi.fn(), mobile: false }));
+const mocks = vi.hoisted(() => ({ timeline: vi.fn(), folderTimeline: vi.fn(), page: vi.fn(), folderPage: vi.fn(), folders: vi.fn(), locate: vi.fn(), preview: vi.fn(), closePreview: vi.fn(), video: vi.fn(), mobile: false }));
 vi.mock('../../api', () => ({ isMobilePlatform: () => mocks.mobile }));
 vi.mock('../../api/gallery', () => ({ getMediaTimelineSummary: mocks.timeline, getMediaTimelineAnchors: mocks.timeline, getMediaFolderTimeline: mocks.folderTimeline, listMediaPage: mocks.page, listMediaFolderPage: mocks.folderPage, listMediaFolders: mocks.folders, locateMedia: mocks.locate }));
 vi.mock('../../modules/search', () => ({ clearSearch: vi.fn() }));
@@ -14,7 +14,8 @@ vi.mock('../../modules/selection', () => ({
 }));
 vi.mock('../file-list/touch', () => ({ bindLongPress: () => () => {}, bindPullToRefresh: () => () => {} }));
 vi.mock('./gallery-controller', () => ({ beginRender: vi.fn(), cachedThumb: () => '', rearmLocked: vi.fn(), setActive: vi.fn(), setRoot: vi.fn(), teardown: vi.fn() }));
-vi.mock('../../modules/modals/preview', () => ({ activatePreviewModal: vi.fn(), openPreviewSource: mocks.preview }));
+vi.mock('../../modules/modals/preview', () => ({ activatePreviewModal: vi.fn(), closePreviewModal: mocks.closePreview, openPreviewSource: mocks.preview }));
+vi.mock('../../modules/modals/video', () => ({ openVideoModal: mocks.video }));
 import { state } from '../../state';
 import { activateGallery, enterPhotos, exitPhotos, renderGallery, setPhotosMode, teardownGallery, toggleGallerySelection } from '../../modules/gallery';
 import { albumsView, galleryView, photosMode } from './gallery-store';
@@ -34,7 +35,7 @@ beforeEach(() => {
     state.selectedItems = new Map();
     mocks.timeline.mockReset().mockImplementation(async () => timeline());
     mocks.page.mockReset().mockImplementation(async (cursor: string) => ({ generation, startIndex: Number(cursor), nextCursor: '', items: Array.from({ length: Math.min(128, 1000 - Number(cursor)) }, (_, offset) => ({ msgId: Number(cursor) + offset + 1, name: 'photo.jpg', size: 12, parentId: '', uploadTime: 1, uploaderId: 1, encrypted: false, plaintextSize: 0, revision: 1, contentMsgId: 1, contentHash: '' })) }));
-    mocks.preview.mockReset(); mocks.locate.mockReset();
+    mocks.preview.mockReset(); mocks.locate.mockReset(); mocks.closePreview.mockReset(); mocks.video.mockReset();
     mocks.folders.mockReset().mockResolvedValue([]);
     mocks.folderTimeline.mockReset(); mocks.folderPage.mockReset();
     photosMode.set({ kind: 'timeline' });
@@ -225,5 +226,24 @@ describe('gallery orchestration', () => {
         teardownGallery();
         expect(await source.getNeighbor(first, 1)).toBeNull();
         expect(source.getPosition(first)).toBeNull();
+    });
+
+    it('hands a video neighbor to the player instead of skipping past it', async () => {
+        const photos = mocks.page.getMockImplementation()!;
+        mocks.page.mockImplementation(async (...args: unknown[]) => {
+            const page = await photos(...args);
+            return { ...page, items: page.items.map((item: { msgId: number }) => item.msgId === 2 ? { ...item, name: 'clip.mp4' } : item) };
+        });
+        await renderGallery();
+        const button = document.createElement('button'); button.className = 'gallery-cell'; button.dataset.id = '1'; button.dataset.index = '0'; host.append(button);
+        button.click();
+        await vi.waitFor(() => expect(mocks.preview).toHaveBeenCalledOnce());
+        const [source, first] = mocks.preview.mock.calls[0];
+
+        expect(await source.getNeighbor(first, 1)).toBeNull();
+        expect(mocks.closePreview).toHaveBeenCalledOnce();
+        await vi.waitFor(() => expect(mocks.video).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 2, name: 'clip.mp4' }), undefined, expect.objectContaining({ channelId: 1 }),
+        ));
     });
 });
