@@ -41,6 +41,11 @@ func (w sourceCopyWorker) publish(ctx context.Context, job sourceCopyJob) (Sourc
 			}
 		}
 		if err := w.verifyBodies(ctx, job); err != nil {
+			// A confirmed missing attachment cannot be published. An attempted
+			// commit can still own it until ordered replay certifies rejection.
+			if errors.Is(err, tgclient.ErrMessageNotFound) && (job.Attempt == 0 || attempt > job.Attempt) {
+				return w.abandonBody(ctx, job)
+			}
 			return w.finish(ctx, job, sourceCopyPending, "Could not verify the attachment in My Drive. Check again from Activity.")
 		}
 		if attempt != job.Attempt || job.Attempt == 0 {

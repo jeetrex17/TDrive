@@ -114,6 +114,9 @@ func (w sourceCopyWorker) cleanup(ctx context.Context, job sourceCopyJob) (Sourc
 	if !job.hasBodies() {
 		return w.finish(ctx, job, sourceCopyFailed, "The copy could not finish. Check that the source file and destination folder still exist.")
 	}
+	if len(ids) < len(job.Parts) {
+		return w.finish(ctx, job, sourceCopyFailed, "An attachment was removed from My Drive. Select the original file to copy it again.")
+	}
 	return w.finish(ctx, job, sourceCopyFailed, "The file could not be placed in that folder")
 }
 

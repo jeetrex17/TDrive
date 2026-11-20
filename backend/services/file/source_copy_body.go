@@ -290,11 +290,14 @@ func (w sourceCopyWorker) verifyBodies(ctx context.Context, job sourceCopyJob) e
 		return err
 	}
 	for index, part := range job.Parts {
-		if part.BodyID <= 0 || receipts[index] != part.BodyID {
-			return errors.New("Destination attachment is missing from the copy")
+		if part.BodyID <= 0 {
+			return errors.New("Destination attachment has no receipt")
 		}
 		if err := w.verifyBody(ctx, job, index); err != nil {
 			return err
+		}
+		if receipts[index] != part.BodyID {
+			return errors.New("Destination attachment has not been projected")
 		}
 	}
 	return nil
