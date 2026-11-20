@@ -33,6 +33,7 @@
     import { sourceKey } from '../channels/channel-model';
     import { closeChannel, openChannel } from '../channels/channel-store';
     import { openChannelPost, openInTelegram, recentChannelPages, showChannelActions, showPostActions } from '../../modules/channel-sources';
+    import { openSourceCopy } from '../../modules/source-copies';
     import { listChannelSourceTopics, listChannelMedia } from '../../api';
 
     interface Props {
@@ -235,6 +236,7 @@
                         onOpenTelegram={openInTelegram}
                         onActions={showChannelActions}
                         onPostActions={showPostActions}
+                        onSavePosts={openSourceCopy}
                         onBack={closeChannel}
                         recentPages={recentChannelPages}
                     />

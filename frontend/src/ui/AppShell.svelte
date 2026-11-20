@@ -25,6 +25,7 @@
         showChannelActions,
         showPostActions,
     } from '../modules/channel-sources';
+    import { openSourceCopy } from '../modules/source-copies';
     import { clearSelection, openSelectedItemsDelete, openSelectedItemsDownload, openSelectedItemsMove } from '../modules/selection';
     import { chooseFilesForCurrentFolder, chooseFolderForCurrentFolder } from '../modules/transfers';
     import { openNewFolderModal } from '../modules/modals/folder';
@@ -354,6 +355,7 @@
                     onOpenPost={openChannelPost}
                     onOpenTelegram={openInTelegram}
                     onPostActions={showPostActions}
+                    onSavePosts={openSourceCopy}
                     recentPages={recentChannelPages}
                 />
             {/key}

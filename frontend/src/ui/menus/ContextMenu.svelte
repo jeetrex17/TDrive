@@ -13,6 +13,7 @@
     import FolderUpIcon from '@lucide/svelte/icons/folder-up';
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
     import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+    import SquareCheckIcon from '@lucide/svelte/icons/square-check';
     import XIcon from '@lucide/svelte/icons/x';
     import FileTextIcon from '@lucide/svelte/icons/file-text';
     import DatabaseIcon from '@lucide/svelte/icons/database';
@@ -45,6 +46,7 @@
         refresh: RefreshCwIcon,
         external: ExternalLinkIcon,
         clear: XIcon,
+        select: SquareCheckIcon,
     };
 
     const DETAIL_ICONS: Record<ContextMenuDetailIcon, typeof FileIcon> = {
