@@ -36,7 +36,7 @@ interface RowMenuOptions {
 // what the user actually presses.
 const DELETE_SHORTCUT = isApplePlatform() ? '⌫' : 'Del';
 
-function sharedDriveCopyAction(rows: readonly FileListFileRow[], primary = false): ContextMenuItem | undefined {
+function sharedDriveCopyAction(rows: readonly FileListFileRow[], primary = false) {
     if (!rows.length || rows.length > MAX_SOURCE_COPY_SELECTION || state.myUserID <= 0) return;
     const drive = state.channels.find(({ id }) => id === rows[0].channelId);
     if (drive?.kind !== 'shared') return;
@@ -56,14 +56,17 @@ function sharedDriveCopyAction(rows: readonly FileListFileRow[], primary = false
         icon: 'copy',
         primary,
         action: () => openSharedDriveCopy(accountId, sourceDrive, files),
-    };
+    } satisfies ContextMenuItem;
 }
 
-function selectedSharedDriveCopyAction(items: readonly FileCommandItem[]): ContextMenuItem | undefined {
+export function selectedSharedDriveCopyAction() {
+    const selected = state.selectedItems;
+    if (!selected.size || selected.size > MAX_SOURCE_COPY_SELECTION) return;
+
     const rows: FileListFileRow[] = [];
-    for (const item of items) {
+    for (const [key, item] of selected) {
         if (item.type !== 'file') return;
-        const row = fileListRowForKey(`file:${item.id}`);
+        const row = fileListRowForKey(key);
         if (row?.kind !== 'file' || row.channelId !== item.channelId) return;
         rows.push(row);
     }
@@ -201,7 +204,7 @@ export function activateContextMenu(): () => void {
 
         if (state.selectedItems.size > 1) {
             const count = state.selectedItems.size;
-            const copy = count <= MAX_SOURCE_COPY_SELECTION ? selectedSharedDriveCopyAction(getSelectionPayload()) : undefined;
+            const copy = selectedSharedDriveCopyAction();
             showContextMenu(e.clientX, e.clientY, [
                 { label: `Move ${count} items…`, icon: 'move', action: () => openMoveModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId }) },
                 ...(copy ? [copy] : []),
