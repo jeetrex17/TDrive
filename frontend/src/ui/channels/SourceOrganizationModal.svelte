@@ -109,6 +109,7 @@
     title={editing ? (editing.id ? 'Rename group' : 'New group') : removing ? 'Delete group?' : source ? 'Move to group' : 'Source groups'}
     titleId="source-organization-title"
     subtitle={!editing && !removing && source ? source.title : undefined}
+    dismissible={!busy}
     onClose={close}
 >
     {#if editing}

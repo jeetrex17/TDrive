@@ -1,4 +1,4 @@
-import { bootTDrive, expect, resolves, test } from './wails-mock';
+import { bootTDrive, deferred, expect, resolves, test } from './wails-mock';
 
 const source = {
     peer_kind: 'channel',
@@ -110,4 +110,39 @@ test('the mobile copy sheet keeps its footer in view with a long selection', asy
     await page.mouse.wheel(0, 1000);
     await expect(lastName).toBeInViewport();
     await expect(dialog.getByRole('button', { name: 'Save here', exact: true })).toBeInViewport({ ratio: 1 });
+});
+
+test('reduced motion keeps the busy copy sheet reachable after a swipe', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    const saved = { id: 'copy-1', name: 'recording.mkv', parent_id: '', status: 'saved', file_id: 400, message: '' };
+    const mock = await bootTDrive(page, {
+        ...copyPlans(['recording.mkv']),
+        Haptic: resolves(null),
+        SaveSourceCopies: deferred('save', [saved]),
+    }, { url: '/?mobile=ios' });
+    await page.getByRole('button', { name: /Switch drive/ }).click();
+    await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
+    await page.getByRole('button', { name: 'Actions for recording.mkv', exact: true }).click();
+    await page.getByRole('button', { name: 'Save to My Drive', exact: true }).click();
+
+    const dialog = page.getByRole('dialog', { name: 'Save to My Drive', exact: true });
+    await dialog.getByRole('button', { name: 'Save here', exact: true }).click();
+    await expect.poll(async () => (await mock.calls('SaveSourceCopies')).length).toBe(1);
+    await expect(dialog.getByRole('button', { name: 'Stop saving', exact: true })).toBeInViewport({ ratio: 1 });
+
+    const header = await dialog.locator('.sheet-grab').boundingBox();
+    if (!header) throw new Error('The copy sheet is missing its header.');
+    const x = header.x + header.width / 2;
+    const y = header.y + 12;
+    await page.mouse.move(x, y);
+    await page.mouse.down();
+    await page.mouse.move(x, y + 170, { steps: 6 });
+    await page.mouse.up();
+
+    await mock.release('save');
+    const done = dialog.getByRole('button', { name: 'Done', exact: true });
+    await expect(done).toBeInViewport({ ratio: 1 });
+    await done.click();
+    await expect(dialog).toBeHidden();
 });

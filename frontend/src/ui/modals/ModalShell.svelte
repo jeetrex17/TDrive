@@ -21,6 +21,7 @@
         presentation?: 'dialog' | 'sheet';
         initialFocus?: string;
         restoreFocus?: string;
+        dismissible?: boolean;
         onClose: () => void;
         // header replaces the default title/subtitle block for dialogs with a
         // custom heading layout. It must render an element with id={titleId}
@@ -41,6 +42,7 @@
         presentation,
         initialFocus,
         restoreFocus,
+        dismissible = true,
         onClose,
         header,
         children,
@@ -65,6 +67,7 @@
     let wasOpen = false;
     let swipeExiting = false;
     let closeTimer: ReturnType<typeof setTimeout> | null = null;
+    let settleTimer: ReturnType<typeof setTimeout> | null = null;
 
     function prefersReducedMotion(): boolean {
         return typeof window !== 'undefined'
@@ -81,7 +84,7 @@
         if (!host) return null;
         if (!a11y) {
             a11y = installModalA11y(host, {
-                requestClose: () => onClose(),
+                requestClose,
                 initialFocus: initialFocusTarget,
                 restoreFocus,
             });
@@ -89,8 +92,12 @@
         return a11y;
     }
 
+    function requestClose(): void {
+        if (open && dismissible) onClose();
+    }
+
     function handleHostClick(event: MouseEvent): void {
-        if (event.target === host) onClose();
+        if (event.target === host) requestClose();
     }
 
     function mountHost(): void {
@@ -109,6 +116,21 @@
         host?.style.setProperty('--sheet-scrim', String(value));
     }
 
+    function clearSettleTimer(): void {
+        if (settleTimer === null) return;
+        clearTimeout(settleTimer);
+        settleTimer = null;
+    }
+
+    function resetSheetPosition(): void {
+        clearSettleTimer();
+        if (card) {
+            card.style.transition = '';
+            card.style.transform = '';
+        }
+        setScrimProgress(1);
+    }
+
     function openTransition(): void {
         clearCloseTimer();
         swipeExiting = false;
@@ -119,7 +141,7 @@
             host.style.display = 'flex';
             host.setAttribute('aria-hidden', 'false');
         }
-        setScrimProgress(1);
+        resetSheetPosition();
         active = true;
         void tick().then(() => {
             if (!open || !active) return;
@@ -137,6 +159,9 @@
     }
 
     function closeTransition(): void {
+        sheetDrag.cancel();
+        clearCloseTimer();
+        if (!swipeExiting) resetSheetPosition();
         if (active) {
             active = false;
             a11y?.deactivate();
@@ -146,7 +171,6 @@
 
         if (asSheet && !swipeExiting && !prefersReducedMotion()) {
             closing = true;
-            clearCloseTimer();
             closeTimer = setTimeout(finishClose, EXIT_MS);
             return;
         }
@@ -185,22 +209,24 @@
 
     function springBack(velocity = 0): void {
         if (!card) return;
+        if (prefersReducedMotion()) {
+            resetSheetPosition();
+            return;
+        }
+        clearSettleTimer();
         // A finger that was still moving gets a shorter return, so the settle
         // continues the gesture instead of restarting from a standstill.
         const ms = velocity > FLICK_SPEED ? Math.round(EXIT_MS * 0.7) : EXIT_MS;
         card.style.transition = `transform ${ms}ms var(--ease-enter)`;
         card.style.transform = 'translateY(0)';
         setScrimProgress(1);
-        const el = card;
-        window.setTimeout(() => {
-            el.style.transition = '';
-            el.style.transform = '';
-        }, EXIT_MS);
+        settleTimer = setTimeout(resetSheetPosition, ms);
     }
 
     function swipeDismiss(): void {
-        if (!card || prefersReducedMotion()) {
-            onClose();
+        if (!card || !dismissible || prefersReducedMotion()) {
+            resetSheetPosition();
+            requestClose();
             return;
         }
         swipeExiting = true;
@@ -208,15 +234,25 @@
         card.style.transform = 'translateY(100%)';
         setScrimProgress(0);
         clearCloseTimer();
-        closeTimer = setTimeout(() => onClose(), EXIT_MS);
+        closeTimer = setTimeout(() => {
+            closeTimer = null;
+            requestClose();
+            // A caller can refuse a close. Return the sheet to its open position.
+            void tick().then(() => {
+                if (!open || !swipeExiting) return;
+                swipeExiting = false;
+                springBack();
+            });
+        }, EXIT_MS);
     }
 
     // The pointer wiring is the shared one; this host only says how to follow
     // the finger (scrim), settle and dismiss. The grab area is the header, so a
     // press on a header button falls through to the button.
     const sheetDrag = createSheetDragController({
-        sheet: () => card,
+        sheet: () => open && dismissible && !swipeExiting ? card : null,
         grab: (el) => {
+            clearSettleTimer();
             dragging = true;
             el.style.transition = '';
         },
@@ -231,8 +267,18 @@
         },
     });
 
+    $effect(() => {
+        if (dismissible) return;
+        sheetDrag.cancel();
+        if (!swipeExiting) return;
+        swipeExiting = false;
+        clearCloseTimer();
+        springBack();
+    });
+
     onDestroy(() => {
         clearCloseTimer();
+        clearSettleTimer();
         a11y?.deactivate();
         host?.removeEventListener('click', handleHostClick);
         if (host) {
@@ -273,7 +319,7 @@
                 onpointerdown={sheetDrag.onPointerDown}
                 onpointermove={sheetDrag.onPointerMove}
                 onpointerup={sheetDrag.onPointerUp}
-                onpointercancel={sheetDrag.onPointerUp}
+                onpointercancel={sheetDrag.cancel}
             >
                 <div class="sheet-handle" aria-hidden="true"><span></span></div>
                 {@render titleBlock()}

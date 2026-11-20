@@ -77,6 +77,7 @@
     actionsClass="modal-actions source-copy-actions"
     initialFocus="#source-copy-dismiss"
     restoreFocus={sharedCopy ? '#file-list' : '.channel-row-main'}
+    dismissible={stage !== 'saving' && stage !== 'creating'}
     onClose={closeSourceCopy}
 >
     <div class="copy-body">
