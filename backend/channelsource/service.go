@@ -138,6 +138,9 @@ func NewService(db *sql.DB, tg tgclient.Client, mediaService *media.Service, sel
 	if err := migrateMediaSources(db); err != nil {
 		return nil, err
 	}
+	if err := ensureSourceOrganizationSchema(db); err != nil {
+		return nil, err
+	}
 	return &Service{db: db, tg: tg, media: mediaService, self: self, retry: tgclient.FloodWaitRetryPolicy{
 		MaxRetries: 2, MaxWait: 30 * time.Second, MaxTotalWait: time.Minute,
 		MaxTransientRetries: 2, TransientBackoff: 500 * time.Millisecond, MaxTransientBackoff: 2 * time.Second,
