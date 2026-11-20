@@ -44,19 +44,20 @@ type SourceInfo struct {
 }
 
 type MediaItem struct {
-	MsgID       int64  `json:"msg_id"`
-	TopicID     int64  `json:"topic_id"`
-	Date        int64  `json:"date"`
-	Name        string `json:"name"`
-	Size        int64  `json:"size"`
-	Duration    int64  `json:"duration"` // whole seconds; 0 when Telegram did not say
-	MimeType    string `json:"mime_type"`
-	Kind        string `json:"kind"`
-	Caption     string `json:"caption"`
-	Streamable  bool   `json:"streamable"`
-	Protected   bool   `json:"protected"`
-	BlockReason string `json:"block_reason,omitempty"`
-	TelegramURL string `json:"telegram_url"`
+	MsgID        int64  `json:"msg_id"`
+	TopicID      int64  `json:"topic_id"`
+	Date         int64  `json:"date"`
+	Name         string `json:"name"`
+	Size         int64  `json:"size"`
+	Duration     int64  `json:"duration"` // whole seconds; 0 when Telegram did not say
+	MimeType     string `json:"mime_type"`
+	Kind         string `json:"kind"`
+	Caption      string `json:"caption"`
+	Streamable   bool   `json:"streamable"`
+	Protected    bool   `json:"protected"`
+	BlockReason  string `json:"block_reason,omitempty"`
+	TelegramURL  string `json:"telegram_url"`
+	CopyIdentity string `json:"copy_identity,omitempty"`
 }
 
 type MediaPage struct {
@@ -490,7 +491,8 @@ func mediaItem(channel tgclient.JoinedBroadcastChannel, message tgclient.History
 	}
 	item := MediaItem{MsgID: message.MsgID, TopicID: topicID, Date: message.Date, Name: name, Size: message.MediaSize,
 		Duration: int64(math.Round(message.Duration)), MimeType: message.MimeType, Kind: string(kind), Caption: message.Text,
-		TelegramURL: telegramURL(channel, message.MsgID), Protected: channel.Protected || message.NoForwards}
+		TelegramURL: telegramURL(channel, message.MsgID), Protected: channel.Protected || message.NoForwards,
+		CopyIdentity: copyIdentity(channel, message)}
 	switch {
 	case message.Restricted:
 		item.BlockReason = "restricted"
