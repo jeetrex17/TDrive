@@ -5,9 +5,11 @@
     import FolderIcon from '@lucide/svelte/icons/folder';
     import PenLineIcon from '@lucide/svelte/icons/pen-line';
     import Trash2Icon from '@lucide/svelte/icons/trash-2';
+    import { isMobilePlatform } from '../../api';
     import { toAppError } from '../../modules/errors';
     import ModalShell from '../modals/ModalShell.svelte';
     import { deleteSourceGroup, moveSourceToGroup, saveSourceGroup } from './source-organization-api';
+    import { sourceKey, type ChannelSource } from './channel-model';
     import {
         closeSourceOrganization,
         groupForSource,
@@ -91,9 +93,21 @@
         void change(() => deleteSourceGroup(account, group.id), () => { removing = null; });
     }
 
+    async function restoreMovedSourceFocus(selected: ChannelSource, groupId: string): Promise<void> {
+        await tick();
+        const sidebar = document.querySelector('.sidebar');
+        const row = sidebar?.querySelector<HTMLElement>(`[data-channel-source-key="${CSS.escape(sourceKey(selected))}"]`);
+        const toggle = sidebar?.querySelector<HTMLElement>(`[data-channel-group-id="${CSS.escape(groupId)}"]`);
+        (row ?? toggle)?.focus();
+    }
+
     function move(id: string): void {
         const selected = source;
-        if (selected) void change(() => moveSourceToGroup(selected, id), closeSourceOrganization);
+        if (!selected) return;
+        void change(() => moveSourceToGroup(selected, id), () => {
+            closeSourceOrganization();
+            if (!isMobilePlatform()) void restoreMovedSourceFocus(selected, id);
+        });
     }
 
     function back(): void {

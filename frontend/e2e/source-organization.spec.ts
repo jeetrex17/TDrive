@@ -69,3 +69,25 @@ for (const mobile of [false, true]) {
         }
     });
 }
+
+for (const expanded of [false, true]) {
+    test(`desktop restores focus after moving a source to a ${expanded ? 'visible' : 'collapsed'} group`, async ({ page }) => {
+        await bootTDrive(page, {
+            ListConnectedChannelSources: resolves([source]),
+            ListSourceGroups: resolves({ groups, assignments: [] }),
+            MoveSourceToGroup: resolves({ groups, assignments }),
+        });
+        const nav = page.locator('.sidebar');
+        const group = nav.getByRole('button', { name: 'Work', exact: true });
+        const row = nav.getByRole('button', { name: 'Group Field Team', exact: true });
+        const dialog = page.getByRole('dialog', { name: 'Move to group', exact: true });
+        if (!expanded) await group.click();
+
+        await row.press('Shift+F10');
+        await page.getByRole('menuitem', { name: 'Move to group…' }).press('Enter');
+        await dialog.getByRole('button', { name: 'Work', exact: true }).press('Enter');
+
+        await expect(dialog).toBeHidden();
+        await expect(expanded ? row : group).toBeFocused();
+    });
+}

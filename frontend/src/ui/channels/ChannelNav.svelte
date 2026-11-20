@@ -84,6 +84,7 @@
             class="drive-item channel-nav-item"
             class:active
             type="button"
+            data-channel-source-key={sourceKey(source)}
             title={`${source.title} (${sourcePeerLabel(source)})`}
             aria-current={active ? 'page' : undefined}
             onclick={() => onSelect(source)}
@@ -126,7 +127,7 @@
     {#each sourceGroups.groups as group (group.id)}
         {@const expanded = isExpanded(group.id)}
         <section class="channel-nav-group">
-            <button class="channel-nav-group-toggle" type="button" aria-expanded={expanded} onclick={() => toggleGroup(group.id)}>
+            <button class="channel-nav-group-toggle" type="button" data-channel-group-id={group.id} aria-expanded={expanded} onclick={() => toggleGroup(group.id)}>
                 {#if expanded}
                     <ChevronDownIcon size={13} aria-hidden="true" />
                 {:else}
