@@ -968,6 +968,31 @@ func (f *Fake) GetMediaSourcePeer(_ context.Context, peer InputPeer) (SourcePeer
 	return SourcePeer{}, ErrChannelUnavailable
 }
 
+func (f *Fake) GetJoinedDrivePeer(ctx context.Context, peer InputPeer) (SourcePeer, error) {
+	if err := ctx.Err(); err != nil {
+		return SourcePeer{}, err
+	}
+	if peer.ChannelID <= 0 || (peer.PeerKind() != PeerChannel && peer.PeerKind() != PeerSupergroup) {
+		return SourcePeer{}, ErrChannelUnavailable
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.channelLookups++
+	for _, source := range f.sourcePeers {
+		if source.ID == peer.ChannelID && (source.Kind == PeerChannel || source.Kind == PeerSupergroup) &&
+			source.AccessHash == peer.AccessHash {
+			return source, nil
+		}
+	}
+	for _, source := range f.joinedBroadcast {
+		if source.ID == peer.ChannelID && source.AccessHash == peer.AccessHash {
+			source.Kind = PeerChannel
+			return source, nil
+		}
+	}
+	return SourcePeer{}, ErrChannelUnavailable
+}
+
 func (f *Fake) ResolvePublicChannel(_ context.Context, username string) (SourcePeer, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

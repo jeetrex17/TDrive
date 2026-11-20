@@ -152,19 +152,18 @@ func (s *Service) sharedCopyPeer(ctx context.Context, source channelsource.CopyS
 	if peer.ChannelID != source.PeerID {
 		return tgclient.InputPeer{}, channelsource.ErrCopyNotAllowed
 	}
-	peer.Kind = tgclient.PeerSupergroup
-	live, err := s.TG.GetMediaSourcePeer(ctx, peer)
+	live, err := s.TG.GetJoinedDrivePeer(ctx, peer)
 	if errors.Is(err, tgclient.ErrChannelUnavailable) {
 		return tgclient.InputPeer{}, channelsource.ErrCopyNotAllowed
 	}
 	if err != nil {
 		return tgclient.InputPeer{}, err
 	}
-	if live.ID != peer.ChannelID || live.Kind != peer.Kind || live.Protected || live.Restricted {
+	if live.ID != peer.ChannelID || (live.Kind != tgclient.PeerChannel && live.Kind != tgclient.PeerSupergroup) ||
+		live.Protected || live.Restricted {
 		return tgclient.InputPeer{}, channelsource.ErrCopyNotAllowed
 	}
-	peer.AccessHash = cmp.Or(live.AccessHash, peer.AccessHash)
-	return peer, nil
+	return tgclient.InputPeer{ChannelID: peer.ChannelID, Kind: live.Kind, AccessHash: cmp.Or(live.AccessHash, peer.AccessHash)}, nil
 }
 
 func (s *Service) sharedCopyManagedFile(ctx context.Context, source channelsource.CopySource, revision int64) (projection.DownloadFile, error) {

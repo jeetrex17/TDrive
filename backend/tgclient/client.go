@@ -265,6 +265,9 @@ type Client interface {
 	GetBroadcastChannel(ctx context.Context, peer InputPeer) (JoinedBroadcastChannel, error)
 	ListMediaSourcePeers(ctx context.Context) ([]SourcePeer, error)
 	GetMediaSourcePeer(ctx context.Context, peer InputPeer) (SourcePeer, error)
+	// GetJoinedDrivePeer checks live membership in a broadcast or supergroup.
+	// Its kind comes from Telegram, as stored drive handles omit it.
+	GetJoinedDrivePeer(ctx context.Context, peer InputPeer) (SourcePeer, error)
 	ResolvePublicChannel(ctx context.Context, username string) (SourcePeer, error)
 	// DownloadChannelPhoto returns the small (160px) JPEG of a channel's
 	// profile photo.

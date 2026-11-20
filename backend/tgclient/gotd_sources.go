@@ -208,19 +208,15 @@ func (g *Gotd) GetMediaSourcePeer(ctx context.Context, peer InputPeer) (SourcePe
 				}
 			}
 		case PeerChannel, PeerSupergroup:
-			result, err := api.ChannelsGetChannels(ctx, []tg.InputChannelClass{&tg.InputChannel{ChannelID: peer.ChannelID, AccessHash: peer.AccessHash}})
+			channel, err := readSourceChannel(ctx, api, peer)
 			if err != nil {
 				return err
 			}
-			for _, value := range result.GetChats() {
-				if channel, ok := value.(*tg.Channel); ok && channel.ID == peer.ChannelID {
-					out = sourceFromChannel(channel)
-					if out.Kind != peer.PeerKind() || (channel.Left && (channel.Megagroup || channel.Username == "")) {
-						return ErrChannelUnavailable
-					}
-					return nil
-				}
+			out = sourceFromChannel(channel)
+			if out.Kind != peer.PeerKind() || (channel.Left && (channel.Megagroup || channel.Username == "")) {
+				return ErrChannelUnavailable
 			}
+			return nil
 		default:
 			return ErrChannelUnavailable
 		}
@@ -230,6 +226,51 @@ func (g *Gotd) GetMediaSourcePeer(ctx context.Context, peer InputPeer) (SourcePe
 		return SourcePeer{}, ErrChannelUnavailable
 	}
 	return out, err
+}
+
+// GetJoinedDrivePeer resolves the live kind and membership of a drive channel.
+func (g *Gotd) GetJoinedDrivePeer(ctx context.Context, peer InputPeer) (SourcePeer, error) {
+	var source SourcePeer
+	err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
+		var err error
+		source, err = requestJoinedDrivePeer(ctx, api, peer)
+		return err
+	})
+	return source, err
+}
+
+func requestJoinedDrivePeer(ctx context.Context, api *tg.Client, peer InputPeer) (SourcePeer, error) {
+	if peer.ChannelID <= 0 || (peer.PeerKind() != PeerChannel && peer.PeerKind() != PeerSupergroup) {
+		return SourcePeer{}, ErrChannelUnavailable
+	}
+	channel, err := readSourceChannel(ctx, api, peer)
+	if tgerr.Is(err, "CHANNEL_PRIVATE", "CHANNEL_INVALID", "PEER_ID_INVALID") {
+		return SourcePeer{}, ErrChannelUnavailable
+	}
+	if err != nil {
+		return SourcePeer{}, err
+	}
+	// Public broadcasts can remain readable after leaving. A minimal channel
+	// response does not establish current membership either.
+	if channel.Left || channel.Min || (!channel.Broadcast && !channel.Megagroup) {
+		return SourcePeer{}, ErrChannelUnavailable
+	}
+	return sourceFromChannel(channel), nil
+}
+
+func readSourceChannel(ctx context.Context, api *tg.Client, peer InputPeer) (*tg.Channel, error) {
+	result, err := api.ChannelsGetChannels(ctx, []tg.InputChannelClass{
+		&tg.InputChannel{ChannelID: peer.ChannelID, AccessHash: peer.AccessHash},
+	})
+	if err != nil {
+		return nil, err
+	}
+	for _, value := range result.GetChats() {
+		if channel, ok := value.(*tg.Channel); ok && channel.ID == peer.ChannelID {
+			return channel, nil
+		}
+	}
+	return nil, ErrChannelUnavailable
 }
 
 func (g *Gotd) ResolvePublicChannel(ctx context.Context, username string) (SourcePeer, error) {

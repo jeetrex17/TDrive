@@ -75,6 +75,31 @@ func TestResolveSharedCopyAllowsOtherMembersRawDocuments(t *testing.T) {
 	}
 }
 
+func TestResolveSharedCopyRequiresBroadcastMembership(t *testing.T) {
+	svc, _, fake, _ := newTestService(t)
+	peer := tgclient.SourcePeer{Kind: tgclient.PeerChannel, ID: sharedChannelID, AccessHash: 88}
+	svc.Peers = testPeerResolver{peer: tgclient.InputPeer{ChannelID: peer.ID, AccessHash: peer.AccessHash}}
+	fake.SeedMediaSourcePeers(peer)
+	fake.SeedPublicChannel("shared", peer)
+
+	message := sharedCopyMessage(31, 99, 5)
+	message.PeerKind = tgclient.PeerChannel
+	fake.SeedHistory(message)
+	source := channelsource.CopySource{
+		PeerKind: SharedCopyPeerKind, PeerID: peer.ID, MsgID: message.MsgID, AccountID: 7, Generation: "0",
+		Identity: tgclient.SharedRawCopyIdentity(message),
+	}
+	ref, err := svc.ResolveSharedCopyPart(t.Context(), source, message.MsgID)
+	if err != nil || ref.Peer.PeerKind() != tgclient.PeerChannel || ref.DocumentID != message.DocumentID {
+		t.Fatalf("resolve joined broadcast attachment = %+v, %v", ref, err)
+	}
+
+	fake.SeedMediaSourcePeers()
+	if _, err := svc.ResolveSharedCopyPart(t.Context(), source, message.MsgID); !errors.Is(err, channelsource.ErrCopyNotAllowed) {
+		t.Fatalf("resolve public broadcast attachment after leaving: %v", err)
+	}
+}
+
 func TestResolveSharedCopyRejectsHiddenAndRestrictedBodies(t *testing.T) {
 	for _, test := range []struct {
 		name string
