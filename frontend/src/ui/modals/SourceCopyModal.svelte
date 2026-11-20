@@ -27,6 +27,8 @@
 
     let makingFolder = $state(false);
     let folderName = $state('');
+    let folderNameInput = $state<HTMLInputElement | null>(null);
+    let newFolderButton = $state<HTMLButtonElement | null>(null);
     const stage = $derived($dialog?.stage);
     const editing = $derived(stage === 'ready' && !$dialog?.browseFailed);
     const anySaved = $derived(Boolean($dialog?.results.some(({ status }) => status === 'saved')));
@@ -49,6 +51,20 @@
         const handle = pushSheet(() => browseSourceCopyCrumb(($dialog?.path.length ?? 0) - 2));
         return () => handle.release();
     });
+
+    async function startFolder(): Promise<void> {
+        makingFolder = true;
+        folderName = $dialog?.suggestedFolder ?? '';
+        await tick();
+        folderNameInput?.focus();
+    }
+
+    async function cancelFolder(): Promise<void> {
+        makingFolder = false;
+        folderName = '';
+        await tick();
+        newFolderButton?.focus();
+    }
 
     async function makeFolder(): Promise<void> {
         const before = $dialog?.path;
@@ -128,19 +144,18 @@
                 {#if makingFolder}
                     <div class="copy-folder-editor">
                         <label class="field-label" for="source-copy-folder-name">Folder name</label>
-                        <input id="source-copy-folder-name" type="text" autocomplete="off" bind:value={folderName} disabled={!editing} onkeydown={(event) => {
+                        <input id="source-copy-folder-name" type="text" autocomplete="off" bind:this={folderNameInput} bind:value={folderName} disabled={!editing} onkeydown={(event) => {
                             if (event.key === 'Enter' && editing && folderName.trim()) void makeFolder();
                         }} />
                         <div class="copy-folder-buttons">
-                            <button type="button" class="secondary-btn" disabled={!editing} onclick={() => { makingFolder = false; }}>Cancel</button>
+                            <button type="button" class="secondary-btn" disabled={!editing} onclick={() => void cancelFolder()}>Cancel</button>
                             <button type="button" class="secondary-btn" disabled={!editing || !folderName.trim()} onclick={() => void makeFolder()}>Create folder</button>
                         </div>
                     </div>
                 {:else}
-                    <button type="button" class="secondary-btn copy-new-folder" disabled={!editing} onclick={() => {
-                        makingFolder = true;
-                        folderName = $dialog?.suggestedFolder ?? '';
-                    }}><FolderPlusIcon size={16} aria-hidden="true" /> New folder</button>
+                    <button type="button" class="secondary-btn copy-new-folder" bind:this={newFolderButton} disabled={!editing} onclick={() => void startFolder()}>
+                        <FolderPlusIcon size={16} aria-hidden="true" /> New folder
+                    </button>
                 {/if}
                 {#if $dialog.items.length === 1}
                     <label class="field-label" for="source-copy-file-name">File name</label>
@@ -172,6 +187,9 @@
                         </ul>
                     </details>
                 {/if}
+                {#if editing}
+                    <p id="source-copy-name-hint" class="copy-muted copy-name-hint">TDrive adds a number to names that are already in use in this folder.</p>
+                {/if}
                 {#if stage === 'saving'}<p role="status">{$dialog.stopping ? 'Stopping after the current work settles…' : sharedCopy ? 'Copying files…' : 'Saving files…'}</p>{/if}
             {/if}
             {#if $dialog.error}<p class="modal-error" role="alert">{$dialog.error}</p>{/if}
@@ -196,7 +214,7 @@
                         <button class="secondary-btn" type="button" onclick={() => void viewActivity()}>View Activity</button>
                     {/if}
                 {:else}
-                    <button class="primary-btn" type="button" disabled={!editing || makingFolder || $dialog?.items.some(({ name }) => !name.trim())} onclick={() => void confirmSourceCopy()}>{sharedCopy ? 'Copy here' : 'Save here'}</button>
+                    <button class="primary-btn" type="button" disabled={!editing || makingFolder || $dialog?.items.some(({ name }) => !name.trim())} aria-describedby={editing ? 'source-copy-name-hint' : undefined} onclick={() => void confirmSourceCopy()}>{sharedCopy ? 'Copy here' : 'Save here'}</button>
                 {/if}
             {/if}
         </div>
@@ -231,6 +249,7 @@
     .copy-folder-editor { margin-block: var(--space-3); }
     .copy-folder-buttons { display: flex; justify-content: flex-end; gap: var(--space-2); margin-block-start: var(--space-2); }
     .copy-muted { color: var(--color-text-muted); font-size: var(--type-xs); line-height: var(--leading-normal); }
+    .copy-name-hint { margin-block: var(--space-2) 0; }
     .copy-files {
         margin-block: var(--space-3);
         border: 1px solid var(--color-border-soft);

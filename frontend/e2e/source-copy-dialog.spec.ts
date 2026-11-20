@@ -46,9 +46,9 @@ function copyPlans(names: readonly string[], plannedNames: readonly string[] = n
 }
 
 test('expanded copy selection keeps long names compact and explains renames', async ({ page }) => {
-    const original = `${longStem}.mkv`;
+    const original = `${longStem}:Bonus.mkv`;
     const companion = 'Shoreline_Bonus_Interview.mkv';
-    const plannedStem = `${longStem} (2)`;
+    const plannedStem = `${longStem}_Bonus`;
     const plannedName = `${plannedStem}.mkv`;
     await bootTDrive(page, copyPlans([original, companion], [plannedName, companion]));
     await page.getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
@@ -61,6 +61,7 @@ test('expanded copy selection keeps long names compact and explains renames', as
     const toggle = dialog.getByText('2 files selected', { exact: true });
     const selectedFiles = dialog.getByRole('list', { name: 'Selected files', exact: true });
     await expect(save).toBeEnabled();
+    await expect(save).toHaveAccessibleDescription(/adds a number to names that are already in use/);
     await expect(selectedFiles).toBeHidden();
 
     await toggle.click();
@@ -110,6 +111,20 @@ test('the mobile copy sheet keeps its footer in view with a long selection', asy
     await page.mouse.wheel(0, 1000);
     await expect(lastName).toBeInViewport();
     await expect(dialog.getByRole('button', { name: 'Save here', exact: true })).toBeInViewport({ ratio: 1 });
+});
+
+test('keyboard focus follows the copy folder editor', async ({ page }) => {
+    await bootTDrive(page, copyPlans(['recording.mkv']));
+    await page.getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
+    await page.getByRole('button', { name: /^Play recording/ }).press('Shift+F10');
+    await page.getByRole('menuitem', { name: 'Save to My Drive…', exact: true }).press('Enter');
+
+    const dialog = page.getByRole('dialog', { name: 'Save to My Drive', exact: true });
+    const newFolder = dialog.getByRole('button', { name: 'New folder', exact: true });
+    await newFolder.press('Enter');
+    await expect(dialog.getByRole('textbox', { name: 'Folder name', exact: true })).toBeFocused();
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).first().press('Enter');
+    await expect(newFolder).toBeFocused();
 });
 
 test('reduced motion keeps the busy copy sheet reachable after a swipe', async ({ page }) => {
