@@ -6,13 +6,15 @@
 export type DragAxis = 'x' | 'y';
 
 export interface TouchGestureHandlers {
+    /** Decline a gesture start while still tracking the contact for multitouch. */
+    acceptsStart?(event: PointerEvent): boolean;
     tap?(x: number, y: number): void;
     doubleTap?(x: number, y: number): void;
     /** Return false to leave this pointer to whoever else is listening. */
     dragStart?(axis: DragAxis): boolean;
     drag?(dx: number, dy: number, axis: DragAxis): void;
-    /** velocity is px per ms along the locked axis. */
-    dragEnd?(dx: number, dy: number, axis: DragAxis, velocity: number): void;
+    /** Velocity is px per ms along the locked axis. Cancellation still ends the drag for cleanup. */
+    dragEnd?(dx: number, dy: number, axis: DragAxis, velocity: number, cancelled: boolean): void;
     pinchStart?(): void;
     /** factor is the change since the previous pinch event, centred on x, y. */
     pinch?(factor: number, x: number, y: number): void;
@@ -58,12 +60,12 @@ export function bindTouchGestures(el: HTMLElement, handlers: TouchGestureHandler
         const [a, b] = Array.from(pointers.values());
         return a && b ? { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 } : { x: 0, y: 0 };
     };
-    const endDrag = (pointer: TrackedPointer, time: number) => {
+    const endDrag = (pointer: TrackedPointer, time: number, cancelled: boolean) => {
         const dx = pointer.x - pointer.startX;
         const dy = pointer.y - pointer.startY;
         const travelled = axis === 'x' ? Math.abs(dx) : Math.abs(dy);
         const velocity = travelled / Math.max(1, time - pointer.startTime);
-        handlers.dragEnd?.(dx, dy, axis, velocity);
+        handlers.dragEnd?.(dx, dy, axis, velocity, cancelled);
     };
 
     const onPointerDown = (event: PointerEvent) => {
@@ -76,15 +78,21 @@ export function bindTouchGestures(el: HTMLElement, handlers: TouchGestureHandler
             startTime: event.timeStamp,
         });
         if (pointers.size === 1) {
-            mode = 'pending';
+            if (handlers.acceptsStart?.(event) === false) {
+                clearTapTimer();
+                lastTap = null;
+                mode = 'dead';
+            } else {
+                mode = 'pending';
+            }
             return;
         }
         if (pointers.size === 2) {
             clearTapTimer();
             lastTap = null;
-            if (mode === 'drag') handlers.dragEnd?.(0, 0, axis, 0);
-            mode = 'pinch';
-            lastDistance = distance();
+            if (mode === 'drag') handlers.dragEnd?.(0, 0, axis, 0, true);
+            mode = handlers.pinch ? 'pinch' : 'dead';
+            if (mode === 'pinch') lastDistance = distance();
             handlers.pinchStart?.();
             return;
         }
@@ -126,7 +134,7 @@ export function bindTouchGestures(el: HTMLElement, handlers: TouchGestureHandler
         pointer.y = event.clientY;
         pointers.delete(event.pointerId);
         if (mode === 'drag') {
-            endDrag(pointer, event.timeStamp);
+            endDrag(pointer, event.timeStamp, event.type === 'pointercancel');
             mode = pointers.size ? 'dead' : 'idle';
             return;
         }

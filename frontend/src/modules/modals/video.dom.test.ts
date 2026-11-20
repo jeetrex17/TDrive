@@ -349,8 +349,8 @@ describe("mobile video gestures", () => {
         return { stage, video };
     }
 
-    function pointer(target: HTMLElement, type: string, x: number, y: number, time = 0) {
-        const event = new PointerEvent(type, { bubbles: true, pointerType: "touch", pointerId: 1, clientX: x, clientY: y });
+    function pointer(target: HTMLElement, type: string, x: number, y: number, time = 0, pointerId = 1) {
+        const event = new PointerEvent(type, { bubbles: true, pointerType: "touch", pointerId, isPrimary: pointerId === 1, clientX: x, clientY: y });
         Object.defineProperty(event, "timeStamp", { value: time });
         target.dispatchEvent(event);
     }
@@ -391,6 +391,132 @@ describe("mobile video gestures", () => {
         expect(video.paused).toBe(true);
         stage.click();
         expect(video.paused).toBe(true);
+    });
+
+    it.each([
+        [100, 20, 40, "-10s"],
+        [400, 480, 60, "+10s"],
+        [700, 620, 40, "-10s"],
+    ])("seeks once on a horizontal swipe from x=%s to x=%s", async (start, end, seconds, feedback) => {
+        const { stage, video } = await openPhone();
+        pointer(video, "pointerdown", start, 200);
+        pointer(video, "pointermove", (start + end) / 2, 202, 50);
+        pointer(video, "pointermove", end, 204, 100);
+        expect(video.currentTime).toBe(50);
+        pointer(video, "pointerup", end, 204, 120);
+        expect(video.currentTime).toBe(seconds);
+        expect(document.querySelector("#video-skip-feedback")?.textContent).toBe(feedback);
+        stage.click();
+        expect(video.paused).toBe(false);
+        expect(apiMocks.closeMedia).not.toHaveBeenCalled();
+    });
+
+    it.each([
+        { ending: "pointerup", x: 415, y: 204, description: "short" },
+        { ending: "pointerup", x: 480, y: 320, description: "mostly vertical at release" },
+        { ending: "pointercancel", x: 480, y: 204, description: "cancelled" },
+    ])("keeps the playhead still when a horizontal drag is $description", async ({ ending, x, y }) => {
+        const { stage, video } = await openPhone();
+        pointer(stage, "pointerdown", 400, 200);
+        pointer(stage, "pointermove", x, 204, 100);
+        pointer(stage, ending, x, y, 120);
+        expect(video.currentTime).toBe(50);
+        expect(apiMocks.closeMedia).not.toHaveBeenCalled();
+    });
+
+    it.each(["#video-stage", "#video-scrubber"])("abandons a seek when another finger touches %s", async (selector) => {
+        const { stage, video } = await openPhone();
+        const secondTarget = document.querySelector<HTMLElement>(selector)!;
+        pointer(stage, "pointerdown", 400, 200);
+        pointer(stage, "pointermove", 480, 204, 100);
+        pointer(secondTarget, "pointerdown", 300, 300, 110, 2);
+        pointer(stage, "pointerup", 480, 204, 120);
+        pointer(secondTarget, "pointerup", 300, 300, 130, 2);
+        expect(video.currentTime).toBe(50);
+    });
+
+    it("keeps a second finger from seeking during a timeline drag", async () => {
+        const { stage, video } = await openPhone();
+        const scrubber = document.querySelector<HTMLElement>("#video-scrubber")!;
+        pointer(scrubber, "pointerdown", 300, 400);
+        pointer(stage, "pointerdown", 400, 200, 20, 2);
+        pointer(stage, "pointermove", 480, 204, 100, 2);
+        pointer(scrubber, "pointercancel", 300, 400, 110);
+        pointer(stage, "pointerup", 480, 204, 120, 2);
+        expect(video.currentTime).toBe(50);
+    });
+
+    it("does not pair a control tap with a video surface tap", async () => {
+        const { stage, video } = await openPhone();
+        const button = stage.querySelector<HTMLButtonElement>("#video-center-play")!;
+        video.pause();
+        pointer(button, "pointerdown", 435, 200);
+        pointer(button, "pointerup", 435, 200, 20);
+        button.click();
+        expect(video.paused).toBe(false);
+        pointer(stage, "pointerdown", 449, 200, 100);
+        pointer(stage, "pointerup", 449, 200, 120);
+        expect(video.paused).toBe(false);
+    });
+
+    it("lets a player button and an open settings panel keep their own interaction", async () => {
+        const { stage, video } = await openPhone();
+        const button = stage.querySelector<HTMLButtonElement>("#video-center-play")!;
+        pointer(button, "pointerdown", 400, 200);
+        pointer(button, "pointermove", 480, 204, 100);
+        pointer(button, "pointerup", 480, 204, 120);
+        expect(video.currentTime).toBe(50);
+
+        document.querySelector<HTMLButtonElement>("#video-picture-button")!.click();
+        pointer(stage, "pointerdown", 400, 200, 200);
+        pointer(stage, "pointermove", 480, 204, 300);
+        pointer(stage, "pointerup", 480, 204, 320);
+        expect(video.currentTime).toBe(50);
+        expect(document.querySelector<HTMLElement>("#video-settings-panel")?.hidden).toBe(false);
+    });
+
+    it.each([
+        { moveBeforeChange: true, phase: "during the swipe" },
+        { moveBeforeChange: false, phase: "before the finger moves" },
+    ])("does not carry a swipe across a video change $phase", async ({ moveBeforeChange }) => {
+        const { stage, video } = await openPhone();
+        pointer(stage, "pointerdown", 400, 200);
+        if (moveBeforeChange) pointer(stage, "pointermove", 480, 204, 100);
+
+        apiMocks.openMedia.mockResolvedValue(mediaOpenResult(8, "replacement-video"));
+        const controller = await import("./video");
+        await controller.openVideoModal({ id: 8, name: "clip-8.mp4", size: 1024 });
+        video.currentTime = 30;
+        video.dispatchEvent(new Event("loadedmetadata"));
+
+        if (!moveBeforeChange) pointer(stage, "pointermove", 480, 204, 110);
+        pointer(stage, "pointerup", 480, 204, 120);
+        expect(video.currentTime).toBe(30);
+    });
+
+    it("snaps back when the system cancels a downward drag", async () => {
+        const { stage } = await openPhone();
+        const shell = document.getElementById("video-shell")!;
+        pointer(stage, "pointerdown", 400, 100);
+        pointer(stage, "pointermove", 400, 300, 100);
+        expect(shell.style.transform).toContain("200px");
+        pointer(stage, "pointercancel", 400, 300, 120);
+        await nextTasks();
+        expect(shell.style.transform).toBe("");
+        expect(apiMocks.closeMedia).not.toHaveBeenCalled();
+    });
+
+    it("does not dismiss after a downward drag turns mostly horizontal", async () => {
+        const { stage, video } = await openPhone();
+        const shell = document.getElementById("video-shell")!;
+        pointer(stage, "pointerdown", 400, 200);
+        pointer(stage, "pointermove", 403, 209, 20);
+        pointer(stage, "pointermove", 480, 245, 50);
+        pointer(stage, "pointerup", 480, 245, 60);
+        await nextTasks();
+        expect(shell.style.transform).toBe("");
+        expect(apiMocks.closeMedia).not.toHaveBeenCalled();
+        expect(video.currentTime).toBe(50);
     });
 
     it("snaps back after a short swipe and closes after a deliberate downward swipe", async () => {
