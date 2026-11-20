@@ -100,6 +100,10 @@ case "$PLATFORM" in
     ;;
   darwin)
     brew list mpv >/dev/null 2>&1 || brew install mpv
+    # mpv.pc can require libarchive by name, and Homebrew keeps it keg-only.
+    libarchive_pkgconfig="$(brew --prefix libarchive)/lib/pkgconfig"
+    export PKG_CONFIG_PATH="$libarchive_pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    pkg-config --cflags --libs mpv >/dev/null || die "could not resolve Homebrew mpv build flags"
     libmpv="$(pkg-config --variable=libdir mpv)/libmpv.2.dylib"
     mkdir -p "$runtime_root/bin" "$runtime_root/lib"
     cp -pL "$(command -v mpv)" "$runtime_root/bin/mpv"
@@ -120,6 +124,7 @@ case "$PLATFORM" in
     clear_darwin_build_cache
     emit "TDRIVE_MPV_RUNTIME_DIR=$runtime_root" \
       "TDRIVE_MPV_PACKAGE_SOURCE=homebrew-ci-system-mpv-not-release-runtime" \
+      "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" \
       "MACOSX_DEPLOYMENT_TARGET=$minos" \
       "TDRIVE_MPV_RAISE_APP_MINOS=$minos"
     ;;
