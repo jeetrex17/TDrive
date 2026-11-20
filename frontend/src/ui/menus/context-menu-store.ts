@@ -6,7 +6,7 @@ import { writable } from 'svelte/store';
  * can assert the action a row offers without importing Svelte.
  */
 export type ContextMenuIcon =
-    | 'open' | 'play' | 'download' | 'rename' | 'move' | 'delete'
+    | 'open' | 'play' | 'download' | 'rename' | 'move' | 'copy' | 'delete'
     | 'upload' | 'folder-up' | 'folder-new' | 'refresh' | 'external' | 'clear' | 'select';
 
 export type ContextMenuItem =

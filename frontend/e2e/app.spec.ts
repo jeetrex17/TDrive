@@ -384,6 +384,81 @@ test('the sender can rename a forwarded root attachment in a shared drive', asyn
     expect(await mock.calls('RenameFile')).toMatchObject([{ args: [701, 'renamed.pdf'], state: 'fulfilled' }]);
 });
 
+test('a Shared Drive file can be copied to a subfolder in My Drive', async ({ page }) => {
+    const file = { msg_id: 42, name: 'shared.pdf', size: 321, revision: 3, uploader_id: 8 };
+    const parent = { id: 'd:work', name: 'Work', parent_id: '' };
+    const child = { id: 'd:reports', name: 'Reports', parent_id: parent.id };
+    const mock = await bootTDrive(page, {
+        ListChannels: resolves([
+            { ...PERSONAL_CHANNEL, is_active: false },
+            { id: 2, title: 'Shared files', kind: 'shared', is_active: true, invite_link: '' },
+        ]),
+        GetFolderContents: resolves({ folders: [], files: [file] }),
+        ResolveUsernames: resolves({ '8': 'Uploader' }),
+        ListSourceCopyFolders: resolves({ drive_id: 1, folders: [parent] }),
+        PreviewSourceCopyNames: resolves([file.name]),
+        SaveSourceCopies: resolves([{ id: 'copy-1', name: file.name, parent_id: child.id, status: 'saved', file_id: 400, message: '' }]),
+    });
+    const row = page.getByRole('row', { name: 'File: shared.pdf' });
+    await row.click({ button: 'right' });
+    await page.getByRole('menuitem', { name: 'Copy to My Drive…' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Copy to My Drive' });
+    await expect(dialog.getByRole('button', { name: 'Work' })).toBeVisible();
+    await mock.setPlan('ListSourceCopyFolders', resolves({ drive_id: 1, folders: [child] }));
+    await dialog.getByRole('button', { name: 'Work' }).click();
+    await expect(dialog.getByRole('button', { name: 'Reports' })).toBeVisible();
+    await mock.setPlan('ListSourceCopyFolders', resolves({ drive_id: 1, folders: [] }));
+    await dialog.getByRole('button', { name: 'Reports' }).click();
+    await expect(dialog.getByText('No folders here.')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Parent folder' })).toBeEnabled();
+    await dialog.getByRole('button', { name: 'Copy here' }).click();
+    await expect(dialog.getByText('Copied', { exact: true })).toBeVisible();
+    expect((await mock.calls('ListSourceCopyFolders')).map((call) => call.args)).toEqual([
+        [7, ''], [7, parent.id], [7, child.id],
+    ]);
+    expect((await mock.calls('SaveSourceCopies')).map((call) => call.args)).toEqual([
+        [7, 1, child.id, [{ name: file.name, source: {
+            account_id: 7, peer_kind: 'shared-drive', peer_id: 2, msg_id: file.msg_id, generation: '3', identity: 'managed',
+        } }], true],
+    ]);
+    expect(await mock.calls('SetActiveChannel')).toEqual([]);
+});
+
+test('the phone can copy a forwarded Shared Drive file from its overflow menu', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const file = { id: 701, name: 'forwarded.pdf', size: 321, date: 1_735_689_600, access_hash: 0, uploader_id: 8, copy_identity: 'raw:forwarded-file' };
+    const folder = { id: 'd:archive', name: 'Archive', parent_id: '' };
+    const mock = await bootTDrive(page, {
+        ListChannels: resolves([
+            { ...PERSONAL_CHANNEL, is_active: false },
+            { id: 2, title: 'Shared files', kind: 'shared', is_active: true, invite_link: '' },
+        ]),
+        GetFileList: resolves([file]),
+        Haptic: resolves(null),
+        ResolveUsernames: resolves({ '8': 'Uploader' }),
+        ListSourceCopyFolders: resolves({ drive_id: 1, folders: [folder] }),
+        PreviewSourceCopyNames: resolves([file.name]),
+        SaveSourceCopies: resolves([{ id: 'copy-1', name: file.name, parent_id: '', status: 'saved', file_id: 400, message: '' }]),
+    }, { url: '/?mobile=ios' });
+    await page.getByRole('button', { name: `More actions for ${file.name}` }).click();
+    await page.getByRole('button', { name: 'Copy to My Drive', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Copy to My Drive' });
+    await expect(dialog.getByRole('button', { name: 'Archive' })).toBeVisible();
+    await mock.setPlan('ListSourceCopyFolders', resolves({ drive_id: 1, folders: [] }));
+    await dialog.getByRole('button', { name: 'Archive' }).click();
+    await expect(dialog.getByText('No folders here.')).toBeVisible();
+    await mock.setPlan('ListSourceCopyFolders', resolves({ drive_id: 1, folders: [folder] }));
+    await dialog.getByRole('button', { name: 'Parent folder' }).click();
+    await expect(dialog.getByRole('button', { name: 'Archive' })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Copy here' }).click();
+    await expect(dialog.getByText('Copied', { exact: true })).toBeVisible();
+    expect((await mock.calls('SaveSourceCopies')).map((call) => call.args)).toEqual([
+        [7, 1, '', [{ name: file.name, source: {
+            account_id: 7, peer_kind: 'shared-drive', peer_id: 2, msg_id: file.id, generation: '0', identity: file.copy_identity,
+        } }], true],
+    ]);
+});
+
 test('gallery loads binary thumbnails and one explicitly opened original stream', async ({ page }) => {
     const requested = await routeRenditions(page);
     const mock = await bootTDrive(page, galleryPlans([FIRST_PHOTO]));

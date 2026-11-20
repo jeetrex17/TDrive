@@ -8,6 +8,7 @@
     import DownloadIcon from '@lucide/svelte/icons/download';
     import PencilIcon from '@lucide/svelte/icons/pencil';
     import FolderInputIcon from '@lucide/svelte/icons/folder-input';
+    import CopyIcon from '@lucide/svelte/icons/copy';
     import Trash2Icon from '@lucide/svelte/icons/trash-2';
     import UploadIcon from '@lucide/svelte/icons/upload';
     import FolderUpIcon from '@lucide/svelte/icons/folder-up';
@@ -39,6 +40,7 @@
         download: DownloadIcon,
         rename: PencilIcon,
         move: FolderInputIcon,
+        copy: CopyIcon,
         delete: Trash2Icon,
         upload: UploadIcon,
         'folder-up': FolderUpIcon,

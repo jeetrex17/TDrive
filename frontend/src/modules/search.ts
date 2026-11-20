@@ -192,6 +192,8 @@ function renderSearchResults(results: SearchHit[], query: string) {
                 uploaderID: Number(result.uploaderId || 0),
                 date: Number(result.uploadTime || 0),
                 encrypted,
+                ...(result.revision !== undefined ? { revision: result.revision } : {}),
+                ...(result.copyIdentity ? { copyIdentity: result.copyIdentity } : {}),
                 canDelete: ownerOnly,
                 canRename: ownerOnly,
             }, String(result.parentId || ""), {
@@ -377,6 +379,7 @@ export async function runGlobalSearch() {
                 plaintextSize: 0,
                 path: 'My Drive',
                 source: 'tg',
+                ...(file.copyIdentity ? { copyIdentity: file.copyIdentity } : {}),
             }));
 
         renderSearchResults([...fs, ...tgMatches], query);
