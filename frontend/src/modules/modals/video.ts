@@ -85,6 +85,7 @@ export type { VideoOpenTarget, VideoPlaylistLaunch } from "../video/video-queue"
 const CHROME_HIDE_DELAY_MS = 2500;
 const LOADING_DEBOUNCE_MS = 250;
 const PLAYBACK_HINT_INTERVAL_MS = 1000;
+const SWIPE_SEEK_MIN_PX = 40;
 
 interface VideoOpenAttempt {
     generation: number;
@@ -134,12 +135,9 @@ let videoHostObserver: MutationObserver | null = null;
 let videoHostEl: HTMLElement | null = null;
 let unbindVideoDOM: (() => void) | null = null;
 let unbindTouchGestures: (() => void) | null = null;
-// Where the last stage pointer came from: touch taps go through the phone
-// recogniser, and a tap that began on the chrome is the chrome's to handle.
+// Touch gestures handle stage taps before the browser emits a click.
 let stagePointerTouch = false;
-let stagePointerX = 0;
 let mobileControls: MobileVideoControls | null = null;
-let stagePointerOnChrome = false;
 let videoDOM: VideoDOM = collectVideoDOM(null);
 let geometry: VideoGeometryController | null = null;
 let transport: VideoTransportController | null = null;
@@ -1524,21 +1522,24 @@ function handleStageDoubleClick(event: MouseEvent) {
     void geometry?.toggleFullscreen();
 }
 
-function trackStagePointer(event: PointerEvent) {
-    stagePointerX = event.clientX;
-    stagePointerTouch = event.pointerType === "touch";
-    stagePointerOnChrome = targetIsVideoChrome(event.target);
-}
-
-// Phone gestures: a tap toggles the controls, a double tap on either side
-// seeks ten seconds (in the middle it toggles playback). Edge swipes control
-// brightness/volume; a swipe down through the centre closes the player.
-function videoTouchHandlers(): TouchGestureHandlers {
-    const shell = () => byID<HTMLElement>("video-shell");
+// Phone gestures: taps control the chrome and playback. Horizontal swipes
+// seek, and vertical swipes control brightness, volume or dismissal.
+function videoTouchHandlers(stage: HTMLElement, shell: HTMLElement): TouchGestureHandlers {
+    let startX = 0;
+    let playbackGeneration: number | undefined;
     let adjustingControl = false;
+    const canDrag = () => isOpen() && !hasError && !isAnyMenuOpen();
+    const canSeek = () => canDrag() && currentState.duration > 0 &&
+        playbackGeneration !== undefined && playbackTransitions.isCurrent(playbackGeneration);
     return {
+        acceptsStart: ({ target, clientX }) => {
+            if (!(target instanceof Element) || !stage.contains(target) || targetIsVideoChrome(target)) return false;
+            startX = clientX;
+            playbackGeneration = activeOpenAttempt?.generation;
+            return true;
+        },
         tap: () => {
-            if (!isOpen() || hasError || stagePointerOnChrome) return;
+            if (!isOpen() || hasError) return;
             if (videoDOM.modal?.classList.contains("is-video-chrome-visible")) {
                 clearChromeTimer();
                 setChromeVisible(false);
@@ -1547,8 +1548,8 @@ function videoTouchHandlers(): TouchGestureHandlers {
             }
         },
         doubleTap: (x) => {
-            if (!isOpen() || hasError || stagePointerOnChrome || !videoDOM.stage) return;
-            const { left, width } = videoDOM.stage.getBoundingClientRect();
+            if (!isOpen() || hasError) return;
+            const { left, width } = stage.getBoundingClientRect();
             const across = (x - left) / Math.max(1, width);
             if (across < 1 / 3) transport?.seekBy(-SEEK_STEP_SECONDS);
             else if (across > 2 / 3) transport?.seekBy(SEEK_STEP_SECONDS);
@@ -1556,28 +1557,32 @@ function videoTouchHandlers(): TouchGestureHandlers {
         },
         dragStart: (axis) => {
             adjustingControl = false;
-            if (axis !== "y" || !isOpen() || hasError || stagePointerOnChrome || isAnyMenuOpen()) return false;
-            const rect = videoDOM.stage?.getBoundingClientRect();
-            if (rect) adjustingControl = mobileControls?.startDrag((stagePointerX - rect.left) / Math.max(1, rect.width), rect.height) ?? false;
+            if (axis === "x") return canSeek();
+            if (!canDrag()) return false;
+            const { left, width, height } = stage.getBoundingClientRect();
+            adjustingControl = mobileControls?.startDrag((startX - left) / Math.max(1, width), height) ?? false;
             return true;
         },
-        drag: (_dx, dy) => {
+        drag: (_dx, dy, axis) => {
+            if (axis === "x") return;
             if (adjustingControl) { mobileControls?.drag(dy); return; }
-            const el = shell();
-            if (!el) return;
             const drop = Math.max(0, dy);
-            el.style.transition = "none";
-            el.style.transform = `translate3d(0, ${drop}px, 0)`;
-            el.style.opacity = String(Math.max(0.4, 1 - drop / 480));
+            shell.style.transition = "none";
+            shell.style.transform = `translate3d(0, ${drop}px, 0)`;
+            shell.style.opacity = String(Math.max(0.4, 1 - drop / 480));
         },
-        dragEnd: (_dx, dy, _axis, velocity) => {
+        dragEnd: (dx, dy, axis, velocity, cancelled) => {
+            if (axis === "x") {
+                if (!cancelled && Math.abs(dx) >= SWIPE_SEEK_MIN_PX && Math.abs(dx) > Math.abs(dy) && canSeek()) {
+                    transport?.seekBy(Math.sign(dx) * SEEK_STEP_SECONDS);
+                }
+                return;
+            }
             if (adjustingControl) { mobileControls?.endDrag(); adjustingControl = false; return; }
-            const el = shell();
-            if (!el) return;
-            el.style.transition = "";
-            el.style.transform = "";
-            el.style.opacity = "";
-            if (dy > 120 || (dy > 32 && velocity > 0.6)) void closeVideoModal();
+            shell.style.transition = "";
+            shell.style.transform = "";
+            shell.style.opacity = "";
+            if (!cancelled && dy > Math.abs(dx) && (dy > 120 || (dy > 32 && velocity > 0.6))) void closeVideoModal();
         },
     };
 }
@@ -1620,7 +1625,6 @@ export function teardownVideoModal(): void {
     unbindVideoDOM = null;
     unbindTouchGestures?.();
     unbindTouchGestures = null;
-    videoDOM.stage?.removeEventListener("pointerdown", trackStagePointer);
     nativeStateRouter.unbind();
     unsubscribeEncryptedMediaSessionsClosed?.();
     unsubscribeEncryptedMediaSessionsClosed = null;
@@ -1759,14 +1763,18 @@ export function activateVideoModal(): () => void {
         syncActivePanelGeometry();
         applyHtmlPicture();
     });
-    if (isMobilePlatform()) {
+    const shell = byID("video-shell");
+    if (isMobilePlatform() && shell) {
         mobileControls = new MobileVideoControls({
             rotate: byID<HTMLButtonElement>("video-rotate"),
             volume: byID<HTMLButtonElement>("video-mobile-volume"),
             feedback: byID("video-mobile-feedback"),
         });
-        videoDOM.stage.addEventListener("pointerdown", trackStagePointer);
-        unbindTouchGestures = bindTouchGestures(videoDOM.stage, videoTouchHandlers());
+        videoDOM.stage.addEventListener("pointerdown", (event) => {
+            stagePointerTouch = event.pointerType !== "mouse";
+        }, { signal: controlListeners.signal });
+        // Controls sit beside the stage. Their touches can interrupt a gesture.
+        unbindTouchGestures = bindTouchGestures(shell, videoTouchHandlers(videoDOM.stage, shell));
     }
     applyState(EMPTY_PLAYER_STATE);
     return teardownVideoModal;
