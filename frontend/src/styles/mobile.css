@@ -878,6 +878,16 @@ html.mobile .account-row {
     cursor: pointer;
 }
 html.mobile .account-row + .account-row { border-top: 1px solid var(--color-border-soft); }
+/* Scoped through the group so it outranks the switch row's own phone sizing. */
+html.mobile .account-group .account-card .ui-switch-row {
+    min-height: 52px;
+    padding: var(--space-2) 14px;
+}
+html.mobile .account-group .account-card .ui-switch-title {
+    font-size: var(--mobile-type-body);
+    font-weight: var(--weight-regular);
+}
+html.mobile .account-card .ui-switch-row + .account-row { border-top: 1px solid var(--color-border-soft); }
 html.mobile .account-row:active { background: var(--overlay-neutral-2); }
 html.mobile .account-row .account-row-icon { flex: 0 0 auto; color: var(--color-text-muted); }
 html.mobile .account-row-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

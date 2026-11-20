@@ -37,13 +37,9 @@ for (const platform of ['desktop', 'android'] as const) {
             result: { ok: true }, files: [{ name: 'queued.txt', msg_id: 42 }], failures: [],
         }));
         if (platform === 'desktop') await page.getByRole('row', { name: 'Folder: Reports', exact: true }).dblclick();
+        // The first answer is remembered, so the second upload queues without asking.
         await chooseUpload(page, platform === 'android');
-        const review = page.locator('#upload-options-modal').getByRole('dialog');
-        await expect(review).toContainText('queued.txt');
-        await expect(review).toContainText('Personal');
-        if (platform === 'desktop') await expect(review).toContainText('Reports');
-        await review.getByRole('button', { name: 'Add to queue', exact: true }).click();
-        await expect(review).toBeHidden();
+        await expect(page.locator('#upload-options-modal').getByRole('dialog')).toBeHidden();
         if (platform === 'desktop') await page.locator('#breadcrumb-back').click();
 
         if (platform === 'desktop') await openActivity(page);
@@ -95,12 +91,10 @@ test('a batch for a closed drive pauses without holding back the open drive', as
     await mock.setPlan('SelectFiles', resolves(['/tmp/holiday.mov']));
     await mock.setPlan('RetryUploadToDriveFS', resolves({ result: { ok: true }, files: [], failures: [] }));
     await chooseUpload(page);
-    await page.getByRole('button', { name: 'Add to queue', exact: true }).click();
     await page.getByRole('button', { name: 'Team', exact: true }).click();
     await mock.release('first');
     await mock.setPlan('SelectFiles', resolves(['/tmp/team-notes.pdf']));
     await chooseUpload(page);
-    await page.getByRole('button', { name: /Add to queue|Continue/ }).click();
     await expect.poll(async () => (await mock.calls('RetryUploadToDriveFS')).map(({ args }) => args[0])).toEqual([
         ['/tmp/first.txt'], ['/tmp/team-notes.pdf'],
     ]);
@@ -146,7 +140,6 @@ test('removing a waiting upload leaves the active batch running', async ({ page 
     await expect.poll(async () => (await mock.calls('RetryUploadToDriveFS')).length).toBe(1);
     await mock.setPlan('SelectFiles', resolves(['/tmp/removed.txt']));
     await chooseUpload(page);
-    await page.getByRole('button', { name: 'Add to queue', exact: true }).click();
     await openActivity(page);
     const activity = page.getByRole('dialog', { name: 'Activity', exact: true });
     await activity.getByRole('button', { name: 'View removed.txt', exact: true }).click();

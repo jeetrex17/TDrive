@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { get } from 'svelte/store';
 import type { TransferItem } from '../ui/notifications/notif-store';
 import { idleTransferActivity, state } from '../state';
 import { sidebarState } from '../ui/sidebar/sidebar-store';
@@ -489,6 +490,23 @@ describe('the picker window', () => {
 
         expect(planStarted).toBe(true);
         expect(encryptionSettled).toBe(true);
+        state.activeChannel = { id: 1, title: 'Test drive', kind: 'shared' };
+    });
+
+    it('asks how to upload once on My Drive, then uses that answer', async () => {
+        const { encryptUploads } = await import('./upload-preferences');
+        const { openUploadOptionsModal } = await import('./modals/upload-options');
+        encryptUploads.set(null);
+        state.activeChannel = { id: 1, title: 'Personal', kind: 'personal' };
+        app.SelectFiles.mockResolvedValue(['/tmp/report.pdf']);
+        app.PlanImport.mockResolvedValue({ files: 1, folders: 0, archives: 0, limitExceeded: false });
+
+        await uploadWithParentID('');
+        await uploadWithParentID('');
+
+        expect(openUploadOptionsModal).toHaveBeenCalledOnce();
+        expect(get(encryptUploads)).toBe(false);
+        encryptUploads.set(null);
         state.activeChannel = { id: 1, title: 'Test drive', kind: 'shared' };
     });
 

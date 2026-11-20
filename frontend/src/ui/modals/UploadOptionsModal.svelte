@@ -23,7 +23,7 @@
 
     $effect(() => {
         if ($view.open && !wasOpen) {
-            // Default to plain upload every time. Encryption is explicit per batch.
+            // Asked once: the answer becomes the default for later uploads.
             uploadMode = 'plain';
         }
         wasOpen = $view.open;
@@ -56,6 +56,7 @@
                 <small>TDrive encrypts file contents before sending them to Telegram. Names and folders stay visible.</small>
             </span>
         </label>
+        <p class="field-help">TDrive remembers this. Change it any time from the account menu.</p>
     {/if}
 
     {#snippet actions()}

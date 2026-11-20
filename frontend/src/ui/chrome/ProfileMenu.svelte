@@ -5,9 +5,11 @@
     import LogOutIcon from '@lucide/svelte/icons/log-out';
     import PaletteIcon from '@lucide/svelte/icons/palette';
     import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
+    import ShieldIcon from '@lucide/svelte/icons/shield';
     import PhotoBackupPanel from '../gallery/PhotoBackupPanel.svelte';
     import { tick } from 'svelte';
     import { checkForUpdates } from '../../modules/updates';
+    import { encryptUploads, setEncryptUploads } from '../../modules/upload-preferences';
     import { eventOccurredWithin } from '../event-path';
     import AppearancePanel from '../theme/AppearancePanel.svelte';
     import { recoverThemeTransitionClick } from '../theme/theme-interaction';
@@ -52,7 +54,7 @@
 
     function menuItems(): HTMLElement[] {
         if (!menuEl) return [];
-        return Array.from(menuEl.querySelectorAll<HTMLElement>('[role="menuitem"]'))
+        return Array.from(menuEl.querySelectorAll<HTMLElement>('[role="menuitem"], [role="menuitemcheckbox"]'))
             .filter((item) => !item.hidden && !item.hasAttribute('disabled'));
     }
 
@@ -266,6 +268,18 @@
         </button>
         <button id="profile-menu-photo-backup" class="profile-menu-item" type="button" role="menuitem" onclick={() => void openBackup()}>
             <HardDriveIcon size={20} strokeWidth={2} aria-hidden="true" /><span>Photo &amp; video backup</span>
+        </button>
+        <button
+            id="profile-menu-encrypt-uploads"
+            class="profile-menu-item"
+            type="button"
+            role="menuitemcheckbox"
+            aria-checked={$encryptUploads === true}
+            onclick={() => setEncryptUploads($encryptUploads !== true)}
+        >
+            <ShieldIcon size={20} strokeWidth={2} aria-hidden="true" />
+            <span>Encrypt uploads</span>
+            <span class="profile-menu-value" aria-hidden="true">{$encryptUploads === true ? 'On' : 'Off'}</span>
         </button>
         {#if $encryptionEntryVisible}
             <button
