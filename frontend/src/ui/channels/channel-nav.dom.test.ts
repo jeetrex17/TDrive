@@ -10,7 +10,10 @@ const organizationAPI = vi.hoisted(() => ({
     deleteSourceGroup: vi.fn(),
     moveSourceToGroup: vi.fn(),
 }));
-vi.mock('./source-organization-api', () => organizationAPI);
+vi.mock('../../api/channel-sources', async (importOriginal) => ({
+    ...await importOriginal<typeof import('../../api/channel-sources')>(),
+    ...organizationAPI,
+}));
 
 const source = (peerId: number, title: string): ChannelSource => ({
     peerKind: 'channel', peerId, title, username: '', connected: true, protected: false, available: true, accountId: '7', generation: 'g',

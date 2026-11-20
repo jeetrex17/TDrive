@@ -5,10 +5,9 @@
     import FolderIcon from '@lucide/svelte/icons/folder';
     import PenLineIcon from '@lucide/svelte/icons/pen-line';
     import Trash2Icon from '@lucide/svelte/icons/trash-2';
-    import { isMobilePlatform } from '../../api';
+    import { deleteSourceGroup, isMobilePlatform, moveSourceToGroup, saveSourceGroup } from '../../api';
     import { toAppError } from '../../modules/errors';
     import ModalShell from '../modals/ModalShell.svelte';
-    import { deleteSourceGroup, moveSourceToGroup, saveSourceGroup } from './source-organization-api';
     import { sourceKey, type ChannelSource } from './channel-model';
     import {
         closeSourceOrganization,

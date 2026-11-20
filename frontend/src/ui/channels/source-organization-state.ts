@@ -1,7 +1,7 @@
 import { get, writable } from 'svelte/store';
+import { listSourceGroups } from '../../api';
 import { closeDriveSwitcher } from '../mobile/mobile-shell-store';
 import { sourceKey, type ChannelSource } from './channel-model';
-import { listSourceGroups } from './source-organization-api';
 
 export interface SourceGroup {
     readonly id: string;

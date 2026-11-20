@@ -1,13 +1,17 @@
 import {
     ChannelSourcePhoto as rawPhoto,
     ConnectChannelSource as rawConnect,
+    DeleteSourceGroup as rawDeleteGroup,
     DisconnectChannelSource as rawDisconnect,
     ListChannelMedia as rawListMedia,
     ListChannelMediaByTopic as rawListTopicMedia,
     ListChannelSourceTopics as rawListTopics,
     ListChannelSourceCandidates as rawListCandidates,
     ListConnectedChannelSources as rawListConnected,
+    ListSourceGroups as rawListGroups,
+    MoveSourceToGroup as rawMoveToGroup,
     ResolvePublicChannelSource as rawResolvePublic,
+    SaveSourceGroup as rawSaveGroup,
 } from '../../bindings/TDrive/internal/app/driveservice';
 import { OpenChannelMedia as rawOpenChannelMedia } from '../../bindings/TDrive/internal/app/mediaservice';
 import type { MediaItem, MediaPage, SourceInfo } from '../../bindings/TDrive/backend/channelsource/models';
@@ -133,3 +137,14 @@ export const listChannelSourceTopics: ChannelTopicFetcher = async (request) => {
         next: { offsetDate: value.next_offset_date, offsetId: value.next_offset_id, offsetTopic: value.next_offset_topic },
     };
 };
+
+export const listSourceGroups = (accountId: string) => invokeBackend(rawListGroups, Number(accountId));
+
+export const saveSourceGroup = (accountId: string, groupId: string, name: string) =>
+    invokeBackend(rawSaveGroup, Number(accountId), groupId, name);
+
+export const deleteSourceGroup = (accountId: string, groupId: string) =>
+    invokeBackend(rawDeleteGroup, Number(accountId), groupId);
+
+export const moveSourceToGroup = (source: ChannelSource, groupId: string) =>
+    invokeBackend(rawMoveToGroup, source.peerKind, source.peerId, Number(source.accountId), source.generation, groupId);
