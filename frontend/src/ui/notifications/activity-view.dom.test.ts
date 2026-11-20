@@ -64,7 +64,10 @@ describe('full activity view', () => {
     it('owns Escape and restores the invoking button after closing', async () => {
         const invoker = document.createElement('button'); invoker.id = 'notif-bell'; document.body.appendChild(invoker); invoker.focus();
         openActivity(); await settle();
-        expect(document.activeElement).toBe(host.querySelector('#activity-search'));
+        // Nothing to search or filter yet, so neither is drawn.
+        expect(host.querySelector('#activity-search')).toBeNull();
+        expect(host.querySelector('.activity-filters')).toBeNull();
+        expect(document.activeElement).toBe(host.querySelector('.close-activity'));
         document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); await settle();
         expect(get(activityView).open).toBe(false);
         expect(document.activeElement).toBe(invoker);

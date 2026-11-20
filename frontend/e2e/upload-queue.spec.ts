@@ -45,7 +45,7 @@ for (const platform of ['desktop', 'android'] as const) {
         if (platform === 'desktop') await openActivity(page);
         else {
             await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: /^Transfers/ }).click();
-            await page.getByRole('button', { name: 'View all activity', exact: true }).click();
+            await page.getByRole('button', { name: 'Activity', exact: true }).click();
         }
         const activity = page.getByRole('dialog', { name: 'Activity', exact: true });
         await activity.getByRole('button', { name: 'View queued.txt', exact: true }).click();

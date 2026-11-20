@@ -64,6 +64,10 @@
     const uploadRunning = $derived($uploadActivities.some((entry) => entry.status === 'active'));
     // Reports from a batch still listed belong to its detail page, not a second card.
     const orphanReports = $derived($failedUploadReports.filter((report) => !report.activityId || !$uploadActivities.some((entry) => entry.id === report.activityId)));
+    // Search and filters only appear once the tab has something to narrow.
+    const tabHasItems = $derived(tab === 'transfers'
+        ? entries.length > 0 || orphanReports.length > 0
+        : $historyEvents.some((entry) => entry.kind === 'event'));
     const headline = $derived.by(() => {
         const active = entries.filter((entry) => entry.status === 'Active').length;
         const waiting = entries.filter((entry) => entry.status === 'Queued').length;
@@ -148,11 +152,11 @@
                 <button type="button" id="activity-tab-transfers" role="tab" aria-selected={tab === 'transfers'} aria-controls="activity-content" tabindex={tab === 'transfers' ? 0 : -1} onclick={() => selectTab('transfers')}>Transfers</button>
                 <button type="button" id="activity-tab-notifications" role="tab" aria-selected={tab === 'notifications'} aria-controls="activity-content" tabindex={tab === 'notifications' ? 0 : -1} onclick={() => selectTab('notifications')}>Notifications</button>
             </div>
-            <label class="activity-search"><SearchIcon size={15} aria-hidden="true" /><input id="activity-search" type="search" aria-label="Search activity" placeholder={tab === 'transfers' ? 'Search files or destination' : 'Search notifications'} bind:value={query} oninput={() => { listPage = 0; showingDetails = false; }} /></label>
+            {#if tabHasItems || query}<label class="activity-search"><SearchIcon size={15} aria-hidden="true" /><input id="activity-search" type="search" aria-label="Search activity" placeholder={tab === 'transfers' ? 'Search files or destination' : 'Search notifications'} bind:value={query} oninput={() => { listPage = 0; showingDetails = false; }} /></label>{/if}
         </div>
         <div id="activity-content" role="tabpanel" aria-labelledby={`activity-tab-${tab}`} class="activity-content" class:empty={count === 0}>
             <div class="activity-list-pane">
-                {#if tab === 'transfers'}
+                {#if tab === 'transfers' && (tabHasItems || filter !== 'All')}
                     <div class="activity-filters" role="group" aria-label="Filter transfers">
                         {#each ACTIVITY_FILTERS as option (option)}<button type="button" aria-pressed={filter === option} onclick={() => selectFilter(option)}>{option}</button>{/each}
                     </div>
