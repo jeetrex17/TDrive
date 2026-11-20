@@ -19,13 +19,13 @@ func TestResendMediaRechecksAfterWriteCooldown(t *testing.T) {
 		now := time.Now()
 		denied := errors.New("source no longer accessible")
 		resolves, sends := 0, 0
-		_, err := g.resendMedia(t.Context(), InputPeer{ChannelID: 3}, "part caption", 25,
-			func(context.Context) (DocumentRef, error) {
+		_, err := g.resendMedia(t.Context(), InputPeer{ChannelID: 3}, 25,
+			func(context.Context) (ExistingMedia, error) {
 				resolves++
 				if time.Since(now) < time.Second {
 					t.Fatal("source access checked before the write cooldown")
 				}
-				return DocumentRef{}, denied
+				return ExistingMedia{}, denied
 			},
 			func(context.Context, *tg.MessagesSendMediaRequest) (tg.UpdatesClass, error) {
 				sends++
@@ -42,10 +42,10 @@ func TestResendMediaRefreshesReferenceAndKeepsRandomID(t *testing.T) {
 	g := &Gotd{writes: newWriteCoordinator(nil, nil)}
 	peer := InputPeer{ChannelID: 3, AccessHash: 70}
 	resolves, sends := 0, 0
-	result, err := g.resendMedia(t.Context(), peer, "part caption", 25,
-		func(context.Context) (DocumentRef, error) {
+	result, err := g.resendMedia(t.Context(), peer, 25,
+		func(context.Context) (ExistingMedia, error) {
 			resolves++
-			return DocumentRef{DocumentID: 80, AccessHash: 71, Size: 142, FileReference: []byte{byte(resolves)}}, nil
+			return resendMediaTestDocument(byte(resolves)), nil
 		},
 		func(_ context.Context, request *tg.MessagesSendMediaRequest) (tg.UpdatesClass, error) {
 			sends++
@@ -75,13 +75,13 @@ func TestResendMediaRetainsUnknownSendWhenNextCheckDenies(t *testing.T) {
 		denied := errors.New("source protected")
 		transport := errors.New("connection reset by peer")
 		resolves, sends := 0, 0
-		_, err := g.resendMedia(t.Context(), InputPeer{ChannelID: 3}, "part caption", 25,
-			func(context.Context) (DocumentRef, error) {
+		_, err := g.resendMedia(t.Context(), InputPeer{ChannelID: 3}, 25,
+			func(context.Context) (ExistingMedia, error) {
 				resolves++
 				if resolves > 1 {
-					return DocumentRef{}, denied
+					return ExistingMedia{}, denied
 				}
-				return DocumentRef{DocumentID: 80, AccessHash: 71, Size: 142, FileReference: []byte{1}}, nil
+				return resendMediaTestDocument(1), nil
 			},
 			func(context.Context, *tg.MessagesSendMediaRequest) (tg.UpdatesClass, error) {
 				sends++
@@ -107,9 +107,9 @@ func TestResendMediaDistinguishesRejectionFromUnknownAcceptance(t *testing.T) {
 	} {
 		t.Run(option.name, func(t *testing.T) {
 			g := &Gotd{writes: newWriteCoordinator(nil, nil)}
-			result, err := g.resendMedia(t.Context(), InputPeer{ChannelID: 3}, "part caption", 25,
-				func(context.Context) (DocumentRef, error) {
-					return DocumentRef{DocumentID: 80, AccessHash: 71, Size: 142, FileReference: []byte{1}}, nil
+			result, err := g.resendMedia(t.Context(), InputPeer{ChannelID: 3}, 25,
+				func(context.Context) (ExistingMedia, error) {
+					return resendMediaTestDocument(1), nil
 				},
 				func(context.Context, *tg.MessagesSendMediaRequest) (tg.UpdatesClass, error) {
 					return nil, option.rpcError
@@ -119,6 +119,13 @@ func TestResendMediaDistinguishesRejectionFromUnknownAcceptance(t *testing.T) {
 				t.Fatalf("resend = %+v, %v, want failed with unknown=%v", result, err, option.unknown)
 			}
 		})
+	}
+}
+
+func resendMediaTestDocument(ref byte) ExistingMedia {
+	return ExistingMedia{
+		Document: DocumentRef{DocumentID: 80, AccessHash: 71, Size: 142, FileReference: []byte{ref}},
+		Caption:  "part caption",
 	}
 }
 
@@ -145,10 +152,11 @@ func TestFakeResendMediaKeepsDestinationBytesAfterSourceMessageDeletion(t *testi
 		HasMedia: true, MediaSize: int64(len(body)), DocumentName: "payload.bin",
 	})
 	fake.SeedSourceDocumentBody(source.Kind, source.ChannelID, msgID, body)
-	resolve := func(ctx context.Context) (DocumentRef, error) {
-		return fake.ResolveDocument(ctx, source, msgID)
+	prepare := func(ctx context.Context) (ExistingMedia, error) {
+		ref, err := fake.ResolveDocument(ctx, source, msgID)
+		return ExistingMedia{Document: ref, Caption: "hidden body"}, err
 	}
-	receipt, err := fake.ResendMedia(ctx, destination, "hidden body", 25, resolve)
+	receipt, err := fake.ResendMedia(ctx, destination, 25, prepare)
 	if err != nil || receipt.MsgID == msgID || receipt.MsgID <= 0 {
 		t.Fatalf("resend = %+v, %v, want a separate destination message", receipt, err)
 	}

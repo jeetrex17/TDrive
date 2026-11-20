@@ -70,24 +70,15 @@ func (job sourceCopyJob) bodyHeader(index int) string {
 }
 
 func (w *sourceCopyWorker) prepareBodies(ctx context.Context, job sourceCopyJob) (sourceCopyJob, bool, error) {
-	if len(job.Parts) == 0 {
-		planned, err := w.planBodies(ctx, job)
-		if err != nil {
-			return w.sourceUnavailable(ctx, job, false, err)
-		}
-		job = planned
-	} else {
+	if len(job.Parts) > 0 {
 		reconciled, err := w.reconcileBodies(ctx, job)
 		if err != nil {
 			return w.stop(ctx, job, sourceCopyPending, sourceCopyReceiptPending)
 		}
 		job = reconciled
 	}
-	for index := range job.Parts {
-		if job.Parts[index].BodyID > 0 {
-			continue
-		}
-		prepared, stopped, err := w.prepareBody(ctx, job, index)
+	if !job.hasBodies() {
+		prepared, stopped, err := w.sendMissingBodies(ctx, job)
 		if stopped || err != nil {
 			return prepared, stopped, err
 		}
@@ -99,15 +90,48 @@ func (w *sourceCopyWorker) prepareBodies(ctx context.Context, job sourceCopyJob)
 	return job, false, nil
 }
 
-func (w *sourceCopyWorker) planBodies(ctx context.Context, job sourceCopyJob) (sourceCopyJob, error) {
+func (w *sourceCopyWorker) sendMissingBodies(ctx context.Context, job sourceCopyJob) (sourceCopyJob, bool, error) {
+	var shared sharedCopySelection
+	if job.Source.PeerKind == SharedCopyPeerKind {
+		selection, err := parseSharedCopySelection(job.Source)
+		if err != nil {
+			return w.stopBodyPreparation(ctx, job, err)
+		}
+		if err := w.ensureSharedProjection(ctx, selection.driveID); err != nil {
+			return w.stopBodyPreparation(ctx, job, err)
+		}
+		shared = selection
+	}
+	if len(job.Parts) == 0 {
+		planned, err := w.planBodies(ctx, job, shared)
+		if err != nil {
+			return w.stopBodyPreparation(ctx, job, err)
+		}
+		job = planned
+	}
+	for index := range job.Parts {
+		if job.Parts[index].BodyID > 0 {
+			continue
+		}
+		prepared, stopped, err := w.sendBody(ctx, job, index, shared)
+		if stopped || err != nil {
+			return prepared, stopped, err
+		}
+		job = prepared
+	}
+	return job, false, nil
+}
+
+func (w sourceCopyWorker) planBodies(ctx context.Context, job sourceCopyJob, shared sharedCopySelection) (sourceCopyJob, error) {
 	if job.Source.PeerKind != SharedCopyPeerKind {
 		job.Parts = []sourceCopyPart{{SourceID: job.Source.MsgID}}
 		return job, nil
 	}
-	if err := w.ensureSharedProjection(ctx, job.Source.PeerID); err != nil {
-		return job, err
+	if shared.rawIdentity != "" {
+		job.Parts = []sourceCopyPart{{SourceID: shared.fileID}}
+		return job, nil
 	}
-	source, err := w.ResolveSharedCopy(ctx, job.Source)
+	source, err := w.resolveSharedCopy(ctx, shared)
 	if err != nil {
 		return job, err
 	}
@@ -139,53 +163,35 @@ func (w *sourceCopyWorker) ensureSharedProjection(ctx context.Context, channelID
 	return w.sharedSyncErr
 }
 
-func (w *sourceCopyWorker) resolveCopyPart(ctx context.Context, source channelsource.CopySource, messageID int64) (tgclient.DocumentRef, error) {
-	if source.PeerKind != SharedCopyPeerKind {
-		return w.deps.Resolve(ctx, source)
-	}
-	if err := w.ensureSharedProjection(ctx, source.PeerID); err != nil {
+func (w sourceCopyWorker) resolveBody(ctx context.Context, job sourceCopyJob, index int, shared sharedCopySelection) (tgclient.DocumentRef, error) {
+	if err := w.checkSourceCopyScope(ctx, job.ChannelID, w.accountID); err != nil {
 		return tgclient.DocumentRef{}, err
 	}
-	return w.ResolveSharedCopyPart(ctx, source, messageID)
-}
-
-func (w *sourceCopyWorker) prepareBody(ctx context.Context, job sourceCopyJob, index int) (sourceCopyJob, bool, error) {
-	hadAttempt := job.startedBody()
 	if _, err := w.validParent(job.ChannelID, job.Result.ParentID, "target"); err != nil {
-		return w.stopBodyPreparation(ctx, job, errSourceCopyDestinationUnavailable)
+		return tgclient.DocumentRef{}, errSourceCopyDestinationUnavailable
 	}
 	part := job.Parts[index]
-	ref, err := w.resolveCopyPart(ctx, job.Source, part.SourceID)
-	if err != nil || ref.DocumentID <= 0 || ref.Size <= 0 || ref.PhotoSizeType != "" {
-		return w.stopBodyPreparation(ctx, job, err)
+	var ref tgclient.DocumentRef
+	var err error
+	if job.Source.PeerKind == SharedCopyPeerKind {
+		ref, err = w.resolveSharedCopyPart(ctx, shared, part.SourceID)
+	} else {
+		ref, err = w.deps.Resolve(ctx, job.Source)
 	}
-	if part.DocumentID != 0 && !sameCopyDocument(part, ref) {
-		return w.sourceUnavailable(ctx, job, true, channelsource.ErrCopyChanged)
+	if err != nil {
+		return tgclient.DocumentRef{}, err
+	}
+	if part.DocumentID != 0 && (ref.DocumentID != part.DocumentID || ref.Size != part.Size || ref.PhotoSizeType != "") {
+		return tgclient.DocumentRef{}, channelsource.ErrCopyChanged
 	}
 	remainingBytes := LargeFileMaxBytes - (job.size() - part.Size)
-	if ref.Size > remainingBytes {
-		return w.stopBodyPreparation(ctx, job, channelsource.ErrCopyNotAllowed)
+	if ref.DocumentID <= 0 || ref.Size <= 0 || ref.Size > remainingBytes || ref.PhotoSizeType != "" {
+		return tgclient.DocumentRef{}, channelsource.ErrCopyNotAllowed
 	}
-	before := part
-	part.DocumentID, part.Size = ref.DocumentID, ref.Size
-	job = job.withPart(index, part)
-	if job.Result.Name == "" {
-		job.Result.Name = NormalizeSourceCopyName(ref.Name)
-	}
-	if err := w.persistSourceCopyJob(ctx, job); err != nil {
-		if ctx.Err() != nil {
-			return w.sourceUnavailable(ctx, job, hadAttempt, err)
-		}
-		return job, true, err
-	}
-	return w.sendBody(ctx, job, index, before)
+	return ref, nil
 }
 
-func sameCopyDocument(part sourceCopyPart, ref tgclient.DocumentRef) bool {
-	return ref.DocumentID == part.DocumentID && ref.Size == part.Size && ref.PhotoSizeType == ""
-}
-
-func (w *sourceCopyWorker) sendBody(ctx context.Context, job sourceCopyJob, index int, before sourceCopyPart) (sourceCopyJob, bool, error) {
+func (w sourceCopyWorker) sendBody(ctx context.Context, job sourceCopyJob, index int, shared sharedCopySelection) (sourceCopyJob, bool, error) {
 	step := "source-copy:body"
 	// Preserve the original send ID for single documents already journaled.
 	if index > 0 {
@@ -195,34 +201,56 @@ func (w *sourceCopyWorker) sendBody(ctx context.Context, job sourceCopyJob, inde
 	if err != nil {
 		return job, true, err
 	}
-	part := job.Parts[index]
-	result, err := w.sender.ResendMedia(ctx, w.peer, job.bodyHeader(index), randomID, func(ctx context.Context) (tgclient.DocumentRef, error) {
-		if err := w.checkSourceCopyScope(ctx, job.ChannelID, w.accountID); err != nil {
-			return tgclient.DocumentRef{}, err
+	prepared := job
+	var journalErr error
+	result, err := w.sender.ResendMedia(ctx, w.peer, randomID, func(ctx context.Context) (tgclient.ExistingMedia, error) {
+		ref, err := w.resolveBody(ctx, prepared, index, shared)
+		if err != nil {
+			return tgclient.ExistingMedia{}, err
 		}
-		if _, err := w.validParent(job.ChannelID, job.Result.ParentID, "target"); err != nil {
-			return tgclient.DocumentRef{}, errSourceCopyDestinationUnavailable
+		prepared, journalErr = w.pinCopyBody(ctx, prepared, index, ref)
+		if journalErr != nil {
+			return tgclient.ExistingMedia{}, journalErr
 		}
-		ref, err := w.resolveCopyPart(ctx, job.Source, part.SourceID)
-		if err == nil && !sameCopyDocument(part, ref) {
-			err = channelsource.ErrCopyChanged
-		}
-		return ref, err
+		return tgclient.ExistingMedia{Document: ref, Caption: prepared.bodyHeader(index)}, nil
 	})
 	if result.MsgID <= 0 {
 		if err == nil || errors.Is(err, tgclient.ErrSendOutcomeUnknown) {
-			return w.stop(ctx, job, sourceCopyPending, sourceCopyReceiptPending)
+			return w.stop(ctx, prepared, sourceCopyPending, sourceCopyReceiptPending)
+		}
+		if journalErr != nil && ctx.Err() == nil {
+			return prepared, true, journalErr
 		}
 		// An explicit rejection does not change the part's receipt state.
 		// Preserve any older uncertainty while clearing this unaccepted attempt.
-		return w.stopBodyPreparation(ctx, job.withPart(index, before), err)
+		job.Result.Name = prepared.Result.Name
+		return w.stopBodyPreparation(ctx, job, err)
 	}
+	part := prepared.Parts[index]
 	part.BodyID = result.MsgID
-	job = job.withPart(index, part)
+	job = prepared.withPart(index, part)
 	if err := w.persistSourceCopyJobAfterAttempt(ctx, job); err != nil {
 		return job, true, err
 	}
 	return job, false, nil
+}
+
+func (w sourceCopyWorker) pinCopyBody(ctx context.Context, job sourceCopyJob, index int, ref tgclient.DocumentRef) (sourceCopyJob, error) {
+	part := job.Parts[index]
+	if part.DocumentID != 0 && job.Result.Name != "" {
+		return job, nil
+	}
+	part.DocumentID, part.Size = ref.DocumentID, ref.Size
+	next := job.withPart(index, part)
+	if next.Result.Name == "" {
+		next.Result.Name = NormalizeSourceCopyName(ref.Name)
+	}
+	// Reconcile a lost send response against the exact document and caption
+	// recorded before the write.
+	if err := w.persistSourceCopyJob(ctx, next); err != nil {
+		return job, err
+	}
+	return next, nil
 }
 
 func (w sourceCopyWorker) stopBodyPreparation(ctx context.Context, job sourceCopyJob, err error) (sourceCopyJob, bool, error) {

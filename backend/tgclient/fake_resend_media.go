@@ -9,13 +9,17 @@ import (
 
 // ResendMedia mimics Telegram copying its stored bytes to another message
 // without requiring either the upload or download method on the fake.
-func (f *Fake) ResendMedia(ctx context.Context, peer InputPeer, caption string, randomID int64, resolve func(context.Context) (DocumentRef, error)) (SendFileResult, error) {
-	if peer.PeerKind() != PeerChannel || peer.ChannelID <= 0 || caption == "" || randomID <= 0 || resolve == nil {
+func (f *Fake) ResendMedia(ctx context.Context, peer InputPeer, randomID int64, prepare func(context.Context) (ExistingMedia, error)) (SendFileResult, error) {
+	if peer.PeerKind() != PeerChannel || peer.ChannelID <= 0 || randomID <= 0 || prepare == nil {
 		return SendFileResult{}, fmt.Errorf("tgclient.Fake: invalid existing media send")
 	}
-	ref, err := resolve(ctx)
+	media, err := prepare(ctx)
 	if err != nil {
 		return SendFileResult{}, err
+	}
+	ref, caption := media.Document, media.Caption
+	if caption == "" {
+		return SendFileResult{}, fmt.Errorf("tgclient.Fake: existing media send has no caption")
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()

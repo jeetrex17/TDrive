@@ -15,12 +15,17 @@ type MessageDocumentResolver interface {
 	ResolveMessageDocument(context.Context, InputPeer, int64) (HistoryMessage, DocumentRef, error)
 }
 
-// ExistingMediaSender publishes an existing Telegram document to a
-// destination channel without transferring the payload through this device.
-// The resolver authorizes the exact source after write admission on every
-// attempt. Retries preserve the operation's random ID.
+// ExistingMedia is the exact document and caption prepared for a send.
+type ExistingMedia struct {
+	Document DocumentRef
+	Caption  string
+}
+
+// ExistingMediaSender publishes an existing Telegram document to a destination
+// channel. After write admission on every attempt, prepare authorizes the
+// source and records any durable intent. Retries preserve the random ID.
 type ExistingMediaSender interface {
-	ResendMedia(ctx context.Context, destination InputPeer, caption string, randomID int64, resolve func(context.Context) (DocumentRef, error)) (SendFileResult, error)
+	ResendMedia(ctx context.Context, destination InputPeer, randomID int64, prepare func(context.Context) (ExistingMedia, error)) (SendFileResult, error)
 }
 
 func (g *Gotd) ResolveMessageDocument(ctx context.Context, peer InputPeer, msgID int64) (HistoryMessage, DocumentRef, error) {
@@ -47,8 +52,8 @@ func (g *Gotd) ResolveMessageDocument(ctx context.Context, peer InputPeer, msgID
 	return message, ref, err
 }
 
-func (g *Gotd) ResendMedia(ctx context.Context, destination InputPeer, caption string, randomID int64, resolve func(context.Context) (DocumentRef, error)) (SendFileResult, error) {
-	return g.resendMedia(ctx, destination, caption, randomID, resolve,
+func (g *Gotd) ResendMedia(ctx context.Context, destination InputPeer, randomID int64, prepare func(context.Context) (ExistingMedia, error)) (SendFileResult, error) {
+	return g.resendMedia(ctx, destination, randomID, prepare,
 		func(ctx context.Context, request *tg.MessagesSendMediaRequest) (tg.UpdatesClass, error) {
 			var updates tg.UpdatesClass
 			err := g.run(ctx, func(ctx context.Context, api *tg.Client) error {
@@ -61,11 +66,11 @@ func (g *Gotd) ResendMedia(ctx context.Context, destination InputPeer, caption s
 }
 
 func (g *Gotd) resendMedia(
-	ctx context.Context, destination InputPeer, caption string, randomID int64,
-	resolve func(context.Context) (DocumentRef, error),
+	ctx context.Context, destination InputPeer, randomID int64,
+	prepare func(context.Context) (ExistingMedia, error),
 	send func(context.Context, *tg.MessagesSendMediaRequest) (tg.UpdatesClass, error),
 ) (SendFileResult, error) {
-	if destination.PeerKind() != PeerChannel || destination.ChannelID <= 0 || caption == "" || randomID <= 0 || resolve == nil {
+	if destination.PeerKind() != PeerChannel || destination.ChannelID <= 0 || randomID <= 0 || prepare == nil {
 		return SendFileResult{}, fmt.Errorf("tgclient: invalid existing media send")
 	}
 	var result SendFileResult
@@ -73,15 +78,19 @@ func (g *Gotd) resendMedia(
 	refreshAvailable := true
 	attempt := func() error {
 		return g.writes.Do(ctx, writeClassMessage, func() error {
-			ref, err := resolve(ctx)
+			media, err := prepare(ctx)
 			if err != nil {
 				return err
 			}
+			ref := media.Document
 			if ref.DocumentID <= 0 || ref.Size <= 0 || len(ref.FileReference) == 0 || ref.PhotoSizeType != "" {
 				return ErrNotFile
 			}
+			if media.Caption == "" {
+				return errors.New("tgclient: existing media send has no caption")
+			}
 			request := &tg.MessagesSendMediaRequest{
-				Peer: toPeer(destination), Message: caption, RandomID: randomID, Silent: true,
+				Peer: toPeer(destination), Message: media.Caption, RandomID: randomID, Silent: true,
 				Media: &tg.InputMediaDocument{ID: &tg.InputDocument{
 					ID: ref.DocumentID, AccessHash: ref.AccessHash, FileReference: ref.FileReference,
 				}},

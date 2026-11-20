@@ -425,16 +425,21 @@ type sourceCopyTelegram struct {
 	unknownBodyWithoutPublish bool
 	loseBodyReceipt           bool
 	loseCommitReceipt         bool
+	beforeBody                func(tgclient.DocumentRef, string)
 	afterBody                 func()
 	beforeCommit              func(tgclient.InputPeer, int64)
 }
 
-func (f *sourceCopyTelegram) ResendMedia(ctx context.Context, peer tgclient.InputPeer, caption string, randomID int64, resolve func(context.Context) (tgclient.DocumentRef, error)) (tgclient.SendFileResult, error) {
-	f.bodyCalls++
-	f.bodyRandomIDs = append(f.bodyRandomIDs, randomID)
-	ref, err := resolve(ctx)
+func (f *sourceCopyTelegram) ResendMedia(ctx context.Context, peer tgclient.InputPeer, randomID int64, prepare func(context.Context) (tgclient.ExistingMedia, error)) (tgclient.SendFileResult, error) {
+	media, err := prepare(ctx)
 	if err != nil {
 		return tgclient.SendFileResult{}, err
+	}
+	f.bodyCalls++
+	f.bodyRandomIDs = append(f.bodyRandomIDs, randomID)
+	ref, caption := media.Document, media.Caption
+	if f.beforeBody != nil {
+		f.beforeBody(ref, caption)
 	}
 	if f.unknownBodyWithoutPublish {
 		return tgclient.SendFileResult{}, tgclient.ErrSendOutcomeUnknown
