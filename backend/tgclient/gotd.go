@@ -3,6 +3,7 @@ package tgclient
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -1144,6 +1145,10 @@ func channelMessages(ctx context.Context, api *tg.Client, peer InputPeer, msgIDs
 	messages, ok := result.(*tg.MessagesChannelMessages)
 	if !ok {
 		return nil, fmt.Errorf("tgclient: unexpected channels.getMessages response %T", result)
+	}
+	if messages.Inexact {
+		// Callers use omitted messages to confirm that an attachment is gone.
+		return nil, errors.New("tgclient: inexact channels.getMessages response")
 	}
 	found := make(map[int64]tg.MessageClass, len(msgIDs))
 	for _, msg := range messages.Messages {
