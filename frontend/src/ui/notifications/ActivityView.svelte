@@ -7,6 +7,7 @@
     import SearchIcon from '@lucide/svelte/icons/search';
     import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
     import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
+    import CopyIcon from '@lucide/svelte/icons/copy';
     import ClockIcon from '@lucide/svelte/icons/clock';
     import BellIcon from '@lucide/svelte/icons/bell';
     import ModalShell from '../modals/ModalShell.svelte';
@@ -18,6 +19,7 @@
     import { clearHistory } from '../../modules/notif-bell';
     import { resumableUploads } from '../../modules/resumable-upload-store';
     import { resumableDownloads } from '../../modules/resumable-download-store';
+    import { activeCopyChecks, clearSourceCopyHistory, sourceCopyActivity } from '../../modules/source-copies';
     import { sidebarState } from '../sidebar/sidebar-store';
     import { historyEvents, type NoticeEvent } from './notif-store';
     import { visibleHistory } from './visible-history';
@@ -42,7 +44,7 @@
     });
     const activeDriveId = $derived($sidebarState.activeChannelId);
     const entries = $derived(activityEntries($uploadActivities, $visibleHistory, $resumableUploads, $resumableDownloads,
-        { allEvents: $historyEvents, activeDriveId, now: $clock, uploadsPaused: $uploadsPaused }));
+        { allEvents: $historyEvents, activeDriveId, now: $clock, uploadsPaused: $uploadsPaused, sourceCopies: $sourceCopyActivity, checkingCopies: $activeCopyChecks }));
     const transfers = $derived(entries.filter((entry) => (filter === 'All' || entry.status === filter) && matchesActivity(entry, query)));
     const notices = $derived($historyEvents.filter((entry): entry is NoticeEvent => entry.kind === 'event' && `${entry.title} ${entry.body}`.toLocaleLowerCase().includes(query.trim().toLocaleLowerCase())));
     // The bell's rows open a batch by its aggregate transfer id.
@@ -71,7 +73,8 @@
         return parts.length ? parts.join(' · ') : 'Nothing in progress';
     });
     const canClear = $derived($historyEvents.some((entry) => entry.kind === 'event' || !['queued', 'active', 'paused', 'canceling'].includes(entry.status))
-        || $uploadActivities.some((entry) => entry.status !== 'queued' && entry.status !== 'active'));
+        || $uploadActivities.some((entry) => entry.status !== 'queued' && entry.status !== 'active')
+        || $sourceCopyActivity.some((entry) => entry.status !== 'pending'));
 
     $effect(() => {
         const request = $activityView;
@@ -99,6 +102,7 @@
     function clear(): void {
         clearHistory();
         clearUploadActivityHistory();
+        clearSourceCopyHistory();
         confirmingClear = false;
     }
     function tabKeydown(event: KeyboardEvent): void {
@@ -163,7 +167,7 @@
                                 {@const paused = entry.kind === 'batch' && isBatchPaused(entry.batch, activeDriveId)}
                                 <li><button type="button" class="activity-item" class:selected={selectedTransfer?.id === entry.id} aria-label={`View ${entry.name}`} aria-pressed={selectedTransfer?.id === entry.id} onclick={() => select(entry.id)}>
                                     <span class="item-glyph" data-tone={entry.status === 'Needs attention' ? 'danger' : paused ? 'warning' : entry.status === 'Queued' ? 'muted' : 'accent'}>
-                                        {#if entry.status === 'Queued'}<ClockIcon size={16} aria-hidden="true" />{:else if entry.kind === 'download' || (entry.kind === 'transfer' && entry.transfer.direction === 'down')}<ArrowDownIcon size={16} aria-hidden="true" />{:else}<ArrowUpIcon size={16} aria-hidden="true" />{/if}
+                                        {#if entry.status === 'Queued'}<ClockIcon size={16} aria-hidden="true" />{:else if entry.kind === 'download' || (entry.kind === 'transfer' && entry.transfer.direction === 'down')}<ArrowDownIcon size={16} aria-hidden="true" />{:else if entry.kind === 'sourceCopy'}<CopyIcon size={16} aria-hidden="true" />{:else}<ArrowUpIcon size={16} aria-hidden="true" />{/if}
                                     </span>
                                     <span class="item-copy">
                                         <span class="item-title">{entry.name}</span>
