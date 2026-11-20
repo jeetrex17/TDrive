@@ -412,6 +412,7 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 		mimeType           string
 		duration           float64
 		ttlSeconds         int
+		nativePhoto        bool
 		paid               bool
 	)
 	if media, ok := fullMsg.Media.(*tg.MessageMediaDocument); ok {
@@ -434,6 +435,7 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 			}
 		}
 	} else if media, ok := fullMsg.Media.(*tg.MessageMediaPhoto); ok {
+		nativePhoto = true
 		ttlSeconds, _ = media.GetTTLSeconds()
 		if ref, err := mediaRefFromTG(InputPeer{}, int64(fullMsg.ID), fullMsg); err == nil {
 			hasMedia = true
@@ -447,6 +449,7 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 		paid = true
 	}
 
+	autoDeleteSeconds, _ := fullMsg.GetTTLPeriod()
 	return HistoryMessage{
 		MsgID:              int64(fullMsg.ID),
 		TopicID:            forumMessageTopic(fullMsg),
@@ -463,6 +466,8 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 		Duration:           duration,
 		NoForwards:         fullMsg.Noforwards,
 		TTLSeconds:         ttlSeconds,
+		AutoDeleteSeconds:  autoDeleteSeconds,
+		NativePhoto:        nativePhoto,
 		Paid:               paid,
 		Restricted:         restrictedHere(fullMsg.RestrictionReason),
 	}, true

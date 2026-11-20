@@ -639,18 +639,23 @@ func (f *Fake) GetFileDocument(ctx context.Context, peer InputPeer, msgID int64)
 }
 
 func (f *Fake) ResolveDocument(ctx context.Context, peer InputPeer, msgID int64) (DocumentRef, error) {
+	_, ref, err := f.ResolveMessageDocument(ctx, peer, msgID)
+	return ref, err
+}
+
+func (f *Fake) ResolveMessageDocument(ctx context.Context, peer InputPeer, msgID int64) (HistoryMessage, DocumentRef, error) {
 	message, err := f.GetChannelMessage(ctx, peer, msgID)
 	if err != nil {
-		return DocumentRef{}, err
+		return HistoryMessage{}, DocumentRef{}, err
 	}
 	if !message.HasMedia || message.MediaSize <= 0 {
-		return DocumentRef{}, ErrNotFile
+		return message, DocumentRef{}, ErrNotFile
 	}
 	documentID := message.DocumentID
 	if documentID == 0 {
 		documentID = msgID
 	}
-	return DocumentRef{
+	return message, DocumentRef{
 		Peer:       peer,
 		MsgID:      msgID,
 		Size:       message.MediaSize,
