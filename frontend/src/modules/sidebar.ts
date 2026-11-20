@@ -96,6 +96,7 @@ export async function handlePendingClick(inviteHash: string): Promise<void> {
                 level: 'success',
                 title: 'Request approved',
                 body: 'Joined the drive.',
+                history: true,
             });
         } else {
             const lastError = result?.pending?.lastError.trim() ?? '';

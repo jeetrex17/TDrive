@@ -288,3 +288,23 @@ describe('notification expiry scheduling', () => {
         expect(cleared).toHaveBeenCalledOnce();
     });
 });
+
+describe('notification history', () => {
+    it('keeps problems and opted-in results, not confirmations of the user’s own action', async () => {
+        const { historyEvents } = await import('../ui/notifications/notif-store');
+        historyEvents.set([]);
+
+        notify({ level: 'success', title: 'Folder created' });
+        notify({ level: 'info', title: 'Link copied' });
+        notify({ level: 'error', title: 'Could not create folder' });
+        notify({ level: 'warning', title: 'Copy did not finish' });
+        notify({ level: 'error', title: 'Upload failed', history: false });
+        notify({ level: 'info', title: 'TDrive 9.9.9 is available', history: true });
+
+        expect(get(historyEvents).map((event) => ('title' in event ? event.title : '')).sort()).toEqual([
+            'Copy did not finish',
+            'Could not create folder',
+            'TDrive 9.9.9 is available',
+        ]);
+    });
+});
