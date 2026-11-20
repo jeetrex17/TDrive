@@ -200,6 +200,7 @@ function openSelectionOutsidePreview(item: PreviewCommandItem | null): boolean {
         .find((candidate) => candidate.kind === 'file' && candidate.id === String(item.id));
     const target = {
         id: Number(item.id),
+        channelId: item.channelId,
         name: item.name,
         size: Number(item.size ?? 0),
         encrypted: row?.kind === 'file' ? row.encrypted : undefined,

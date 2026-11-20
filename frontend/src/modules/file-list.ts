@@ -54,6 +54,8 @@ type FileRowInput = {
     uploaderID?: number;
     uploaderId?: number;
     encrypted?: boolean;
+    revision?: number;
+    copyIdentity?: string;
     canDelete?: boolean;
     canRename?: boolean;
     source?: string;
@@ -377,6 +379,8 @@ export function buildFileRow(file: FileRowInput, parentId: string, overrides: Pa
         uploaderID,
         uploadTime,
         encrypted,
+        ...(file.revision !== undefined ? { revision: file.revision } : {}),
+        ...(file.copyIdentity ? { copyIdentity: file.copyIdentity } : {}),
         canDelete,
         canRename,
         thumbnail: overrides.thumbnail,
@@ -723,7 +727,9 @@ function rowsForLoadedData(data: LoadedFileData, view: FileViewIdentity): FileLi
         date: file.uploadTime,
         uploaderID: file.uploaderId,
         encrypted: file.encrypted,
+        revision: file.revision,
     }, view.folderId, {
+        channelId: view.channelId,
         // Only the current folder's projected media opt in. This avoids a
         // gallery-wide lookup and keeps raw Telegram/search rows icon-only.
         thumbnail: fileThumbnailIdentity(file, view.channelId, state.myUserID),
@@ -737,7 +743,8 @@ function rowsForLoadedData(data: LoadedFileData, view: FileViewIdentity): FileLi
             size: file.size,
             date: file.date,
             uploaderID: file.uploaderId,
-        }, view.folderId));
+            copyIdentity: file.copyIdentity,
+        }, view.folderId, { channelId: view.channelId }));
     const fileRows = [...filesystemRows, ...telegramRows]
         .sort((left, right) => right.uploadTime - left.uploadTime);
 

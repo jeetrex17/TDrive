@@ -65,7 +65,11 @@ func (e *Engine) applyDifference(channelID int64, diff tgclient.ChannelDifferenc
 	if err != nil {
 		return false, fmt.Errorf("sync: begin projection: %w", err)
 	}
-	overlap := false
+	overlap, err := replayInNewlyCoveredRangeTx(tx, channelID, *watermark, pageWatermark)
+	if err != nil {
+		_ = tx.Rollback()
+		return false, err
+	}
 	for _, p := range parsed {
 		alreadySeen, err := projection.ProjectFromOpTx(tx, channelID, p.MsgID, p.Op, p.FromID, p.RawHeader)
 		if err != nil {

@@ -352,6 +352,7 @@ export function toRootFile(f: Partial<TDriveFile>): RootFile {
         accessHash: Number(f.access_hash ?? 0),
         date: Number(f.date ?? 0),
         uploaderId: Number(f.uploader_id ?? 0),
+        ...('copy_identity' in f && typeof f.copy_identity === 'string' ? { copyIdentity: f.copy_identity } : {}),
     };
 }
 
@@ -367,6 +368,7 @@ export function toSearchHit(h: SearchResult): SearchHit {
         uploaderId: Number(h.uploader_id ?? 0),
         encrypted: Boolean(h.encrypted),
         plaintextSize: Number(h.plaintext_size ?? 0),
+        ...(typeof h.revision === 'number' ? { revision: h.revision } : {}),
         path: String(h.path ?? ""),
         source: "fs",
     };

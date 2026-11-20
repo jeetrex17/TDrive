@@ -539,13 +539,6 @@ html.mobile .file-row.is-card-bottom {
     border-bottom-left-radius: var(--radius-xl);
     border-bottom-right-radius: var(--radius-xl);
 }
-/* A phone has no persistent scrollbar. The classic one steals 8px from the
-   right, which pushes the card off-centre against a 12px margin on the left. */
-html.mobile .file-list-box {
-    scrollbar-width: none;
-    -ms-overflow-style: none;
-}
-html.mobile .file-list-box::-webkit-scrollbar { width: 0; height: 0; }
 html.mobile .file-row + .file-row::before {
     content: "";
     position: absolute;

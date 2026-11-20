@@ -8,11 +8,13 @@
     import DownloadIcon from '@lucide/svelte/icons/download';
     import PencilIcon from '@lucide/svelte/icons/pencil';
     import FolderInputIcon from '@lucide/svelte/icons/folder-input';
+    import CopyIcon from '@lucide/svelte/icons/copy';
     import Trash2Icon from '@lucide/svelte/icons/trash-2';
     import UploadIcon from '@lucide/svelte/icons/upload';
     import FolderUpIcon from '@lucide/svelte/icons/folder-up';
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
     import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
+    import SquareCheckIcon from '@lucide/svelte/icons/square-check';
     import XIcon from '@lucide/svelte/icons/x';
     import FileTextIcon from '@lucide/svelte/icons/file-text';
     import DatabaseIcon from '@lucide/svelte/icons/database';
@@ -38,6 +40,7 @@
         download: DownloadIcon,
         rename: PencilIcon,
         move: FolderInputIcon,
+        copy: CopyIcon,
         delete: Trash2Icon,
         upload: UploadIcon,
         'folder-up': FolderUpIcon,
@@ -45,6 +48,7 @@
         refresh: RefreshCwIcon,
         external: ExternalLinkIcon,
         clear: XIcon,
+        select: SquareCheckIcon,
     };
 
     const DETAIL_ICONS: Record<ContextMenuDetailIcon, typeof FileIcon> = {

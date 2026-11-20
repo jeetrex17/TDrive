@@ -73,6 +73,17 @@ func legacyPortableName(name, kind, objectID string) string {
 	return buildLegacyPortableName(name, kind == "file")
 }
 
+// PortableFileName normalizes an external filename and optionally inserts a
+// numbered collision suffix before its extension.
+func PortableFileName(name string, ordinal int) string {
+	name = buildLegacyPortableName(name, true)
+	if ordinal <= 1 {
+		return name
+	}
+	stem, extension := splitLegacyFileExtension(name)
+	return truncatePortableName(stem, fmt.Sprintf(" (%d)%s", ordinal, extension))
+}
+
 func buildLegacyPortableName(name string, preserveFileExtension bool) string {
 	name = norm.NFC.String(strings.ToValidUTF8(name, "_"))
 	var b strings.Builder

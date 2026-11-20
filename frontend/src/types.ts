@@ -39,6 +39,7 @@ export interface RootFile {
     accessHash: number;
     date: number;
     uploaderId?: number;
+    copyIdentity?: string;
 }
 
 export type SearchHitType = "file" | "folder";
@@ -53,6 +54,8 @@ export interface SearchHit {
     uploaderId: number;
     encrypted: boolean;
     plaintextSize: number;
+    revision?: number;
+    copyIdentity?: string;
     path: string;
     source: "fs" | "tg";
 }

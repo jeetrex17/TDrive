@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Reproduce restored cgo archives retaining an obsolete pkg-config library path.
+# Check that macOS runtime preparation makes the current cgo libraries visible.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -17,10 +17,10 @@ export CGO_ENABLED=1
 export RUNNER_TEMP="$TMP_ROOT/runner"
 export GITHUB_ENV="$TMP_ROOT/github-env"
 export PKG_CONFIG_LIBDIR="$TMP_ROOT/pkgconfig"
-export TDRIVE_TEST_LIBARCHIVE_PREFIX="$TMP_ROOT/libarchive"
 unset PKG_CONFIG_PATH TDRIVE_MACOS_MPV_RUNTIME_URL TDRIVE_MACOS_MPV_RUNTIME_SHA256
 mkdir -p "$TMP_ROOT/project/native" "$TMP_ROOT/pkgconfig" "$TMP_ROOT/bin" \
-  "$TMP_ROOT/repo/scripts" "$TMP_ROOT/repo/build/darwin"
+  "$TMP_ROOT/repo/scripts" "$TMP_ROOT/repo/build/darwin" \
+  "$TMP_ROOT/libarchive/lib/pkgconfig" "$TMP_ROOT/extra-pkgconfig"
 cp "$SCRIPT_DIR/prepare-mpv-runtime.sh" "$TMP_ROOT/repo/scripts/"
 cp "$SCRIPT_DIR/../build/darwin/Info.plist" "$TMP_ROOT/repo/build/darwin/"
 # Acquisition is independent of cache invalidation and has its own archive tests.
@@ -74,21 +74,20 @@ EOF
 
 cat > "$TMP_ROOT/bin/brew" <<'EOF'
 #!/bin/sh
-if [ "$*" = "--prefix libarchive" ]; then
-  printf '%s\n' "$TDRIVE_TEST_LIBARCHIVE_PREFIX"
+if [ "$1" = --prefix ] && [ "$2" = libarchive ]; then
+  cd "$(dirname "$0")/../libarchive" && pwd -P
 else
   echo 'mpv fixture'
 fi
 EOF
-mkdir -p "$TDRIVE_TEST_LIBARCHIVE_PREFIX/lib/pkgconfig"
-cat > "$TDRIVE_TEST_LIBARCHIVE_PREFIX/lib/pkgconfig/libarchive.pc" <<'EOF'
+cat > "$TMP_ROOT/libarchive/lib/pkgconfig/libarchive.pc" <<'EOF'
 Name: libarchive
-Description: keg-only libarchive fixture
+Description: keg-only Homebrew dependency fixture
 Version: 3.8.11
 EOF
 cat > "$TMP_ROOT/bin/mpv" <<'EOF'
 #!/bin/sh
-exit 0
+printf 'mpv v0.42.0\n'
 EOF
 cat > "$TMP_ROOT/bin/lipo" <<'EOF'
 #!/bin/sh
@@ -103,7 +102,7 @@ chmod +x "$TMP_ROOT/bin/"*
 cd "$TMP_ROOT/project"
 for runtime_mode in homebrew pinned; do
   export PKG_CONFIG_LIBDIR="$TMP_ROOT/pkgconfig"
-  unset MACOSX_DEPLOYMENT_TARGET PKG_CONFIG_PATH
+  unset MACOSX_DEPLOYMENT_TARGET PKG_CONFIG_PATH TDRIVE_MPV_TEST_VERSION
   if [ "$runtime_mode" = pinned ]; then
     export TDRIVE_MACOS_MPV_RUNTIME_URL=https://example.invalid/mpv.tar.gz
     export TDRIVE_MACOS_MPV_RUNTIME_SHA256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef
@@ -129,13 +128,12 @@ for runtime_mode in homebrew pinned; do
   fi
 
   if [ "$runtime_mode" = homebrew ]; then
-    printf 'Requires.private: libarchive\n' >> "$PKG_CONFIG_LIBDIR/mpv.pc"
-    if pkg-config --cflags --libs -- mpv >"$TMP_ROOT/pkg-config.log" 2>&1; then
-      echo "fixture did not reproduce the missing keg-only libarchive" >&2
-      exit 1
-    fi
-    if ! grep -q "libarchive.*not found" "$TMP_ROOT/pkg-config.log"; then
+    printf 'Requires.private: libarchive >= 3.4.0\n' >> "$PKG_CONFIG_LIBDIR/mpv.pc"
+    export PKG_CONFIG_PATH="$TMP_ROOT/extra-pkgconfig"
+    if pkg-config --cflags --libs mpv > "$TMP_ROOT/pkg-config.log" 2>&1 ||
+      ! grep -q libarchive "$TMP_ROOT/pkg-config.log"; then
       cat "$TMP_ROOT/pkg-config.log" >&2
+      echo 'fixture did not reproduce the hidden libarchive dependency' >&2
       exit 1
     fi
   fi
@@ -144,14 +142,25 @@ for runtime_mode in homebrew pinned; do
   set -a
   source "$GITHUB_ENV"
   set +a
-  if [ "$runtime_mode" = homebrew ]; then
-    pkg-config --cflags --libs -- mpv >/dev/null
-  fi
   if ! go build -o "$TMP_ROOT/fresh-app" . >"$TMP_ROOT/fresh.log" 2>&1; then
     cat "$TMP_ROOT/fresh.log" >&2
-    echo "runtime preparation retained stale cgo linker flags" >&2
+    echo "runtime preparation did not provide usable cgo linker flags" >&2
     exit 1
   fi
   "$TMP_ROOT/fresh-app"
+  if [ "$runtime_mode" = homebrew ]; then
+    expected_path="$(cd "$TMP_ROOT/libarchive/lib/pkgconfig" && pwd -P):$TMP_ROOT/extra-pkgconfig"
+    if [ "$PKG_CONFIG_PATH" != "$expected_path" ]; then
+      printf 'pkg-config path is %s, expected %s\n' "$PKG_CONFIG_PATH" "$expected_path" >&2
+      exit 1
+    fi
+    if [ "${TDRIVE_MPV_TEST_VERSION:-}" != 0.42.0 ]; then
+      echo 'Homebrew preparation did not record the fixture version' >&2
+      exit 1
+    fi
+  elif [ -n "${TDRIVE_MPV_TEST_VERSION:-}" ]; then
+    echo 'pinned runtime preparation recorded a fixture version' >&2
+    exit 1
+  fi
   echo "PASS: $runtime_mode preparation invalidates stale cgo library paths"
 done

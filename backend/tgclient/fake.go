@@ -639,18 +639,23 @@ func (f *Fake) GetFileDocument(ctx context.Context, peer InputPeer, msgID int64)
 }
 
 func (f *Fake) ResolveDocument(ctx context.Context, peer InputPeer, msgID int64) (DocumentRef, error) {
+	_, ref, err := f.ResolveMessageDocument(ctx, peer, msgID)
+	return ref, err
+}
+
+func (f *Fake) ResolveMessageDocument(ctx context.Context, peer InputPeer, msgID int64) (HistoryMessage, DocumentRef, error) {
 	message, err := f.GetChannelMessage(ctx, peer, msgID)
 	if err != nil {
-		return DocumentRef{}, err
+		return HistoryMessage{}, DocumentRef{}, err
 	}
 	if !message.HasMedia || message.MediaSize <= 0 {
-		return DocumentRef{}, ErrNotFile
+		return message, DocumentRef{}, ErrNotFile
 	}
 	documentID := message.DocumentID
 	if documentID == 0 {
 		documentID = msgID
 	}
-	return DocumentRef{
+	return message, DocumentRef{
 		Peer:       peer,
 		MsgID:      msgID,
 		Size:       message.MediaSize,
@@ -957,6 +962,31 @@ func (f *Fake) GetMediaSourcePeer(_ context.Context, peer InputPeer) (SourcePeer
 	}
 	for _, source := range f.publicChannels {
 		if source.ID == peer.ChannelID && source.Kind == peer.PeerKind() && source.AccessHash == peer.AccessHash {
+			return source, nil
+		}
+	}
+	return SourcePeer{}, ErrChannelUnavailable
+}
+
+func (f *Fake) GetJoinedDrivePeer(ctx context.Context, peer InputPeer) (SourcePeer, error) {
+	if err := ctx.Err(); err != nil {
+		return SourcePeer{}, err
+	}
+	if peer.ChannelID <= 0 || (peer.PeerKind() != PeerChannel && peer.PeerKind() != PeerSupergroup) {
+		return SourcePeer{}, ErrChannelUnavailable
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.channelLookups++
+	for _, source := range f.sourcePeers {
+		if source.ID == peer.ChannelID && (source.Kind == PeerChannel || source.Kind == PeerSupergroup) &&
+			source.AccessHash == peer.AccessHash {
+			return source, nil
+		}
+	}
+	for _, source := range f.joinedBroadcast {
+		if source.ID == peer.ChannelID && source.AccessHash == peer.AccessHash {
+			source.Kind = PeerChannel
 			return source, nil
 		}
 	}

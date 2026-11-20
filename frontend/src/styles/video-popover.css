@@ -130,29 +130,6 @@
     overflow-x: hidden;
     overflow-y: auto;
     overscroll-behavior: contain;
-    scrollbar-width: thin;
-    scrollbar-color: rgba(255, 255, 255, 0.22) transparent;
-}
-
-.video-popover-body::-webkit-scrollbar {
-    width: 8px;
-}
-
-.video-popover-body::-webkit-scrollbar-track {
-    background: transparent;
-}
-
-.video-popover-body::-webkit-scrollbar-thumb {
-    min-height: 28px;
-    border: 2px solid transparent;
-    border-radius: 999px;
-    background: rgba(255, 255, 255, 0.22);
-    background-clip: content-box;
-}
-
-.video-popover-body::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.34);
-    background-clip: content-box;
 }
 
 .video-popover-footer {

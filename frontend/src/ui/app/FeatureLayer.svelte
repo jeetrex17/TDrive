@@ -2,6 +2,7 @@
     import { listChannelSourceCandidates, resolvePublicChannelSource } from '../../api';
     import { activateLiveSyncEvents } from '../../modules/channels';
     import { activateChannelSources, addChannel, channelPhoto, closeChannelPicker, showChannel } from '../../modules/channel-sources';
+    import { activateSourceCopies } from '../../modules/source-copies';
     import { activateContextMenu } from '../../modules/context-menu';
     import { activateDropOverlay } from '../../modules/drop-overlay';
     import { renderEncryptionSettingsEntry } from '../../modules/encryption';
@@ -79,6 +80,7 @@
     import LeaveDriveModal from '../modals/LeaveDriveModal.svelte';
     import LogoutModal from '../modals/LogoutModal.svelte';
     import MoveModal from '../modals/MoveModal.svelte';
+    import SourceCopyModal from '../modals/SourceCopyModal.svelte';
     import NewDriveModal from '../modals/NewDriveModal.svelte';
     import RenameModal from '../modals/RenameModal.svelte';
     import ShareDriveModal from '../modals/ShareDriveModal.svelte';
@@ -88,6 +90,8 @@
     import MountSelectionModal from '../mount/MountSelectionModal.svelte';
     import ChannelPickerModal from '../channels/ChannelPickerModal.svelte';
     import { channelPickerOpen, channelSources } from '../channels/channel-store';
+    import SourceOrganizationModal from '../channels/SourceOrganizationModal.svelte';
+    import { resetSourceOrganization } from '../channels/source-organization-state';
     import ToastStack from '../notifications/ToastStack.svelte';
     import ActivityView from '../notifications/ActivityView.svelte';
     import PreviewModal from '../preview/PreviewModal.svelte';
@@ -98,6 +102,9 @@
     import FeaturePortal from './FeaturePortal.svelte';
 
     $effect(() => activateNotificationEffects());
+    $effect(() => {
+        if ($appView.kind === 'dashboard') return resetSourceOrganization;
+    });
 
     $effect(() => {
         if ($appView.kind !== 'dashboard') return;
@@ -119,6 +126,7 @@
             activateLiveSyncEvents(),
             activateUpdates(),
             activateChannelSources(),
+            activateSourceCopies(),
         ];
         let previewActivationCancelled = false;
         let deactivatePreview = () => {};
@@ -190,6 +198,9 @@
             onConfirm={confirmMove}
         />
     </div>
+    <div id="source-copy-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
+        <SourceCopyModal />
+    </div>
     <div id="new-drive-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <NewDriveModal onSubmit={submitNewDrive} />
     </div>
@@ -226,6 +237,9 @@
     </div>
     <div id="logout-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <LogoutModal onConfirm={confirmLogout} />
+    </div>
+    <div id="source-organization-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
+        <SourceOrganizationModal />
     </div>
     <div id="channel-picker-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <ChannelPickerModal

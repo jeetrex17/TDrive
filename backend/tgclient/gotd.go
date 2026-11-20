@@ -3,6 +3,7 @@ package tgclient
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -412,6 +413,7 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 		mimeType           string
 		duration           float64
 		ttlSeconds         int
+		nativePhoto        bool
 		paid               bool
 	)
 	if media, ok := fullMsg.Media.(*tg.MessageMediaDocument); ok {
@@ -434,6 +436,7 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 			}
 		}
 	} else if media, ok := fullMsg.Media.(*tg.MessageMediaPhoto); ok {
+		nativePhoto = true
 		ttlSeconds, _ = media.GetTTLSeconds()
 		if ref, err := mediaRefFromTG(InputPeer{}, int64(fullMsg.ID), fullMsg); err == nil {
 			hasMedia = true
@@ -447,6 +450,7 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 		paid = true
 	}
 
+	autoDeleteSeconds, _ := fullMsg.GetTTLPeriod()
 	return HistoryMessage{
 		MsgID:              int64(fullMsg.ID),
 		TopicID:            forumMessageTopic(fullMsg),
@@ -463,6 +467,8 @@ func historyMessageFromTG(msg tg.MessageClass) (HistoryMessage, bool) {
 		Duration:           duration,
 		NoForwards:         fullMsg.Noforwards,
 		TTLSeconds:         ttlSeconds,
+		AutoDeleteSeconds:  autoDeleteSeconds,
+		NativePhoto:        nativePhoto,
 		Paid:               paid,
 		Restricted:         restrictedHere(fullMsg.RestrictionReason),
 	}, true
@@ -1136,11 +1142,17 @@ func channelMessages(ctx context.Context, api *tg.Client, peer InputPeer, msgIDs
 	if err != nil {
 		return nil, err
 	}
+	messages, ok := result.(*tg.MessagesChannelMessages)
+	if !ok {
+		return nil, fmt.Errorf("tgclient: unexpected channels.getMessages response %T", result)
+	}
+	if messages.Inexact {
+		// Callers use omitted messages to confirm that an attachment is gone.
+		return nil, errors.New("tgclient: inexact channels.getMessages response")
+	}
 	found := make(map[int64]tg.MessageClass, len(msgIDs))
-	if messages, ok := result.(*tg.MessagesChannelMessages); ok {
-		for _, msg := range messages.Messages {
-			found[int64(msg.GetID())] = msg
-		}
+	for _, msg := range messages.Messages {
+		found[int64(msg.GetID())] = msg
 	}
 	return found, nil
 }

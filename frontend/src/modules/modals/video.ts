@@ -16,6 +16,7 @@ import {
     setImmersive,
     setScreenProtect,
     updateMediaPlayback,
+    type MediaOpenInfo,
     type MediaOpenResult,
     type NativeMediaOpenResult,
     type NativeMediaRect,
@@ -25,7 +26,7 @@ import { formatBytes } from "../../utils";
 import { isIOSPlayableVideo, isRemuxableVideo, isWebviewDirectVideo, videoFormatLabel } from "../media-types";
 import { appActions } from "../app-actions";
 import { accessEncryptedResource } from "../encryption";
-import { prefersNativePlayer, rememberNativePlayer } from "../video/native-memory";
+import { forgetNativePlayer, prefersNativePlayer, rememberNativePlayer, type NativeMemoryTarget } from "../video/native-memory";
 import {
     SerialPlaybackTransitions,
     capturePlaybackIntent,
@@ -87,12 +88,18 @@ const LOADING_DEBOUNCE_MS = 250;
 const PLAYBACK_HINT_INTERVAL_MS = 1000;
 const SWIPE_SEEK_MIN_PX = 40;
 
+interface VideoOpenScope {
+    readonly accountId: number;
+    readonly channelId: number;
+}
+
 interface VideoOpenAttempt {
     generation: number;
-    accountId: number;
+    scope: VideoOpenScope;
     target: VideoOpenTarget;
     htmlFailureHandled: boolean;
     nativeFallbackRequested: boolean;
+    retryInWebview: boolean;
     pausedByUser: boolean;
     playbackIntent: PlaybackIntent | null;
 }
@@ -104,7 +111,7 @@ let settingsSection: SettingsSection | null = null;
 let settingsReturnFocus: HTMLElement | null = null;
 let playlistOpen = false;
 let playlistReturnFocus: HTMLElement | null = null;
-let activePlaylist: ActiveVideoPlaylist | null = null;
+let activePlaylist: (ActiveVideoPlaylist & { scope: VideoOpenScope }) | null = null;
 let audioPicker: TrackPicker | null = null;
 let subtitlePicker: TrackPicker | null = null;
 
@@ -301,7 +308,7 @@ function retryVideoOpen() {
     }
     const attempt = activeOpenAttempt;
     if (!attempt) return;
-    void openVideoTarget(attempt.target, null);
+    void openVideoTarget(attempt.target, null, attempt.scope, attempt.retryInWebview);
 }
 
 function handleHtmlPlaybackError(detail: string) {
@@ -587,25 +594,61 @@ function closeOpenMenu() {
 // Telegram. A single slot is enough: only the immediate next item is useful.
 const mediaPrefetcher = new MediaPrefetcher<MediaOpenResult>({
     open: (id) => {
-        // Only ever the next queued item. Should the queue change underneath,
-        // open nothing rather than guess what the id meant.
-        const item = activePlaylist?.items.find((entry) => entry.id === id);
-        return item ? openTarget(item) : Promise.reject(new Error("video is no longer queued"));
+        const playlist = activePlaylist;
+        const item = nextPlaylistTarget();
+        return playlist && item?.id === id
+            ? openTarget(item, playlist.scope)
+            : Promise.reject(new Error("video is no longer queued"));
     },
     close: (token) => safelyCloseMedia(token),
     warm: (session) => warmMediaEdges(session.url, session.info.plaintextSize || session.info.storedSize || 0),
 });
 
-// A target with its own capability opens through it; a drive file opens by id.
-// A channel post's id is only a message id, so it must never reach openMedia.
-function openTarget(target: VideoOpenTarget): Promise<MediaOpenResult> {
-    return target.open ? target.open() : openMedia(target.id);
+const VIDEO_SCOPE_CHANGED = new Error("The original video is unavailable. Open it again from its original location.");
+
+function showVideoScopeError() {
+    setError(VIDEO_SCOPE_CHANGED.message, { label: "Back to files", run: () => void closeVideoModal() });
+}
+
+function videoScopeMatches(target: VideoOpenTarget, scope: VideoOpenScope, info?: MediaOpenInfo): boolean {
+    if (appState.myUserID !== scope.accountId || (info && info.fileId !== target.id)) return false;
+    // Source capabilities already carry their own account and peer.
+    if (target.open) return true;
+    return !appState.channelSwitchInProgress
+        && (appState.activeChannel?.id ?? 0) === scope.channelId
+        && (!info || !scope.channelId || info.channelId === scope.channelId);
+}
+
+function requireVideoScope(target: VideoOpenTarget, scope: VideoOpenScope, info?: MediaOpenInfo) {
+    if (!videoScopeMatches(target, scope, info)) throw VIDEO_SCOPE_CHANGED;
+}
+
+async function openTarget(target: VideoOpenTarget, scope: VideoOpenScope): Promise<MediaOpenResult> {
+    requireVideoScope(target, scope);
+    const opened = await (target.open ? target.open() : openMedia(target.id));
+    if (!videoScopeMatches(target, scope, opened.info)) {
+        await safelyCloseMedia(opened.token);
+        throw VIDEO_SCOPE_CHANGED;
+    }
+    return opened;
+}
+
+function nativeMemoryTarget(attempt: VideoOpenAttempt): NativeMemoryTarget | null {
+    const { target, scope } = attempt;
+    if (target.open && !target.resumeKey) return null;
+    return { ...scope, id: target.id, name: target.name, size: target.size, sourceIdentity: target.resumeKey };
+}
+
+function rememberFailedNativeRoute(attempt: VideoOpenAttempt) {
+    if (!isWebviewDirectVideo(attempt.target.name)) return;
+    // Retry must work when storage is full or unavailable.
+    attempt.retryInWebview = true;
+    forgetNativePlayer(nativeMemoryTarget(attempt));
 }
 
 function nextPlaylistTarget(): VideoOpenTarget | null {
     if (!activePlaylist?.autoNext) return null;
-    const next = activePlaylist.items[activePlaylist.currentIndex + 1];
-    return next ? normalizeVideoTarget(next) : null;
+    return activePlaylist.items[activePlaylist.currentIndex + 1] ?? null;
 }
 
 function maybePrefetchNext(state: PlayerState) {
@@ -835,10 +878,10 @@ function syncPlaylistSnapshot() {
     syncPlaylistButton();
 }
 
-function installVideoPlaylist(target: VideoOpenTarget, launch?: VideoPlaylistLaunch) {
+function installVideoPlaylist(target: VideoOpenTarget, scope: VideoOpenScope, launch?: VideoPlaylistLaunch) {
     hideVideoPlaylist();
     void mediaPrefetcher.discard();
-    activePlaylist = createActivePlaylist(target, loadAutoNextPreference(), launch);
+    activePlaylist = { ...createActivePlaylist(target, loadAutoNextPreference(), launch), scope };
     syncPlaylistSnapshot();
 }
 
@@ -858,6 +901,7 @@ async function switchVideoPlaylistItem(index: number, closePanel: boolean): Prom
     }
     const target = playlist.items[index];
     if (index !== playlist.currentIndex + 1) await mediaPrefetcher.discard();
+    if (activePlaylist !== playlist || !isOpen()) return;
     const intent = nextPlaylistPlaybackIntent();
     playlist.currentIndex = index;
     setVideoPlaylistCurrentIndex(index);
@@ -865,7 +909,7 @@ async function switchVideoPlaylistItem(index: number, closePanel: boolean): Prom
     syncPlaylistButton();
     if (closePanel) hideVideoPlaylist(true);
     try {
-        await openVideoTarget(target, intent);
+        await openVideoTarget(target, intent, playlist.scope);
     } finally {
         if (activePlaylist === playlist && playlist.currentIndex === index) {
             setVideoPlaylistSwitching(null);
@@ -910,6 +954,7 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
     if (!video) return;
     let opened: MediaOpenResult | null = null;
     let adapter: HtmlVideoAdapter | null = null;
+    let hlsSource: HlsSource | null = null;
     try {
         // A prefetched session was opened while the file was already unlocked,
         // so only a cold open can reach the vault prompt. A null here is the
@@ -917,7 +962,7 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
         const prefetched = mediaPrefetcher.take(attempt.target.id);
         opened = prefetched ?? await accessEncryptedResource(
             Boolean(attempt.target.encrypted),
-            () => openTarget(attempt.target),
+            () => openTarget(attempt.target, attempt.scope),
         );
         if (!opened) {
             // Closing queues teardown after this ownership transition finishes.
@@ -928,6 +973,8 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
             await safelyCloseMedia(opened.token);
             return;
         }
+        const { target, scope } = attempt;
+        requireVideoScope(target, scope, opened.info);
         if (!opened.url || !opened.token) {
             await safelyCloseMedia(opened.token);
             opened = null;
@@ -939,12 +986,12 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
         // JavaScript player pointed at the same remuxed playlist iOS uses. A
         // file with one soundtrack keeps the native path, which is faster and
         // has nothing to gain from the detour.
-        let hlsSource: HlsSource | null = null;
         if (opened.hlsUrl && isAndroidPlatform() && await prefersJsPlayer(opened.hlsUrl)) {
             if (!isCurrent() || !isOpen()) {
                 await safelyCloseMedia(opened.token);
                 return;
             }
+            requireVideoScope(target, scope, opened.info);
             hlsSource = await attachHls(video, opened.hlsUrl, () => adapter?.refresh());
         }
         // The shell can close while HLS attaches to its media element.
@@ -954,6 +1001,7 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
             return;
         }
 
+        requireVideoScope(target, scope, opened.info);
         const displayName = opened.info.name || opened.name || attempt.target.name || "Video";
         const displaySize = opened.info.plaintextSize || opened.info.storedSize || attempt.target.size || 0;
         updateMediaText(displayName, displaySize, attempt.target.title);
@@ -972,7 +1020,7 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
         activeAdapter = adapter;
         adapter.load();
         activeResume = new PlaybackResume(
-            attempt.target.open && !attempt.target.resumeKey ? null : playbackResumeKey(attempt.accountId, opened.info, attempt.target.resumeKey),
+            attempt.target.open && !attempt.target.resumeKey ? null : playbackResumeKey(attempt.scope.accountId, opened.info, attempt.target.resumeKey),
             undefined, undefined, attempt.playbackIntent?.currentTime,
         );
         unsubscribeState = adapter.subscribe((state) => {
@@ -987,11 +1035,18 @@ async function openHtmlPlayback(attempt: VideoOpenAttempt, isCurrent: () => bool
     } catch (err: unknown) {
         if (adapter && activeAdapter === adapter) {
             await releaseActive();
-        } else if (opened?.token) {
-            if (activeMediaToken === opened.token) detachActiveReferences();
-            await safelyCloseMedia(opened.token);
+        } else {
+            hlsSource?.destroy();
+            if (opened?.token) {
+                if (activeMediaToken === opened.token) detachActiveReferences();
+                await safelyCloseMedia(opened.token);
+            }
         }
         if (!isCurrent()) return;
+        if (err === VIDEO_SCOPE_CHANGED) {
+            showVideoScopeError();
+            return;
+        }
         console.error("OpenMedia failed:", err);
         setError(errorMessage(err, "Could not open this video. Try again."));
     }
@@ -1017,7 +1072,6 @@ function handleHtmlMediaError(
     // Phones have no native player to promote to; the HTML error is final there.
     const undecodable = shouldFallbackFromHtmlMediaError(code);
     if (undecodable && !isMobilePlatform()) {
-        rememberNativePlayer(attempt.target);
         attempt.nativeFallbackRequested = true;
         const intent = capturePlaybackIntent(state, attempt.pausedByUser);
         setLoadingStatusOverride("Switching to a compatible player...");
@@ -1087,6 +1141,7 @@ async function openNativePlayback(
     warmed: MediaOpenResult | null = null,
     intent: PlaybackIntent | null = null,
 ) {
+    const { target, scope } = attempt;
     let existing = warmed;
     let opened: NativeMediaOpenResult | null = null;
     let owner: "none" | "html" | "native" | "adapter" = existing ? "html" : "none";
@@ -1094,8 +1149,8 @@ async function openNativePlayback(
         // A target with its own capability cannot be opened natively by id, so
         // its session is opened here, where a failure reaches the reader, and
         // the native player attaches to it.
-        if (!existing && attempt.target.open) {
-            existing = await attempt.target.open();
+        if (!existing && target.open) {
+            existing = await openTarget(target, scope);
             owner = "html";
             if (!isCurrent() || !isOpen()) {
                 await safelyCloseMedia(existing.token);
@@ -1104,12 +1159,13 @@ async function openNativePlayback(
         }
         // Re-attaching an existing session never re-prompts: its token was only
         // handed out after the file was unlocked once.
+        requireVideoScope(target, scope, existing?.info);
         const result = existing
             ? await attachNativeMedia(existing.token, rect)
-            : await accessEncryptedResource(
-                Boolean(attempt.target.encrypted),
-                () => openNativeMedia(attempt.target.id, rect),
-            );
+            : await accessEncryptedResource(Boolean(target.encrypted), () => {
+                requireVideoScope(target, scope);
+                return openNativeMedia(target.id, rect);
+            });
         if (!result) {
             // Closing queues teardown after this ownership transition finishes.
             if (isCurrent()) void closeVideoModal();
@@ -1129,6 +1185,7 @@ async function openNativePlayback(
             return;
         }
 
+        requireVideoScope(target, scope, opened.info);
         activateNativePlayback(attempt, opened, intent);
         owner = "adapter";
     } catch (err: unknown) {
@@ -1145,8 +1202,13 @@ async function openNativePlayback(
             await safelyCloseMedia(existing?.token || "");
         }
         if (!isCurrent()) return;
-        console.error(existing ? "AttachNativeMedia failed:" : "OpenNativeMedia failed:", err);
         geometry?.setNativeLayout("none");
+        if (err === VIDEO_SCOPE_CHANGED) {
+            showVideoScopeError();
+            return;
+        }
+        rememberFailedNativeRoute(attempt);
+        console.error(existing ? "AttachNativeMedia failed:" : "OpenNativeMedia failed:", err);
         // A closed loopback session also surfaces as an HTML media error, so the
         // handoff can race a dead token; report that as the interruption it is.
         const sessionLost = Boolean(existing) && /session not found/i.test(errorDetail(err));
@@ -1167,6 +1229,7 @@ function handleNativeMediaError(attempt: VideoOpenAttempt, token: string, detail
     ) {
         return;
     }
+    rememberFailedNativeRoute(attempt);
     console.error("Native media player failed:", detail);
     void playbackTransitions.run(attempt.generation, async (isCurrent) => {
         if (!isCurrent() || activeNative?.token !== token) return;
@@ -1222,28 +1285,38 @@ function activateNativePlayback(
     }
 
     activeResume = new PlaybackResume(
-        attempt.target.open && !attempt.target.resumeKey ? null : playbackResumeKey(attempt.accountId, opened.info, attempt.target.resumeKey),
+        attempt.target.open && !attempt.target.resumeKey ? null : playbackResumeKey(attempt.scope.accountId, opened.info, attempt.target.resumeKey),
         undefined, undefined, intent?.currentTime,
     );
     unsubscribeState = adapter.subscribe((state) => {
         if (!playbackTransitions.isCurrent(attempt.generation) || activeAdapter !== adapter) return;
+        if (attempt.nativeFallbackRequested && state.duration > 0 && !state.loading) {
+            rememberNativePlayer(nativeMemoryTarget(attempt));
+            attempt.nativeFallbackRequested = false;
+        }
         applyState(state);
     });
     setChromeVisible(true);
     if (!standalone) geometry?.scheduleNativeResize();
 }
 
-async function openVideoTarget(target: VideoOpenTarget, playbackIntent: PlaybackIntent | null): Promise<void> {
+async function openVideoTarget(
+    target: VideoOpenTarget,
+    playbackIntent: PlaybackIntent | null,
+    scope: VideoOpenScope,
+    retryInWebview = false,
+): Promise<void> {
     const host = document.getElementById("video-modal");
     if (videoHostEl !== host || !videoSetupComplete) activateVideoModal();
     if (!videoDOM.modal || !videoDOM.video || !videoDOM.filename || !videoDOM.meta) return;
 
     const attempt: VideoOpenAttempt = {
         generation: playbackTransitions.begin(),
-        accountId: appState.myUserID,
+        scope,
         target,
         htmlFailureHandled: false,
         nativeFallbackRequested: false,
+        retryInWebview,
         pausedByUser: false,
         playbackIntent,
     };
@@ -1272,6 +1345,10 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
     await playbackTransitions.run(attempt.generation, async (isCurrent) => {
         await releaseActive();
         if (!isCurrent() || !isOpen()) return;
+        if (!videoScopeMatches(target, scope)) {
+            showVideoScopeError();
+            return;
+        }
         setProtectedPlayback(Boolean(target.protected));
         // A container iOS cannot demux and the backend will not repackage fails no
         // matter how long it is given, so do not open a media session for it: that
@@ -1290,11 +1367,9 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
 
         setLoadingStatusOverride("");
         setLoading(true);
-        // A container the webview handles goes to the HTML player, unless it
-        // already failed to decode this very file: then the native player
-        // opens first and the failed attempt is not paid again. Phones have
-        // no native player, so every container goes through <video>.
-        if (isMobilePlatform() || (isWebviewDirectVideo(attempt.target.name) && !prefersNativePlayer(attempt.target))) {
+        const useWebview = isWebviewDirectVideo(target.name)
+            && (attempt.retryInWebview || !prefersNativePlayer(nativeMemoryTarget(attempt)));
+        if (isMobilePlatform() || useWebview) {
             await openHtmlPlayback(attempt, isCurrent);
             return;
         }
@@ -1307,14 +1382,18 @@ async function openVideoTarget(target: VideoOpenTarget, playbackIntent: Playback
     });
 }
 
-export async function openVideoModal(target: VideoOpenTarget, playlist?: VideoPlaylistLaunch): Promise<void> {
+export async function openVideoModal(
+    target: VideoOpenTarget,
+    playlist?: VideoPlaylistLaunch,
+    scope: VideoOpenScope = { accountId: appState.myUserID, channelId: appState.activeChannel?.id ?? 0 },
+): Promise<void> {
     const normalized = normalizeVideoTarget(target);
     if (!normalized) return;
     const host = document.getElementById("video-modal");
     if (videoHostEl !== host || !videoSetupComplete) activateVideoModal();
     if (!videoDOM.modal || !videoDOM.video || !videoDOM.filename || !videoDOM.meta) return;
-    installVideoPlaylist(normalized, playlist);
-    await openVideoTarget(normalized, null);
+    installVideoPlaylist(normalized, scope, playlist);
+    await openVideoTarget(normalized, null, scope);
 }
 
 export async function closeVideoModal() {

@@ -682,6 +682,16 @@ func (e *Engine) EnsureEncryptionPolicy(ctx context.Context, channelID int64) er
 	return e.syncEngine.EnsureAuthoritative(ctx, channelID)
 }
 
+// SyncSourceCopyDrive reads an explicit drive in Telegram message order so the
+// copy can use the current source revision and confirm its destination commit.
+func (e *Engine) SyncSourceCopyDrive(ctx context.Context, channelID int64) error {
+	if e == nil || e.syncEngine == nil {
+		return fmt.Errorf("drive sync is unavailable")
+	}
+	defer e.notifyProjectionChanged(channelID)
+	return e.syncEngine.EnsureAuthoritative(ctx, channelID)
+}
+
 // PrepareHardDeleteProjection applies channel history in Telegram message
 // order under the sync engine's per-channel lock. It rebuilds derived state
 // only when locally projected commits were ahead of the sync watermark.

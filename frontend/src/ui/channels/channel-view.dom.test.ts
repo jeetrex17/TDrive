@@ -24,8 +24,8 @@ async function settle(): Promise<void> {
     flushSync();
 }
 
-function render(source: ChannelSource, fetchMedia: ChannelMediaFetcher, recentPages?: ChannelPageMemory, fetchTopics?: ChannelTopicFetcher) {
-    const props = { source, fetchMedia, onOpenPost: vi.fn(), onOpenTelegram: vi.fn(), onPostActions: vi.fn(), recentPages, fetchTopics };
+function render(source: ChannelSource, fetchMedia: ChannelMediaFetcher, recentPages?: ChannelPageMemory, fetchTopics?: ChannelTopicFetcher, mobile = false) {
+    const props = { source, fetchMedia, onOpenPost: vi.fn(), onOpenTelegram: vi.fn(), onPostActions: vi.fn(), onSavePosts: vi.fn(), recentPages, fetchTopics, mobile };
     host = document.createElement('div');
     document.body.append(host);
     app = mount(ChannelView, { target: host, props });
@@ -54,6 +54,70 @@ afterEach(async () => {
 });
 
 describe('ChannelView', () => {
+    it('offers phone actions for a copyable file with no viewer or Telegram link', async () => {
+        const group = { ...SOURCE, peerKind: 'group' as const, username: '' };
+        const archive = { ...MANUAL, name: 'archive.zip', telegramUrl: '', copyIdentity: 'attachment1' };
+        const protectedArchive = { ...archive, msgId: 72, name: 'locked.zip', protected: true };
+        const props = render(group, answering(archive, protectedArchive), undefined, undefined, true);
+        await settle();
+        const actions = host?.querySelector<HTMLButtonElement>('[aria-label="Actions for archive.zip"]');
+        expect(actions).not.toBeNull();
+        actions?.click();
+        expect(props.onPostActions.mock.calls[0]?.slice(2, 4)).toEqual([archive, group]);
+        expect(host?.querySelector('[aria-label="Actions for locked.zip"]')).toBeNull();
+    });
+
+    it('selects source files with plain, Shift, Command, and Ctrl clicks and saves eligible files only', async () => {
+        const first = { ...VIDEO, copyIdentity: 'attachment1' };
+        const second = { ...MANUAL, copyIdentity: 'attachment2' };
+        const third = { ...VIDEO, msgId: 68, caption: 'After dark', copyIdentity: 'attachment3' };
+        const props = render(SOURCE, answering(first, PAID, second, third));
+        await settle();
+        const button = (label: string) => Array.from(host?.querySelectorAll('button') ?? []).find((node) => node.textContent?.trim() === label);
+        const click = async (name: RegExp, modifiers?: MouseEventInit) => {
+            const row = rowNamed(name);
+            expect(row).toBeDefined();
+            row?.dispatchEvent(new MouseEvent('click', { bubbles: true, detail: 1, ...modifiers }));
+            await settle();
+        };
+
+        await click(/Dawn in the forest/);
+        expect(button('Save 1 file to My Drive')).toBeDefined();
+        expect(button('Select files')).toBeUndefined();
+        expect(props.onOpenPost).not.toHaveBeenCalled();
+        expect(rowNamed(/Dawn in the forest/)?.getAttribute('aria-pressed')).toBe('true');
+        await click(/After dark/, { shiftKey: true });
+        expect(button('Save 3 files to My Drive')).toBeDefined();
+        await click(/kit\.pdf/, { metaKey: true });
+        expect(button('Save 2 files to My Drive')).toBeDefined();
+        expect(rowNamed(/kit\.pdf/)?.getAttribute('aria-pressed')).toBe('false');
+        await click(/kit\.pdf/, { ctrlKey: true });
+        expect(button('Save 3 files to My Drive')).toBeDefined();
+        await click(/After dark/, { ctrlKey: true });
+        button('Save 2 files to My Drive')?.click();
+        expect(props.onSavePosts).toHaveBeenCalledWith(SOURCE, [first, second], SOURCE.title);
+    });
+
+    it('selects and clears a range with the keyboard', async () => {
+        const first = { ...VIDEO, copyIdentity: 'attachment1' };
+        const second = { ...MANUAL, copyIdentity: 'attachment2' };
+        render(SOURCE, answering(first, second));
+        await settle();
+        const firstRow = rowNamed(/Dawn in the forest/);
+        const secondRow = rowNamed(/kit\.pdf/);
+        firstRow?.focus();
+        firstRow?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: ' ' }));
+        await settle();
+        expect(firstRow?.getAttribute('aria-pressed')).toBe('true');
+        firstRow?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'ArrowDown', shiftKey: true }));
+        await settle();
+        expect(document.activeElement).toBe(secondRow);
+        expect(secondRow?.getAttribute('aria-pressed')).toBe('true');
+        secondRow?.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, key: 'Escape' }));
+        await settle();
+        expect(firstRow?.getAttribute('aria-pressed')).toBe('false');
+        expect(secondRow?.getAttribute('aria-pressed')).toBe('false');
+    });
     it('names restrictions in words and never shows the backend codes', async () => {
         render(SOURCE, answering(VIDEO, PAID, MANUAL));
         await settle();

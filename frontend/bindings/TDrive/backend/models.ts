@@ -34,5 +34,6 @@ export interface SearchResult {
     "uploader_id": number;
     "encrypted"?: boolean;
     "plaintext_size"?: number;
+    "revision"?: number;
     "path": string;
 }

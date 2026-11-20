@@ -53,6 +53,8 @@ export type {
     ResumableDownloadsResult,
     SafeAreaInsets,
     SelfUser,
+    SourceCopyFolderPage,
+    SourceCopySaveResponse,
     TDriveFile,
     TrashEntry,
     UploadResult

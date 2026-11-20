@@ -27,7 +27,7 @@ mkdir -p "$stub_bin" "$app_path/Contents/MacOS" "$runtime_root/bin" "$runtime_ro
 
 printf '#!/usr/bin/env bash\nprintf "Darwin\\n"\n' > "$stub_bin/uname"
 printf '#!/usr/bin/env bash\n[ "${1:-}" = "-archs" ] || exit 1\nprintf "arm64\\n"\n' > "$stub_bin/lipo"
-printf '#!/usr/bin/env bash\ntarget="${!#}"\ncase "$target" in\n  */Contents/MacOS/TDrive) printf "minos 11.0\\n" ;;\n  *) printf "minos 15.0\\n" ;;\nesac\n' > "$stub_bin/xcrun"
+printf '#!/usr/bin/env bash\ntarget="${!#}"\ncase "$target" in\n  */Contents/MacOS/TDrive) printf "minos %%s\\n" "${FIXTURE_APP_MINOS:-11.0}" ;;\n  *) printf "minos 15.0\\n" ;;\nesac\n' > "$stub_bin/xcrun"
 chmod 755 "$stub_bin/uname" "$stub_bin/lipo" "$stub_bin/xcrun"
 
 printf '#!/usr/bin/env bash\nexit 0\n' > "$app_path/Contents/MacOS/TDrive"
@@ -56,40 +56,45 @@ if [ "$generic_status" -eq 0 ] || [ "$generic_status" -eq "$deployment_incompati
   fail "ordinary packaging failure returned reserved status $generic_status"
 fi
 
-printf '#!/usr/bin/env bash\nprintf "minos 15.0\\n"\n' > "$stub_bin/xcrun"
-printf '#!/usr/bin/env bash\nprintf "%%s:\\n" "$2"\n' > "$stub_bin/otool"
-for command in install_name_tool codesign; do
-  printf '#!/usr/bin/env bash\nexit 0\n' > "$stub_bin/$command"
-done
-chmod 755 "$stub_bin/"*
+printf 'package-mpv-darwin exit-code contract tests passed\n'
+
 cat > "$runtime_root/bin/mpv" <<'EOF'
-#!/usr/bin/env bash
-if [ "${2:-}" = "--version" ]; then
-  printf 'mpv 99.0.0\nFFmpeg version: 9.0.0\n'
+#!/bin/sh
+if [ "${2:-}" = --version ]; then
+  printf 'mpv v%s\nFFmpeg version: 9.0.2\n' "$FIXTURE_MPV_VERSION"
 fi
 EOF
+cat > "$stub_bin/otool" <<'EOF'
+#!/bin/sh
+printf '%s:\n' "$2"
+EOF
+for tool in codesign install_name_tool; do
+  printf '#!/bin/sh\nexit 0\n' > "$stub_bin/$tool"
+done
+chmod 755 "$runtime_root/bin/mpv" "$stub_bin/otool" "$stub_bin/codesign" "$stub_bin/install_name_tool"
 
 export PATH="$stub_bin:$PATH"
+export FIXTURE_APP_MINOS=15.0 FIXTURE_MPV_VERSION=99.0.0
 export TDRIVE_MPV_RUNTIME_DIR="$runtime_root"
-export TDRIVE_MPV_RUNTIME_PINNED=0
-export TDRIVE_MPV_PACKAGE_SOURCE=homebrew-ci-system-mpv-not-release-runtime
 export TDRIVE_MPV_ARCHIVE_SHA256=0000000000000000000000000000000000000000000000000000000000000000
-
-if "$PACKAGE_SCRIPT" "$app_path" > "$TMP_ROOT/release.out" 2>&1 ||
-  ! grep -q 'mpv version mismatch' "$TMP_ROOT/release.out"; then
-  cat "$TMP_ROOT/release.out" >&2
-  fail "packaging without the CI flag must enforce the pinned version"
+if ! "$PACKAGE_SCRIPT" "$app_path" "$FIXTURE_MPV_VERSION" > "$TMP_ROOT/fixture.out" 2>&1; then
+  cat "$TMP_ROOT/fixture.out" >&2
+  fail 'the unpinned CI bundle rejected the installed fixture version'
 fi
-if TDRIVE_MPV_RUNTIME_PINNED=1 "$PACKAGE_SCRIPT" "$app_path" --allow-homebrew-fixture > "$TMP_ROOT/pinned.out" 2>&1 ||
-  ! grep -q 'mpv version mismatch' "$TMP_ROOT/pinned.out"; then
-  cat "$TMP_ROOT/pinned.out" >&2
-  fail "the CI flag must not override a pinned runtime"
-fi
-
-"$PACKAGE_SCRIPT" "$app_path" --allow-homebrew-fixture
 manifest="$app_path/Contents/Resources/media/media-runtime.manifest"
-grep -Fxq 'mpv_version=99.0.0' "$manifest" || fail "CI fixture version was not recorded"
-grep -Fxq 'ci_fixture=true' "$manifest" || fail "Homebrew runtime must be marked as a CI fixture"
-grep -Fxq 'release_runtime=false' "$manifest" || fail "Homebrew runtime must not be marked for release"
+grep -Fxq "mpv_version=$FIXTURE_MPV_VERSION" "$manifest" || fail 'fixture manifest recorded the wrong version'
+grep -Fxq 'ci_fixture=true' "$manifest" || fail 'fixture manifest did not identify the CI runtime'
+grep -Fxq 'release_runtime=false' "$manifest" || fail 'fixture manifest identified the runtime as a release'
 
-printf 'package-mpv-darwin contract tests passed\n'
+if "$PACKAGE_SCRIPT" "$app_path" > "$TMP_ROOT/default.out" 2>&1 ||
+  ! grep -q 'mpv version mismatch' "$TMP_ROOT/default.out"; then
+  fail 'default packaging did not enforce the pinned version'
+fi
+
+if TDRIVE_MPV_ARCHIVE_SHA256=0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef \
+  "$PACKAGE_SCRIPT" "$app_path" "$FIXTURE_MPV_VERSION" > "$TMP_ROOT/pinned.out" 2>&1 ||
+  ! grep -q 'test mpv version requires an unpinned runtime' "$TMP_ROOT/pinned.out"; then
+  fail 'checksum-pinned packaging did not reject the fixture version override'
+fi
+
+printf 'package-mpv-darwin version contract tests passed\n'

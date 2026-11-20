@@ -5,6 +5,7 @@
     import { cancelTransfersInDirection, cancelUploadFile } from '../../modules/notif-bell';
     import { cancelActivityFile, downloadRetryFor, reviewFailedUploads, setUploadsPaused } from '../../modules/transfers';
     import { switchActiveChannel } from '../../modules/channels';
+    import { activeCopyChecks, checkSourceCopy } from '../../modules/source-copies';
     import { formatBytes } from '../../utils';
     import { failedUploadReports } from '../modals/failed-uploads-store';
     import { sidebarState } from '../sidebar/sidebar-store';
@@ -266,7 +267,7 @@
         </section>
     {:else}
         <div class="detail-heading">
-            <span class="detail-eyebrow">{entry.kind === 'download' || (transfer?.direction === 'down') ? 'Download' : 'Upload'}</span>
+            <span class="detail-eyebrow">{entry.kind === 'sourceCopy' ? 'Copy' : entry.kind === 'download' || transfer?.direction === 'down' ? 'Download' : 'Upload'}</span>
             <h3>{entry.name}</h3>
             <p class="detail-status" data-tone={entry.status === 'Needs attention' ? 'danger' : undefined}>{status}</p>
         </div>
@@ -285,6 +286,13 @@
                 {#if entry.job.savedPath}<div><dt>Saved to</dt><dd>{entry.job.savedPath}</dd></div>{/if}
             </dl>
             <ActivityMessage title={entry.name} message={entry.job.error} />
+        {:else if entry.kind === 'sourceCopy'}
+            {#if entry.copy.message}<ActivityMessage title="Copy status" message={entry.copy.message} />{/if}
+            {#if entry.copy.status === 'pending'}
+                <button class="pill quiet" type="button" disabled={$activeCopyChecks.has(entry.copy.id)} onclick={() => void checkSourceCopy(entry.copy.id)}>
+                    {$activeCopyChecks.has(entry.copy.id) ? 'Checking…' : 'Check copy'}
+                </button>
+            {/if}
         {:else if transfer}
             {#if showTransfer}<TransferRow {transfer} onCancel={cancelTransfersInDirection} onCancelFile={cancelUploadFile} />{/if}
             <ActivityMessage title={entry.name} message={transfer.note || ''} />

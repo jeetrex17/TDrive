@@ -10,6 +10,197 @@ const media = { msg_id: 71, date: 1_735_689_600, name: 'forest-dawn.mp4', size: 
 const paid = { ...media, msg_id: 70, name: 'members-cut.mp4', streamable: false, block_reason: 'paid' };
 const mediaPage = { peer_kind: 'channel', peer_id: 50, channel_id: 50, account_id: 7, generation: 'source-a', items: [media, paid], next_offset_id: 0, has_more: false };
 
+test('save selected source files to My Drive while a shared drive is active', async ({ page }) => {
+    const first = { ...media, copy_identity: 'first' };
+    const second = { ...media, msg_id: 72, name: 'notes.zip', kind: 'document', streamable: false, block_reason: 'unsupported_format', telegram_url: '', copy_identity: 'second' };
+    const blocked = { ...paid, protected: true, copy_identity: 'must-not-save' };
+    const folder = { id: 'd:weekend', name: 'Weekend archive', parent_id: '' };
+    const saved = { id: 'copy-a', name: first.name, parent_id: folder.id, status: 'saved', file_id: 401, message: '' };
+    const canceled = { id: 'copy-b', name: second.name, parent_id: folder.id, status: 'canceled', file_id: 0, message: '' };
+    const mock = await bootTDrive(page, {
+        ListChannels: resolves([
+            { id: 1, title: 'Personal', kind: 'personal', is_active: false },
+            { id: 2, title: 'Shared team', kind: 'shared', is_active: true },
+        ]),
+        // Persisted connections come from local storage. The live media page
+        // supplies the separately checked copy identity for each attachment.
+        ListConnectedChannelSources: resolves([{ ...source, available: false }]),
+        ListChannelMedia: resolves({ ...mediaPage, items: [first, blocked, second] }),
+        ListSourceCopyFolders: resolves({ drive_id: 1, folders: [folder] }),
+        PreviewSourceCopyNames: resolves([first.name, second.name]),
+        SaveSourceCopies: deferred('copy-results', { results: [saved, canceled], not_started: '' }),
+        CancelSourceCopies: resolves(true),
+        SetActiveChannel: resolves(null),
+    });
+    await page.locator('.sidebar').getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
+    const firstRow = page.getByRole('button', { name: /^Play forest-dawn\.mp4/ });
+    const secondRow = page.locator('.channel-row-main').filter({ hasText: second.name });
+    await firstRow.click({ button: 'right' });
+    await expect(page.getByRole('menuitem', { name: 'Save to My Drive…' })).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('button', { name: 'Select files', exact: true })).toHaveCount(0);
+    const scroller = page.locator('.channel-scroll');
+    const listBounds = await scroller.boundingBox();
+    await firstRow.getByText(first.name, { exact: true }).click();
+    await expect(firstRow).toHaveAttribute('aria-pressed', 'true');
+    expect(await scroller.boundingBox()).toEqual(listBounds);
+    await secondRow.getByText(second.name, { exact: true }).click({ modifiers: ['Shift'] });
+    await expect(secondRow).toHaveAttribute('aria-pressed', 'true');
+    await secondRow.getByText(second.name, { exact: true }).click({ modifiers: ['Meta'] });
+    await expect(secondRow).toHaveAttribute('aria-pressed', 'false');
+    await secondRow.getByText(second.name, { exact: true }).click({ modifiers: ['Meta'] });
+    await expect(page.getByRole('button', { name: 'Save 2 files to My Drive' })).toBeVisible();
+    await page.keyboard.press('Shift+F10');
+    await page.getByRole('menuitem', { name: 'Save 2 files to My Drive…' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Save to My Drive' });
+    await expect(dialog.getByText('Copies are saved without vault encryption.', { exact: false })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: folder.name })).toBeVisible();
+    await mock.setPlan('ListSourceCopyFolders', resolves({ drive_id: 1, folders: [] }));
+    await dialog.getByRole('button', { name: folder.name }).click();
+    await dialog.getByRole('button', { name: 'Save here' }).click();
+    await expect.poll(async () => (await mock.calls('SaveSourceCopies')).length).toBe(1);
+    const [call] = await mock.calls('SaveSourceCopies');
+    expect(call.args).toEqual([
+        7, 1, folder.id,
+        [first, second].map((item) => ({
+            name: item.name,
+            source: { account_id: 7, peer_kind: 'channel', peer_id: 50, generation: 'source-a', msg_id: item.msg_id, identity: item.copy_identity },
+        })),
+        true, expect.any(String),
+    ]);
+    await dialog.getByRole('button', { name: 'Stop saving' }).click();
+    expect((await mock.calls('CancelSourceCopies')).map((entry) => entry.args)).toEqual([[7]]);
+    await mock.release('copy-results');
+    await expect(dialog.getByText('Saved', { exact: true })).toBeVisible();
+    await expect(dialog.getByText('Canceled', { exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: 'Open folder' }).click();
+    await expect(dialog).toBeHidden();
+    await expect.poll(async () => (await mock.calls('GetFolderContents')).some(({ args }) => args[0] === folder.id)).toBe(true);
+});
+
+test('mobile can save a basic group attachment with no viewer or Telegram link', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const group = { ...source, peer_kind: 'group', title: 'Private group', username: '' };
+    const document = { ...media, name: 'archive.zip', kind: 'document', streamable: false, block_reason: 'unsupported_format', telegram_url: '', copy_identity: 'archive' };
+    const folder = { id: 'd:private', name: 'Private group', parent_id: '' };
+    const saved = { id: 'copy-a', name: document.name, parent_id: folder.id, status: 'saved', file_id: 401, message: '' };
+    const mock = await bootTDrive(page, {
+        ListConnectedChannelSources: resolves([group]),
+        ListChannelMedia: resolves({ ...mediaPage, peer_kind: 'group', items: [document] }),
+        ListSourceCopyFolders: resolves({ drive_id: 1, folders: [] }),
+        PreviewSourceCopyNames: resolves([document.name]),
+        CreateSourceCopyFolder: resolves(folder),
+        SaveSourceCopies: resolves({ results: [], not_started: 'target folder not found' }),
+    }, { url: '/?mobile=ios' });
+    await page.getByRole('button', { name: /Switch drive/ }).click();
+    await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Group Private group', exact: true }).click();
+    await page.getByRole('button', { name: 'Actions for archive.zip' }).click();
+    await page.getByRole('button', { name: 'Save to My Drive', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Save to My Drive' });
+    await dialog.getByRole('button', { name: 'New folder' }).click();
+    await expect(dialog.getByRole('textbox', { name: 'Folder name' })).toHaveValue('Private group');
+    await mock.setPlan('PreviewSourceCopyNames', resolves(['Private group']));
+    await dialog.getByRole('button', { name: 'Create folder' }).click();
+    await expect(dialog.getByRole('button', { name: folder.name })).toBeVisible();
+    await mock.setPlan('PreviewSourceCopyNames', resolves([document.name]));
+    const save = dialog.getByRole('button', { name: 'Save here' });
+    await save.click();
+    await expect(dialog.getByText('Choose a valid destination folder.')).toBeVisible();
+    expect(await mock.calls('ListSourceCopyBatch')).toHaveLength(0);
+
+    await mock.setPlan('SaveSourceCopies', resolves({ results: [saved], not_started: '' }));
+    await save.click();
+    await expect(dialog.getByText('Saved', { exact: true })).toBeVisible();
+    expect((await mock.calls('CreateSourceCopyFolder')).map(({ args }) => args)).toEqual([[7, 1, '', 'Private group']]);
+    await dialog.getByRole('button', { name: 'Open folder' }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.getByRole('button', { name: 'Files', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('heading', { name: folder.name, exact: true })).toBeVisible();
+    await expect.poll(async () => (await mock.calls('GetFolderContents')).some(({ args }) => args[0] === folder.id)).toBe(true);
+    expect(await mock.calls('SetActiveChannel')).toHaveLength(0);
+});
+
+test('mobile selects source files from row actions and adds more files by tapping', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const first = { ...media, copy_identity: 'first' };
+    const second = { ...first, msg_id: 72, name: 'coast.mp4', copy_identity: 'second' };
+    const mock = await bootTDrive(page, {
+        ListConnectedChannelSources: resolves([source]),
+        ListChannelMedia: resolves({ ...mediaPage, items: [first, second] }),
+        ListSourceCopyFolders: resolves({ drive_id: 1, folders: [] }),
+        PreviewSourceCopyNames: resolves([first.name, second.name]),
+    }, { url: '/?mobile=ios' });
+    await page.getByRole('button', { name: /Switch drive/ }).click();
+    await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
+    await page.getByRole('button', { name: `Actions for ${first.name}` }).click();
+    await page.getByRole('dialog', { name: first.name }).getByRole('button', { name: 'Select', exact: true }).click();
+    const secondRow = page.locator('.channel-row-main').filter({ hasText: second.name });
+    await secondRow.click();
+    await expect(secondRow).toHaveAttribute('aria-pressed', 'true');
+    await page.getByRole('button', { name: 'Save 2 files to My Drive' }).click();
+    await expect(page.getByRole('dialog', { name: 'Save to My Drive' })).toBeVisible();
+    expect(await mock.calls('OpenChannelMedia')).toEqual([]);
+});
+
+test('Activity restores and checks a pending copy with the source disconnected', async ({ page }) => {
+    const pending = { id: 'copy-pending', name: 'interrupted.zip', parent_id: '', status: 'pending', file_id: 0, message: 'Waiting for Telegram receipt' };
+    const mock = await bootTDrive(page, {
+        ListSourceCopies: resolves([pending]),
+        RetrySourceCopy: deferred('copy-check', { ...pending, status: 'saved', file_id: 401, message: '' }),
+    });
+    await page.locator('#notif-bell').click();
+    const activity = page.getByRole('dialog', { name: 'Activity' });
+    await activity.getByRole('button', { name: 'Needs attention', exact: true }).click();
+    const row = activity.getByRole('button', { name: 'View interrupted.zip' });
+    await row.click();
+    await expect(activity.getByText('Waiting for Telegram receipt')).toBeVisible();
+    await activity.getByRole('button', { name: 'Check copy' }).click();
+    await expect(row).toContainText('Checking copy…');
+    await expect(row).toHaveAttribute('aria-pressed', 'true');
+    const checking = activity.getByRole('button', { name: 'Checking…' });
+    await expect(checking).toBeDisabled();
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(checking).toBeVisible();
+    await mock.release('copy-check');
+    await expect(row).toHaveCount(0);
+    await expect(activity.getByRole('heading', { name: 'No matching activity' })).toBeVisible();
+    expect((await mock.calls('RetrySourceCopy')).map(({ args }) => args)).toEqual([[7, 'copy-pending']]);
+    expect(await mock.calls('SaveSourceCopies')).toHaveLength(0);
+});
+
+test('Activity shows a committed copy after the save response is lost', async ({ page }) => {
+    const file = { ...media, copy_identity: 'source-file' };
+    const committed = { id: 'copy-committed', name: file.name, parent_id: '', status: 'saved', file_id: 450, message: '' };
+    const older = { ...committed, id: 'older-copy', name: 'older.mp4', file_id: 400 };
+    const mock = await bootTDrive(page, {
+        ListConnectedChannelSources: resolves([source]),
+        ListChannelMedia: resolves({ ...mediaPage, items: [file] }),
+        ListSourceCopyFolders: resolves({ drive_id: 1, folders: [] }),
+        ListSourceCopies: resolves([older]),
+        ListSourceCopyBatch: resolves([committed]),
+        PreviewSourceCopyNames: resolves([file.name]),
+        SaveSourceCopies: rejects('The save response could not be received.'),
+    });
+    await page.locator('.sidebar').getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
+    const row = page.getByRole('button', { name: /^Play forest-dawn/ });
+    await row.focus();
+    await row.press('Shift+F10');
+    await page.getByRole('menuitem', { name: 'Save to My Drive…' }).click();
+    const dialog = page.getByRole('dialog', { name: 'Save to My Drive' });
+    await expect.poll(async () => (await mock.calls('ListSourceCopies')).length).toBe(1);
+    await dialog.getByRole('button', { name: 'Save here' }).click();
+    await dialog.getByRole('button', { name: 'View Activity' }).click();
+    const activity = page.getByRole('dialog', { name: 'Activity' });
+    await expect(activity.getByRole('button', { name: 'View forest-dawn.mp4', exact: true })).toContainText('Saved to My Drive');
+    await expect(activity.getByRole('button', { name: 'View older.mp4', exact: true })).toHaveCount(0);
+    await expect(activity.getByRole('button', { name: 'Check copy' })).toHaveCount(0);
+    const saves = await mock.calls('SaveSourceCopies');
+    expect(saves).toHaveLength(1);
+    expect((await mock.calls('ListSourceCopyBatch')).map(({ args }) => args)).toEqual([[7, 1, saves[0].args[5]]]);
+    expect(await mock.calls('ListSourceCopies')).toHaveLength(1);
+});
+
 async function expectToastActionOnRight(toast: Locator): Promise<void> {
     const copy = await toast.locator('.toast-content').boundingBox();
     const action = await toast.getByRole('button', { name: 'Undo' }).boundingBox();
@@ -59,7 +250,7 @@ test('desktop channels sit beside the drives and keep the app header', async ({ 
     await expect(page.getByRole('menuitem', { name: 'Remove from TDrive' })).toBeVisible();
     await page.keyboard.press('Escape');
 
-    await page.locator('.channel-nav-add').click();
+    await page.locator('.channel-nav-title').getByRole('button', { name: 'Add a source', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Add a source' });
     await expect(dialog.getByRole('button', { name: 'Open Field Recordings, already connected' })).toBeVisible();
     await dialog.getByRole('button', { name: 'Connect Tech Talks' }).click();
@@ -155,7 +346,7 @@ test('the picker distinguishes joined chat types and verifies a public link befo
         ConnectChannelSource: resolves({ ...publicChannel, connected: true, generation: 'public-a' }),
     });
 
-    await page.locator('.channel-nav-add').click();
+    await page.locator('.channel-nav-title').getByRole('button', { name: 'Add a source', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Add a source' });
     await expect(dialog.getByRole('button', { name: 'Connect Mina' })).toBeVisible();
     await expect(dialog.getByText('Direct message', { exact: true })).toBeVisible();
@@ -169,7 +360,7 @@ test('the picker distinguishes joined chat types and verifies a public link befo
 test('desktop source picker has no horizontal overflow', async ({ page }) => {
     const direct = { peer_kind: 'user', peer_id: 50, channel_id: 0, title: 'Mina', username: '', connected: false, protected: false, available: true, account_id: 7, generation: '' };
     await bootTDrive(page, { ListChannelSourceCandidates: resolves([direct]) });
-    await page.locator('.channel-nav-add').click();
+    await page.locator('.channel-nav-title').getByRole('button', { name: 'Add a source', exact: true }).click();
     await page.screenshot({ path: 'test-results/source-picker-desktop.png', fullPage: true, animations: 'disabled' });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
@@ -182,7 +373,7 @@ test('390x844 mobile source picker has no sheet bleed', async ({ page }) => {
         ResolvePublicChannelSource: resolves(candidate),
     }, { url: '/?mobile=ios' });
     await page.getByRole('button', { name: /Switch drive/ }).click();
-    await page.locator('.channel-nav-add').click();
+    await page.locator('.channel-nav-title').getByRole('button', { name: 'Add a source', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Add a source' });
     const link = dialog.getByLabel('Public channel link');
     expect(await link.evaluate((input) => parseFloat(getComputedStyle(input).fontSize))).toBeGreaterThanOrEqual(16);
@@ -257,7 +448,7 @@ test("a channel video queues the channel's other videos in the player's playlist
         UpdateMediaPlayback: resolves(null),
     });
     await page.locator('.sidebar').getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
-    await page.getByRole('button', { name: /^Play Dawn chorus/ }).click();
+    await page.getByRole('button', { name: /^Play Dawn chorus/ }).dblclick();
 
     await expect(page.locator('#video-shell')).toBeVisible();
     await expect(page.locator('#video-filename')).toHaveText('Dawn chorus');
@@ -293,7 +484,7 @@ test('a channel video bound for the native player reports a failed open', async 
         CloseMedia: resolves(null),
     });
     await page.locator('.sidebar').getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
-    await page.getByRole('button', { name: /^Play Feature film/ }).click();
+    await page.getByRole('button', { name: /^Play Feature film/ }).press('Enter');
 
     await expect(page.locator('#video-error')).toBeVisible();
     await expect(page.locator('#video-error-retry')).toBeVisible();
@@ -441,7 +632,8 @@ for (const { platform, protectedContent } of ['desktop', 'ios', 'android'].flatM
             expect(await imagePost.evaluate((element) => element.dispatchEvent(new Event('copy', { bubbles: true, cancelable: true })))).toBe(false);
             await expect(imagePost).toHaveCSS('user-select', 'none');
         }
-        await imagePost.click();
+        if (platform === 'desktop') await imagePost.dblclick();
+        else await imagePost.click();
         const viewer = page.locator('#viewer-modal');
         const photo = viewer.getByRole('img', { name: 'forest.svg' });
         await expect(photo).toBeVisible();
@@ -480,7 +672,9 @@ for (const { platform, protectedContent } of ['desktop', 'ios', 'android'].flatM
         if (protectedContent && platform !== 'desktop') expect((await mock.calls('SetScreenProtect')).slice(-1)[0]?.args[0]).toBe(true);
 
         await mock.setPlan('OpenChannelMedia', resolves(stream(guide)));
-        await channel.getByRole('button', { name: /^Open guide\.pdf,/ }).click();
+        const guidePost = channel.getByRole('button', { name: /^Open guide\.pdf,/ });
+        if (platform === 'desktop') await guidePost.dblclick();
+        else await guidePost.click();
         const frame = viewer.frameLocator('iframe');
         if (protectedContent) {
             await expect(frame.locator('body')).toHaveClass('is-protected');
@@ -504,7 +698,9 @@ for (const { platform, protectedContent } of ['desktop', 'ios', 'android'].flatM
         if (protectedContent && platform !== 'desktop') expect((await mock.calls('SetScreenProtect')).slice(-1)[0]?.args[0]).toBe(true);
 
         await mock.setPlan('OpenChannelMedia', resolves(stream(notes)));
-        await channel.getByRole('button', { name: /^Open notes\.txt,/ }).click();
+        const notesPost = channel.getByRole('button', { name: /^Open notes\.txt,/ });
+        if (platform === 'desktop') await notesPost.dblclick();
+        else await notesPost.click();
         await expect(viewer.locator('.text-viewer-body')).toHaveText('Read directly from the source.');
         if (protectedContent) {
             await expect(viewer.locator('.text-viewer-body')).toHaveCSS('user-select', 'none');

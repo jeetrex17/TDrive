@@ -100,17 +100,17 @@ case "$PLATFORM" in
     ;;
   darwin)
     brew list mpv >/dev/null 2>&1 || brew install mpv
-    # mpv's pkg-config metadata can require libarchive, which Homebrew keeps keg-only.
-    if libarchive_prefix="$(brew --prefix libarchive)" && [ -f "$libarchive_prefix/lib/pkgconfig/libarchive.pc" ]; then
-      export PKG_CONFIG_PATH="$libarchive_prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
-      emit "PKG_CONFIG_PATH=$PKG_CONFIG_PATH"
-    fi
-    pkg-config --cflags --libs -- mpv >/dev/null
+    # mpv.pc can require libarchive by name, and Homebrew keeps it keg-only.
+    libarchive_pkgconfig="$(brew --prefix libarchive)/lib/pkgconfig"
+    export PKG_CONFIG_PATH="$libarchive_pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+    pkg-config --cflags --libs mpv >/dev/null || die "could not resolve Homebrew mpv build flags"
     libmpv="$(pkg-config --variable=libdir mpv)/libmpv.2.dylib"
     mkdir -p "$runtime_root/bin" "$runtime_root/lib"
     cp -pL "$(command -v mpv)" "$runtime_root/bin/mpv"
     cp -pL "$libmpv" "$runtime_root/lib/libmpv.2.dylib"
     chmod 755 "$runtime_root/bin/mpv"
+    mpv_version="$("$runtime_root/bin/mpv" --no-config --version | awk '$1 == "mpv" { sub(/^v/, "", $2); print $2; exit }')"
+    [ -n "$mpv_version" ] || die "could not read the Homebrew mpv version"
     write_fixture_notices "macOS media runtime assembled from Homebrew mpv." brew list --versions mpv
     # Homebrew builds for the runner's own macOS release. The app must promise
     # the same floor, or dyld would refuse the bundled libmpv on older systems.
@@ -126,6 +126,8 @@ case "$PLATFORM" in
     clear_darwin_build_cache
     emit "TDRIVE_MPV_RUNTIME_DIR=$runtime_root" \
       "TDRIVE_MPV_PACKAGE_SOURCE=homebrew-ci-system-mpv-not-release-runtime" \
+      "TDRIVE_MPV_TEST_VERSION=$mpv_version" \
+      "PKG_CONFIG_PATH=$PKG_CONFIG_PATH" \
       "MACOSX_DEPLOYMENT_TARGET=$minos" \
       "TDRIVE_MPV_RAISE_APP_MINOS=$minos"
     ;;

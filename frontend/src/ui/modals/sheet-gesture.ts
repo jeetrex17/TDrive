@@ -97,6 +97,7 @@ export interface SheetDragController {
     onPointerDown: (event: PointerEvent) => void;
     onPointerMove: (event: PointerEvent) => void;
     onPointerUp: (event: PointerEvent) => void;
+    cancel: () => void;
     /** True while a drag is in progress, for callers that mirror it into state. */
     isDragging: () => boolean;
 }
@@ -131,8 +132,19 @@ export function createSheetDragController(options: SheetDragOptions): SheetDragC
     let startY = 0;
     let delta = 0;
 
+    function reset(): void {
+        dragging = false;
+        delta = 0;
+        drag.reset();
+    }
+
     return {
         isDragging: () => dragging,
+        cancel(): void {
+            if (!dragging) return;
+            reset();
+            options.settle(0);
+        },
         onPointerDown(event: PointerEvent): void {
             const sheet = options.sheet();
             if (!sheet) return;
@@ -160,15 +172,13 @@ export function createSheetDragController(options: SheetDragOptions): SheetDragC
         onPointerUp(): void {
             const sheet = options.sheet();
             if (!dragging || !sheet) return;
-            dragging = false;
             const velocity = drag.velocity();
             const height = sheet.offsetHeight || 0;
             const threshold = options.threshold
                 ? options.threshold(height)
                 : Math.max(88, height * 0.28);
             const dismissed = shouldDismiss(delta, velocity, threshold);
-            delta = 0;
-            drag.reset();
+            reset();
             if (dismissed) options.dismiss();
             else options.settle(velocity);
         },

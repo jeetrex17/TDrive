@@ -63,6 +63,10 @@ const lifecycle: AppLifecycle = {
                 await viewer.openFileViewer(target);
             },
             playVideo: async (target) => {
+                const scope = {
+                    accountId: state.myUserID,
+                    channelId: target.channelId || state.activeChannel?.id || 0,
+                };
                 // Video transport and player adapters stay lazy until playback is requested.
                 let playlistContext:
                     | {
@@ -94,11 +98,7 @@ const lifecycle: AppLifecycle = {
                 }
                 const video = await import('./modules/modals/video');
                 video.activateVideoModal();
-                if (playlistContext) {
-                    await video.openVideoModal(target, playlistContext);
-                    return;
-                }
-                await video.openVideoModal(target);
+                await video.openVideoModal(target, playlistContext, scope);
             },
         });
         bindChannelsRenderers({
