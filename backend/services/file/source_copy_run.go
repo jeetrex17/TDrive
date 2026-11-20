@@ -129,15 +129,20 @@ func (w sourceCopyWorker) cleanableBodies(ctx context.Context, job sourceCopyJob
 	if _, err := w.projectedBodies(ctx, job); err != nil {
 		return nil, err
 	}
-	if err := w.confirmUnreferencedBodies(ctx, job, job.bodyIDs()); err != nil {
+	knownIDs := job.bodyIDs()
+	if err := w.confirmUnreferencedBodies(ctx, job, knownIDs); err != nil {
 		return nil, err
 	}
-	var ids []int64
+	messages, err := w.readBodyMessages(ctx, knownIDs)
+	if err != nil {
+		return nil, err
+	}
+	ids := make([]int64, 0, len(knownIDs))
 	for index, part := range job.Parts {
 		if part.BodyID <= 0 {
 			continue
 		}
-		switch err := w.verifyBody(ctx, job, index); {
+		switch err := job.verifyBodyMessage(index, messages); {
 		case errors.Is(err, tgclient.ErrMessageNotFound):
 		case err != nil:
 			return nil, err

@@ -299,28 +299,54 @@ func (w sourceCopyWorker) verifyBodies(ctx context.Context, job sourceCopyJob) e
 	if err != nil {
 		return err
 	}
-	for index, part := range job.Parts {
-		if part.BodyID <= 0 {
-			return errors.New("Destination attachment has no receipt")
-		}
-		if err := w.verifyBody(ctx, job, index); err != nil {
+	ids := job.bodyIDs()
+	if len(ids) == 0 || len(ids) != len(job.Parts) {
+		return errors.New("Destination attachment has no receipt")
+	}
+	messages, err := w.readBodyMessages(ctx, ids)
+	if err != nil {
+		return err
+	}
+	for index, id := range ids {
+		if err := job.verifyBodyMessage(index, messages); err != nil {
 			return err
 		}
-		if receipts[index] != part.BodyID {
+		if receipts[index] != id {
 			return errors.New("Destination attachment has not been projected")
 		}
 	}
 	return nil
 }
 
-func (w sourceCopyWorker) verifyBody(ctx context.Context, job sourceCopyJob, index int) error {
+func (w sourceCopyWorker) readBodyMessages(ctx context.Context, ids []int64) (map[int64]tgclient.HistoryMessage, error) {
+	if len(ids) == 0 {
+		return nil, nil
+	}
+	if reader, ok := w.TG.(tgclient.ChannelMessageBatchReader); ok {
+		return reader.GetChannelMessages(ctx, w.peer, ids)
+	}
+	messages := make(map[int64]tgclient.HistoryMessage, len(ids))
+	for _, id := range ids {
+		msg, err := w.TG.GetChannelMessage(ctx, w.peer, id)
+		switch {
+		case errors.Is(err, tgclient.ErrMessageNotFound):
+		case err != nil:
+			return nil, err
+		default:
+			messages[id] = msg
+		}
+	}
+	return messages, nil
+}
+
+func (job sourceCopyJob) verifyBodyMessage(index int, messages map[int64]tgclient.HistoryMessage) error {
 	part := job.Parts[index]
-	msg, err := w.TG.GetChannelMessage(ctx, w.peer, part.BodyID)
-	if err != nil {
-		return err
+	msg, present := messages[part.BodyID]
+	if !present {
+		return tgclient.ErrMessageNotFound
 	}
 	if !matchesCopyMessage(job, msg, part.BodyID, job.bodyHeader(index)) ||
-		!msg.HasMedia || msg.DocumentID != part.DocumentID || msg.MediaSize != part.Size {
+		!msg.HasMedia || msg.NativePhoto || msg.DocumentID != part.DocumentID || msg.MediaSize != part.Size {
 		return errors.New("The destination attachment could not be verified")
 	}
 	return nil

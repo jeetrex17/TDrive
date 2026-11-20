@@ -1141,11 +1141,13 @@ func channelMessages(ctx context.Context, api *tg.Client, peer InputPeer, msgIDs
 	if err != nil {
 		return nil, err
 	}
+	messages, ok := result.(*tg.MessagesChannelMessages)
+	if !ok {
+		return nil, fmt.Errorf("tgclient: unexpected channels.getMessages response %T", result)
+	}
 	found := make(map[int64]tg.MessageClass, len(msgIDs))
-	if messages, ok := result.(*tg.MessagesChannelMessages); ok {
-		for _, msg := range messages.Messages {
-			found[int64(msg.GetID())] = msg
-		}
+	for _, msg := range messages.Messages {
+		found[int64(msg.GetID())] = msg
 	}
 	return found, nil
 }
