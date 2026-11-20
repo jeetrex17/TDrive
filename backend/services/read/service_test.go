@@ -212,6 +212,9 @@ func TestSearchBuildsFolderPaths(t *testing.T) {
 	if results[0].Path != "My Drive / A / B" {
 		t.Fatalf("path = %q, want nested path", results[0].Path)
 	}
+	if results[0].Revision != 1 {
+		t.Fatalf("file revision = %d, want 1", results[0].Revision)
+	}
 }
 
 func TestOrphanedFiles(t *testing.T) {
@@ -246,6 +249,7 @@ func TestTelegramRootFilesUsesTGHistory(t *testing.T) {
 			HasMedia:           true,
 			MediaSize:          123,
 			DocumentName:       "legacy.bin",
+			DocumentID:         101,
 			DocumentAccessHash: 777,
 		},
 		tgclient.HistoryMessage{
@@ -265,6 +269,9 @@ func TestTelegramRootFilesUsesTGHistory(t *testing.T) {
 	}
 	if files[0].ID != 50 || files[0].Name != "legacy.bin" || files[0].Size != 123 || files[0].AccessHash != 777 {
 		t.Fatalf("bad file: %+v", files[0])
+	}
+	if files[0].CopyIdentity == "" {
+		t.Fatal("ordinary document is missing its copy identity")
 	}
 }
 

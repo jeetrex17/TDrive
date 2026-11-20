@@ -53,5 +53,6 @@ type SearchResult struct {
 	UploaderID    int64  `json:"uploader_id"`
 	Encrypted     bool   `json:"encrypted,omitempty"`
 	PlaintextSize int64  `json:"plaintext_size,omitempty"`
+	Revision      int64  `json:"revision,omitempty"`
 	Path          string `json:"path"`
 }

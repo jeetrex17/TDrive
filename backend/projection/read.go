@@ -42,6 +42,7 @@ type SearchHit struct {
 	UploaderID    int64
 	Encrypted     bool
 	PlaintextSize int64
+	Revision      int64
 }
 
 // ErrInvalidContext reports a nil context passed to a context-aware projection
@@ -503,7 +504,7 @@ func Search(db *sql.DB, channelID int64, query string, limit int) ([]SearchHit, 
 
 	fileRows, err := db.Query(`
 		SELECT f.msg_id, COALESCE(d.display_name, f.name), f.size, f.parent_id,
-		       f.upload_time, f.uploader_user_id, f.encrypted, f.plaintext_size
+		       f.upload_time, f.uploader_user_id, f.encrypted, f.plaintext_size, f.revision
 		FROM files f
 		LEFT JOIN dirents d
 		  ON d.channel_id=f.channel_id AND d.object_id='f:' || f.msg_id
@@ -518,7 +519,7 @@ func Search(db *sql.DB, channelID int64, query string, limit int) ([]SearchHit, 
 		var h SearchHit
 		var enc int
 		h.Type = "file"
-		if err := fileRows.Scan(&h.MsgID, &h.Name, &h.Size, &h.ParentID, &h.Time, &h.UploaderID, &enc, &h.PlaintextSize); err != nil {
+		if err := fileRows.Scan(&h.MsgID, &h.Name, &h.Size, &h.ParentID, &h.Time, &h.UploaderID, &enc, &h.PlaintextSize, &h.Revision); err != nil {
 			_ = fileRows.Close()
 			return nil, err
 		}

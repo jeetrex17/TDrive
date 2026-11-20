@@ -82,16 +82,18 @@ type SearchResult struct {
 	UploaderID    int64
 	Encrypted     bool
 	PlaintextSize int64
+	Revision      int64
 	Path          string
 }
 
 type TelegramFile struct {
-	ID         int
-	Name       string
-	Size       int64
-	AccessHash int64
-	Date       int
-	UploaderID int64
+	ID           int
+	Name         string
+	Size         int64
+	AccessHash   int64
+	Date         int
+	UploaderID   int64
+	CopyIdentity string
 }
 
 func (s *Service) StorageUsed(channelID int64) (int64, error) {
@@ -188,6 +190,7 @@ func (s *Service) Search(channelID int64, query string, limit int) ([]SearchResu
 				UploaderID:    h.UploaderID,
 				Encrypted:     h.Encrypted,
 				PlaintextSize: h.PlaintextSize,
+				Revision:      h.Revision,
 				Path:          path,
 			})
 		}
@@ -331,12 +334,13 @@ func (s *Service) TelegramRootFiles(ctx context.Context, channelID int64) ([]Tel
 			msg.DocumentName = captionName
 		}
 		files = append(files, TelegramFile{
-			ID:         int(msg.MsgID),
-			Name:       tgclient.MediaName(msg),
-			Size:       msg.MediaSize,
-			AccessHash: msg.DocumentAccessHash,
-			Date:       int(msg.Date),
-			UploaderID: msg.FromID,
+			ID:           int(msg.MsgID),
+			Name:         tgclient.MediaName(msg),
+			Size:         msg.MediaSize,
+			AccessHash:   msg.DocumentAccessHash,
+			Date:         int(msg.Date),
+			UploaderID:   msg.FromID,
+			CopyIdentity: tgclient.SharedRawCopyIdentity(msg),
 		})
 	}
 	return files, nil
