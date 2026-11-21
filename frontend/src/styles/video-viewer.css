@@ -949,7 +949,7 @@
 
 .video-speed-custom input {
     box-sizing: border-box;
-    /* Cancel the global `input { margin-bottom: 15px }` reset; inside this
+    /* Cancel the global `input { margin-bottom: 16px }` reset; inside this
        align-items:center grid that stray margin shifts the field up ~7px and
        drops the Set button off its baseline. */
     margin: 0;

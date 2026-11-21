@@ -10,6 +10,8 @@
 }
 
 .auth-welcome { text-align: center; }
+/* The form's fields and its button share one 40px height. */
+.auth-box input { min-height: 40px; }
 
 .auth-box h2 { color: var(--color-text); margin-bottom: 0.5rem; font-size: var(--type-xl); font-weight: var(--weight-semibold); letter-spacing: -0.01em; }
 .auth-box p { color: var(--text-muted); margin-bottom: 1.5rem; font-size: var(--type-base); }
@@ -78,7 +80,7 @@
 
 input {
     width: 100%; min-height: 36px; padding: 8px 12px; background: var(--color-surface-1); border: 1px solid var(--color-border-soft);
-    border-radius: var(--radius-md); color: var(--color-text); margin-bottom: 15px; font-size: var(--type-base); outline: none;
+    border-radius: var(--radius-md); color: var(--color-text); margin-bottom: 16px; font-size: var(--type-base); outline: none;
     transition:
         background-color var(--motion-med) var(--ease-standard),
         border-color var(--motion-med) var(--ease-standard),
@@ -89,7 +91,7 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 
 .input-with-action {
     position: relative;
-    margin-bottom: 15px;
+    margin-bottom: 16px;
 }
 .input-with-action input {
     padding-right: 44px;

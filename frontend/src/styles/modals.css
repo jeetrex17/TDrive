@@ -14,11 +14,11 @@
     animation: tdrive-surface-enter var(--motion-slow) var(--ease-enter) both;
 }
 .modal-title { color: var(--color-text); font-size: var(--type-md); font-weight: var(--weight-semibold); letter-spacing: -0.01em; margin-bottom: 4px; }
-.modal-subtitle { color: var(--color-text-muted); font-size: var(--type-sm); line-height: 1.45; margin-bottom: 18px; }
+.modal-subtitle { color: var(--color-text-muted); font-size: var(--type-sm); line-height: 1.45; margin-bottom: 16px; }
 .share-drive-link {
     width: 100%;
     min-height: 36px;
-    margin-bottom: 15px;
+    margin-bottom: 16px;
     padding: 8px 12px;
     overflow-wrap: anywhere;
     user-select: text;
