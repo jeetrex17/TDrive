@@ -49,21 +49,10 @@
 }
 
 .file-viewer-topbar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: var(--space-5);
     min-height: 72px;
     padding: 14px 18px;
     border-bottom: 1px solid var(--viewer-border-soft);
     background: var(--viewer-surface-2);
-}
-
-.file-viewer-identity {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    min-width: 0;
 }
 
 .file-viewer-kind-mark {
@@ -84,43 +73,18 @@
     height: 22px;
 }
 
-.file-viewer-title-group {
-    min-width: 0;
-}
-
-.file-viewer-title {
-    max-width: min(72vw, 980px);
-    overflow: hidden;
-    color: var(--viewer-text);
-    font-size: var(--type-lg);
-    font-weight: 800;
+.file-viewer-topbar .viewer-title {
     line-height: 1.2;
-    text-overflow: ellipsis;
-    white-space: nowrap;
 }
 
-.file-viewer-meta {
-    display: flex;
-    align-items: center;
-    gap: 8px;
+.file-viewer-topbar .viewer-meta {
     margin-top: 4px;
-    color: var(--viewer-text-muted);
-    font-size: var(--type-xs);
     font-weight: 700;
     letter-spacing: 0.02em;
     text-transform: uppercase;
 }
 
-.file-viewer-actions {
-    display: flex;
-    align-items: center;
-    gap: var(--space-3);
-    flex: 0 0 auto;
-    min-width: 0;
-}
-
 .file-viewer-action,
-.file-viewer-close,
 .audio-play,
 .audio-mute {
     display: inline-flex;
@@ -145,32 +109,13 @@
     font-weight: 800;
 }
 
-.file-viewer-action.is-icon-only {
-    width: 36px;
-    min-width: 36px;
-    padding: 0;
-}
-
 .file-viewer-action svg {
     width: 16px;
     height: 16px;
 }
 
-.file-viewer-close {
-    width: 44px;
-    height: 44px;
-    border-radius: var(--radius-pill);
-    line-height: 1;
-}
-
-.file-viewer-close svg {
-    width: 19px;
-    height: 19px;
-}
-
 @media (hover: hover) {
     .file-viewer-action:hover,
-    .file-viewer-close:hover,
     .audio-play:hover,
     .audio-mute:hover {
         background: var(--viewer-control-hover);
@@ -180,7 +125,6 @@
 }
 
 .file-viewer-action:active,
-.file-viewer-close:active,
 .audio-play:active,
 .audio-mute:active {
     transform: translateY(0.5px) scale(0.985);
@@ -193,7 +137,6 @@
 }
 
 .file-viewer-action:focus-visible,
-.file-viewer-close:focus-visible,
 .audio-play:focus-visible,
 .audio-mute:focus-visible,
 .audio-seek:focus-visible,
@@ -649,8 +592,7 @@
         display: none;
     }
 
-    .file-viewer-title {
-        max-width: 58vw;
+    .file-viewer-topbar .viewer-title {
         font-size: var(--type-md);
     }
 
@@ -686,13 +628,13 @@
         justify-content: space-between;
     }
 
-    .file-viewer-actions .text-viewer-toggle {
+    .file-viewer-topbar .viewer-actions .text-viewer-toggle {
         order: 3;
         width: 100%;
         justify-content: center;
     }
 
-    .file-viewer-actions .text-viewer-toggle button {
+    .file-viewer-topbar .viewer-actions .text-viewer-toggle button {
         flex: 1;
     }
 }
@@ -719,36 +661,16 @@ html.mobile #viewer-modal .file-viewer-shell {
 html.mobile .file-viewer-topbar.is-phone {
     display: grid;
     grid-template-columns: 44px minmax(0, 1fr) 44px;
-    align-items: center;
     gap: 4px;
     min-height: 44px;
     padding: var(--inset-top) 8px 0;
 }
-html.mobile .file-viewer-topbar.is-phone .file-viewer-title {
-    max-width: none;
+html.mobile .file-viewer-topbar.is-phone .viewer-title {
     font-size: var(--type-md);
     font-weight: var(--weight-strong);
     text-align: center;
 }
-html.mobile .file-viewer-topbar.is-phone .file-viewer-close,
-html.mobile .file-viewer-topbar.is-phone .file-viewer-action {
-    width: 44px;
-    min-width: 44px;
-    height: 44px;
-    padding: 0;
-    border: 0;
-    border-radius: var(--radius-pill);
-    background: transparent;
-    color: var(--viewer-text);
-    -webkit-tap-highlight-color: transparent;
-}
-html.mobile .file-viewer-topbar.is-phone .file-viewer-action svg { width: 20px; height: 20px; }
-@media (hover: hover) {
-    html.mobile .file-viewer-topbar.is-phone .file-viewer-close:hover,
-    html.mobile .file-viewer-topbar.is-phone .file-viewer-action:hover { background: transparent; }
-}
-html.mobile .file-viewer-topbar.is-phone .file-viewer-close:active,
-html.mobile .file-viewer-topbar.is-phone .file-viewer-action:active { background: var(--viewer-overlay-2); transform: none; }
+html.mobile .file-viewer-topbar.is-phone .viewer-actions { justify-content: flex-end; }
 html.mobile .file-viewer-subbar {
     display: flex;
     justify-content: center;

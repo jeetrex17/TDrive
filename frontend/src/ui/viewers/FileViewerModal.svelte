@@ -8,11 +8,11 @@
     import PlayIcon from '@lucide/svelte/icons/play';
     import Volume2Icon from '@lucide/svelte/icons/volume-2';
     import VolumeXIcon from '@lucide/svelte/icons/volume-x';
-    import XIcon from '@lucide/svelte/icons/x';
     import { isMobilePlatform } from '../../api';
     import { createZoomPanController } from '../preview/zoom-pan';
     import { bindTouchGestures } from '../preview/touch-gestures';
     import ModalShell from '../modals/ModalShell.svelte';
+    import ViewerTopBar from './ViewerTopBar.svelte';
     import { isPdfFrameMessage, pdfViewerFrameSrc } from './pdf-frame';
     import { bindViewOnlyGuards } from './view-only-guards';
     import { fileViewerState } from './file-viewer-store';
@@ -29,8 +29,7 @@
 
     let { onClose, onDownload }: Props = $props();
 
-    // The phone header is a 44px bar: close, the file name, download. The
-    // desktop header below is untouched.
+    // The phone header is a 44px bar: download, the file name, close.
     const mobile = isMobilePlatform();
 
     const TEXT_CHUNK_BYTES = 512 * 1024;
@@ -441,22 +440,22 @@
     {/if}
 {/snippet}
 
+{#snippet downloadButton()}
+    {#if !$fileViewerState.readOnly && !$fileViewerState.protected}<button class="viewer-icon-btn" type="button" onclick={onDownload} aria-label="Download" title="Download">
+        <DownloadIcon aria-hidden="true" />
+    </button>{/if}
+{/snippet}
+
 {#snippet viewerHeader()}
     {#if mobile}
     <div class="file-viewer-head">
-        <!-- Close sits at the trailing end, where the photo and video
-             viewers put it. -->
-        <div class="file-viewer-topbar is-phone">
-            {#if !$fileViewerState.readOnly && !$fileViewerState.protected}<button class="file-viewer-action is-icon-only" type="button" onclick={onDownload} aria-label="Download" title="Download">
-                <DownloadIcon aria-hidden="true" />
-            </button>{:else}<span aria-hidden="true"></span>{/if}
-            <h3 id="file-viewer-title" class="file-viewer-title" title={$fileViewerState.title}>
-                {$fileViewerState.title || 'Open file'}
-            </h3>
-            <button class="file-viewer-close" type="button" onclick={onClose} aria-label="Close file" title="Close">
-                <XIcon strokeWidth={2.2} aria-hidden="true" />
-            </button>
-        </div>
+        <!-- Download leads and close trails, where the photo and video
+             viewers put it; an empty slot keeps the name centred. -->
+        <ViewerTopBar class="file-viewer-topbar is-phone" titleId="file-viewer-title" title={$fileViewerState.title || 'Open file'} closeLabel="Close file" {onClose}>
+            {#snippet leading()}
+                <span class="file-viewer-leading">{@render downloadButton()}</span>
+            {/snippet}
+        </ViewerTopBar>
         {#if $fileViewerState.protected}<div class="file-viewer-subbar">{@render protectedBadge()}</div>{/if}
         {#if shouldShowMarkdownToggle()}
             <div class="file-viewer-subbar">
@@ -465,8 +464,8 @@
         {/if}
     </div>
     {:else}
-    <div class="file-viewer-topbar">
-        <div class="file-viewer-identity">
+    <ViewerTopBar class="file-viewer-topbar" titleId="file-viewer-title" title={$fileViewerState.title || 'Open file'} closeLabel="Close file" {onClose}>
+        {#snippet leading()}
             <div class={`file-viewer-kind-mark is-${$fileViewerState.kind || 'file'}`} aria-hidden="true">
                 {#if $fileViewerState.kind === 'image'}
                     <ImageIcon strokeWidth={1.8} />
@@ -478,34 +477,24 @@
                     <FileIcon strokeWidth={1.8} />
                 {/if}
             </div>
-            <div class="file-viewer-title-group">
-                <h3 id="file-viewer-title" class="file-viewer-title" title={$fileViewerState.title}>
-                    {$fileViewerState.title || 'Open file'}
-                </h3>
-                <div class="file-viewer-meta">
-                    <span>{viewerLabel()}</span>
-                    {@render protectedBadge()}
-                    {#if $fileViewerState.meta}
-                        <span aria-hidden="true">·</span>
-                        <span>{$fileViewerState.meta}</span>
-                    {/if}
-                    <span aria-hidden="true">·</span>
-                    <span>{viewerStatus()}</span>
-                </div>
-            </div>
-        </div>
-        <div class="file-viewer-actions">
+        {/snippet}
+        {#snippet meta()}
+            <span>{viewerLabel()}</span>
+            {@render protectedBadge()}
+            {#if $fileViewerState.meta}
+                <span aria-hidden="true">·</span>
+                <span>{$fileViewerState.meta}</span>
+            {/if}
+            <span aria-hidden="true">·</span>
+            <span>{viewerStatus()}</span>
+        {/snippet}
+        {#snippet actions()}
             {#if shouldShowMarkdownToggle()}
                 {@render markdownToggle()}
             {/if}
-            {#if !$fileViewerState.readOnly && !$fileViewerState.protected}<button class="file-viewer-action" type="button" onclick={onDownload} aria-label="Download" title="Download">
-                <DownloadIcon aria-hidden="true" />
-            </button>{/if}
-            <button class="file-viewer-close" type="button" onclick={onClose} aria-label="Close file" title="Close">
-                <XIcon strokeWidth={2.2} aria-hidden="true" />
-            </button>
-        </div>
-    </div>
+            {@render downloadButton()}
+        {/snippet}
+    </ViewerTopBar>
     {/if}
 {/snippet}
 
@@ -515,7 +504,7 @@
     titleId="file-viewer-title"
     presentation={mobile ? 'dialog' : undefined}
     cardClass={`file-viewer-shell ${$fileViewerState.kind ? `is-${$fileViewerState.kind}` : ''}`}
-    initialFocus=".file-viewer-close"
+    initialFocus=".viewer-close"
     restoreFocus="#file-list"
     header={viewerHeader}
     onClose={onClose}
