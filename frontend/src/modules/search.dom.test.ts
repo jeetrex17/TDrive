@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
     enqueueDownload: vi.fn(),
     enqueueFolderDownload: vi.fn(),
     isMobilePlatform: vi.fn(() => true),
+    openImagePreview: vi.fn(),
 }));
 
 vi.mock('../api', () => ({
@@ -48,8 +49,10 @@ vi.mock('./transfers', () => ({
 }));
 vi.mock('./media-types', () => ({
     canOpenFileViewer: vi.fn(() => false),
+    isImageFile: (name: string) => name.endsWith('.jpg'),
     isVideoFile: vi.fn(() => false),
 }));
+vi.mock('./image-preview', () => ({ openImagePreview: mocks.openImagePreview }));
 vi.mock('./app-actions', () => ({
     appActions: () => ({
         refreshFiles: mocks.refreshFiles,
@@ -137,6 +140,33 @@ describe('search scheduling', () => {
             expect.objectContaining({ id: 701, revision: 9, source: 'fs' }),
             'd:reports',
             expect.objectContaining({ channelId: 42 }),
+        );
+    });
+
+    it('opens an image result in the photo viewer', async () => {
+        mocks.isMobilePlatform.mockReturnValue(false);
+        state.searchQuery = 'beach';
+        mocks.search.mockResolvedValueOnce([{ type: 'file', id: '9', name: 'beach.jpg', source: 'fs', parentId: '' }]);
+
+        await runGlobalSearch();
+        const [, , overrides] = mocks.buildFileRow.mock.calls[0];
+        const row = mocks.buildFileRow.mock.results[0].value;
+        expect(overrides.actions.map((action: { kind: string }) => action.kind)).toEqual(['open', 'download']);
+        overrides.onDoubleClick();
+
+        expect(mocks.openImagePreview).toHaveBeenCalledWith(row);
+    });
+
+    it('shows a failed search as an error with a way to try again', async () => {
+        state.searchQuery = 'report';
+        mocks.search.mockRejectedValueOnce(new Error('offline'));
+        vi.spyOn(console, 'error').mockImplementation(() => {});
+
+        await runGlobalSearch();
+
+        expect(mocks.renderFileState).toHaveBeenLastCalledWith(
+            expect.anything(), 'error', 'Search failed', expect.any(String),
+            expect.objectContaining({ label: 'Try again' }),
         );
     });
 
