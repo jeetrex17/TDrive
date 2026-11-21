@@ -6,10 +6,9 @@
 .gallery-title {
     display: none;
     align-items: center;
-    font-size: var(--type-lg);
-    font-weight: var(--weight-strong);
-    color: var(--text-main);
-    letter-spacing: 0.01em;
+    font-size: var(--type-base);
+    font-weight: var(--weight-medium);
+    color: var(--color-text);
 }
 .main-content.photos-mode .gallery-title { display: flex; }
 
@@ -20,7 +19,7 @@
 
 /* View switching: photos mode hides the file list, its table header, and the
    folder breadcrumb, and reveals the gallery with its "Photos" title. */
-.gallery-view { display: none; flex: 1; overflow-y: auto; padding: 0 24px 28px; }
+.gallery-view { display: none; flex: 1; overflow-y: auto; padding: 0 0 24px; }
 .main-content.photos-mode #file-list,
 .main-content.photos-mode .file-table-header { display: none; }
 .main-content.photos-mode #breadcrumb-back,
@@ -38,19 +37,19 @@
     position: sticky;
     top: 0;
     z-index: 1;
-    padding: 16px 2px 12px;
-    font-size: var(--type-md);
-    font-weight: var(--weight-strong);
-    letter-spacing: 0.01em;
-    color: var(--text-main);
+    padding: 16px 14px 10px;
+    font-size: var(--type-sm);
+    font-weight: var(--weight-semibold);
+    color: var(--color-text);
     /* Opaque so grid cells never ghost through the sticky header on scroll. */
     background: var(--bg-dark);
 }
+html:not(.mobile) .gallery-group-header { background: var(--color-surface-0); }
 
 .gallery-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(172px, 1fr));
-    gap: 5px;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 2px;
 }
 .gallery-virtual { position: relative; overflow-anchor: none; }
 .gallery-virtual-row { position: absolute; left: 0; right: 0; contain: layout style; }
@@ -70,16 +69,16 @@
     color: inherit;
     position: relative;
     aspect-ratio: 1 / 1;
-    border-radius: var(--radius-lg);
+    border-radius: 0;
     overflow: hidden;
     cursor: pointer;
     background: var(--bg-panel);
-    transition: transform 140ms var(--ease-standard), box-shadow 140ms var(--ease-standard);
+    transition: filter var(--motion-fast) var(--ease-standard);
 }
 @media (hover: hover) {
-    .gallery-cell:hover { transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+    .gallery-cell:hover { filter: brightness(1.08); }
 }
-.gallery-cell:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.gallery-cell:focus-visible { outline: none; box-shadow: inset var(--focus-ring); }
 
 .gallery-thumb {
     width: 100%;
@@ -93,7 +92,7 @@
 
 /* Loading shimmer while a thumbnail is being fetched/generated. */
 .gallery-cell.is-loading {
-    background-image: linear-gradient(100deg, var(--bg-panel) 30%, var(--overlay-accent-1) 50%, var(--bg-panel) 70%);
+    background-image: linear-gradient(100deg, var(--bg-panel) 30%, var(--overlay-neutral-2) 50%, var(--bg-panel) 70%);
     background-size: 200% 100%;
     animation: gallery-shimmer 1.3s linear infinite;
 }
@@ -520,7 +519,7 @@ html.mobile .gallery-cell {
     -webkit-touch-callout: none;
 }
 @media (hover: hover) {
-    html.mobile .gallery-cell:hover { transform: none; box-shadow: none; }
+    html.mobile .gallery-cell:hover { filter: none; }
 }
 html.mobile .gallery-cell:focus-visible { box-shadow: inset var(--focus-ring); }
 html.mobile .gallery-cell::after {
@@ -873,7 +872,7 @@ html.mobile .preview-unlock-go {
 /* The photo grid's own states, reused verbatim rather than restated: the
    shimmer while a cover loads, and the stripes a locked vault draws. */
 .album-cover.is-loading {
-    background-image: linear-gradient(100deg, var(--bg-panel) 30%, var(--overlay-accent-1) 50%, var(--bg-panel) 70%);
+    background-image: linear-gradient(100deg, var(--bg-panel) 30%, var(--overlay-neutral-2) 50%, var(--bg-panel) 70%);
     background-size: 200% 100%;
     animation: gallery-shimmer 1.3s linear infinite;
 }
