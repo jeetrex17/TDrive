@@ -68,7 +68,7 @@
     .viewer-icon-btn:hover { background: var(--viewer-overlay-3); }
 }
 
-.viewer-icon-btn:active { background: var(--viewer-overlay-2); transform: scale(0.96); }
+.viewer-icon-btn:active { background: var(--viewer-overlay-2); transform: scale(var(--press-scale)); }
 .viewer-icon-btn[aria-pressed="true"] { background: var(--viewer-overlay-3); }
 
 .viewer-icon-btn:focus-visible {

@@ -129,7 +129,7 @@
     outline: none;
     box-shadow: var(--focus-ring);
 }
-.profile-menu-item:active { transform: translateY(0.5px); }
+.profile-menu-item:active { transform: scale(var(--press-scale)); }
 .profile-menu-item svg {
     width: 16px;
     height: 16px;

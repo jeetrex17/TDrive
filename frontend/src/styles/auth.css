@@ -64,7 +64,7 @@
 @media (hover: hover) {
     .auth-link:hover { background: var(--overlay-accent-1); }
 }
-.auth-link:active { transform: translateY(1px); }
+.auth-link:active { transform: scale(var(--press-scale)); }
 
 .auth-caption {
     text-align: left;
@@ -260,7 +260,7 @@ html.mobile .auth-actions .primary-btn {
 @media (hover: hover) {
     html.mobile .auth-actions .primary-btn:hover { transform: none; }
 }
-html.mobile .auth-actions .primary-btn:active:not(:disabled) { transform: scale(0.98); }
+html.mobile .auth-actions .primary-btn:active:not(:disabled) { transform: scale(var(--press-scale)); }
 
 html.mobile .auth-helper-row {
     justify-content: flex-start;

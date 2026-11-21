@@ -299,7 +299,7 @@
     outline-offset: 2px;
 }
 
-.video-icon-btn:active { transform: scale(0.96); }
+.video-icon-btn:active { transform: scale(var(--press-scale)); }
 
 .video-icon-btn:disabled,
 .video-icon-btn[aria-disabled="true"] {
@@ -407,7 +407,7 @@
 
 .video-center-play:active,
 .video-center-skip:active {
-    transform: scale(0.96);
+    transform: scale(var(--press-scale));
 }
 
 .video-center-skip:disabled,
@@ -1033,7 +1033,7 @@
 }
 
 .video-speed-custom button:active {
-    transform: translateY(0.5px) scale(0.98);
+    transform: scale(var(--press-scale));
 }
 
 .video-loading {
@@ -1177,7 +1177,7 @@
 }
 
 .video-error-action:active {
-    transform: scale(0.98);
+    transform: scale(var(--press-scale));
 }
 
 .video-overlay.is-video-fullscreen {

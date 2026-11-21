@@ -18,7 +18,7 @@
     .notif-bell:hover { background: var(--bg-panel); color: var(--text-main); border-color: var(--border); }
 }
 .notif-bell:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.notif-bell:active { transform: translateY(1px); }
+.notif-bell:active { transform: scale(var(--press-scale)); }
 .notif-bell-icon { width: 18px; height: 18px; display: inline-flex; }
 .notif-bell-icon svg { width: 100%; height: 100%; }
 

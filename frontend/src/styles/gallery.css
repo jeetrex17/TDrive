@@ -460,7 +460,7 @@ html:not(.mobile) .gallery-group-header { background: var(--color-surface-0); }
 @media (hover: hover) {
     .preview-unlock-go:hover { filter: brightness(1.08); transform: translateX(1px); }
 }
-.preview-unlock-go:active { transform: scale(0.96); }
+.preview-unlock-go:active { transform: scale(var(--press-scale)); }
 .preview-unlock-go:disabled { opacity: 0.5; cursor: progress; transform: none; filter: none; }
 .preview-unlock-go svg { width: 18px; height: 18px; }
 .preview-unlock-error {
@@ -623,7 +623,7 @@ html.mobile .gallery-empty-actions .secondary-btn {
     padding: 0 18px;
     font-size: var(--mobile-type-body);
 }
-html.mobile .gallery-empty-actions .primary-btn:active { transform: scale(0.97); }
+html.mobile .gallery-empty-actions .primary-btn:active { transform: scale(var(--press-scale)); }
 
 /* ----- Phone lightbox ----- */
 /* Fullscreen on the viewer palette, chrome that a tap toggles, no chevrons

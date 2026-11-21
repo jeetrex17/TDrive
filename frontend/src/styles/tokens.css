@@ -63,6 +63,9 @@
     --gutter: 16px;
     /* One height for every control in a toolbar row. */
     --toolbar-control: 32px;
+    /* How far a control gives under a press. Small glyph targets (the tab
+       icons, the floating add button) press deeper so the give is visible. */
+    --press-scale: 0.97;
 
     --motion-fast: 120ms;
     --motion-med: 180ms;

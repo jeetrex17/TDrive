@@ -250,7 +250,7 @@
     }
 
     .mode-card:hover { transform: translateY(-1px); color: var(--color-text); }
-    .mode-card:active { transform: translateY(0) scale(0.98); }
+    .mode-card:active { transform: scale(var(--press-scale)); }
     .mode-card:focus-visible { outline: none; box-shadow: var(--focus-ring); }
     .mode-card.selected {
         color: var(--color-accent);
@@ -295,7 +295,7 @@
     }
 
     .theme-card:hover { transform: translateY(-2px); border-color: var(--color-border); }
-    .theme-card:active { transform: translateY(0) scale(0.985); }
+    .theme-card:active { transform: scale(var(--press-scale)); }
     .theme-card:focus-visible { outline: none; box-shadow: var(--focus-ring); }
     .theme-card.selected {
         background: var(--overlay-accent-1);

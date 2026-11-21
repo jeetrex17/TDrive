@@ -61,7 +61,7 @@ html:not(.mobile) .main-content {
 @media (hover: hover) {
     .breadcrumb-link:hover { background: var(--overlay-neutral-1); color: var(--color-text); }
 }
-.breadcrumb-link:active { transform: translateY(0.5px); }
+.breadcrumb-link:active { transform: scale(var(--press-scale)); }
 .breadcrumb-sep { color: var(--color-text-subtle); opacity: 0.6; }
 /* The folder being looked at is the page title. */
 .breadcrumb-path > .breadcrumb-link:last-child { color: var(--color-text); }
@@ -489,7 +489,7 @@ html[data-input="keyboard"] .file-list-box:focus-visible .file-row.is-keyboard-a
     .action-icon:hover { background: var(--overlay-neutral-2); color: var(--text-main); }
 }
 .action-icon:focus-visible { outline: none; box-shadow: var(--focus-ring); color: var(--text-main); }
-.action-icon:active { transform: translateY(0.5px) scale(0.98); }
+.action-icon:active { transform: scale(var(--press-scale)); }
 
 
 /* ====================== PHONE ROWS ====================== */
@@ -846,7 +846,7 @@ html.mobile .file-state-actions .secondary-btn {
     padding: 0 18px;
     font-size: var(--mobile-type-body);
 }
-html.mobile .file-state-actions .secondary-btn:active { transform: scale(0.97); }
+html.mobile .file-state-actions .secondary-btn:active { transform: scale(var(--press-scale)); }
 
 /* First-load skeleton in the phone row's own shape. */
 html.mobile .file-state.is-loading { padding: 0; }

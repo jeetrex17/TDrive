@@ -88,7 +88,7 @@
     }
 
     .ui-icon-button:active:not(:disabled) {
-        transform: translateY(0.5px) scale(0.98);
+        transform: scale(var(--press-scale));
     }
 
     .ui-icon-button:focus-visible {

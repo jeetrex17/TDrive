@@ -371,7 +371,7 @@
         background: var(--color-action);
     }
     .updates-btn.primary:hover { background: var(--color-action-hover); }
-    .updates-btn.primary:active { transform: scale(0.97); }
+    .updates-btn.primary:active { transform: scale(var(--press-scale)); }
     .updates-btn.primary:disabled { opacity: 0.6; cursor: default; }
     .updates-btn.ghost {
         color: var(--color-text-muted);

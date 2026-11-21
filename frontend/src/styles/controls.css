@@ -22,7 +22,7 @@
 @media (hover: hover) {
     .primary-btn:hover:not(:disabled) { background: var(--color-action-hover); }
 }
-.primary-btn:active:not(:disabled) { transform: scale(0.97); }
+.primary-btn:active:not(:disabled) { transform: scale(var(--press-scale)); }
 
 .secondary-btn {
     padding: var(--space-3) var(--space-4);
@@ -45,7 +45,7 @@
 @media (hover: hover) {
     .secondary-btn:hover:not(:disabled) { background: var(--color-surface-2); }
 }
-.secondary-btn:active:not(:disabled) { transform: scale(0.97); }
+.secondary-btn:active:not(:disabled) { transform: scale(var(--press-scale)); }
 .primary-btn:disabled,
 .secondary-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
@@ -67,7 +67,7 @@
 @media (hover: hover) {
     .icon-btn:hover { border-color: var(--text-main); color: var(--text-main); }
 }
-.icon-btn:active { transform: translateY(0.5px) scale(0.98); }
+.icon-btn:active { transform: scale(var(--press-scale)); }
 .icon-btn svg { width: 18px; height: 18px; }
 
 /* === SEGMENTED CONTROL ===
