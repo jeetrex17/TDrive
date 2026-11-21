@@ -603,7 +603,7 @@ html.mobile .mobile-context-action .mobile-fab .primary-btn.upload-btn {
     overflow: hidden;
     border: 0;
     border-radius: 50%;
-    background: var(--color-accent);
+    background: var(--color-action);
     color: transparent;
     font-size: var(--type-2xs);
     box-shadow: var(--shadow-md);
@@ -613,7 +613,7 @@ html.mobile .mobile-context-action .mobile-fab .upload-btn-pill {
     height: 52px;
     display: grid;
     place-items: center;
-    color: var(--color-on-accent);
+    color: var(--color-on-action);
     border-radius: var(--radius-pill);
     transition: transform var(--motion-fast) var(--ease-standard);
 }

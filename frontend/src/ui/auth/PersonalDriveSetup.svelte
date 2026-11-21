@@ -529,11 +529,11 @@
     .drive-confirm-create {
         min-height: 34px;
         padding: 0 14px;
-        color: var(--color-on-accent);
+        color: var(--color-on-action);
         font: inherit;
         font-size: var(--type-sm);
-        font-weight: var(--weight-strong);
-        background: var(--accent);
+        font-weight: var(--weight-semibold);
+        background: var(--color-action);
         border: 0;
         border-radius: var(--radius-md);
         cursor: pointer;
@@ -629,15 +629,15 @@
         width: 100%;
         min-height: 50px;
         margin-top: 0;
-        color: var(--color-on-accent);
+        color: var(--color-on-action);
         font-size: var(--type-md);
-        font-weight: var(--weight-strong);
-        background: var(--accent);
+        font-weight: var(--weight-semibold);
+        background: var(--color-action);
         border-radius: var(--radius-lg);
     }
     :global(html.mobile) .drive-ghost.is-primary:not(:disabled):hover {
-        color: var(--color-on-accent);
-        background: var(--accent);
+        color: var(--color-on-action);
+        background: var(--color-action);
     }
     :global(html.mobile) .drive-secondary-stack { gap: 0; }
     :global(html.mobile) .drive-confirm {

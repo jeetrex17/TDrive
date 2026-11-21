@@ -367,11 +367,11 @@
             border-color var(--motion-fast) var(--ease-standard);
     }
     .updates-btn.primary {
-        color: var(--color-on-accent);
-        background: var(--color-accent);
+        color: var(--color-on-action);
+        background: var(--color-action);
     }
-    .updates-btn.primary:hover { background: var(--color-accent-hover); }
-    .updates-btn.primary:active { transform: translateY(0.5px); }
+    .updates-btn.primary:hover { background: var(--color-action-hover); }
+    .updates-btn.primary:active { transform: scale(0.97); }
     .updates-btn.primary:disabled { opacity: 0.6; cursor: default; }
     .updates-btn.ghost {
         color: var(--color-text-muted);

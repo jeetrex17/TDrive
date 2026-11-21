@@ -71,25 +71,24 @@
     }
 
     .is-primary {
-        color: var(--color-on-accent);
-        background: var(--accent);
-        border-color: var(--accent);
+        color: var(--color-on-action);
+        background: var(--color-action);
+        border-color: var(--color-action);
     }
 
     .is-primary:hover:not(:disabled) {
-        background: var(--accent-hover);
-        border-color: var(--accent-hover);
+        background: var(--color-action-hover);
+        border-color: var(--color-action-hover);
     }
 
     .is-secondary {
-        color: var(--text-main);
-        background: transparent;
-        border-color: var(--border);
+        color: var(--color-text);
+        background: var(--color-surface-1);
+        border-color: var(--color-border-soft);
     }
 
     .is-secondary:hover:not(:disabled) {
-        background: var(--surface-control);
-        border-color: var(--color-surface-3);
+        background: var(--color-surface-2);
     }
 
     .is-small {

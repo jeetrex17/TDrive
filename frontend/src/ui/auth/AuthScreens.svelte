@@ -540,7 +540,7 @@
     }
 
     .auth-form .primary-btn:disabled:hover {
-        background: var(--accent);
+        background: var(--color-action);
         transform: none;
     }
 

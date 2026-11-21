@@ -223,9 +223,9 @@
 }
 /* The first action is the one the empty place is asking for. */
 .file-state-actions .secondary-btn:first-child {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--color-on-accent);
+    background: var(--color-action);
+    border-color: var(--color-action);
+    color: var(--color-on-action);
 }
 .file-state.is-loading {
     display: block;

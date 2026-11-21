@@ -176,7 +176,7 @@
 @media (hover: hover) {
     .move-modal-footer .primary-btn:disabled:hover {
         transform: none;
-        background: var(--accent);
+        background: var(--color-action);
     }
 }
 
