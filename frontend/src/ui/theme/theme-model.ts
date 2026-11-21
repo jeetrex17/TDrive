@@ -1,4 +1,5 @@
 export const THEME_IDS = [
+    'chalk',
     'daybreak',
     'porcelain',
     'catppuccin-latte',
@@ -6,6 +7,7 @@ export const THEME_IDS = [
     'gruvbox-light',
     'rose-pine-dawn',
     'everforest-light',
+    'graphite',
     'quiet-relay',
     'tokyo-night',
     'catppuccin-mocha',
@@ -50,6 +52,12 @@ function defineTheme(definition: ThemeDefinition): ThemeDefinition {
  */
 export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
     defineTheme({
+        id: 'chalk',
+        name: 'Chalk',
+        appearance: 'light',
+        preview: ['#f4f5f6', '#eeeff1', '#1a6dc2', '#0b0c0e'],
+    }),
+    defineTheme({
         id: 'daybreak',
         name: 'Daybreak',
         appearance: 'light',
@@ -90,6 +98,12 @@ export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
         name: 'Everforest Light',
         appearance: 'light',
         preview: ['#fffbef', '#f2efdf', '#4c7a1a', '#5c6a72'],
+    }),
+    defineTheme({
+        id: 'graphite',
+        name: 'Graphite',
+        appearance: 'dark',
+        preview: ['#08090a', '#1a1b1d', '#4ea7f0', '#f7f8f8'],
     }),
     defineTheme({
         id: 'quiet-relay',
@@ -155,8 +169,8 @@ export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
 
 export const DEFAULT_THEME_PREFERENCE: ThemePreference = Object.freeze({
     mode: 'dark',
-    lightThemeId: 'daybreak',
-    darkThemeId: 'quiet-relay',
+    lightThemeId: 'chalk',
+    darkThemeId: 'graphite',
 });
 
 const THEME_ID_SET: ReadonlySet<string> = new Set(THEME_IDS);

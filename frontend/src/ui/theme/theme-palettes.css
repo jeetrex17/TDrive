@@ -38,6 +38,112 @@
 }
 
 :root:not([data-theme]),
+:root[data-theme="graphite"] {
+    color-scheme: dark;
+
+    /* Graphite: near-black instrument panels, pale actions, blue kept for focus, selection and progress. */
+    --color-canvas: #08090a;
+    --color-surface-0: #0f1011;
+    --color-surface-1: #141516;
+    --color-surface-2: #1a1b1d;
+    --color-surface-3: #232427;
+    --color-text: #f7f8f8;
+    --color-text-soft: #d0d6e0;
+    --color-text-muted: #8a8f98;
+    --color-text-subtle: #858a93;
+    --color-border: #2e3033;
+    --color-border-soft: #1f2023;
+    --color-accent: #4ea7f0;
+    --color-accent-hover: #6db6f3;
+    --color-accent-strong: #2f93e0;
+    --color-on-accent: #08090a;
+    --color-danger: #eb5757;
+    --color-on-danger: #08090a;
+    --color-warning: #f2c94c;
+    --color-success: #4cb782;
+    --color-action: #e6e7e8;
+    --color-action-hover: #ffffff;
+    --color-on-action: #08090a;
+
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.40);
+    --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.40);
+    --shadow-lg: 0 16px 48px rgba(0, 0, 0, 0.50);
+    --focus-ring: 0 0 0 2px rgba(78, 167, 240, 0.55);
+    --glass-bg: #141516;
+    --glass-border: rgba(255, 255, 255, 0.08);
+    --glass-highlight: rgba(255, 255, 255, 0.03);
+    --scrim: rgba(0, 0, 0, 0.60);
+
+    --overlay-neutral-1: rgba(255, 255, 255, 0.03);
+    --overlay-neutral-2: rgba(255, 255, 255, 0.06);
+    --overlay-neutral-3: rgba(255, 255, 255, 0.1);
+    --overlay-white-1: rgba(255, 255, 255, 0.03);
+    --overlay-white-2: rgba(255, 255, 255, 0.06);
+    --overlay-white-3: rgba(255, 255, 255, 0.1);
+    --overlay-accent-1: rgba(78, 167, 240, 0.1);
+    --overlay-accent-2: rgba(78, 167, 240, 0.16);
+    --overlay-accent-3: rgba(78, 167, 240, 0.28);
+    --overlay-danger-1: rgba(235, 87, 87, 0.1);
+    --overlay-danger-2: rgba(235, 87, 87, 0.28);
+    --overlay-warning-1: rgba(242, 201, 76, 0.1);
+    --overlay-warning-2: rgba(242, 201, 76, 0.28);
+    --overlay-success-1: rgba(76, 183, 130, 0.1);
+    --overlay-success-2: rgba(76, 183, 130, 0.27);
+}
+
+:root[data-theme="chalk"] {
+    color-scheme: light;
+
+    /* Chalk: the same instrument system on white panels with near-black actions. */
+    --color-canvas: #f4f5f6;
+    --color-surface-0: #ffffff;
+    --color-surface-1: #f7f7f8;
+    --color-surface-2: #eeeff1;
+    --color-surface-3: #e3e4e7;
+    --color-text: #0b0c0e;
+    --color-text-soft: #2c2f35;
+    --color-text-muted: #5d626b;
+    --color-text-subtle: #61666f;
+    --color-border: #d4d6da;
+    --color-border-soft: #e6e7ea;
+    --color-accent: #1a6dc2;
+    --color-accent-hover: #155fa9;
+    --color-accent-strong: #114f8e;
+    --color-on-accent: #ffffff;
+    --color-danger: #c9303f;
+    --color-on-danger: #ffffff;
+    --color-warning: #8f5400;
+    --color-success: #17744a;
+    --color-action: #0b0c0e;
+    --color-action-hover: #2c2f35;
+    --color-on-action: #ffffff;
+
+    --shadow-sm: 0 1px 2px rgba(11, 12, 14, 0.06);
+    --shadow-md: 0 8px 24px rgba(11, 12, 14, 0.10);
+    --shadow-lg: 0 16px 48px rgba(11, 12, 14, 0.14);
+    --focus-ring: 0 0 0 2px rgba(26, 109, 194, 0.40);
+    --glass-bg: #ffffff;
+    --glass-border: rgba(11, 12, 14, 0.08);
+    --glass-highlight: rgba(255, 255, 255, 0.70);
+    --scrim: rgba(11, 12, 14, 0.36);
+
+    --overlay-neutral-1: rgba(11, 12, 14, 0.035);
+    --overlay-neutral-2: rgba(11, 12, 14, 0.06);
+    --overlay-neutral-3: rgba(11, 12, 14, 0.1);
+    --overlay-white-1: rgba(11, 12, 14, 0.035);
+    --overlay-white-2: rgba(11, 12, 14, 0.06);
+    --overlay-white-3: rgba(11, 12, 14, 0.1);
+    --overlay-accent-1: rgba(26, 109, 194, 0.1);
+    --overlay-accent-2: rgba(26, 109, 194, 0.16);
+    --overlay-accent-3: rgba(26, 109, 194, 0.28);
+    --overlay-danger-1: rgba(201, 48, 63, 0.1);
+    --overlay-danger-2: rgba(201, 48, 63, 0.28);
+    --overlay-warning-1: rgba(143, 84, 0, 0.1);
+    --overlay-warning-2: rgba(143, 84, 0, 0.28);
+    --overlay-success-1: rgba(23, 116, 74, 0.1);
+    --overlay-success-2: rgba(23, 116, 74, 0.27);
+}
+
 :root[data-theme="quiet-relay"] {
     color-scheme: dark;
 

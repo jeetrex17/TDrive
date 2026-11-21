@@ -99,6 +99,12 @@
        own surfaces points this at a darker step; the rest inherit the accent. */
     --color-accent-text: var(--color-accent);
 
+    /* The primary action. Most palettes fill it with their accent; Graphite and
+       Chalk use a neutral so colour stays reserved for focus and selection. */
+    --color-action: var(--color-accent);
+    --color-action-hover: var(--color-accent-hover);
+    --color-on-action: var(--color-on-accent);
+
     /* Compatibility aliases used by the current frontend modules. */
     --bg-dark: var(--color-canvas);
     --bg-sidebar: var(--color-surface-0);
