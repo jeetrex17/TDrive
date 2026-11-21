@@ -97,11 +97,21 @@ function renderedRowsByKey(list: HTMLElement): Map<string, HTMLElement> {
         .map((row) => [getRowKey(row), row] as const)
         .filter(([key]) => Boolean(key)));
 }
+/** The selection's total size; unknown as soon as it includes a folder. */
+function selectionBytes(): number | null {
+    let total = 0;
+    for (const item of state.selectedItems.values()) {
+        if (item.type === 'folder') return null;
+        total += Math.max(0, Number(item.size) || 0);
+    }
+    return total;
+}
+
 export function updateSelectionBar(): void {
     syncSelectedRowKeys();
     if (!state.selectionBarEl) return;
     const count = state.selectedItems.size;
-    setSelectionCount(count);
+    setSelectionCount(count, selectionBytes());
     state.selectionBarEl.style.display = count === 0 ? 'none' : 'flex';
 }
 

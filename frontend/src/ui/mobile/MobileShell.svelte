@@ -259,8 +259,8 @@
         id="selection-bar"
         class="selection-bar mobile-selection-bar"
         style="display: none;"
-        role="status"
-        aria-live="polite"
+        role="toolbar"
+        aria-label="Selection"
     >
         {#if dashboardVisible}
             <SelectionBar

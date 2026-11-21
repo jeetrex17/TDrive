@@ -292,22 +292,23 @@
             </div>
             <div class="col-actions" role="columnheader" aria-colindex="4">
                 <span>Actions</span>
-                <!-- Covers the Actions column while rows are selected; the
-                     selection controller reveals it. -->
-                <div id="selection-bar" class="selection-bar" style="display: none;" role="status" aria-live="polite">
-                    {#if dashboardVisible}
-                        <SelectionBar
-                            onDownload={openSelectedItemsDownload}
-                            onMove={openSelectedItemsMove}
-                            onDelete={trashSelectedItems}
-                            onClear={clearSelection}
-                        />
-                    {/if}
-                </div>
             </div>
         </div>
 
         <div id="file-list" class="file-list-box" data-file-drop-target role="grid" aria-label="Files" aria-multiselectable="true" aria-colcount="4" tabindex="-1"></div>
+
+        <!-- Floats over the list while rows are selected; the selection
+             controller reveals it. -->
+        <div id="selection-bar" class="selection-bar" style="display: none;" role="toolbar" aria-label="Selection">
+            {#if dashboardVisible}
+                <SelectionBar
+                    onDownload={openSelectedItemsDownload}
+                    onMove={openSelectedItemsMove}
+                    onDelete={trashSelectedItems}
+                    onClear={clearSelection}
+                />
+            {/if}
+        </div>
 
         <!-- The gallery's scroll container: the thumbnail observer, click
              delegation and the viewer's return-to-grid find it by this id. -->
