@@ -1,8 +1,8 @@
 /* === NOTIFICATION BELL === */
 .notif-bell {
     position: relative;
-    width: 36px;
-    height: 36px;
+    width: var(--toolbar-control);
+    height: var(--toolbar-control);
     background: transparent;
     border: 1px solid transparent;
     color: var(--text-muted);

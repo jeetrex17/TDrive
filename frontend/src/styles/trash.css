@@ -10,10 +10,10 @@
 .trash-title {
     display: none;
     align-items: center;
-    font-size: var(--type-lg);
-    font-weight: var(--weight-strong);
-    color: var(--text-main);
-    letter-spacing: 0.01em;
+    padding-left: 6px;
+    font-size: var(--type-base);
+    font-weight: var(--weight-medium);
+    color: var(--color-text);
 }
 .main-content.trash-mode .trash-title { display: flex; }
 
@@ -33,9 +33,10 @@
     margin-left: auto;
     align-items: center;
     gap: 6px;
-    padding: 6px 12px;
+    height: var(--toolbar-control);
+    padding: 0 12px;
     border: 1px solid var(--overlay-danger-2);
-    border-radius: var(--radius-sm);
+    border-radius: var(--radius-md);
     background: transparent;
     color: var(--color-danger);
     font-size: var(--type-sm);

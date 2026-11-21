@@ -11,14 +11,20 @@
 .sidebar {
     /* The sidebar sits on the window canvas; the content beside it is the one
        raised panel, so the eye lands there first. */
+    /* Inset by the same --window-inset as the panel beside it, so the gap from
+       a highlighted row to the panel equals the panel's gap to the window. The
+       top is set so the logo's centre meets the top bar's centre (8px inset +
+       1px edge + half of 48px, less half the logo's 28px). */
     width: 232px; flex-shrink: 0; background: transparent;
-    padding: 20px 10px 12px 12px; display: flex; flex-direction: column; min-height: 0;
+    padding: 19px var(--window-inset) var(--window-inset); display: flex; flex-direction: column; min-height: 0;
 }
 .logo {
     display: flex;
     align-items: center;
     gap: 9px;
-    margin-bottom: 40px;
+    /* Starts on the icon column of the rows below it. */
+    padding: 0 8px;
+    margin-bottom: 24px;
     font-size: var(--type-xl);
     font-weight: var(--weight-strong);
     color: var(--color-text);
@@ -35,8 +41,8 @@
     object-fit: contain;
 }
 
-.storage-info { padding: 10px 8px 0; border-top: 1px solid var(--color-border-soft); }
-.storage-info p { font-size: var(--type-xs); color: var(--color-text-subtle); font-variant-numeric: tabular-nums; display: flex; justify-content: space-between; gap: var(--space-2); }
+.storage-info { display: flex; align-items: center; min-height: var(--toolbar-control); padding: 0 8px; border-top: 1px solid var(--color-border-soft); }
+.storage-info p { width: 100%; font-size: var(--type-xs); color: var(--color-text-subtle); font-variant-numeric: tabular-nums; display: flex; justify-content: space-between; gap: var(--space-2); }
 #storage-used { text-align: right; min-width: 0; }
 
 .drives-nav {
@@ -57,13 +63,13 @@
 .drives-section { display: flex; flex-direction: column; }
 .drives-section-title {
     font-size: var(--type-xs); font-weight: var(--weight-medium); letter-spacing: 0;
-    color: var(--color-text-subtle); padding: 0 8px 4px;
+    color: var(--color-text-subtle); padding: 0 8px 6px;
 }
-.drives-list { display: flex; flex-direction: column; gap: 1px; }
+.drives-list { display: flex; flex-direction: column; gap: 2px; }
 .drive-item {
     display: flex; align-items: center; gap: 10px; color: var(--color-text-muted);
-    background: transparent; border: none; cursor: pointer; min-height: 30px;
-    padding: 5px 8px; border-radius: var(--radius-sm); font-size: var(--type-sm); font-weight: var(--weight-medium);
+    background: transparent; border: none; cursor: pointer; min-height: 32px;
+    padding: 6px 8px; border-radius: var(--radius-sm); font-size: var(--type-sm); font-weight: var(--weight-medium);
     transition: background-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard); text-align: left; width: 100%;
 }
 @media (hover: hover) {
@@ -79,7 +85,7 @@
     white-space: nowrap;
 }
 .drive-empty {
-    padding: 5px 8px; font-size: var(--type-sm); color: var(--color-text-subtle);
+    padding: 6px 8px; font-size: var(--type-sm); color: var(--color-text-subtle);
 }
 .pending-drive-item {
     opacity: 0.82;
@@ -98,15 +104,15 @@
 .drives-actions {
     display: flex;
     flex-direction: column;
-    gap: 1px;
+    gap: 2px;
     margin-top: auto;
     padding: 8px 0;
 }
 .drive-action-btn {
     /* Secondary destinations read as quiet sidebar rows, not a stack of
        outlined buttons competing with the navigation above them. */
-    display: flex; align-items: center; gap: 10px; background: transparent; border: 0; min-height: 30px;
-    color: var(--color-text-muted); padding: 5px 8px; border-radius: var(--radius-sm); cursor: pointer;
+    display: flex; align-items: center; gap: 10px; background: transparent; border: 0; min-height: 32px;
+    color: var(--color-text-muted); padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer;
     font-size: var(--type-sm); text-align: left; transition: color var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
 }
 .drive-action-btn:focus-visible {

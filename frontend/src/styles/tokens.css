@@ -56,6 +56,14 @@
     --space-6: 24px;
     --space-8: 32px;
 
+    /* Desktop frame. The content panel sits --window-inset from the window on
+       every side, including the sidebar's; everything inside it starts and
+       ends --gutter from its edges, so left and right margins always match. */
+    --window-inset: 8px;
+    --gutter: 16px;
+    /* One height for every control in a toolbar row. */
+    --toolbar-control: 32px;
+
     --motion-fast: 120ms;
     --motion-med: 180ms;
     --motion-slow: 240ms;

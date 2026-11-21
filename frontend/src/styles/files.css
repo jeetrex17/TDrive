@@ -4,7 +4,7 @@
    columns, so the eye reads a name and its figures without crossing a void. */
 .main-content { --file-columns: minmax(0, 1fr) minmax(112px, 150px) minmax(64px, 96px) 76px; }
 html:not(.mobile) .main-content {
-    margin: 8px 8px 8px 0;
+    margin: var(--window-inset) var(--window-inset) var(--window-inset) 0;
     overflow: hidden;
     background: var(--color-surface-0);
     border: 1px solid var(--color-border-soft);
@@ -13,23 +13,26 @@ html:not(.mobile) .main-content {
 
 .main-content > header {
     min-height: 48px; flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; gap: var(--space-3);
-    padding: 0 10px 0 12px; border-bottom: 1px solid var(--color-border-soft);
+    padding: 0 var(--gutter); border-bottom: 1px solid var(--color-border-soft);
 }
 
 .search-bar { position: relative; width: 240px; min-width: 0; flex: 0 1 240px; }
 .search-bar input {
-    width: 100%; min-width: 0; height: 30px; margin: 0; padding: 0 10px 0 30px;
+    width: 100%; min-width: 0; height: var(--toolbar-control); min-height: 0; margin: 0; padding: 0 10px 0 30px;
     background: var(--color-surface-1); border: 1px solid var(--color-border-soft); border-radius: var(--radius-md);
     font-size: var(--type-sm);
 }
 .search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--color-text-subtle); pointer-events: none; }
 
 .header-actions { display: flex; flex-shrink: 0; gap: var(--space-2); align-items: center; }
-.upload-btn { width: auto; height: 30px; padding: 0 12px; font-size: var(--type-sm); }
+.upload-btn { width: auto; height: var(--toolbar-control); padding: 0 12px; font-size: var(--type-sm); }
 .btn-icon { width: 16px; height: 16px; }
 /* BREADCRUMB */
 .drive-breadcrumb {
     flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: var(--space-1-5);
+    /* Pulls the crumbs' own padding back, so the title's first letter sits on
+       the gutter with the icons and labels below it. */
+    margin-left: -6px;
 }
 .back-btn { width: 28px; height: 28px; border: 0; }
 .back-btn svg { width: 16px; height: 16px; }
@@ -124,7 +127,7 @@ html:not(.mobile) .main-content {
        12px gap between cells: the header mirrors that exactly, or its labels
        start a dozen pixels off the figures under them. */
     display: grid; grid-template-columns: var(--file-columns);
-    align-items: center; min-height: 32px; padding: 0 18px; column-gap: var(--space-3);
+    align-items: center; min-height: 32px; padding: 0 var(--gutter); column-gap: var(--space-3);
     font-size: var(--type-xs); font-weight: var(--weight-medium); color: var(--color-text-subtle); letter-spacing: 0;
     border-bottom: 1px solid var(--color-border-soft);
 }
@@ -181,7 +184,7 @@ html:not(.mobile) .main-content {
     flex: 1;
     overflow-y: auto;
     min-height: 0;
-    padding: 4px 6px;
+    padding: 4px;
     outline: none;
 }
 /* The container is focusable only to catch the keyboard when a row cannot hold

@@ -6,6 +6,8 @@
 .gallery-title {
     display: none;
     align-items: center;
+    /* Matches a crumb's padding, so the title starts on the gutter. */
+    padding-left: 6px;
     font-size: var(--type-base);
     font-weight: var(--weight-medium);
     color: var(--color-text);
@@ -37,7 +39,7 @@
     position: sticky;
     top: 0;
     z-index: 1;
-    padding: 16px 14px 10px;
+    padding: 16px var(--gutter) 8px;
     font-size: var(--type-sm);
     font-weight: var(--weight-semibold);
     color: var(--color-text);
