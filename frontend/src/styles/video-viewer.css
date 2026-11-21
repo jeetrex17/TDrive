@@ -1073,7 +1073,7 @@
     border: 1px solid rgba(247, 118, 142, 0.38);
     border-radius: var(--radius-lg);
     color: #fff;
-    background: linear-gradient(135deg, rgba(27, 30, 43, 0.98), rgba(15, 18, 29, 0.96));
+    background: var(--viewer-surface-2);
     box-shadow: 0 18px 58px rgba(0, 0, 0, 0.42);
     text-align: left;
     z-index: 5;
