@@ -322,7 +322,7 @@ export function buildFolderRow(folder: FolderRowInput, parentId: string, overrid
         name,
         channelId: Number(overrides.channelId ?? state.activeChannel?.id ?? 0),
         parentId: String(overrides.parentId ?? folder.parentId ?? parentId ?? ''),
-        metaLabel: overrides.metaLabel ?? '—',
+        metaLabel: overrides.metaLabel ?? '',
         sizeLabel: overrides.sizeLabel ?? '…',
         size: folderSize,
         modifiedTime: folderModified,
@@ -718,7 +718,7 @@ function rowsForLoadedData(data: LoadedFileData, view: FileViewIdentity): FileLi
                 // A folder shows a size only once one is known. Zero reads as "no
                 // files", which is rarely true and never useful, so it stays blank.
                 sizeLabel: size > 0 ? formatBytes(size) : '',
-                metaLabel: modifiedTime > 0 ? formatDate(modifiedTime) : '—',
+                metaLabel: modifiedTime > 0 ? formatDate(modifiedTime) : '',
             });
         });
 
