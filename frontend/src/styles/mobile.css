@@ -11,13 +11,11 @@
 html.mobile {
     /* Everything that floats above the tab bar measures from these, so the
        bar's shape lives in one place. The slot adds the bottom inset on top. */
-    --tabbar-height: 64px;
-    /* How far the floating bar sits from the screen edges. */
-    --tabbar-inset: 12px;
-    /* The top of the tab bar: where anything floating over the content has to
-       stop. Every such surface measures from this one value, so the bar's shape
-       is stated once and they cannot drift apart. */
-    --mobile-overlay-bottom: calc(var(--tabbar-height) + var(--tabbar-inset) * 2 + var(--inset-bottom));
+    --tabbar-height: 56px;
+    /* Where anything floating over the content stops: the top of the tab bar,
+       plus a margin so a floating button never touches its edge. Every such
+       surface measures from this one value, so they cannot drift apart. */
+    --mobile-overlay-bottom: calc(var(--tabbar-height) + var(--inset-bottom) + var(--space-4));
     --selection-bar-reserve: calc(76px + var(--inset-bottom));
     --context-action-clearance: calc(52px + var(--space-4));
     /* The widest a column of file rows or settings should run before it stops
@@ -463,28 +461,20 @@ html.mobile .topbar-search input:focus-visible {
 }
 
 /* ============================ TAB BAR ============================ */
-/* A floating bar rather than a full-bleed one: it reads as a control resting
-   on the content instead of a wall the content stops at, and the rounded ends
-   echo the file card above it. The upload action sits in the middle of the row
-   as a peer of the tabs, not on top of them. */
+/* Attached to the bottom edge, as both platforms draw their own: a hairline
+   above, the canvas behind, and the home indicator's inset inside it. */
 html.mobile .mobile-tabbar-slot {
     position: relative;
     flex: 0 0 auto;
-    padding:
-        0
-        calc(var(--tabbar-inset) + var(--inset-right))
-        calc(var(--tabbar-inset) + var(--inset-bottom))
-        calc(var(--tabbar-inset) + var(--inset-left));
+    padding: 0 var(--inset-right) var(--inset-bottom) var(--inset-left);
+    background: var(--color-surface-0);
+    border-top: 1px solid var(--color-border-soft);
 }
 html.mobile .tab-bar {
     position: relative;
     display: flex;
     align-items: stretch;
     height: var(--tabbar-height);
-    background: var(--color-surface-1);
-    border: 1px solid var(--color-border-soft);
-    border-radius: var(--radius-xl);
-    box-shadow: var(--shadow-lg);
 }
 html.mobile .tab-item {
     flex: 1 1 0;
@@ -501,7 +491,9 @@ html.mobile .tab-item {
     cursor: pointer;
     transition: color var(--motion-med) var(--ease-standard);
 }
-html.mobile .tab-item.active { color: var(--color-accent); }
+html.mobile .tab-item.active { color: var(--color-text); }
+/* Android's navigation bar marks the active tab with its pill and tint. */
+html.android .tab-item.active { color: var(--color-accent); }
 html.mobile .tab-icon {
     position: relative;
     display: inline-grid;
@@ -527,7 +519,7 @@ html.mobile .tab-icon .profile-avatar {
 html.mobile .tab-icon.is-avatar .tab-pill { opacity: 0; }
 html.mobile .tab-item.active .tab-icon.is-avatar .profile-avatar {
     box-shadow:
-        0 0 0 2px var(--color-accent),
+        0 0 0 2px currentColor,
         inset 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
 
@@ -553,7 +545,7 @@ html.mobile .tab-pill {
     transition: opacity var(--motion-med) var(--ease-enter),
                 transform var(--motion-med) var(--ease-enter);
 }
-html.mobile .tab-item.active .tab-pill {
+html.android .tab-item.active .tab-pill {
     opacity: 1;
     transform: translate(-50%, -50%) scale(1);
 }
