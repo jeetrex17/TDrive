@@ -14,7 +14,8 @@ import { GallerySource } from '../ui/gallery/gallery-source';
 import { clearSearch } from './search';
 import { appActions } from './app-actions';
 import { canOwnerActOnFile } from './file-list';
-import { startSelectionMode, updateSelectionBar } from './selection';
+import { clearSelection, openSelectedItemsDownload, openSelectedItemsMove, startSelectionMode, trashSelectedItems, updateSelectionBar } from './selection';
+import { showContextMenu, type ContextMenuItem } from '../ui/menus/context-menu-store';
 import { beginRender, cachedThumb, rearmLocked, setActive, setRoot, teardown as teardownGalleryController } from '../ui/gallery/gallery-controller';
 import { albumsView, galleryView, photosMode, type PhotosMode } from '../ui/gallery/gallery-store';
 import { albumsWorthShowing, buildAlbumTiles, type AlbumTile } from '../ui/gallery/album-view';
@@ -48,6 +49,7 @@ export function activateGallery(): () => void {
 
     // Click delegation stays on the stable host, matching the pre-Svelte path.
     host.addEventListener('click', onGalleryClick);
+    host.addEventListener('contextmenu', onGalleryContextMenu);
     // When the vault unlocks (e.g. from the lightbox), let locked cells retry
     // without waiting for a full gallery refresh.
     window.addEventListener('tdrive:unlocked', rearmLocked);
@@ -68,6 +70,7 @@ export function teardownGallery(): void {
     backgroundRenderToken += 1;
     releaseAlbumBack();
     galleryEl?.removeEventListener('click', onGalleryClick);
+    galleryEl?.removeEventListener('contextmenu', onGalleryContextMenu);
     window.removeEventListener('tdrive:unlocked', rearmLocked);
     for (const cleanup of touchCleanups.splice(0)) cleanup();
     teardownGalleryController();
@@ -82,29 +85,47 @@ export function teardownGallery(): void {
 
 // The gallery reuses the file list's selection, keyed the way its rows are,
 // so the selection bar's Move and Delete work on photos unchanged.
+function selectionEntry(item: GalleryItem) {
+    const mine = canOwnerActOnFile(item);
+    return {
+        type: 'file' as const,
+        id: item.msgId,
+        name: item.name,
+        channelId: currentChannelId,
+        size: item.encrypted && item.plaintextSize > 0 ? item.plaintextSize : item.size,
+        source: 'fs' as const,
+        parentId: item.parentId,
+        uploaderID: item.uploaderId,
+        canDelete: mine,
+        canRename: mine,
+    };
+}
+
+// Where a Shift-click range starts, as on a desktop file grid.
+let selectionAnchor: number | null = null;
+
 export function toggleGallerySelection(index: number): void {
     const item = currentSource?.peek(index);
     if (!item) return;
     const key = `file:${item.msgId}`;
     startSelectionMode();
     const selected = new Map(state.selectedItems);
-    if (selected.has(key)) {
-        selected.delete(key);
-    } else {
-        const mine = canOwnerActOnFile(item);
-        selected.set(key, {
-            type: 'file',
-            id: item.msgId,
-            name: item.name,
-            channelId: currentChannelId,
-            size: item.encrypted && item.plaintextSize > 0 ? item.plaintextSize : item.size,
-            source: 'fs',
-            parentId: item.parentId,
-            uploaderID: item.uploaderId,
-            canDelete: mine,
-            canRename: mine,
-        });
+    if (selected.has(key)) selected.delete(key);
+    else selected.set(key, selectionEntry(item));
+    selectionAnchor = index;
+    state.selectedItems = selected;
+    updateSelectionBar();
+}
+
+/** Adds every loaded item between the anchor and this one. */
+function extendGallerySelection(index: number): void {
+    const anchor = selectionAnchor ?? index;
+    const selected = new Map(state.selectedItems);
+    for (let at = Math.min(anchor, index); at <= Math.max(anchor, index); at += 1) {
+        const item = currentSource?.peek(at);
+        if (item) selected.set(`file:${item.msgId}`, selectionEntry(item));
     }
+    startSelectionMode();
     state.selectedItems = selected;
     updateSelectionBar();
 }
@@ -342,11 +363,55 @@ function onGalleryClick(event: MouseEvent): void {
         toggleGallerySelection(index);
         return;
     }
-    if (isVideoFile(item.name)) {
-        void openGalleryVideo(item);
-        return;
+    // Desktop selects the way a file grid does; a plain click still opens.
+    if (!isMobilePlatform()) {
+        if (event.metaKey || event.ctrlKey) {
+            toggleGallerySelection(index);
+            return;
+        }
+        if (event.shiftKey) {
+            extendGallerySelection(index);
+            return;
+        }
+        if (state.selectedItems.size > 0) clearSelection();
     }
-    void openGalleryLightbox(item);
+    openGalleryItem(item);
+}
+
+function openGalleryItem(item: GalleryItem): void {
+    if (isVideoFile(item.name)) void openGalleryVideo(item);
+    else void openGalleryLightbox(item);
+}
+
+/** Right-click acts on the selection, taking the clicked photo in first. */
+function onGalleryContextMenu(event: MouseEvent): void {
+    if (isMobilePlatform()) return;
+    const cell = (event.target as HTMLElement).closest<HTMLElement>('button.gallery-cell');
+    if (!cell) return;
+    const index = Number(cell.dataset.index ?? -1);
+    const item = currentSource?.peek(index);
+    if (!item || item.msgId !== Number(cell.dataset.id)) return;
+    event.preventDefault();
+    if (!state.selectedItems.has(`file:${item.msgId}`)) {
+        clearSelection();
+        toggleGallerySelection(index);
+    }
+    const count = state.selectedItems.size;
+    const items: ContextMenuItem[] = count > 1
+        ? [
+            { label: `Download ${count} items`, icon: 'download', action: openSelectedItemsDownload },
+            { label: `Move ${count} items…`, icon: 'move', action: openSelectedItemsMove },
+            { type: 'divider' },
+            { label: `Delete ${count} items`, icon: 'delete', danger: true, action: trashSelectedItems },
+        ]
+        : [
+            { label: 'Open', icon: isVideoFile(item.name) ? 'play' : 'open', action: () => { clearSelection(); openGalleryItem(item); } },
+            { label: 'Download', icon: 'download', action: openSelectedItemsDownload },
+            { label: 'Move…', icon: 'move', action: openSelectedItemsMove },
+            { type: 'divider' },
+            { label: 'Delete', icon: 'delete', danger: true, action: trashSelectedItems },
+        ];
+    showContextMenu(event.clientX, event.clientY, items);
 }
 
 async function openGalleryVideo(item: GalleryItem): Promise<void> {

@@ -588,8 +588,9 @@ html.mobile .gallery-locked-pill {
     line-height: 1.6;
     pointer-events: none;
 }
-html.mobile .gallery-check {
+.gallery-check {
     position: absolute;
+    z-index: 2;
     top: 6px;
     left: 6px;
     display: grid;
@@ -602,14 +603,24 @@ html.mobile .gallery-check {
     color: var(--color-on-accent);
     transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
 }
-html.mobile .gallery-check svg { opacity: 0; }
-html.mobile .gallery-cell.is-selected .gallery-check {
+.gallery-check svg { opacity: 0; }
+.gallery-cell.is-selected .gallery-check {
     background: var(--accent);
     border-color: var(--accent);
 }
-html.mobile .gallery-cell.is-selected .gallery-check svg { opacity: 1; }
+.gallery-cell.is-selected .gallery-check svg { opacity: 1; }
 html.mobile .gallery-cell.is-selected::after { box-shadow: inset 0 0 0 3px var(--accent); }
-html.mobile .gallery-cell.is-selected .gallery-thumb { opacity: 0.78; }
+.gallery-cell.is-selected .gallery-thumb { opacity: 0.78; }
+/* Desktop cells are rounded, so the selection ring follows their corners. */
+.gallery-cell.is-selected::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border-radius: inherit;
+    box-shadow: inset 0 0 0 3px var(--accent);
+    pointer-events: none;
+}
 
 html.mobile .gallery-skeleton { padding-top: 2px; }
 html.mobile .gallery-skeleton-cell {
