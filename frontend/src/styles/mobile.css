@@ -485,16 +485,6 @@ html.mobile .tab-bar {
     border-radius: var(--radius-xl);
     box-shadow: var(--shadow-lg);
 }
-/* The upload action is the middle cell and shares the tabs' sizing, so all
-   five centres land on the same rhythm. Given a width of its own it made the
-   two gaps beside it narrower than the two at the ends. */
-html.mobile .mobile-fab {
-    flex: 1 1 0;
-    position: relative;
-    display: grid;
-    place-items: center;
-    min-width: 0;
-}
 html.mobile .tab-item {
     flex: 1 1 0;
     display: flex;
@@ -585,61 +575,11 @@ html.mobile .tab-badge {
 }
 
 /* ============================ UPLOAD BUTTON ============================ */
-/* Docked into the middle of the tab bar. The Fab renders the upload menu
-   inside .mobile-fab; the rules below restyle the menu's own trigger into the
-   accent circle. It rides above the bar so its shadow reads against it. */
-/* The upload action sits in the bar's middle slot, level with the tab icons.
-   It used to float half outside the bar, which cost it on every count: a
-   circle overlapping a rounded rectangle put three different corner radii in
-   one control, the cut-out needed a canvas-coloured ring to fake a hole in the
-   bar's outline, and at 56px with a drop shadow it was the brightest and
-   largest object on the screen -- louder than the files, which are the actual
-   point of the app.
-
-   Seated and shrunk, it is still unmistakably the primary action, because
-   accent on dark does that at any size. It just no longer shouts. */
-html.mobile .mobile-fab .upload-btn,
-html.mobile .mobile-fab .primary-btn.upload-btn {
-    /* Built like a tab item, because it is standing in a row of them: same
-       stack, same gap, same padding, same label. What sets it apart is that its
-       pill is filled rather than tinted, which is the difference between acting
-       and navigating. */
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 3px;
-    padding: 6px 0;
-    border: 0;
-    border-radius: var(--radius-xl);
-    background: transparent;
-    color: var(--color-accent);
-    font-size: 0.6875rem;
-    font-weight: var(--weight-semibold);
-    letter-spacing: 0.01em;
-    box-shadow: none;
-}
-html.mobile .mobile-fab .upload-btn-pill {
-    /* The same 48x32 the active tab's pill grows into, so the two read as one
-       family rather than two unrelated shapes sharing a bar. */
-    width: 48px;
-    height: 32px;
-    display: grid;
-    place-items: center;
-    background: var(--color-accent);
-    color: var(--color-on-accent);
-    border-radius: var(--radius-pill);
-    transition: transform var(--motion-fast) var(--ease-standard);
-}
-html.mobile .mobile-fab .upload-btn:active .upload-btn-pill { transform: scale(0.9); }
-html.mobile .mobile-fab .upload-btn .btn-icon { width: 24px; height: 24px; }
-
 /* Contextual primary action. It is deliberately independent of the tab bar:
    navigation has four equally weighted destinations, while creating content
    only appears where it has somewhere to go. 52px gives Android's 48dp target
-   room and remains comfortably above iOS's 44pt floor. */
+   room and remains comfortably above iOS's 44pt floor. The Fab renders the
+   upload menu's own trigger, restyled here into the accent circle. */
 html.mobile .mobile-context-action {
     position: absolute;
     right: calc(var(--space-4) + var(--inset-right));
@@ -655,30 +595,32 @@ html.mobile .mobile-context-action .mobile-fab .upload-btn,
 html.mobile .mobile-context-action .mobile-fab .primary-btn.upload-btn {
     display: grid;
     place-items: center;
+    gap: 3px;
     width: 52px;
     height: 52px;
     padding: 0;
     overflow: hidden;
+    border: 0;
     border-radius: 50%;
     background: var(--color-accent);
     color: transparent;
+    font-size: 0.6875rem;
     box-shadow: var(--shadow-md);
 }
 html.mobile .mobile-context-action .mobile-fab .upload-btn-pill {
     width: 52px;
     height: 52px;
-    background: transparent;
+    display: grid;
+    place-items: center;
     color: var(--color-on-accent);
+    border-radius: var(--radius-pill);
+    transition: transform var(--motion-fast) var(--ease-standard);
 }
-html.mobile .mobile-context-action .mobile-fab .upload-btn:active .upload-btn-pill {
-    transform: scale(0.94);
-}
+html.mobile .mobile-context-action .mobile-fab .upload-btn:active .upload-btn-pill { transform: scale(0.94); }
+html.mobile .mobile-context-action .mobile-fab .upload-btn .btn-icon { width: 24px; height: 24px; }
 
-/* The upload menu is a bottom sheet on a phone, not a popover. The trigger is
-   docked in the middle of the tab bar against the bottom safe area, so there is
-   no room to anchor a popover to it without covering the bar. A sheet is also
-   the surface the row actions and the drive switcher already use, so the phone
-   keeps one way of asking a question. */
+/* The upload menu is a bottom sheet on a phone, not a popover: the same
+   surface the row actions and the drive switcher use. */
 html.mobile .upload-scrim {
     position: fixed;
     inset: 0;
@@ -1351,8 +1293,7 @@ html.mobile .file-row.is-revealing .row-more {
     html.mobile .mobile-sheet,
     html.mobile .sheet-scrim,
     html.mobile .topbar-search-shell,
-    html.mobile .topbar-search-shell .topbar-search,
-    html.mobile .mobile-fab .upload-btn { transition: none; }
+    html.mobile .topbar-search-shell .topbar-search { transition: none; }
     /* The pill still needs to mark the active tab, so only its movement goes;
        opacity carries the meaning and stays (design-taste: keep comprehension). */
     html.mobile .tab-item.active .tab-pill { transform: translate(-50%, -50%) scale(1); }
