@@ -69,6 +69,7 @@ import { VideoGeometryController } from "../video/video-geometry";
 import { SEEK_STEP_SECONDS, VOLUME_STEP, VideoTransportController } from "../video/video-transport";
 import { bindVideoDOM, collectVideoDOM, videoDOMLive, type VideoDOM } from "../video/video-dom";
 import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from "../../ui/modals/modal-a11y";
+import { isDismissSwipe, VIEWER_CHROME_HIDE_MS } from "./viewer-chrome";
 import { bindTouchGestures, type TouchGestureHandlers } from "../../ui/preview/touch-gestures";
 import { videoPlaybackPreferences } from "../../ui/video/video-preferences-store";
 import { loadAutoNextPreference } from "../video/video-playlist";
@@ -83,7 +84,6 @@ import {
 
 export type { VideoOpenTarget, VideoPlaylistLaunch } from "../video/video-queue";
 
-const CHROME_HIDE_DELAY_MS = 2500;
 const LOADING_DEBOUNCE_MS = 250;
 const PLAYBACK_HINT_INTERVAL_MS = 1000;
 const SWIPE_SEEK_MIN_PX = 40;
@@ -197,7 +197,7 @@ function scheduleChromeHide() {
     chromeHideTimer = setTimeout(() => {
         if (!isOpen() || currentState.paused || hasError || isAnyMenuOpen() || isScrubberTooltipActive()) return;
         setChromeVisible(false);
-    }, CHROME_HIDE_DELAY_MS);
+    }, VIEWER_CHROME_HIDE_MS);
 }
 
 function isScrubberTooltipActive() {
@@ -1661,7 +1661,7 @@ function videoTouchHandlers(stage: HTMLElement, shell: HTMLElement): TouchGestur
             shell.style.transition = "";
             shell.style.transform = "";
             shell.style.opacity = "";
-            if (!cancelled && dy > Math.abs(dx) && (dy > 120 || (dy > 32 && velocity > 0.6))) void closeVideoModal();
+            if (!cancelled && dy > Math.abs(dx) && isDismissSwipe(dy, velocity)) void closeVideoModal();
         },
     };
 }

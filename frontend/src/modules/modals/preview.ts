@@ -5,6 +5,7 @@ import { notify } from '../notifications';
 import { isEncryptionPasswordRequired } from '../errors';
 import { enqueueDownload } from '../transfers';
 import { renderImageInfoHTML } from './preview-info';
+import { isDismissSwipe, VIEWER_CHROME_HIDE_MS } from './viewer-chrome';
 import { readExif, type ImageExif } from '../exif';
 import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from '../../ui/modals/modal-a11y';
 import { pushSheet, type SheetHandle } from '../../ui/modals/sheet-stack';
@@ -37,7 +38,6 @@ type PreviewSelection =
 // bytes the backend can validate before exposing a loopback capability.
 const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp"]);
 
-const PREVIEW_CHROME_HIDE_DELAY_MS = 1600;
 
 // The whole element set, or nothing. Before this the controller held one
 // variable per element and every function opened by re-checking whichever three
@@ -245,7 +245,7 @@ function scheduleChromeHide() {
         if (!isPreviewOpen() || isErrorVisible()) return;
         if (isCloseButtonFocused()) return;
         setChromeVisible(false);
-    }, PREVIEW_CHROME_HIDE_DELAY_MS);
+    }, VIEWER_CHROME_HIDE_MS);
 }
 
 function revealChrome() {
@@ -942,7 +942,7 @@ function previewTouchHandlers(): TouchGestureHandlers {
                 openInfoPanel();
                 return;
             }
-            if (dy > 96 || (dy > 24 && velocity > 0.6)) {
+            if (isDismissSwipe(dy, velocity)) {
                 settleDrag(false);
                 closePreviewModal();
                 return;
@@ -959,7 +959,9 @@ async function handlePreviewKeydown(event: KeyboardEvent) {
     if (event.key === "Escape" && previewOpen) {
         event.preventDefault();
         event.stopPropagation();
-        closePreviewModal();
+        // The innermost layer goes first, as in the video player.
+        if (infoOpen) closeInfoPanel();
+        else closePreviewModal();
         return;
     }
 

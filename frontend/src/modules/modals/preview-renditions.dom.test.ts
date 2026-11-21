@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { VIEWER_CHROME_HIDE_MS } from './viewer-chrome';
 
 const mocks = vi.hoisted(() => ({
     acquire: vi.fn(),
@@ -430,7 +431,7 @@ describe('bounded photo viewer', () => {
         expect(modal.classList.contains('is-chrome-visible')).toBe(true);
         document.getElementById('preview-download')!.focus();
         modal.dispatchEvent(new PointerEvent('pointermove', { pointerType: 'mouse' }));
-        vi.advanceTimersByTime(1600);
+        vi.advanceTimersByTime(VIEWER_CHROME_HIDE_MS);
         expect(modal.classList.contains('is-chrome-visible')).toBe(false);
         modal.dispatchEvent(new PointerEvent('pointermove', { pointerType: 'mouse' }));
         expect(modal.classList.contains('is-chrome-visible')).toBe(true);

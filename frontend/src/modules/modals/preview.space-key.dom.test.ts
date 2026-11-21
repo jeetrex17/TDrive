@@ -251,6 +251,10 @@ describe('preview keyboard ownership', () => {
         await vi.waitFor(() => expect(document.getElementById('preview-counter')!.textContent).toBe('1 / 2'));
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'I' }));
         expect(document.getElementById('preview-modal')!.classList.contains('is-info-open')).toBe(true);
+        // Escape closes the innermost layer first: the info panel, then the viewer.
+        window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
+        expect(document.getElementById('preview-modal')!.classList.contains('is-info-open')).toBe(false);
+        expect(document.getElementById('preview-modal')!.style.display).not.toBe('none');
         window.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', cancelable: true }));
         expect(document.getElementById('preview-modal')!.style.display).toBe('none');
     });

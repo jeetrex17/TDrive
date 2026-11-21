@@ -444,16 +444,18 @@
 {#snippet viewerHeader()}
     {#if mobile}
     <div class="file-viewer-head">
+        <!-- Close sits at the trailing end, where the photo and video
+             viewers put it. -->
         <div class="file-viewer-topbar is-phone">
-            <button class="file-viewer-close" type="button" onclick={onClose} aria-label="Close file" title="Close">
-                <XIcon strokeWidth={2.2} aria-hidden="true" />
-            </button>
+            {#if !$fileViewerState.readOnly && !$fileViewerState.protected}<button class="file-viewer-action is-icon-only" type="button" onclick={onDownload} aria-label="Download" title="Download">
+                <DownloadIcon aria-hidden="true" />
+            </button>{:else}<span aria-hidden="true"></span>{/if}
             <h3 id="file-viewer-title" class="file-viewer-title" title={$fileViewerState.title}>
                 {$fileViewerState.title || 'Open file'}
             </h3>
-            {#if !$fileViewerState.readOnly && !$fileViewerState.protected}<button class="file-viewer-action is-icon-only" type="button" onclick={onDownload} aria-label="Download" title="Download">
-                <DownloadIcon aria-hidden="true" />
-            </button>{/if}
+            <button class="file-viewer-close" type="button" onclick={onClose} aria-label="Close file" title="Close">
+                <XIcon strokeWidth={2.2} aria-hidden="true" />
+            </button>
         </div>
         {#if $fileViewerState.protected}<div class="file-viewer-subbar">{@render protectedBadge()}</div>{/if}
         {#if shouldShowMarkdownToggle()}
