@@ -7,7 +7,6 @@
 @media (prefers-reduced-motion: reduce) {
     html:focus-within { scroll-behavior: auto; }
 
-    .auth-appearance-popover,
     .auth-box,
     .context-menu-panel,
     .modal-card,

@@ -9,17 +9,6 @@
 .search-bar input { width: 100%; min-width: 0; margin: 0; padding-left: 36px; background: var(--bg-sidebar); border: none; }
 .search-icon { position: absolute; left: 10px; top: 12px; width: 16px; height: 16px; color: var(--text-muted); }
 
-.search-empty {
-    margin: 10px 12px;
-    padding: 14px 12px;
-    border-radius: var(--radius-lg);
-    border: 1px dashed var(--color-border);
-    color: var(--text-muted);
-    font-weight: 600;
-    font-size: 0.85rem;
-    text-align: center;
-}
-
 .header-actions { display: flex; flex-shrink: 0; gap: var(--space-3); align-items: center; }
 .upload-btn { width: auto; padding: 8px 20px; font-size: 0.9rem; }
 .btn-icon { width: 16px; height: 16px; }
@@ -456,8 +445,6 @@
 .action-icon:hover { background: var(--overlay-neutral-2); color: var(--text-main); }
 .action-icon:focus-visible { outline: none; box-shadow: var(--focus-ring); color: var(--text-main); }
 .action-icon:active { transform: translateY(0.5px) scale(0.98); }
-.action-icon.del { color: var(--danger); }
-.action-icon.del:hover { background: var(--overlay-danger-1); }
 
 
 /* ====================== PHONE ROWS ====================== */

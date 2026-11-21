@@ -942,23 +942,6 @@ html.mobile .account-logout:active { background: var(--overlay-danger-1); }
 
 /* Appearance and backup are drill-ins, leaving Account a fast, scannable list. */
 html.mobile .account-detail { min-width: 0; }
-html.mobile .account-detail-back {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    min-width: 44px;
-    min-height: 44px;
-    margin: -8px 0 var(--space-3) -8px;
-    padding: 0 8px;
-    border: 0;
-    border-radius: var(--radius-md);
-    background: transparent;
-    color: var(--color-accent);
-    font-size: 0.9375rem;
-    font-weight: var(--weight-semibold);
-    cursor: pointer;
-}
-html.mobile .account-detail-back:active { background: var(--overlay-accent-1); }
 html.mobile .account-detail .appearance-panel {
     width: auto;
     max-height: none;

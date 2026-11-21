@@ -29,19 +29,6 @@
     font-size: 0.95rem;
     line-height: 1.35;
 }
-/* The name of the thing being deleted, as plain emphasised text. It used to sit
-   in a bordered, filled box that read as an input waiting to be typed into. */
-.delete-target-name {
-    max-height: 5.5rem;
-    margin: var(--space-1) 0 var(--space-4);
-    overflow: auto;
-    overflow-wrap: anywhere;
-    word-break: break-word;
-    color: var(--color-text);
-    font-size: var(--type-base);
-    font-weight: var(--weight-semibold);
-    line-height: var(--leading-snug);
-}
 /* A visible label above a dialog field. The input keeps its accessible name
    from the `for`/id link, so the placeholder no longer has to stand in for it. */
 .field-label {

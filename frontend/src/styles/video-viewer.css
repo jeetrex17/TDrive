@@ -1179,7 +1179,6 @@
 
 @media (prefers-reduced-motion: reduce) {
     .file-state.is-loading .file-state-icon::before,
-    .pending-spinner,
     .pending-folder .pending-indicator,
     .gallery-cell.is-loading {
         animation: none;

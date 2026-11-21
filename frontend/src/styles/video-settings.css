@@ -1,6 +1,6 @@
 /* Surface, anchoring and motion come from .video-popover. */
 .video-settings-panel { height: min(480px, var(--video-popover-available)); }
-.video-settings-section[hidden], .video-track-list button[hidden], .video-track-empty[hidden] { display: none; }
+.video-settings-section[hidden], .video-track-list button[hidden] { display: none; }
 /* One segmented control, inset concentrically inside the popover corner. */
 .video-settings-tabs {
     flex: 0 0 auto;
@@ -68,7 +68,6 @@
 .video-settings-panel .video-menu:not(.is-open) { display: none; }
 .video-track-list { max-height: 240px; overflow: auto; }
 .video-track-list button { width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }
-.video-track-empty { font-size: 13px; color: #a8b2c5; padding: 8px; }
 .video-picture-options { display: grid; gap: 7px; }
 .video-picture-options button {
     display: flex;
