@@ -77,7 +77,7 @@ test('dashboard renders normalized first-party drive and file data', async ({ pa
     await expect(page.locator('#success-screen')).toBeVisible();
     await expect(page.getByRole('navigation', { name: 'Drives' }).getByRole('button', { name: 'Personal', exact: true })).toHaveAttribute('aria-current', 'page');
     await expect(page.getByRole('row', { name: 'File: contract.txt' })).toBeVisible();
-    await expect(page.locator('#storage-used')).toContainText('0 B / Unlimited');
+    await expect(page.locator('#storage-used')).toHaveText('0 B');
     expect(await mock.calls('GetFolderContents')).toMatchObject([{ args: [''] }]);
 });
 

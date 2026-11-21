@@ -180,7 +180,7 @@
         </nav>
 
         <div class="storage-info">
-            <p>Storage:<span id="storage-used">0 B / Unlimited</span></p>
+            <p>Storage<span id="storage-used">—</span></p>
         </div>
     </aside>
 

@@ -145,7 +145,7 @@ it('rejects old drive results and old storage totals after navigation', async ()
     flushSync();
     expect(list.textContent).toContain('current.txt');
     expect(list.textContent).not.toContain('stale.txt');
-    expect(storage.innerText).toBe('1 KB / Unlimited');
+    expect(storage.textContent).toBe('1 KB');
     expect(state.telegramRootCacheDriveKey).toBe('2');
 });
 
@@ -221,7 +221,7 @@ it('refreshes uploader labels only while the shared-drive request is current', a
 it.each([NaN, -1])('does not display invalid storage usage %s', async (size) => {
     api.getStorageUsed.mockResolvedValue(size);
     refreshFiles(); await expectText('report.txt');
-    expect(storage.innerText).toBe('— / Unlimited');
+    expect(storage.textContent).toBe('—');
 });
 
 
@@ -288,5 +288,5 @@ it('does not apply late user names to a replacement personal-drive listing', asy
 it('shows unavailable storage when the usage query fails', async () => {
     api.getStorageUsed.mockRejectedValue(new Error('usage unavailable'));
     refreshFiles(); await expectText('report.txt');
-    expect(storage.innerText).toBe('— / Unlimited');
+    expect(storage.textContent).toBe('—');
 });

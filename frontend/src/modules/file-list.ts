@@ -653,21 +653,24 @@ function isCurrentFileRequest(request: FileRefreshRequest): boolean {
     );
 }
 
+// The drive the footer's number belongs to. Folder changes keep showing it
+// while the refresh runs; only a drive change blanks it.
+let storageDriveId: number | null = null;
+
 function refreshStorageUsage(request: FileRefreshRequest, storageUsed: HTMLElement | null): void {
     if (!storageUsed) return;
-    if (request.presentation === 'foreground-navigation') {
-        storageUsed.innerText = 'Calculating... / Unlimited';
+    if (storageDriveId !== request.view.channelId) {
+        storageDriveId = request.view.channelId;
+        storageUsed.textContent = '—';
     }
     void getStorageUsed()
         .then((bytes) => {
             if (!isCurrentFileRequest(request)) return;
             const value = Number(bytes);
-            storageUsed.innerText = Number.isFinite(value) && value >= 0
-                ? `${formatBytes(value)} / Unlimited`
-                : '— / Unlimited';
+            storageUsed.textContent = Number.isFinite(value) && value >= 0 ? formatBytes(value) : '—';
         })
         .catch(() => {
-            if (isCurrentFileRequest(request)) storageUsed.innerText = '— / Unlimited';
+            if (isCurrentFileRequest(request)) storageUsed.textContent = '—';
         });
 }
 
