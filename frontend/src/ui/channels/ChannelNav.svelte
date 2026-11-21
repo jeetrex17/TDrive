@@ -173,10 +173,10 @@
         align-items: center;
         justify-content: space-between;
         gap: var(--space-2);
-        padding: 0 6px 6px 12px;
-        color: var(--text-muted);
+        padding: 0 4px 4px 8px;
+        color: var(--color-text-subtle);
         font-size: var(--type-xs);
-        font-weight: var(--weight-semibold);
+        font-weight: var(--weight-medium);
     }
 
     .channel-nav-tools { display: flex; align-items: center; }
@@ -249,7 +249,7 @@
         gap: var(--space-2);
         width: 100%;
         min-width: 0;
-        padding: 6px 10px;
+        padding: 6px 8px;
         border: 0;
         border-radius: var(--radius-sm);
         background: transparent;
@@ -267,7 +267,7 @@
     .channel-nav-group-empty,
     .channel-nav-ungrouped {
         margin: 0;
-        padding: 6px 12px;
+        padding: 6px 8px;
         color: var(--text-muted);
         font-size: var(--type-xs);
     }
