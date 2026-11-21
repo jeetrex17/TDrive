@@ -3,6 +3,7 @@
     import { installModalA11y } from './modal-a11y';
     import { createSheetDragController, FLICK_SPEED } from './sheet-gesture';
     import { isMobilePlatform } from '../../api';
+    import { prefersReducedMotion } from '../mobile/motion';
 
     interface Props {
         hostId: string;
@@ -68,12 +69,6 @@
     let swipeExiting = false;
     let closeTimer: ReturnType<typeof setTimeout> | null = null;
     let settleTimer: ReturnType<typeof setTimeout> | null = null;
-
-    function prefersReducedMotion(): boolean {
-        return typeof window !== 'undefined'
-            && typeof window.matchMedia === 'function'
-            && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-    }
 
     function initialFocusTarget(): Element | null {
         if (!initialFocus || !host) return null;
