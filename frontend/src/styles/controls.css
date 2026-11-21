@@ -64,7 +64,9 @@
         color var(--motion-med) var(--ease-standard),
         transform var(--motion-fast) var(--ease-standard);
 }
-.icon-btn:hover { border-color: var(--text-main); color: var(--text-main); }
+@media (hover: hover) {
+    .icon-btn:hover { border-color: var(--text-main); color: var(--text-main); }
+}
 .icon-btn:active { transform: translateY(0.5px) scale(0.98); }
 .icon-btn svg { width: 18px; height: 18px; }
 
@@ -91,7 +93,9 @@
     cursor: pointer;
     transition: color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
 }
-.segmented button:hover { color: var(--text-main); }
+@media (hover: hover) {
+    .segmented button:hover { color: var(--text-main); }
+}
 .segmented button[aria-pressed="true"] { background: var(--surface-control); color: var(--text-main); }
 .segmented button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 @media (prefers-reduced-motion: reduce) {

@@ -76,7 +76,9 @@
     background: var(--bg-panel);
     transition: transform 140ms var(--ease-standard), box-shadow 140ms var(--ease-standard);
 }
-.gallery-cell:hover { transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+@media (hover: hover) {
+    .gallery-cell:hover { transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+}
 .gallery-cell:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 .gallery-thumb {
@@ -168,11 +170,19 @@
     box-shadow: 0 14px 40px rgba(0,0,0,0.22);
     transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
 }
-.preview-icon-btn:hover, .preview-icon-btn:focus-visible {
+.preview-icon-btn:focus-visible {
     background: rgba(20, 23, 34, 0.74);
     border-color: rgba(255, 255, 255, 0.16);
     transform: translateY(-1px);
     outline: none;
+}
+@media (hover: hover) {
+    .preview-icon-btn:hover {
+        background: rgba(20, 23, 34, 0.74);
+        border-color: rgba(255, 255, 255, 0.16);
+        transform: translateY(-1px);
+        outline: none;
+    }
 }
 .preview-icon-btn svg { width: 20px; height: 20px; }
 
@@ -196,7 +206,9 @@
     opacity: 0.55;
     transition: opacity 0.16s ease, background 0.16s ease, transform 0.16s ease;
 }
-.preview-nav:hover:not(:disabled) { opacity: 1; background: rgba(20, 23, 34, 0.7); }
+@media (hover: hover) {
+    .preview-nav:hover:not(:disabled) { opacity: 1; background: rgba(20, 23, 34, 0.7); }
+}
 .preview-nav:disabled { opacity: 0.18; cursor: default; }
 .preview-nav svg { width: 24px; height: 24px; }
 .preview-nav-prev { left: 24px; }
@@ -283,7 +295,9 @@
     cursor: pointer;
     transition: background 0.15s ease, color 0.15s ease;
 }
-.preview-info-close:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
+@media (hover: hover) {
+    .preview-info-close:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
+}
 
 .info-date {
     color: rgba(255, 255, 255, 0.96);
@@ -325,7 +339,9 @@
     cursor: pointer;
     transition: background 0.15s ease;
 }
-.info-map-link:hover { background: rgba(255, 255, 255, 0.09); }
+@media (hover: hover) {
+    .info-map-link:hover { background: rgba(255, 255, 255, 0.09); }
+}
 .info-empty { color: rgba(255, 255, 255, 0.5); font-size: var(--type-base); }
 
 /* tabindex=-1 scroll containers are focused programmatically, never tabbed to,
@@ -452,7 +468,9 @@
     cursor: pointer;
     transition: color 0.15s ease, background 0.15s ease;
 }
-.preview-unlock-eye:hover { color: var(--viewer-text); background: var(--viewer-overlay-2); }
+@media (hover: hover) {
+    .preview-unlock-eye:hover { color: var(--viewer-text); background: var(--viewer-overlay-2); }
+}
 .preview-unlock-eye svg { width: 18px; height: 18px; }
 /* Primary action: the single filled accent button (the one strong CTA), flat. */
 .preview-unlock-go {
@@ -469,7 +487,9 @@
     cursor: pointer;
     transition: filter 0.15s ease, transform 0.15s ease;
 }
-.preview-unlock-go:hover { filter: brightness(1.08); transform: translateX(1px); }
+@media (hover: hover) {
+    .preview-unlock-go:hover { filter: brightness(1.08); transform: translateX(1px); }
+}
 .preview-unlock-go:active { transform: scale(0.96); }
 .preview-unlock-go:disabled { opacity: 0.5; cursor: progress; transform: none; filter: none; }
 .preview-unlock-go svg { width: 18px; height: 18px; }
@@ -530,7 +550,9 @@ html.mobile .gallery-cell {
     -webkit-tap-highlight-color: transparent;
     -webkit-touch-callout: none;
 }
-html.mobile .gallery-cell:hover { transform: none; box-shadow: none; }
+@media (hover: hover) {
+    html.mobile .gallery-cell:hover { transform: none; box-shadow: none; }
+}
 html.mobile .gallery-cell:focus-visible { box-shadow: inset var(--focus-ring); }
 html.mobile .gallery-cell::after {
     content: "";
@@ -818,7 +840,9 @@ html.mobile .preview-unlock-go {
     border-radius: var(--radius-lg);
     transition: transform var(--motion-fast) var(--ease-standard);
 }
-.album-tile:hover { transform: translateY(-2px); }
+@media (hover: hover) {
+    .album-tile:hover { transform: translateY(-2px); }
+}
 .album-tile:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 /* Square, because a 4:3 crop of a portrait photo loses the subject.

@@ -65,7 +65,9 @@
     transition: background 0.15s ease, color 0.15s ease;
 }
 
-.auth-link:hover { background: var(--overlay-accent-1); }
+@media (hover: hover) {
+    .auth-link:hover { background: var(--overlay-accent-1); }
+}
 .auth-link:active { transform: translateY(1px); }
 
 .auth-caption {
@@ -116,10 +118,12 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
     justify-content: center;
     transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
-.input-with-action .input-action-btn:hover {
-    background: var(--overlay-white-1);
-    border-color: var(--border);
-    color: var(--color-text-soft);
+@media (hover: hover) {
+    .input-with-action .input-action-btn:hover {
+        background: var(--overlay-white-1);
+        border-color: var(--border);
+        color: var(--color-text-soft);
+    }
 }
 .input-with-action .input-action-btn:active {
     transform: translateY(-50%) scale(0.98);
@@ -257,7 +261,9 @@ html.mobile .auth-actions .primary-btn {
     border-radius: var(--radius-lg);
 }
 
-html.mobile .auth-actions .primary-btn:hover { transform: none; }
+@media (hover: hover) {
+    html.mobile .auth-actions .primary-btn:hover { transform: none; }
+}
 html.mobile .auth-actions .primary-btn:active:not(:disabled) { transform: scale(0.98); }
 
 html.mobile .auth-helper-row {
@@ -291,9 +297,11 @@ html.mobile .auth-box .input-with-action .input-action-btn {
     width: 44px;
     height: 44px;
 }
-html.mobile .auth-box .input-with-action .input-action-btn:hover {
-    background: transparent;
-    border-color: transparent;
+@media (hover: hover) {
+    html.mobile .auth-box .input-with-action .input-action-btn:hover {
+        background: transparent;
+        border-color: transparent;
+    }
 }
 html.mobile .auth-box .input-with-action .input-action-btn:active {
     transform: translateY(-50%);

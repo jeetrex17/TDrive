@@ -51,7 +51,9 @@
     transition: color var(--motion-fast) var(--ease-standard),
         border-color var(--motion-fast) var(--ease-standard);
 }
-.auth-update-footer button:hover { color: var(--color-text); border-color: var(--color-accent); }
+@media (hover: hover) {
+    .auth-update-footer button:hover { color: var(--color-text); border-color: var(--color-accent); }
+}
 .auth-update-footer button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 .auth-update-footer .auth-update-accent { color: var(--color-accent); font-weight: 800; }
 

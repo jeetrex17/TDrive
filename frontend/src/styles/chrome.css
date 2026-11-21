@@ -64,7 +64,9 @@
     padding: 9px 12px; border-radius: var(--radius-md); font-size: var(--type-base); font-weight: var(--weight-medium);
     transition: background-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard); text-align: left; width: 100%;
 }
-.drive-item:hover { background: var(--bg-panel); color: var(--text-main); }
+@media (hover: hover) {
+    .drive-item:hover { background: var(--bg-panel); color: var(--text-main); }
+}
 .drive-item.active { background: var(--overlay-accent-1); color: var(--accent); }
 .drive-item .icon { width: 18px; height: 18px; flex-shrink: 0; }
 .drive-item-title {
@@ -103,10 +105,15 @@
     color: var(--text-muted); padding: 8px 12px; border-radius: var(--radius-md); cursor: pointer;
     font-size: var(--type-sm); text-align: left; transition: color var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
 }
-.drive-action-btn:hover,
 .drive-action-btn:focus-visible {
     color: var(--text-main);
     background: var(--bg-panel);
+}
+@media (hover: hover) {
+    .drive-action-btn:hover {
+        color: var(--text-main);
+        background: var(--bg-panel);
+    }
 }
 .drive-action-btn .icon { width: 16px; height: 16px; }
 

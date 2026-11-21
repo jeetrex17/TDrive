@@ -46,7 +46,9 @@
     cursor: pointer;
     transition: color 160ms var(--ease-standard);
 }
-.video-settings-tabs button:hover { color: #dbe4f7; }
+@media (hover: hover) {
+    .video-settings-tabs button:hover { color: #dbe4f7; }
+}
 .video-settings-tabs button[aria-pressed=true] { color: #f2f5ff; }
 .video-settings-body { padding: 0 14px 14px; }
 .video-settings-section h3 {
@@ -82,7 +84,9 @@
     cursor: pointer;
     transition: background-color 120ms var(--ease-standard), border-color 120ms var(--ease-standard);
 }
-.video-picture-options button:hover { background: rgba(255, 255, 255, 0.08); }
+@media (hover: hover) {
+    .video-picture-options button:hover { background: rgba(255, 255, 255, 0.08); }
+}
 .video-picture-options button small { color: #a8b2c5; font-size: var(--type-2xs); }
 .video-picture-options button.is-selected { border-color: var(--video-accent-border, rgba(122, 162, 247, 0.58)); background: var(--video-accent-bg, rgba(122, 162, 247, 0.2)); }
 .video-subtitle-preview { display: grid; place-items: center; min-height: 84px; background: transparent; border-radius: var(--radius-md); padding: 10px; text-align: center; margin-bottom: 14px; }
@@ -117,7 +121,9 @@
     transition: background-color 120ms var(--ease-standard), scale 120ms var(--ease-standard);
 }
 .video-settings-save:active { scale: 0.96; }
-.video-settings-save:hover { filter: brightness(1.12); }
+@media (hover: hover) {
+    .video-settings-save:hover { filter: brightness(1.12); }
+}
 /* The native player on Windows and Linux still needs the picture inset, since
    its window paints above the webview and would otherwise cover the dock. */
 .video-overlay.is-video-native-fallback .video-native-viewport { right: var(--video-native-right-inset, var(--video-native-side-inset, 0)); }
@@ -186,11 +192,17 @@
     background: #f4f7ff;
     box-shadow: 0 1px 4px #0006;
 }
-.video-settings-range:hover::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--video-accent-bg); }
-.video-settings-range:hover::-moz-range-thumb { box-shadow: 0 0 0 4px var(--video-accent-bg); }
+@media (hover: hover) {
+    .video-settings-range:hover::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--video-accent-bg); }
+}
+@media (hover: hover) {
+    .video-settings-range:hover::-moz-range-thumb { box-shadow: 0 0 0 4px var(--video-accent-bg); }
+}
 .video-settings-panel .video-settings-range:focus-visible { outline: 2px solid var(--video-accent); outline-offset: 3px; box-shadow: none; }
 .video-settings-check { min-height: 40px; cursor: pointer; border-radius: var(--radius-md); padding: 4px 6px; margin: 6px -6px; }
-.video-settings-check:hover { background: #ffffff08; }
+@media (hover: hover) {
+    .video-settings-check:hover { background: #ffffff08; }
+}
 .video-settings-panel .video-settings-check input[type=checkbox] {
     appearance: none;
     -webkit-appearance: none;

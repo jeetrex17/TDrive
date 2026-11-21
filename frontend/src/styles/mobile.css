@@ -740,7 +740,9 @@ html.mobile .transfers-group .notif-row {
     border: 0;
     border-radius: 0;
 }
-html.mobile .transfers-group .notif-row:hover { background: transparent; }
+@media (hover: hover) {
+    html.mobile .transfers-group .notif-row:hover { background: transparent; }
+}
 /* One line each, so every row is the same height whatever it is reporting. */
 html.mobile .transfers-group .notif-row-title,
 html.mobile .transfers-group .notif-row-sub {

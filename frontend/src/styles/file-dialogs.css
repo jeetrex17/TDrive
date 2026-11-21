@@ -173,9 +173,11 @@
     opacity: 0.5;
     cursor: not-allowed;
 }
-.move-modal-footer .primary-btn:disabled:hover {
-    transform: none;
-    background: var(--accent);
+@media (hover: hover) {
+    .move-modal-footer .primary-btn:disabled:hover {
+        transform: none;
+        background: var(--accent);
+    }
 }
 
 .preview-overlay {
@@ -286,12 +288,19 @@
     transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
 }
 
-.preview-close-btn:hover,
 .preview-close-btn:focus-visible {
     background: rgba(20, 23, 34, 0.74);
     border-color: rgba(255, 255, 255, 0.16);
     transform: translateY(-1px);
     outline: none;
+}
+@media (hover: hover) {
+    .preview-close-btn:hover {
+        background: rgba(20, 23, 34, 0.74);
+        border-color: rgba(255, 255, 255, 0.16);
+        transform: translateY(-1px);
+        outline: none;
+    }
 }
 
 .preview-content {

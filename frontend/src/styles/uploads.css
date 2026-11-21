@@ -34,7 +34,9 @@
     cursor: pointer;
     transition: background 0.15s ease, color 0.15s ease;
 }
-.upload-menu-item:hover { background: var(--overlay-accent-1); color: var(--accent); }
+@media (hover: hover) {
+    .upload-menu-item:hover { background: var(--overlay-accent-1); color: var(--accent); }
+}
 /* Focus carries the ring on top of the hover tint; hover alone is not a focus
    indicator, because a keyboard user never produces one. */
 .upload-menu-item:focus-visible {

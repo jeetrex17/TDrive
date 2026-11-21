@@ -168,13 +168,15 @@
     height: 19px;
 }
 
-.file-viewer-action:hover,
-.file-viewer-close:hover,
-.audio-play:hover,
-.audio-mute:hover {
-    background: var(--viewer-control-hover);
-    border-color: var(--viewer-border);
-    color: var(--viewer-text);
+@media (hover: hover) {
+    .file-viewer-action:hover,
+    .file-viewer-close:hover,
+    .audio-play:hover,
+    .audio-mute:hover {
+        background: var(--viewer-control-hover);
+        border-color: var(--viewer-border);
+        color: var(--viewer-text);
+    }
 }
 
 .file-viewer-action:active,
@@ -508,8 +510,10 @@
     text-decoration: none;
 }
 
-.text-viewer-body.is-markdown a:hover {
-    text-decoration: underline;
+@media (hover: hover) {
+    .text-viewer-body.is-markdown a:hover {
+        text-decoration: underline;
+    }
 }
 
 .text-viewer-body.is-markdown code {
@@ -615,8 +619,10 @@
     transition: background 0.14s ease, color 0.14s ease;
 }
 
-.text-viewer-toggle button:hover {
-    color: var(--viewer-text);
+@media (hover: hover) {
+    .text-viewer-toggle button:hover {
+        color: var(--viewer-text);
+    }
 }
 
 .text-viewer-toggle button.active {
@@ -737,8 +743,10 @@ html.mobile .file-viewer-topbar.is-phone .file-viewer-action {
     -webkit-tap-highlight-color: transparent;
 }
 html.mobile .file-viewer-topbar.is-phone .file-viewer-action svg { width: 20px; height: 20px; }
-html.mobile .file-viewer-topbar.is-phone .file-viewer-close:hover,
-html.mobile .file-viewer-topbar.is-phone .file-viewer-action:hover { background: transparent; }
+@media (hover: hover) {
+    html.mobile .file-viewer-topbar.is-phone .file-viewer-close:hover,
+    html.mobile .file-viewer-topbar.is-phone .file-viewer-action:hover { background: transparent; }
+}
 html.mobile .file-viewer-topbar.is-phone .file-viewer-close:active,
 html.mobile .file-viewer-topbar.is-phone .file-viewer-action:active { background: var(--viewer-overlay-2); transform: none; }
 html.mobile .file-viewer-subbar {

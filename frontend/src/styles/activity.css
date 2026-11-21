@@ -14,7 +14,9 @@
     transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
     padding: 0;
 }
-.notif-bell:hover { background: var(--bg-panel); color: var(--text-main); border-color: var(--border); }
+@media (hover: hover) {
+    .notif-bell:hover { background: var(--bg-panel); color: var(--text-main); border-color: var(--border); }
+}
 .notif-bell:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .notif-bell:active { transform: translateY(1px); }
 .notif-bell-icon { width: 18px; height: 18px; display: inline-flex; }
@@ -110,10 +112,12 @@
         color var(--motion-fast) var(--ease-standard),
         border-color var(--motion-fast) var(--ease-standard);
 }
-.notif-panel-clear:hover:not(:disabled) {
-    background: var(--overlay-white-2);
-    color: var(--text-main);
-    border-color: var(--color-border);
+@media (hover: hover) {
+    .notif-panel-clear:hover:not(:disabled) {
+        background: var(--overlay-white-2);
+        color: var(--text-main);
+        border-color: var(--color-border);
+    }
 }
 .notif-panel-clear:disabled { opacity: 0.4; cursor: default; }
 .notif-panel-clear:focus-visible,
@@ -156,7 +160,9 @@
     font-size: var(--type-base);
     transition: background 140ms ease, transform 140ms ease;
 }
-.notif-row:hover { background: var(--overlay-white-2); }
+@media (hover: hover) {
+    .notif-row:hover { background: var(--overlay-white-2); }
+}
 .notif-row.notif-copied { background: var(--overlay-success-1); border-color: var(--overlay-success-2); }
 
 .notif-row-event { grid-template-columns: 22px minmax(0, 1fr) auto; row-gap: 6px; }
@@ -226,7 +232,9 @@
     cursor: pointer;
     transition: background 0.15s ease, color 0.15s ease;
 }
-.notif-row-cancel:hover { background: var(--overlay-danger-1); color: var(--danger); }
+@media (hover: hover) {
+    .notif-row-cancel:hover { background: var(--overlay-danger-1); color: var(--danger); }
+}
 .notif-row-copy {
     justify-self: end;
     min-height: 26px;
@@ -242,10 +250,12 @@
     white-space: nowrap;
     cursor: pointer;
 }
-.notif-row-copy:hover {
-    background: var(--overlay-white-2);
-    border-color: var(--color-border);
-    color: var(--text-main);
+@media (hover: hover) {
+    .notif-row-copy:hover {
+        background: var(--overlay-white-2);
+        border-color: var(--color-border);
+        color: var(--text-main);
+    }
 }
 .notif-row-progress {
     width: 100%;
@@ -422,7 +432,9 @@
     min-height: 48px;
     margin-block: -13px;
 }
-.toast-action:hover { text-decoration: underline; }
+@media (hover: hover) {
+    .toast-action:hover { text-decoration: underline; }
+}
 .toast-action:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
@@ -442,7 +454,9 @@
     transition: background 120ms ease, color 120ms ease;
 }
 .toast-close svg { width: 14px; height: 14px; }
-.toast-close:hover { background: var(--overlay-white-2); color: var(--text-main); }
+@media (hover: hover) {
+    .toast-close:hover { background: var(--overlay-white-2); color: var(--text-main); }
+}
 .toast-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .toast-spinner {
