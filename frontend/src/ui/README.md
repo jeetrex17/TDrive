@@ -40,7 +40,6 @@ and platform boundaries in more detail.
 
 ## Shared controls and visual rules
 
-- [`StateView`](StateView.svelte) supplies loading, empty and error copy blocks.
 - [`Button`](Button.svelte) and [`IconButton`](IconButton.svelte) supply shared
   controls; icon-only actions still need an accessible label.
 - [`ProgressBar`](ProgressBar.svelte) handles bounded and indeterminate progress.
@@ -59,7 +58,7 @@ root or duplicate a feature's listeners inside its new Svelte surface.
 
 ## Existing verification
 
-[Primitive checks](primitives.test.ts), [application shell tests](app-shell.dom.test.ts)
+[Application shell tests](app-shell.dom.test.ts)
 and adjacent component DOM tests cover mount behavior and interaction contracts.
 Use a focused behavior test when changing ownership, cleanup, focus or user
 interactions; a successful component compile alone does not verify those flows.
