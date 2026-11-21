@@ -37,7 +37,8 @@ describe('Breadcrumb', () => {
 
         expect(body).toContain('My Drive');
         expect(body).not.toContain('breadcrumb-sep');
-        expect(body).toContain('opacity: 0.35'); // back button dimmed
+        expect(body).toContain('is-hidden'); // back button held in place, invisible
+        expect(body).toContain('aria-current="location"');
     });
 
     it('names the root after the active shared drive', () => {
@@ -66,7 +67,9 @@ describe('Breadcrumb', () => {
         expect(body).toContain('Docs');
         expect(body).toContain('Taxes &amp; &lt;stuff>');
         expect((body.match(/breadcrumb-sep/g) || [])).toHaveLength(2);
-        expect(body).toContain('opacity: 1');
+        expect(body).not.toContain('is-hidden');
+        expect(body).toContain('aria-label="Folder path"');
+        expect((body.match(/aria-current="location"/g) || [])).toHaveLength(1);
         expect(body).toContain('data-index="1"');
     });
 });

@@ -32,8 +32,8 @@
     ]);
     const atRoot = $derived($breadcrumbPath.length === 0);
 
-    function registerRoot(el: HTMLElement) {
-        drag.registerRoot(el);
+    function registerRoot(el: HTMLElement, isRoot: boolean) {
+        if (isRoot) drag.registerRoot(el);
     }
 
     function onDragOver(event: DragEvent, item: CrumbItem): void {
@@ -59,49 +59,41 @@
     }
 </script>
 
+<!-- Hidden rather than removed at the root, so the path does not shift. -->
 <button
     id="breadcrumb-back"
     class="icon-btn back-btn"
+    class:is-hidden={atRoot}
     type="button"
     title={isApplePlatform() ? "Parent folder (⌘↑ or Alt+↑)" : "Parent folder (Alt+↑)"}
     aria-label="Parent folder"
     aria-keyshortcuts={isApplePlatform() ? "Meta+ArrowUp Alt+ArrowUp" : "Alt+ArrowUp"}
     disabled={atRoot}
-    style={`opacity: ${atRoot ? '0.35' : '1'}`}
     onclick={onBack}
 >
     <ChevronLeftIcon size={18} strokeWidth={2} aria-hidden="true" />
 </button>
-<div id="breadcrumb-path" class="breadcrumb-path">
+<nav id="breadcrumb-path" class="breadcrumb-path" aria-label="Folder path">
     {#each items as item, idx (item.index === -1 ? 'root' : item.id)}
         {#if idx > 0}
-            <span class="breadcrumb-sep">/</span>
+            <span class="breadcrumb-sep" aria-hidden="true">/</span>
         {/if}
-        {#if item.index === -1}
-            <button
-                type="button"
-                class="breadcrumb-link"
-                data-index="-1"
-                use:registerRoot
-                onclick={() => onNavigate(-1)}
-                ondragover={(event) => onDragOver(event, item)}
-                ondragleave={onDragLeave}
-                ondrop={(event) => onDrop(event, item)}
-            >
-                {item.name}
-            </button>
-        {:else}
-            <button
-                type="button"
-                class="breadcrumb-link"
-                data-index={String(item.index)}
-                onclick={() => onNavigate(item.index)}
-                ondragover={(event) => onDragOver(event, item)}
-                ondragleave={onDragLeave}
-                ondrop={(event) => onDrop(event, item)}
-            >
-                {item.name}
-            </button>
-        {/if}
+        <button
+            type="button"
+            class="breadcrumb-link"
+            data-index={String(item.index)}
+            aria-current={idx === items.length - 1 ? 'location' : undefined}
+            use:registerRoot={item.index === -1}
+            onclick={() => onNavigate(item.index)}
+            ondragover={(event) => onDragOver(event, item)}
+            ondragleave={onDragLeave}
+            ondrop={(event) => onDrop(event, item)}
+        >
+            {item.name}
+        </button>
     {/each}
-</div>
+</nav>
+
+<style>
+    .is-hidden { visibility: hidden; }
+</style>
