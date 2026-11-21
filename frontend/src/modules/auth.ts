@@ -24,6 +24,7 @@ import {
     onRuntimeEvent,
 } from '../api';
 import { renderBreadcrumb } from './navigation';
+import { restorePlace } from './place-memory';
 import { loadChannels } from './channels';
 import { loadEncryptionStatus } from './encryption';
 import { loadSelfUser } from './profile-menu';
@@ -107,6 +108,10 @@ async function showDashboardForFlow(flowVersion: number): Promise<void> {
     const userID = await userIDPromise;
     if (!isCurrentPersonalDriveFlow(flowVersion)) return;
     state.myUserID = Number(userID) || 0;
+
+    // A phone the OS closed in the background reopens where it was left.
+    await restorePlace();
+    if (!isCurrentPersonalDriveFlow(flowVersion)) return;
 
     // Pull Telegram metadata before reading encryption state. On a fresh
     // reinstall this is what restores the wrapped master key into SQLite.

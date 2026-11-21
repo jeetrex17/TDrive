@@ -20,6 +20,7 @@
     import TabBar from './TabBar.svelte';
     import TopBar from './TopBar.svelte';
     import TransfersTab from './TransfersTab.svelte';
+    import { rememberPlace } from '../../modules/place-memory';
     import { activateMobileBack } from './mobile-back';
     import { activateSafeArea } from './safe-area';
     import { activateKeyboardInsets } from './keyboard-insets';
@@ -172,8 +173,10 @@
         const disposeKeyboard = activateKeyboardInsets();
         const disposeBackground = activateBackgroundTransfers();
         const disposeNotificationActions = activateNotificationActions();
+        const disposePlace = rememberPlace();
 
         return () => {
+            disposePlace();
             disposeNotificationActions();
             disposeBack();
             disposeSafeArea();
