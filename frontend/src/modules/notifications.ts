@@ -96,8 +96,6 @@ export interface NotifyOptions {
     level?: ToastLevel;
     title?: string;
     body?: string;
-    /** Legacy option; all notices expire, including former sticky notices. */
-    sticky?: boolean;
     durationMs?: number;
     spinner?: boolean;
     action?: ToastAction;
@@ -130,7 +128,6 @@ export function notify(opts: NotifyOptions = {}): string {
         level,
         title: String(opts.title || ''),
         body: opts.body ? String(opts.body) : '',
-        sticky: false,
         durationMs: duration,
         expiresAt: now + duration,
         paused,

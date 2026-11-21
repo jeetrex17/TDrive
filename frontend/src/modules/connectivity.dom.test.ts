@@ -42,7 +42,6 @@ describe('connectivity watch', () => {
 
         const toast = currentToast();
         expect(toast?.level).toBe('warning');
-        expect(toast?.sticky).toBe(false);
         expect(toast?.durationMs).toBe(6_000);
     });
 
@@ -55,7 +54,6 @@ describe('connectivity watch', () => {
 
         const toast = currentToast();
         expect(toast?.level).toBe('success');
-        expect(toast?.sticky).toBe(false);
         // One entry, not two: the stack must not jump while the two swap over.
         expect(get(toasts).filter((entry) => entry.id === OFFLINE_TOAST_ID)).toHaveLength(1);
     });

@@ -405,7 +405,7 @@ function notifyDownloadFailure(item: DownloadQueueItem, error: OperationError | 
         history: false,
         action: {
             label: 'Retry',
-            // One shot. The toast is sticky, so without this it sits there
+            // One shot. The toast stays up for a while, so without this it sits there
             // offering to retry a download that is already running again, and
             // a second tap re-queues a key that is mid-flight -- which resets
             // the queue entry's progress under it.

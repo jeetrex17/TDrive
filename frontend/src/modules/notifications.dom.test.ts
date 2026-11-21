@@ -88,13 +88,10 @@ describe('notification expiry scheduling', () => {
         expect(get(toasts)).toHaveLength(0);
     });
 
-    it('bounds old sticky and zero-duration requests, including progress spinners', () => {
-        notify({ id: 'legacy-sticky', title: 'Working', sticky: true, spinner: true });
+    it('bounds zero-duration requests, including progress spinners', () => {
+        notify({ id: 'spinner', title: 'Working', spinner: true });
         notify({ id: 'legacy-zero', level: 'warning', title: 'Offline', durationMs: 0 });
-        expect(get(toasts).map(({ sticky, durationMs }) => ({ sticky, durationMs }))).toEqual([
-            { sticky: false, durationMs: 4_000 },
-            { sticky: false, durationMs: 6_000 },
-        ]);
+        expect(get(toasts).map(({ durationMs }) => durationMs)).toEqual([4_000, 6_000]);
         vi.advanceTimersByTime(6_000);
         expect(get(toasts)).toHaveLength(0);
     });

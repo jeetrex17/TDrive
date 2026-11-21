@@ -67,7 +67,6 @@ function makeToast(overrides: Partial<ToastItem> = {}): ToastItem {
         level: 'error',
         title: 'Upload failed',
         body: 'FLOOD_WAIT (420)',
-        sticky: true,
         spinner: false,
         durationMs: 0,
         expiresAt: 0,

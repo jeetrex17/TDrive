@@ -22,7 +22,6 @@ describe('notifyAppError', () => {
                 level: 'error',
                 title: 'Could not open file',
                 body: 'token=[redacted] failed at [local path]',
-                sticky: false,
                 durationMs: 8_000,
             }),
         ]);
