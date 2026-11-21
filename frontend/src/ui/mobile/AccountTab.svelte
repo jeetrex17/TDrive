@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { tick } from 'svelte';
+    import { onMount, tick } from 'svelte';
     import { get } from 'svelte/store';
     import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
     import FolderIcon from '@lucide/svelte/icons/folder';
@@ -14,7 +14,7 @@
     import Avatar from '../chrome/Avatar.svelte';
     import SwitchRow from '../SwitchRow.svelte';
     import { encryptUploads, setEncryptUploads } from '../../modules/upload-preferences';
-    import { getStorageUsed } from '../../api';
+    import { getAppVersion, getStorageUsed } from '../../api';
     import { formatBytes } from '../../utils';
     import { encryptionEntryVisible, profileLoaded, profileUser } from '../chrome/profile-store';
     import { sidebarState } from '../sidebar/sidebar-store';
@@ -52,6 +52,13 @@
     // because a switch with a page behind it unfolded at the bottom of a list of
     // unrelated rows left the thing being configured off screen. The open detail
     // lives in the shell store so the top bar and this tab agree on it.
+    // Phones update through their stores, so the desktop updater that would
+    // otherwise load this never runs; support still needs the number.
+    let version = $state('');
+    onMount(() => {
+        void getAppVersion().then((info) => { version = info.version; }).catch(() => undefined);
+    });
+
     let appearanceOpener = $state<HTMLButtonElement | null>(null);
     let backupOpener = $state<HTMLButtonElement | null>(null);
     let scrollerEl = $state<HTMLElement | null>(null);
@@ -299,6 +306,9 @@
         <div class="account-card account-about">
             <div class="account-about-name">TDrive</div>
             <div class="account-about-tagline">Your Telegram, as a drive.</div>
+            {#if version}
+                <div class="account-about-version">Version {version}</div>
+            {/if}
         </div>
     </section>
 

@@ -867,6 +867,7 @@ html.mobile .account-row .account-row-chevron { flex: 0 0 auto; color: var(--col
 html.mobile .account-about { padding: 16px; gap: 4px; }
 html.mobile .account-about-name { font-size: var(--type-md); font-weight: var(--weight-strong); color: var(--color-text); }
 html.mobile .account-about-tagline { font-size: var(--type-base); color: var(--color-text-muted); }
+html.mobile .account-about-version { font-size: var(--type-sm); color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
 
 html.mobile .account-logout {
     display: flex;
