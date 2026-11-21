@@ -1398,6 +1398,16 @@ html.mobile .video-shell {
     transition: transform var(--motion-med) var(--ease-standard), opacity var(--motion-med) var(--ease-standard);
 }
 html.mobile .video-stage { touch-action: none; }
+/* Let swipes reach the stage through the scrims and gaps between controls. */
+html.mobile .video-overlay:is(.is-video-chrome-visible, .is-video-error) :is(.video-topbar, .video-controls),
+html.mobile .video-overlay.is-video-paused:not(.is-video-loading):not(.is-video-error) .video-center-controls {
+    pointer-events: none;
+}
+html.mobile .video-overlay:is(.is-video-chrome-visible, .is-video-error) :is(.video-topbar, .video-controls)
+    :is(button:not(:disabled), [role="slider"]:not([aria-disabled="true"])),
+html.mobile .video-overlay.is-video-paused:not(.is-video-loading):not(.is-video-error) .video-center-controls button:not(:disabled) {
+    pointer-events: auto;
+}
 html.mobile .video-player {
     transition: filter var(--motion-slow) var(--ease-standard), transform var(--motion-slow) var(--ease-standard);
 }

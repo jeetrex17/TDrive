@@ -520,8 +520,14 @@ Media thumbnails and My Drive video rows show a progress bar from the same
 record, updated on saves without reloading the view. Older records without duration still
 resume playback and gain a progress bar after the next playback save.
 
-Mobile player controls use a session-scoped native bridge. A left-side vertical
-swipe changes brightness; Android right-side swipes adjust media-stream volume.
+On Android and iOS, a horizontal swipe across the video surface seeks ten
+seconds on release. Swiping left goes back and swiping right goes forward.
+The gesture uses the same transport and feedback as the skip buttons and leaves
+the timeline and other controls available for direct interaction.
+
+Brightness, volume and orientation controls use a session-scoped native bridge.
+A left-side vertical swipe changes brightness. On Android a right-side vertical
+swipe adjusts media-stream volume.
 iOS uses a visible native `MPVolumeView` slider, opened from the right-side gesture
 or volume control, because WKWebView cannot set system volume. The rotate button
 requests portrait or landscape through the native platform. Closing or
