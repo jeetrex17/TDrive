@@ -172,7 +172,7 @@ html:not(.mobile) .main-content {
     width: 10px;
     display: inline-flex;
     justify-content: center;
-    color: var(--color-text-muted);
+    color: var(--color-current-text);
     font-size: var(--type-xs);
     line-height: 1;
 }

@@ -105,6 +105,11 @@
     --color-action-hover: var(--color-accent-hover);
     --color-on-action: var(--color-on-accent);
 
+    /* Where you are: the active sidebar place, tab and sort column. Each palette
+       marks it in its accent; Graphite and Chalk keep it neutral. */
+    --color-current-bg: var(--overlay-accent-1);
+    --color-current-text: var(--color-accent);
+
     /* Compatibility aliases used by the current frontend modules. */
     --bg-dark: var(--color-canvas);
     --bg-sidebar: var(--color-surface-0);

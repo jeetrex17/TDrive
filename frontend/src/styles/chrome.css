@@ -69,7 +69,7 @@
 @media (hover: hover) {
     .drive-item:hover { background: var(--overlay-neutral-1); color: var(--color-text); }
 }
-.drive-item.active { background: var(--overlay-neutral-2); color: var(--color-text); }
+.drive-item.active { background: var(--color-current-bg); color: var(--color-current-text); }
 .drive-item .icon { width: 16px; height: 16px; flex-shrink: 0; }
 .drive-item-title {
     flex: 1;

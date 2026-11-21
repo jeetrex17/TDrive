@@ -491,9 +491,7 @@ html.mobile .tab-item {
     cursor: pointer;
     transition: color var(--motion-med) var(--ease-standard);
 }
-html.mobile .tab-item.active { color: var(--color-text); }
-/* Android's navigation bar marks the active tab with its pill and tint. */
-html.android .tab-item.active { color: var(--color-accent); }
+html.mobile .tab-item.active { color: var(--color-current-text); }
 html.mobile .tab-icon {
     position: relative;
     display: inline-grid;
@@ -519,7 +517,7 @@ html.mobile .tab-icon .profile-avatar {
 html.mobile .tab-icon.is-avatar .tab-pill { opacity: 0; }
 html.mobile .tab-item.active .tab-icon.is-avatar .profile-avatar {
     box-shadow:
-        0 0 0 2px currentColor,
+        0 0 0 2px var(--color-current-text),
         inset 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
 
@@ -537,7 +535,7 @@ html.mobile .tab-pill {
     top: 50%;
     width: 48px;
     height: 32px;
-    background: var(--overlay-accent-1);
+    background: var(--color-current-bg);
     border-radius: var(--radius-pill);
     pointer-events: none;
     opacity: 0;
@@ -545,7 +543,7 @@ html.mobile .tab-pill {
     transition: opacity var(--motion-med) var(--ease-enter),
                 transform var(--motion-med) var(--ease-enter);
 }
-html.android .tab-item.active .tab-pill {
+html.mobile .tab-item.active .tab-pill {
     opacity: 1;
     transform: translate(-50%, -50%) scale(1);
 }
