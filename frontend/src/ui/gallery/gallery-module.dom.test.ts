@@ -246,4 +246,21 @@ describe('gallery orchestration', () => {
             expect.objectContaining({ id: 2, name: 'clip.mp4' }), undefined, expect.objectContaining({ channelId: 1 }),
         ));
     });
+
+    it('offers loaded photo neighbours for warming, never a video', async () => {
+        const photos = mocks.page.getMockImplementation()!;
+        mocks.page.mockImplementation(async (...args: unknown[]) => {
+            const page = await photos(...args);
+            return { ...page, items: page.items.map((item: { msgId: number }) => item.msgId === 3 ? { ...item, name: 'clip.mp4' } : item) };
+        });
+        await renderGallery();
+        const button = document.createElement('button'); button.className = 'gallery-cell'; button.dataset.id = '2'; button.dataset.index = '1'; host.append(button);
+        button.click();
+        await vi.waitFor(() => expect(mocks.preview).toHaveBeenCalledOnce());
+        const [source, second] = mocks.preview.mock.calls[0];
+
+        expect(source.peekNeighbor(second, -1)?.id).toBe(1);
+        expect(source.peekNeighbor(second, 1)).toBeNull();
+        expect(mocks.closePreview).not.toHaveBeenCalled();
+    });
 });

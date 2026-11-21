@@ -365,11 +365,19 @@
 }
 
 .preview-loading-fill {
-    width: 0%;
+    width: 36%;
     height: 100%;
     border-radius: var(--radius-pill);
     background: var(--color-accent);
-    transition: width 0.12s linear;
+}
+/* The original's size is not known while it streams, so the bar says
+   "working" rather than pretending to measure. */
+.preview-overlay.is-preview-loading .preview-loading-fill {
+    animation: preview-loading-sweep 1.2s var(--ease-standard) infinite;
+}
+@keyframes preview-loading-sweep {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(280%); }
 }
 
 .preview-error {
@@ -379,7 +387,7 @@
     transform: translate(-50%, -50%);
     max-width: min(460px, calc(100vw - 48px));
     padding: 14px 18px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-lg);
     background: rgba(18, 20, 29, 0.82);
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 20px 48px rgba(0,0,0,0.24);
@@ -392,6 +400,18 @@
     -webkit-backdrop-filter: blur(18px);
     z-index: 3;
 }
+.preview-error-text { margin: 0 0 var(--space-3); }
+.preview-error-retry {
+    padding: var(--space-1-5) var(--space-4);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: var(--radius-pill);
+    background: rgba(255, 255, 255, 0.08);
+    color: inherit;
+    font: inherit;
+    font-weight: var(--weight-semibold);
+    cursor: pointer;
+}
+.preview-error-retry:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
 .preview-overlay.is-preview-error .preview-close-btn {
     opacity: 1;

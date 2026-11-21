@@ -407,6 +407,12 @@ async function openGalleryLightbox(item: GalleryItem): Promise<void> {
             const index = currentSource.indexOf(Number(active.id));
             return index === undefined ? null : { index, total: currentSource.timeline.totalCount };
         },
+        peekNeighbor(active, direction) {
+            if (!currentSource || currentChannelId !== channelId) return null;
+            const index = currentSource.indexOf(Number(active.id));
+            const neighbor = index === undefined ? undefined : currentSource.peek(index + direction);
+            return neighbor && !isVideoFile(neighbor.name) ? previewItem(neighbor, channelId) : null;
+        },
     }, previewItem(item, channelId));
 }
 

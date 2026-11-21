@@ -71,13 +71,15 @@ describe('bounded photo viewer', () => {
         const preview = await import('./preview');
         preview.activatePreviewModal();
         await preview.openPreviewList([item, { ...item, id: 2 }], 0);
-        expect(mocks.acquire).toHaveBeenCalledTimes(1);
+        // The photo's own thumbnail, then its neighbour's, warmed for a swipe.
+        expect(mocks.acquire.mock.calls.map(([request]) => [request.fileId, request.kind])).toEqual([[1, 'thumbnail'], [2, 'thumbnail']]);
         expect(mocks.acquire).toHaveBeenCalledWith(expect.objectContaining({ fileId: 1, revision: 2, kind: 'thumbnail' }), 'viewer');
         expect(mocks.openOriginal).toHaveBeenCalledExactlyOnceWith(1, 2);
         expect(mocks.reserveOriginal).toHaveBeenCalledTimes(1);
         expect(mocks.setGalleryActive).toHaveBeenCalledWith(false);
         preview.closePreviewModal();
-        expect(mocks.release).toHaveBeenCalledTimes(1);
+        // Closing hands back the photo's thumbnail and the warmed neighbour.
+        expect(mocks.release).toHaveBeenCalledTimes(2);
         expect(mocks.close).toHaveBeenCalledWith('original-1');
         expect(mocks.releaseOriginalBudget).toHaveBeenCalledTimes(1);
         expect(mocks.setGalleryActive).toHaveBeenLastCalledWith(true);
@@ -148,11 +150,12 @@ describe('bounded photo viewer', () => {
         expect(mocks.readExif).toHaveBeenCalledOnce();
     });
 
-    it('never prefetches neighbor originals', async () => {
+    it('warms only the two neighbouring thumbnails and never prefetches originals', async () => {
         const preview = await import('./preview');
         preview.activatePreviewModal();
         await preview.openPreviewList(Array.from({ length: 100 }, (_, index) => ({ ...item, id: index + 1 })), 5);
-        expect(mocks.acquire).toHaveBeenCalledTimes(1);
+        expect(mocks.acquire.mock.calls.map(([request]) => request.fileId).sort()).toEqual([5, 6, 7]);
+        expect(mocks.acquire.mock.calls.every(([request]) => request.kind === 'thumbnail')).toBe(true);
         expect(mocks.openOriginal).toHaveBeenCalledTimes(1);
         preview.closePreviewModal();
     });
@@ -247,9 +250,9 @@ describe('bounded photo viewer', () => {
         preview.activatePreviewModal();
         await preview.openPreviewList([item, { ...item, id: 2 }, { ...item, id: 3 }], 0);
         document.getElementById('preview-next')!.click();
-        await vi.waitFor(() => expect(mocks.acquire).toHaveBeenCalledTimes(2));
+        await vi.waitFor(() => expect(mocks.openOriginal).toHaveBeenCalledWith(2, 2));
         document.getElementById('preview-next')!.click();
-        await vi.waitFor(() => expect(mocks.acquire).toHaveBeenCalledTimes(3));
+        await vi.waitFor(() => expect(mocks.openOriginal).toHaveBeenCalledWith(3, 2));
         expect(mocks.releaseOriginalBudget).toHaveBeenCalledTimes(2);
         expect(mocks.close).toHaveBeenCalledWith('original-1');
         expect(document.getElementById('preview-counter')!.textContent).toBe('3 / 3');
@@ -300,11 +303,50 @@ describe('bounded photo viewer', () => {
         const preview = await import('./preview');
         preview.activatePreviewModal();
         await preview.openPreviewList([item], 0);
-        expect(document.getElementById('preview-error')!.textContent).toBe(message);
+        expect(document.querySelector('#preview-error .preview-error-text')!.textContent).toBe(message);
+        expect(document.querySelector('#preview-error .preview-error-retry')?.textContent).toBe('Try again');
         expect(document.getElementById('preview-image')!.hasAttribute('src')).toBe(false);
         expect(mocks.releaseOriginalBudget).toHaveBeenCalledOnce();
         document.getElementById('preview-download')!.click();
         expect(mocks.download).toHaveBeenCalledWith(1, 'Photo.jpg', 0);
+    });
+
+    it('tries the same photo again from the error', async () => {
+        mocks.openOriginal.mockRejectedValueOnce(new Error('network unavailable'));
+        const preview = await import('./preview');
+        preview.activatePreviewModal();
+        await preview.openPreviewList([item], 0);
+        document.querySelector<HTMLButtonElement>('#preview-error .preview-error-retry')!.click();
+
+        await vi.waitFor(() => expect(mocks.openOriginal).toHaveBeenCalledTimes(2));
+        expect(mocks.openOriginal).toHaveBeenLastCalledWith(1, 2);
+        await vi.waitFor(() => expect(document.getElementById('preview-error')!.style.display).toBe('none'));
+    });
+
+    it('keeps the current photo on screen until the next one has something to show', async () => {
+        let resolveNext: (asset: { url: string; width: number; height: number }) => void = () => {};
+        mocks.acquire.mockImplementation((request: { fileId: number }) => ({
+            promise: request.fileId === 2
+                ? new Promise((resolve) => { resolveNext = resolve; })
+                : Promise.resolve({ url: `blob:photo-${request.fileId}`, width: 1200, height: 800 }),
+            release: mocks.release,
+        }));
+        mocks.openOriginal.mockImplementation((fileId: number) => fileId === 2
+            ? new Promise(() => {})
+            : Promise.resolve({ token: `original-${fileId}`, url: `http://127.0.0.1/media/original-${fileId}`, kind: 'image' }));
+        const preview = await import('./preview');
+        preview.activatePreviewModal();
+        await preview.openPreviewList([item, { ...item, id: 2 }], 0);
+        const image = document.getElementById('preview-image') as HTMLImageElement;
+        await vi.waitFor(() => expect(image.getAttribute('src')).toBe('http://127.0.0.1/media/original-1'));
+
+        document.getElementById('preview-next')!.click();
+        await vi.waitFor(() => expect(mocks.openOriginal).toHaveBeenCalledWith(2, 2));
+        expect(image.getAttribute('src')).toBe('http://127.0.0.1/media/original-1');
+
+        resolveNext({ url: 'blob:photo-2', width: 1200, height: 800 });
+        await vi.waitFor(() => expect(document.getElementById('preview-thumbnail')!.getAttribute('src')).toBe('blob:photo-2'));
+        expect(image.hasAttribute('src')).toBe(false);
     });
 
     it('releases a decoded-original failure and retains its download action', async () => {
@@ -314,7 +356,7 @@ describe('bounded photo viewer', () => {
         document.getElementById('preview-image')!.dispatchEvent(new Event('error'));
         expect(mocks.close).toHaveBeenCalledExactlyOnceWith('original-1');
         expect(mocks.releaseOriginalBudget).toHaveBeenCalledOnce();
-        expect(document.getElementById('preview-error')!.textContent).toBe('Not a supported image');
+        expect(document.querySelector('#preview-error .preview-error-text')!.textContent).toBe('This photo could not be shown.');
         document.getElementById('preview-download')!.click();
         expect(mocks.download).toHaveBeenCalledWith(1, 'Photo.jpg', 123);
         preview.closePreviewModal();
