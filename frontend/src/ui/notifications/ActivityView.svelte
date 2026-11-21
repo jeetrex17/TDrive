@@ -287,7 +287,7 @@
         .activity-toolbar { flex-direction: column; align-items: stretch; gap: var(--space-3); padding: 0 var(--space-4) var(--space-3); }
         .activity-tabs button { min-height: var(--touch-target); }
         .activity-search { width: 100%; height: var(--touch-target); margin: 0; }
-        .activity-search input { font-size: 16px; }
+        .activity-search input { font-size: var(--type-md); }
         .activity-filters { padding: var(--space-3) var(--space-4) var(--space-1); }
         .activity-filters button { min-height: 36px; padding-inline: var(--space-3); font-size: var(--type-sm); }
         .activity-content { display: block; }

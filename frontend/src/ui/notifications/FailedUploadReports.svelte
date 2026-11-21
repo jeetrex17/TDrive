@@ -61,7 +61,7 @@
         background: var(--overlay-accent-1);
         color: var(--accent);
         font: inherit;
-        font-size: 0.76rem;
+        font-size: var(--type-xs);
         font-weight: var(--weight-semibold);
         cursor: pointer;
         transition: background-color var(--motion-med) var(--ease-standard);
@@ -73,6 +73,6 @@
     .failed-upload-actions .notif-row-cancel:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
     .failed-upload-actions .notif-row-cancel { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
     /* Larger touch targets on phones. */
-    [data-variant='mobile'] .failed-upload-review { min-height: 36px; padding: 0 14px; font-size: 0.8125rem; }
+    [data-variant='mobile'] .failed-upload-review { min-height: 36px; padding: 0 14px; font-size: var(--type-sm); }
     [data-variant='mobile'] .failed-upload-actions .notif-row-cancel { width: 40px; height: 40px; }
 </style>

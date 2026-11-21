@@ -482,7 +482,7 @@
     .auth-privacy {
         margin: 0 0 1rem;
         color: var(--color-text-muted);
-        font-size: 0.8rem;
+        font-size: var(--type-sm);
         line-height: 1.5;
         text-align: left;
     }
@@ -501,7 +501,7 @@
         display: block;
         margin-bottom: 0.4rem;
         color: var(--color-text-soft);
-        font-size: 0.82rem;
+        font-size: var(--type-sm);
         font-weight: 600;
     }
 
@@ -516,7 +516,7 @@
     .auth-error {
         margin: 0 0 0.8rem;
         color: var(--danger);
-        font-size: 0.82rem;
+        font-size: var(--type-sm);
         line-height: 1.4;
         text-align: left;
     }
@@ -549,7 +549,7 @@
        spacing to the mobile scale (15 body, 13 fine print, 16 inputs). */
     :global(html.mobile) .auth-intro {
         margin: 0 0 1.5rem;
-        font-size: 0.9375rem;
+        font-size: var(--mobile-type-body);
         line-height: 1.5;
     }
 
@@ -576,7 +576,7 @@
     }
 
     :global(html.mobile) .auth-welcome h2 {
-        font-size: 1.75rem;
+        font-size: var(--type-3xl);
     }
 
     .auth-inline-link {
@@ -600,7 +600,7 @@
     :global(html.mobile) .auth-privacy {
         order: 1;
         margin: 0 0 1rem;
-        font-size: 0.8125rem;
+        font-size: var(--type-sm);
         color: var(--color-text-muted);
     }
 
@@ -611,7 +611,7 @@
 
     :global(html.mobile) .auth-field > label {
         margin-bottom: 0.375rem;
-        font-size: 0.8125rem;
+        font-size: var(--type-sm);
     }
 
     :global(html.mobile) .auth-field:not(.auth-fields .auth-field) {
@@ -624,7 +624,7 @@
 
     :global(html.mobile) .auth-error {
         margin: -0.25rem 0 1rem;
-        font-size: 0.875rem;
+        font-size: var(--type-base);
         line-height: 1.45;
     }
 

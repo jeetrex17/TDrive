@@ -89,7 +89,7 @@
     margin: 0;
     overflow: hidden;
     color: #f2f5ff;
-    font-size: 13px;
+    font-size: var(--type-sm);
     font-weight: 700;
     letter-spacing: -0.005em;
     line-height: 1.3;

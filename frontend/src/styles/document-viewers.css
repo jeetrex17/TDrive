@@ -92,7 +92,7 @@
     max-width: min(72vw, 980px);
     overflow: hidden;
     color: var(--viewer-text);
-    font-size: 1.05rem;
+    font-size: var(--type-lg);
     font-weight: 800;
     line-height: 1.2;
     text-overflow: ellipsis;
@@ -294,7 +294,7 @@
 .audio-title {
     overflow: hidden;
     color: var(--viewer-text);
-    font-size: 1.16rem;
+    font-size: var(--type-xl);
     font-weight: 800;
     line-height: 1.25;
     text-overflow: ellipsis;
@@ -428,7 +428,7 @@
     border-radius: var(--radius-md);
     background: var(--viewer-surface-2);
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-    font-size: 0.88rem;
+    font-size: var(--type-base);
     line-height: 1.72;
     white-space: pre-wrap;
     word-break: break-word;
@@ -444,7 +444,7 @@
         BlinkMacSystemFont,
         'Segoe UI',
         sans-serif;
-    font-size: 0.95rem;
+    font-size: var(--type-md);
     line-height: 1.75;
     white-space: normal;
     word-break: normal;
@@ -479,12 +479,12 @@
 }
 
 .text-viewer-body.is-markdown h2 {
-    font-size: 1.22rem;
+    font-size: var(--type-xl);
 }
 
 .text-viewer-body.is-markdown h3,
 .text-viewer-body.is-markdown h4 {
-    font-size: 1.02rem;
+    font-size: var(--type-md);
 }
 
 .text-viewer-body.is-markdown p,
@@ -536,7 +536,7 @@
     background: var(--viewer-surface-2);
     color: var(--viewer-text);
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-    font-size: 0.88rem;
+    font-size: var(--type-base);
     line-height: 1.72;
 }
 
@@ -720,7 +720,7 @@ html.mobile .file-viewer-topbar.is-phone {
 }
 html.mobile .file-viewer-topbar.is-phone .file-viewer-title {
     max-width: none;
-    font-size: 16px;
+    font-size: var(--type-md);
     font-weight: var(--weight-strong);
     text-align: center;
 }
@@ -749,7 +749,7 @@ html.mobile .file-viewer-subbar {
     background: var(--viewer-surface-2);
 }
 html.mobile .file-viewer-subbar .text-viewer-toggle { width: min(100%, 240px); padding: 3px; }
-html.mobile .file-viewer-subbar .text-viewer-toggle button { flex: 1; min-height: 32px; padding: 0 12px; font-size: 14px; }
+html.mobile .file-viewer-subbar .text-viewer-toggle button { flex: 1; min-height: 32px; padding: 0 12px; font-size: var(--type-base); }
 html.mobile .file-viewer-stage { overscroll-behavior: contain; }
 html.mobile .pdf-frame-shell { padding-bottom: var(--inset-bottom); }
 html.mobile .text-viewer-scroll {
@@ -762,14 +762,14 @@ html.mobile .text-viewer-body {
     border: 0;
     border-radius: 0;
     background: transparent;
-    font-size: 13px;
+    font-size: var(--type-sm);
     line-height: 1.6;
 }
-html.mobile .text-viewer-body.is-structured { font-size: 15px; line-height: 1.6; }
-html.mobile .text-viewer-body.is-markdown h1 { font-size: 1.4rem; }
+html.mobile .text-viewer-body.is-structured { font-size: var(--mobile-type-body); line-height: 1.6; }
+html.mobile .text-viewer-body.is-markdown h1 { font-size: var(--type-2xl); }
 html.mobile .text-viewer-footer { padding: 10px 16px calc(var(--inset-bottom) + 10px); }
 html.mobile .text-viewer-footer .file-viewer-action { min-height: 44px; }
-html.mobile .file-viewer-state { min-height: 40vh; font-size: 15px; }
+html.mobile .file-viewer-state { min-height: 40vh; font-size: var(--mobile-type-body); }
 html.mobile .audio-viewer {
     width: calc(100% - 32px);
     padding: 32px 0 calc(var(--inset-bottom) + 32px);

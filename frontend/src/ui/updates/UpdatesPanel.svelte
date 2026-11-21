@@ -263,7 +263,7 @@
     }
     .updates-header h2 {
         margin: 0;
-        font-size: 0.94rem;
+        font-size: var(--type-md);
         font-weight: 650;
         letter-spacing: 0;
         color: var(--color-text);
@@ -278,7 +278,7 @@
         border-bottom: 1px solid var(--color-border-soft);
     }
     .updates-app-name {
-        font-size: 0.9rem;
+        font-size: var(--type-base);
         font-weight: 650;
         letter-spacing: 0;
     }
@@ -288,7 +288,7 @@
         align-items: center;
         gap: 4px;
         color: var(--color-text-muted);
-        font-size: 0.72rem;
+        font-size: var(--type-xs);
         line-height: 1.35;
     }
     .dot-sep { opacity: 0.6; }
@@ -301,7 +301,7 @@
         gap: 7px;
         margin: 0;
         color: var(--color-text-soft);
-        font-size: 0.82rem;
+        font-size: var(--type-sm);
         font-weight: 550;
         line-height: 1.38;
     }
@@ -310,13 +310,13 @@
     .updates-message { display: flex; flex-direction: column; gap: 3px; }
     .updates-message-title {
         color: var(--color-text-soft);
-        font-size: 0.84rem;
+        font-size: var(--type-sm);
         font-weight: 650;
         line-height: 1.35;
     }
     .updates-message-detail {
         color: var(--color-text-muted);
-        font-size: 0.73rem;
+        font-size: var(--type-xs);
         line-height: 1.4;
     }
 
@@ -345,7 +345,7 @@
         justify-content: space-between;
         margin-top: 6px;
         color: var(--color-text-muted);
-        font-size: 0.74rem;
+        font-size: var(--type-xs);
         font-variant-numeric: tabular-nums;
     }
 
@@ -359,7 +359,7 @@
         padding: 7px 12px;
         border: 1px solid transparent;
         border-radius: var(--radius-md);
-        font-size: 0.78rem;
+        font-size: var(--type-xs);
         font-weight: 650;
         cursor: pointer;
         transition: background var(--motion-fast) var(--ease-standard),
@@ -395,7 +395,7 @@
         color: var(--color-accent);
         background: transparent;
         border: none;
-        font-size: 0.78rem;
+        font-size: var(--type-xs);
         font-weight: 700;
         cursor: pointer;
     }
@@ -415,7 +415,7 @@
         margin: 0 0 10px;
         padding-left: 18px;
         color: var(--color-text-muted);
-        font-size: 0.79rem;
+        font-size: var(--type-sm);
         line-height: 1.5;
     }
     .updates-confirm-buttons { display: flex; gap: 8px; }
@@ -429,7 +429,7 @@
         color: var(--color-danger);
         background: var(--overlay-danger-1);
         border-radius: var(--radius-md);
-        font-size: 0.78rem;
+        font-size: var(--type-xs);
         line-height: 1.4;
     }
     :global(.updates-error svg) { flex-shrink: 0; margin-top: 1px; }
@@ -448,14 +448,14 @@
     .updates-preference-copy { min-width: 0; }
     .updates-preference-title {
         color: var(--color-text-soft);
-        font-size: 0.76rem;
+        font-size: var(--type-xs);
         font-weight: 600;
         line-height: 1.3;
     }
     .updates-preference-description {
         margin-top: 2px;
         color: var(--color-text-muted);
-        font-size: 0.68rem;
+        font-size: var(--type-2xs);
         line-height: 1.35;
     }
     .updates-switch {
@@ -491,14 +491,14 @@
         gap: 12px;
         padding: 0 9px 6px 12px;
     }
-    .updates-checked { color: var(--color-text-subtle); font-size: 0.68rem; }
+    .updates-checked { color: var(--color-text-subtle); font-size: var(--type-2xs); }
     .updates-check {
         padding: 5px 7px;
         color: var(--color-accent);
         background: transparent;
         border: none;
         border-radius: var(--radius-sm);
-        font-size: 0.72rem;
+        font-size: var(--type-xs);
         font-weight: 600;
         cursor: pointer;
         transition: background var(--motion-fast) var(--ease-standard),

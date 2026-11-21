@@ -379,7 +379,7 @@
         align-items: center;
         min-width: 0;
         color: var(--color-text);
-        font-size: 0.92rem;
+        font-size: var(--type-base);
         font-weight: 600;
     }
     .drive-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -387,13 +387,13 @@
         flex: 0 0 auto;
         padding: 2px 7px;
         color: var(--accent);
-        font-size: 0.66rem;
+        font-size: var(--type-2xs);
         font-weight: 700;
         letter-spacing: 0.02em;
         background: var(--overlay-accent-1);
         border-radius: var(--radius-pill);
     }
-    .drive-choice-meta { display: flex; flex-wrap: wrap; color: var(--text-muted); font-size: 0.76rem; }
+    .drive-choice-meta { display: flex; flex-wrap: wrap; color: var(--text-muted); font-size: var(--type-xs); }
     .drive-choice-meta > span + span::before { margin: 0 6px; content: '·'; }
     .drive-choice-meta .in-use { color: var(--color-success); font-weight: 600; }
 
@@ -423,7 +423,7 @@
         display: block;
         margin-top: 10px;
         color: var(--text-muted);
-        font-size: 0.78rem;
+        font-size: var(--type-xs);
         line-height: 1.45;
     }
 
@@ -456,12 +456,12 @@
         padding: 28px 20px;
         margin-bottom: 16px;
         color: var(--text-muted);
-        font-size: 0.8rem;
+        font-size: var(--type-sm);
         background: var(--color-surface-1);
         border: 1px solid var(--border);
         border-radius: var(--radius-md);
     }
-    .drive-panel strong { color: var(--color-text); font-size: 0.92rem; }
+    .drive-panel strong { color: var(--color-text); font-size: var(--type-base); }
 
     .drive-alert {
         display: grid;
@@ -469,13 +469,13 @@
         padding: 12px 14px;
         margin-bottom: 14px;
         color: var(--color-danger);
-        font-size: 0.82rem;
+        font-size: var(--type-sm);
         text-align: left;
         background: color-mix(in srgb, var(--color-danger) 8%, transparent);
         border: 1px solid color-mix(in srgb, var(--color-danger) 22%, transparent);
         border-radius: var(--radius-md);
     }
-    .drive-alert span { color: var(--text-muted); font-size: 0.76rem; overflow-wrap: anywhere; }
+    .drive-alert span { color: var(--text-muted); font-size: var(--type-xs); overflow-wrap: anywhere; }
 
     .drive-spinner {
         width: 16px;
@@ -495,7 +495,7 @@
         padding: 0 12px;
         color: var(--color-text-soft);
         font: inherit;
-        font-size: 0.85rem;
+        font-size: var(--type-base);
         font-weight: 600;
         background: transparent;
         border: 0;
@@ -523,15 +523,15 @@
         border-radius: var(--radius-md);
     }
     .drive-confirm > div:first-child { display: grid; gap: 2px; }
-    .drive-confirm strong { color: var(--color-text); font-size: 0.84rem; }
-    .drive-confirm span { color: var(--text-muted); font-size: 0.74rem; }
+    .drive-confirm strong { color: var(--color-text); font-size: var(--type-sm); }
+    .drive-confirm span { color: var(--text-muted); font-size: var(--type-xs); }
     .drive-confirm-actions { display: flex; flex: 0 0 auto; gap: 6px; }
     .drive-confirm-create {
         min-height: 34px;
         padding: 0 14px;
         color: var(--color-on-accent);
         font: inherit;
-        font-size: 0.8rem;
+        font-size: var(--type-sm);
         font-weight: 700;
         background: var(--accent);
         border: 0;
@@ -583,27 +583,27 @@
         min-height: 56px;
         padding: 12px 16px;
     }
-    :global(html.mobile) .drive-choice-title { font-size: 0.9375rem; }
-    :global(html.mobile) .drive-choice-meta { font-size: 0.8125rem; }
-    :global(html.mobile) .drive-badge { font-size: 0.75rem; }
+    :global(html.mobile) .drive-choice-title { font-size: var(--mobile-type-body); }
+    :global(html.mobile) .drive-choice-meta { font-size: var(--type-sm); }
+    :global(html.mobile) .drive-badge { font-size: var(--type-xs); }
     :global(html.mobile) .drive-check { width: 22px; height: 22px; }
     :global(html.mobile) .drive-panel {
         padding: 32px 20px;
         margin: 0;
-        font-size: 0.875rem;
+        font-size: var(--type-base);
         border-radius: var(--radius-lg);
     }
-    :global(html.mobile) .drive-panel strong { font-size: 1rem; }
+    :global(html.mobile) .drive-panel strong { font-size: var(--type-md); }
     :global(html.mobile) .drive-alert {
-        font-size: 0.9375rem;
+        font-size: var(--mobile-type-body);
         border-radius: var(--radius-lg);
     }
-    :global(html.mobile) .drive-alert span { font-size: 0.8125rem; }
+    :global(html.mobile) .drive-alert span { font-size: var(--type-sm); }
     :global(html.mobile) .drive-scan { margin-top: 16px; }
-    :global(html.mobile) .drive-hint { font-size: 0.8125rem; line-height: 1.5; }
+    :global(html.mobile) .drive-hint { font-size: var(--type-sm); line-height: 1.5; }
     :global(html.mobile) .drive-primary {
         min-height: 50px;
-        font-size: 1rem;
+        font-size: var(--type-md);
         border-radius: var(--radius-lg);
     }
     :global(html.mobile) .drive-primary:hover { transform: none; }
@@ -619,7 +619,7 @@
     :global(html.mobile) .drive-primary.is-busy > :global(svg) { display: none; }
     :global(html.mobile) .drive-ghost {
         min-height: 44px;
-        font-size: 0.9375rem;
+        font-size: var(--mobile-type-body);
     }
     :global(html.mobile) .drive-secondary {
         width: 100%;
@@ -630,7 +630,7 @@
         min-height: 50px;
         margin-top: 0;
         color: var(--color-on-accent);
-        font-size: 1rem;
+        font-size: var(--type-md);
         font-weight: var(--weight-strong);
         background: var(--accent);
         border-radius: var(--radius-lg);
@@ -646,14 +646,14 @@
         margin-top: 4px;
         border-radius: var(--radius-lg);
     }
-    :global(html.mobile) .drive-confirm strong { font-size: 0.9375rem; }
-    :global(html.mobile) .drive-confirm span { font-size: 0.8125rem; }
+    :global(html.mobile) .drive-confirm strong { font-size: var(--mobile-type-body); }
+    :global(html.mobile) .drive-confirm span { font-size: var(--type-sm); }
     :global(html.mobile) .drive-confirm-actions button {
         flex: 1;
         min-height: 44px;
     }
     :global(html.mobile) .drive-confirm-create {
-        font-size: 0.9375rem;
+        font-size: var(--mobile-type-body);
         border-radius: var(--radius-md);
     }
 </style>

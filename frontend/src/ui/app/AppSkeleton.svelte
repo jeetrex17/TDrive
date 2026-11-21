@@ -108,7 +108,7 @@
     .skeleton-logo {
         margin-bottom: 40px;
         color: var(--color-text);
-        font-size: 1.2rem;
+        font-size: var(--type-xl);
         font-weight: 800;
         letter-spacing: -0.5px;
     }
@@ -250,7 +250,7 @@
         font-size: var(--type-sm);
         font-weight: 900;
     }
-    .compact-wordmark { color: var(--color-text); font-size: 0.62rem; font-weight: 800; letter-spacing: -0.2px; }
+    .compact-wordmark { color: var(--color-text); font-size: 0.625rem; font-weight: 800; letter-spacing: -0.2px; }
     .compact-copy { display: grid; gap: 3px; min-width: 0; }
     .compact-copy strong { overflow: hidden; color: var(--color-text); font-size: var(--type-base); text-overflow: ellipsis; white-space: nowrap; }
     .compact-copy span { color: var(--text-muted); font-size: var(--type-xs); }

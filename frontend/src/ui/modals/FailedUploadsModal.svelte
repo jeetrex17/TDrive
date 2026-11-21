@@ -107,7 +107,7 @@
     .failure-count {
         padding: 3px 9px;
         border-radius: var(--radius-pill);
-        font-size: 0.76rem;
+        font-size: var(--type-xs);
         font-weight: var(--weight-semibold);
         font-variant-numeric: tabular-nums;
     }
@@ -153,7 +153,7 @@
         overflow: hidden;
         text-overflow: ellipsis;
     }
-    .failure-detail { color: var(--text-muted); font-size: 0.8rem; line-height: 1.35; }
+    .failure-detail { color: var(--text-muted); font-size: var(--type-sm); line-height: 1.35; }
     .failure-label { font-weight: var(--weight-semibold); }
     .failure-label[data-tone='accent'], .failure-label[data-tone='info'] { color: var(--accent); }
     .failure-label[data-tone='warning'] { color: var(--color-warning); }
@@ -165,7 +165,7 @@
         justify-content: space-between;
         gap: var(--space-2);
         color: var(--text-muted);
-        font-size: 0.8rem;
+        font-size: var(--type-sm);
         font-variant-numeric: tabular-nums;
     }
     .page-buttons { display: flex; gap: 4px; }
@@ -177,7 +177,7 @@
         background: transparent;
         color: var(--text-main);
         font: inherit;
-        font-size: 0.8rem;
+        font-size: var(--type-sm);
         cursor: pointer;
     }
     @media (hover: hover) {
@@ -185,5 +185,5 @@
     }
     .page-buttons button:disabled { opacity: 0.4; cursor: default; }
     :global(html.mobile) .page-buttons button { min-height: 36px; padding: 0 14px; }
-    .failed-upload-error { margin: 0; color: var(--danger); font-size: 0.85rem; }
+    .failed-upload-error { margin: 0; color: var(--danger); font-size: var(--type-base); }
 </style>

@@ -6,7 +6,7 @@
 .gallery-title {
     display: none;
     align-items: center;
-    font-size: 1.05rem;
+    font-size: var(--type-lg);
     font-weight: 700;
     color: var(--text-main);
     letter-spacing: 0.01em;
@@ -31,15 +31,15 @@
 .gallery-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 64px; }
 .gallery-empty-icon { width: 48px; height: 48px; color: var(--border); }
 .gallery-empty-icon svg { width: 100%; height: 100%; }
-.gallery-empty-title { color: var(--text-main); font-weight: 700; font-size: 1rem; }
-.gallery-empty-sub { font-size: 0.85rem; }
+.gallery-empty-title { color: var(--text-main); font-weight: 700; font-size: var(--type-md); }
+.gallery-empty-sub { font-size: var(--type-base); }
 
 .gallery-group-header {
     position: sticky;
     top: 0;
     z-index: 1;
     padding: 16px 2px 12px;
-    font-size: 1rem;
+    font-size: var(--type-md);
     font-weight: 700;
     letter-spacing: 0.01em;
     color: var(--text-main);
@@ -213,7 +213,7 @@
     background: rgba(12, 14, 22, 0.56);
     border: 1px solid rgba(255, 255, 255, 0.08);
     color: rgba(255, 255, 255, 0.86);
-    font-size: 0.8rem;
+    font-size: var(--type-sm);
     font-weight: 700;
     letter-spacing: 0.02em;
     -webkit-backdrop-filter: blur(14px);
@@ -278,7 +278,7 @@
     border-radius: var(--radius-pill);
     background: rgba(255, 255, 255, 0.06);
     color: rgba(255, 255, 255, 0.8);
-    font-size: 0.95rem;
+    font-size: var(--type-md);
     line-height: 1;
     cursor: pointer;
     transition: background 0.15s ease, color 0.15s ease;
@@ -287,7 +287,7 @@
 
 .info-date {
     color: rgba(255, 255, 255, 0.96);
-    font-size: 1.04rem;
+    font-size: var(--type-lg);
     font-weight: 700;
     line-height: 1.45;
     margin-bottom: 20px;
@@ -297,7 +297,7 @@
 .info-section { margin-bottom: 20px; }
 .info-section-title {
     color: rgba(255, 255, 255, 0.5);
-    font-size: 0.7rem;
+    font-size: var(--type-2xs);
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.08em;
@@ -308,7 +308,7 @@
     justify-content: space-between;
     gap: 16px;
     padding: 5px 0;
-    font-size: 0.86rem;
+    font-size: var(--type-base);
 }
 .info-label { color: rgba(255, 255, 255, 0.55); flex-shrink: 0; }
 .info-value { color: rgba(255, 255, 255, 0.92); text-align: right; word-break: break-word; }
@@ -320,13 +320,13 @@
     border: 1px solid rgba(255, 255, 255, 0.12);
     background: rgba(255, 255, 255, 0.04);
     color: var(--viewer-accent);
-    font-size: 0.82rem;
+    font-size: var(--type-sm);
     font-weight: 700;
     cursor: pointer;
     transition: background 0.15s ease;
 }
 .info-map-link:hover { background: rgba(255, 255, 255, 0.09); }
-.info-empty { color: rgba(255, 255, 255, 0.5); font-size: 0.86rem; }
+.info-empty { color: rgba(255, 255, 255, 0.5); font-size: var(--type-base); }
 
 /* tabindex=-1 scroll containers are focused programmatically, never tabbed to,
    so they must not paint a focus outline (it was bleeding through the lightbox). */
@@ -431,7 +431,7 @@
     border: none;
     background: transparent;
     color: var(--viewer-text);
-    font-size: 1rem;
+    font-size: var(--type-md);
     letter-spacing: 0.01em;
     outline: none;
 }
@@ -477,14 +477,14 @@
     margin-top: 16px;
     color: var(--viewer-danger);
     font-family: system-ui, -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
-    font-size: 0.8rem;
+    font-size: var(--type-sm);
     text-align: center;
 }
 .preview-unlock-hint {
     margin-top: 16px;
     color: var(--viewer-text-muted);
     font-family: system-ui, -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
-    font-size: 0.8rem;
+    font-size: var(--type-sm);
     font-weight: 500;
     letter-spacing: 0.01em;
     text-align: center;
@@ -516,7 +516,7 @@ html.mobile .gallery-view {
 html.mobile .main-content.photos-mode .gallery-title { display: none; }
 html.mobile .gallery-group-header {
     padding: 14px 16px 8px;
-    font-size: 15px;
+    font-size: var(--mobile-type-body);
     font-weight: var(--weight-semibold);
 }
 html.mobile .gallery-grid {
@@ -610,15 +610,15 @@ html.mobile .gallery-empty-icon {
     margin-bottom: 6px;
     color: var(--color-text-subtle);
 }
-html.mobile .gallery-empty-title { font-size: 17px; text-wrap: balance; }
-html.mobile .gallery-empty-sub { font-size: 15px; line-height: 1.5; }
+html.mobile .gallery-empty-title { font-size: var(--type-lg); text-wrap: balance; }
+html.mobile .gallery-empty-sub { font-size: var(--mobile-type-body); line-height: 1.5; }
 html.mobile .gallery-empty-actions { margin-top: 14px; }
 html.mobile .gallery-empty-actions .primary-btn,
 html.mobile .gallery-empty-actions .secondary-btn {
     width: auto;
     min-height: 44px;
     padding: 0 18px;
-    font-size: 15px;
+    font-size: var(--mobile-type-body);
 }
 html.mobile .gallery-empty-actions .primary-btn:active { transform: scale(0.97); }
 
@@ -673,7 +673,7 @@ html.mobile .preview-filename {
     flex: 1 1 auto;
     max-width: none;
     padding: 10px 14px;
-    font-size: 14px;
+    font-size: var(--type-base);
 }
 html.mobile .preview-close-btn,
 html.mobile .preview-icon-btn { width: 44px; height: 44px; }

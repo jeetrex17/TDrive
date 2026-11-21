@@ -17,7 +17,7 @@
     border-radius: var(--radius-pill);
     background: var(--overlay-accent-1);
     color: var(--color-accent);
-    font-size: 0.68rem;
+    font-size: var(--type-2xs);
     font-weight: 800;
     letter-spacing: 0.02em;
 }
@@ -45,7 +45,7 @@
     box-shadow: var(--shadow-sm);
     -webkit-backdrop-filter: blur(18px) saturate(150%);
     backdrop-filter: blur(18px) saturate(150%);
-    font-size: 0.78rem;
+    font-size: var(--type-xs);
     font-weight: 650;
     cursor: pointer;
     transition: color var(--motion-fast) var(--ease-standard),

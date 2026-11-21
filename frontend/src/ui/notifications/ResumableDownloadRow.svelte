@@ -101,7 +101,7 @@
     .track, .detail, .note, .actions { grid-column: 2 / -1; }
     .track { height: 5px; border-radius: var(--radius-pill); background: var(--overlay-neutral-2); overflow: hidden; }
     .fill { height: 100%; border-radius: inherit; background: var(--color-accent); transition: width var(--motion-med) var(--ease-standard); }
-    .detail, .note { margin: 0; color: var(--color-text-muted); font-size: 12px; line-height: 1.45; }
+    .detail, .note { margin: 0; color: var(--color-text-muted); font-size: var(--type-xs); line-height: 1.45; }
     .detail { font-variant-numeric: tabular-nums; }
     .actions { display: flex; flex-wrap: wrap; gap: 6px; }
     .actions button { min-height: 28px; padding: 4px 8px; border: 0; border-radius: var(--radius-md); background: var(--overlay-accent-1); color: var(--color-accent); font: inherit; cursor: pointer; }

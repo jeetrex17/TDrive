@@ -210,7 +210,7 @@ html.mobile .topbar-done {
     border: 0;
     background: transparent;
     color: var(--color-accent);
-    font-size: 1rem;
+    font-size: var(--type-md);
     font-weight: var(--weight-semibold);
     border-radius: var(--radius-md);
     cursor: pointer;
@@ -264,7 +264,7 @@ html.mobile .drive-header-name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 1.375rem;
+    font-size: var(--type-2xl);
     font-weight: var(--weight-strong);
     color: var(--color-text);
     letter-spacing: -0.01em;
@@ -293,7 +293,7 @@ html.mobile .topbar-folder-title {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 1.25rem;
+    font-size: var(--type-xl);
     font-weight: var(--weight-strong);
     color: var(--color-text);
     letter-spacing: -0.01em;
@@ -302,7 +302,7 @@ html.mobile .topbar-folder-meta {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 0.8125rem;
+    font-size: var(--type-sm);
     font-weight: var(--weight-medium);
     color: var(--color-text-muted);
 }
@@ -354,7 +354,7 @@ html.mobile .topbar-menu {
 }
 html.mobile .topbar-menu-label {
     padding: 8px 12px 4px;
-    font-size: 0.75rem;
+    font-size: var(--type-xs);
     font-weight: var(--weight-semibold);
     color: var(--color-text-muted);
 }
@@ -369,7 +369,7 @@ html.mobile .topbar-menu-item {
     border: 0;
     background: transparent;
     color: var(--color-text-soft);
-    font-size: 0.9375rem;
+    font-size: var(--mobile-type-body);
     text-align: left;
     border-radius: var(--radius-sm);
     cursor: pointer;
@@ -394,7 +394,7 @@ html.mobile .topbar-selectall {
     border: 0;
     background: transparent;
     color: var(--color-text-soft);
-    font-size: 1rem;
+    font-size: var(--type-md);
     font-weight: var(--weight-medium);
     border-radius: var(--radius-md);
     cursor: pointer;
@@ -439,7 +439,7 @@ html.mobile .topbar-search input {
     height: 40px;
     margin: 0;
     padding: 0 14px 0 40px;
-    font-size: 1rem;
+    font-size: var(--type-md);
     color: var(--color-text);
     background: var(--color-surface-2);
     border: 1px solid transparent;
@@ -604,7 +604,7 @@ html.mobile .mobile-context-action .mobile-fab .primary-btn.upload-btn {
     border-radius: 50%;
     background: var(--color-accent);
     color: transparent;
-    font-size: 0.6875rem;
+    font-size: var(--type-2xs);
     box-shadow: var(--shadow-md);
 }
 html.mobile .mobile-context-action .mobile-fab .upload-btn-pill {
@@ -711,7 +711,7 @@ html.mobile .transfers-clear {
     border: 0;
     background: transparent;
     color: var(--color-accent);
-    font-size: 0.8125rem;
+    font-size: var(--type-sm);
     font-weight: var(--weight-semibold);
     padding: 6px 8px;
     cursor: pointer;
@@ -785,17 +785,17 @@ html.mobile .account-identity {
 }
 html.mobile .account-identity-meta { min-width: 0; }
 html.mobile .account-name {
-    font-size: 1.25rem;
+    font-size: var(--type-xl);
     font-weight: var(--weight-strong);
     color: var(--color-text);
     line-height: 1.2;
 }
-html.mobile .account-handle { font-size: 0.875rem; color: var(--color-text-muted); }
+html.mobile .account-handle { font-size: var(--type-base); color: var(--color-text-muted); }
 
 html.mobile .account-group { margin-bottom: var(--space-6); }
 html.mobile .mobile-section-label {
     padding: 0 var(--space-2) var(--space-2);
-    font-size: 0.8125rem;
+    font-size: var(--type-sm);
     font-weight: var(--weight-semibold);
     color: var(--color-text-muted);
 }
@@ -843,7 +843,7 @@ html.mobile .account-row-static .account-row-label {
 html.mobile .account-row-detail {
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--type-xs);
     line-height: 1.2;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -862,8 +862,8 @@ html.mobile .account-row-value {
 html.mobile .account-row .account-row-chevron { flex: 0 0 auto; color: var(--color-text-subtle); }
 
 html.mobile .account-about { padding: 16px; gap: 4px; }
-html.mobile .account-about-name { font-size: 1rem; font-weight: var(--weight-strong); color: var(--color-text); }
-html.mobile .account-about-tagline { font-size: 0.875rem; color: var(--color-text-muted); }
+html.mobile .account-about-name { font-size: var(--type-md); font-weight: var(--weight-strong); color: var(--color-text); }
+html.mobile .account-about-tagline { font-size: var(--type-base); color: var(--color-text-muted); }
 
 html.mobile .account-logout {
     display: flex;
@@ -875,7 +875,7 @@ html.mobile .account-logout {
     border: 0;
     background: var(--color-surface-1);
     color: var(--color-danger);
-    font-size: 0.9375rem;
+    font-size: var(--mobile-type-body);
     font-weight: var(--weight-semibold);
     border-radius: var(--radius-lg);
     cursor: pointer;
@@ -897,7 +897,7 @@ html.mobile .account-detail .appearance-header {
     border: 0;
 }
 html.mobile .account-detail #appearance-title {
-    font-size: 0.8125rem;
+    font-size: var(--type-sm);
     font-weight: var(--weight-semibold);
     color: var(--color-text-muted);
     letter-spacing: 0;
@@ -965,7 +965,7 @@ html.mobile .switcher-header {
     justify-content: space-between;
     padding: 4px 0 12px;
 }
-html.mobile .switcher-title { font-size: 1.0625rem; font-weight: var(--weight-strong); color: var(--color-text); }
+html.mobile .switcher-title { font-size: var(--type-lg); font-weight: var(--weight-strong); color: var(--color-text); }
 /* A 32px disc inside a 44px target: the margins give back what the box gained,
    so the header keeps its height and the disc stays exactly where it was. */
 html.mobile .switcher-close {
@@ -1009,7 +1009,7 @@ html.mobile .switcher-list .drive-item {
     min-height: 52px;
     padding: 10px 12px;
     border-radius: var(--radius-md);
-    font-size: 1rem;
+    font-size: var(--type-md);
     color: var(--color-text);
 }
 html.mobile .switcher-list .drive-item.active { background: var(--overlay-accent-1); color: var(--color-accent); }
@@ -1043,7 +1043,7 @@ html.mobile .switcher-action {
     border: 0;
     background: transparent;
     color: var(--color-text);
-    font-size: 0.9375rem;
+    font-size: var(--mobile-type-body);
     text-align: left;
     border-radius: var(--radius-md);
     cursor: pointer;
@@ -1063,8 +1063,8 @@ html.mobile .mobile-empty {
     padding: var(--space-6);
 }
 html.mobile .mobile-empty-glyph { color: var(--color-border); margin-bottom: 4px; }
-html.mobile .mobile-empty-title { font-size: 1.0625rem; font-weight: var(--weight-strong); color: var(--color-text); }
-html.mobile .mobile-empty-body { font-size: 0.875rem; color: var(--color-text-muted); max-width: 36ch; }
+html.mobile .mobile-empty-title { font-size: var(--type-lg); font-weight: var(--weight-strong); color: var(--color-text); }
+html.mobile .mobile-empty-body { font-size: var(--type-base); color: var(--color-text-muted); max-width: 36ch; }
 
 /* ============================ TOASTS ============================ */
 /* Keep notices below the top bar so they do not cover navigation controls.

@@ -200,7 +200,7 @@
     .appearance-header h2 {
         margin: 0;
         color: var(--color-text);
-        font-size: 1.05rem;
+        font-size: var(--type-lg);
         font-weight: 800;
         letter-spacing: 0;
     }
@@ -215,7 +215,7 @@
         min-height: 20px;
         margin-bottom: 8px;
         color: var(--color-text-muted);
-        font-size: 0.69rem;
+        font-size: var(--type-2xs);
         font-weight: 800;
         letter-spacing: 0.07em;
         text-transform: uppercase;
@@ -239,7 +239,7 @@
         background: var(--overlay-white-1);
         border: 1px solid var(--color-border-soft);
         border-radius: var(--radius-lg);
-        font-size: 0.75rem;
+        font-size: var(--type-xs);
         font-weight: 750;
         cursor: pointer;
         transition: transform var(--motion-med) var(--ease-standard),
@@ -346,7 +346,7 @@
     .theme-name {
         display: block;
         overflow: hidden;
-        font-size: 0.75rem;
+        font-size: var(--type-xs);
         font-weight: 800;
         line-height: 1.25;
         text-overflow: ellipsis;
@@ -517,7 +517,7 @@
         border-radius: var(--radius-pill);
     }
 
-    :global(html.mobile) .theme-name { font-size: 0.8125rem; }
+    :global(html.mobile) .theme-name { font-size: var(--type-sm); }
     :global(html.mobile) .theme-check { top: 14px; right: 14px; }
 
     @media (prefers-reduced-motion: reduce) {

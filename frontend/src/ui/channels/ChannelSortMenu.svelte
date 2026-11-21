@@ -176,7 +176,7 @@
     .channel-sort-option[aria-checked='true'] { color: var(--accent); }
 
     :global(html.mobile) .channel-sort-menu { right: 4px; min-width: 188px; }
-    :global(html.mobile) .channel-sort-option { min-height: 44px; padding: 0 12px; font-size: 0.9375rem; }
+    :global(html.mobile) .channel-sort-option { min-height: 44px; padding: 0 12px; font-size: var(--mobile-type-body); }
 
     @keyframes channel-sort-in {
         from { opacity: 0; transform: translateY(-4px); }

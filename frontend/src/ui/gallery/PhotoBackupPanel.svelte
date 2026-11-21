@@ -467,7 +467,7 @@
 
     .pb-group-label {
         color: var(--text-muted);
-        font-size: 11px;
+        font-size: var(--type-2xs);
         font-weight: var(--weight-strong);
         letter-spacing: 0.04em;
         text-transform: uppercase;
