@@ -134,11 +134,11 @@
                             <!-- The queue's own progress, with the file it is
                                  on named above it. The counts are already on
                                  the line under the title, so the bar carries
-                                 no label of its own. -->
+                                 no visible label of its own. -->
                             {#if queue}
-                                <ProgressBar value={queue.value} max={queue.max} />
+                                <ProgressBar value={queue.value} max={queue.max} label="Backup progress" />
                             {:else}
-                                <ProgressBar indeterminate />
+                                <ProgressBar indeterminate label="Backup progress" />
                             {/if}
                         </div>
                     {/if}
