@@ -77,8 +77,8 @@
 }
 
 input {
-    width: 100%; padding: 12px 15px; background: var(--bg-dark); border: 1px solid var(--border);
-    border-radius: var(--radius-md); color: var(--color-text); margin-bottom: 15px; font-size: var(--type-md); outline: none;
+    width: 100%; min-height: 36px; padding: 8px 12px; background: var(--color-surface-1); border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-md); color: var(--color-text); margin-bottom: 15px; font-size: var(--type-base); outline: none;
     transition:
         background-color var(--motion-med) var(--ease-standard),
         border-color var(--motion-med) var(--ease-standard),
