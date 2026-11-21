@@ -82,8 +82,8 @@
     // Seeds the spacers for the frames before measureRow reports a real row.
     // A wrong seed is visible: the list scrolls to a stale offset and jumps
     // once the measurement lands. Each is the row's own min-height: the
-    // 40px desktop row, and the taller phone row around its 44px chip.
-    const ESTIMATED_ROW_HEIGHT = mobile ? 68 : 40;
+    // 40px desktop row and the 60px two-line phone row.
+    const ESTIMATED_ROW_HEIGHT = mobile ? 60 : 40;
     const WINDOW_OVERSCAN = 8;
     let scrollTop = $state(0);
     let viewportHeight = $state(0);

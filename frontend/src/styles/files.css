@@ -527,12 +527,13 @@ html.mobile .file-list-box[data-nav="back"] { animation: tdrive-nav-pop var(--mo
 html.mobile .file-row {
     position: relative;
     display: block;
-    min-height: 68px;
-    /* The side margin is what makes the run of rows read as a card rather than
-       a full-bleed list; the background is the card itself. */
-    margin: 0 var(--space-3);
+    min-height: 60px;
+    /* A full-bleed list on the canvas, like the system file apps: rows are
+       separated by hairlines, not gathered into a card. The fill stays opaque
+       because the swipe actions slide out from underneath it. */
+    margin: 0;
     padding: 0;
-    background: var(--color-surface-0);
+    background: var(--color-canvas);
     border-radius: 0;
     overflow: hidden;
     transition: background-color 80ms var(--ease-standard);
@@ -552,7 +553,7 @@ html.mobile .row-swipe-content {
     min-height: inherit;
     /* 6px on the right: the overflow button's 44px hit area ends exactly at
        the card edge instead of spilling into scrollable overflow. */
-    padding: 10px 6px 10px 12px;
+    padding: 8px 6px 8px 16px;
     background: inherit;
 }
 /* The card's ends, marked by the list rather than read off the DOM. A sibling
@@ -560,20 +561,13 @@ html.mobile .row-swipe-content {
    spacers and not the list's -- so mid-list rows came out rounded while
    scrolling. The two corner pairs stay independent so a single-row list still
    rounds on both. */
-html.mobile .file-row.is-card-top {
-    border-top-left-radius: var(--radius-xl);
-    border-top-right-radius: var(--radius-xl);
-}
-html.mobile .file-row.is-card-bottom {
-    border-bottom-left-radius: var(--radius-xl);
-    border-bottom-right-radius: var(--radius-xl);
-}
+
 html.mobile .file-row + .file-row::before {
     content: "";
     position: absolute;
     top: 0;
-    /* Starts at the text column: 12px padding + 44px icon + 12px gap. */
-    left: 68px;
+    /* Starts at the text column: 16px padding + 28px icon + 12px gap. */
+    left: 56px;
     right: 0;
     height: 1px;
     background: var(--color-border-soft);
@@ -586,16 +580,16 @@ html.mobile .file-row + .file-row::before {
    background punches a hole through the middle of it. These restate the fill at
    a specificity that beats the desktop rules rather than weakening them. */
 @media (hover: hover) {
-    html.mobile .file-row:hover:not(.is-selected) { background: var(--color-surface-0); }
+    html.mobile .file-row:hover:not(.is-selected) { background: var(--color-canvas); }
 }
 @media (hover: hover) {
-    html.mobile .file-row:hover:not(.is-selected) { background: var(--color-surface-1); }
+    html.mobile .file-row:hover:not(.is-selected) { background: var(--color-surface-0); }
 }
-html.mobile .file-row:active:not(.is-selected) { background: var(--color-surface-2); }
+html.mobile .file-row:active:not(.is-selected) { background: var(--color-surface-1); }
 /* Selected rows tint the card rather than laying a translucent overlay on it,
    which would otherwise composite against the canvas and read as a hole too. */
 html.mobile .drive-row.is-selected {
-    background: color-mix(in srgb, var(--color-accent) 14%, var(--color-surface-0));
+    background: color-mix(in srgb, var(--color-accent) 14%, var(--color-canvas));
     box-shadow: none;
 }
 html.mobile .file-row.is-keyboard-active:not(.is-selected) {
@@ -708,17 +702,17 @@ html.mobile .uploader-initials {
 
 html.mobile .file-type-icon,
 html.mobile .folder-chip {
-    width: 44px;
-    height: 44px;
+    width: 28px;
+    height: 28px;
     margin: 0;
-    border-radius: var(--radius-lg);
+    border-radius: var(--radius-sm);
 }
 /* Opaque chip colours. The Android WebView mistiles a rounded box whose
    translucent border sits over a fill with an SVG inside, painting a stale
    copy of the rows above it into the list. Mixing the overlay into the row's
    own surface keeps the same tint without the alpha. */
 html.mobile .file-type-icon {
-    background: var(--color-surface-2);
+    background: transparent;
     border-color: transparent;
     color: var(--color-text-muted);
 }
@@ -733,12 +727,15 @@ html.mobile .file-type-icon {
    brightness. A full-strength mark on a lighter tile reads as the structural
    row; a muted mark on a darker tile reads as a leaf. */
 html.mobile .folder-chip {
-    background: var(--color-surface-1);
+    background: transparent;
     border-color: transparent;
-    color: var(--color-text);
+    color: var(--color-accent);
 }
+/* Opaque, for the WebView tiling bug above. */
+html.mobile .folder-chip svg { fill: color-mix(in srgb, var(--color-accent) 20%, var(--color-canvas)); }
+html.mobile .row-thumbnail-loaded { background: var(--color-surface-1); }
 html.mobile .folder-chip svg,
-html.mobile .file-type-icon svg { width: 22px; height: 22px; stroke-width: 1.75; }
+html.mobile .file-type-icon svg { width: 24px; height: 24px; stroke-width: 1.6; }
 
 /* Selection mode: every row grows a check so a tap reads as a toggle. The
    column slides open rather than popping in (motion-12). */
