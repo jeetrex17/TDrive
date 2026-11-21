@@ -7,7 +7,7 @@
     display: none;
     align-items: center;
     font-size: var(--type-lg);
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     color: var(--text-main);
     letter-spacing: 0.01em;
 }
@@ -31,7 +31,7 @@
 .gallery-empty { display: flex; flex-direction: column; align-items: center; gap: 8px; padding-top: 64px; }
 .gallery-empty-icon { width: 48px; height: 48px; color: var(--border); }
 .gallery-empty-icon svg { width: 100%; height: 100%; }
-.gallery-empty-title { color: var(--text-main); font-weight: 700; font-size: var(--type-md); }
+.gallery-empty-title { color: var(--text-main); font-weight: var(--weight-strong); font-size: var(--type-md); }
 .gallery-empty-sub { font-size: var(--type-base); }
 
 .gallery-group-header {
@@ -40,7 +40,7 @@
     z-index: 1;
     padding: 16px 2px 12px;
     font-size: var(--type-md);
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     letter-spacing: 0.01em;
     color: var(--text-main);
     /* Opaque so grid cells never ghost through the sticky header on scroll. */
@@ -195,7 +195,7 @@
     border: 1px solid rgba(255, 255, 255, 0.08);
     color: rgba(255, 255, 255, 0.86);
     font-size: var(--type-sm);
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     letter-spacing: 0.02em;
     -webkit-backdrop-filter: blur(14px);
     backdrop-filter: blur(14px);
@@ -271,7 +271,7 @@
 .info-date {
     color: rgba(255, 255, 255, 0.96);
     font-size: var(--type-lg);
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     line-height: 1.45;
     margin-bottom: 20px;
     padding-right: 34px; /* clear the close button */
@@ -281,7 +281,7 @@
 .info-section-title {
     color: rgba(255, 255, 255, 0.5);
     font-size: var(--type-2xs);
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     text-transform: uppercase;
     letter-spacing: 0.08em;
     margin-bottom: 8px;
@@ -304,7 +304,7 @@
     background: rgba(255, 255, 255, 0.04);
     color: var(--viewer-accent);
     font-size: var(--type-sm);
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     cursor: pointer;
     transition: background 0.15s ease;
 }
@@ -474,7 +474,7 @@
     color: var(--viewer-text-muted);
     font-family: system-ui, -apple-system, "SF Pro Text", "Segoe UI", sans-serif;
     font-size: var(--type-sm);
-    font-weight: 500;
+    font-weight: var(--weight-medium);
     letter-spacing: 0.01em;
     text-align: center;
 }

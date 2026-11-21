@@ -17,7 +17,7 @@
 }
 .auth-icon-box svg { width: 32px; height: 32px; }
 
-.auth-box h2 { color: var(--color-text); margin-bottom: 0.5rem; font-weight: 600; }
+.auth-box h2 { color: var(--color-text); margin-bottom: 0.5rem; font-weight: var(--weight-semibold); }
 .auth-box p { color: var(--text-muted); margin-bottom: 1.5rem; font-size: var(--type-base); }
 
 
@@ -33,7 +33,7 @@
 }
 
 .auth-helper-label {
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     color: var(--color-text-muted);
 }
 
@@ -46,7 +46,7 @@
     background: var(--overlay-white-1);
     border: 1px solid var(--border);
     color: var(--text-main);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     letter-spacing: 0.01em;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -57,7 +57,7 @@
     border: none;
     background: transparent;
     color: var(--accent);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     font-size: var(--type-base);
     cursor: pointer;
     padding: 4px 8px;
@@ -79,7 +79,7 @@
 }
 .auth-caption span {
     color: var(--color-text-soft);
-    font-weight: 500;
+    font-weight: var(--weight-medium);
 }
 
 input {
@@ -212,7 +212,7 @@ html.mobile .auth-icon-box { display: none; }
 html.mobile .auth-box h2 {
     margin-bottom: 8px;
     font-size: var(--type-2xl);
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     line-height: 1.2;
     text-wrap: balance;
 }
@@ -245,13 +245,13 @@ html.mobile .auth-field input {
 
 html.mobile .auth-box .code-input {
     font-size: var(--type-2xl);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.2em;
 }
 
 html.mobile .auth-box .code-input::placeholder {
-    font-weight: 500;
+    font-weight: var(--weight-medium);
     letter-spacing: 0.2em;
 }
 

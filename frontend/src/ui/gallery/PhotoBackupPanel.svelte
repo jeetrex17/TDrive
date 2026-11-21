@@ -344,7 +344,7 @@
 
     .pb-situation-title {
         font-size: var(--font-size-sm);
-        font-weight: 800;
+        font-weight: var(--weight-strong);
         line-height: 1.35;
         min-width: 0;
     }

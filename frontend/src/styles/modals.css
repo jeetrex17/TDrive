@@ -13,7 +13,7 @@
     --motion-enter-scale: 0.985;
     animation: tdrive-surface-enter var(--motion-slow) var(--ease-enter) both;
 }
-.modal-title { color: var(--color-text); font-size: var(--type-lg); font-weight: 700; margin-bottom: 6px; }
+.modal-title { color: var(--color-text); font-size: var(--type-lg); font-weight: var(--weight-strong); margin-bottom: 6px; }
 .modal-subtitle { color: var(--text-muted); font-size: var(--type-base); margin-bottom: 18px; }
 .share-drive-link {
     width: 100%;

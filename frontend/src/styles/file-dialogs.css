@@ -59,7 +59,7 @@
     padding: 4px 8px;
     border-radius: var(--radius-md);
     color: var(--text-main);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     cursor: pointer;
     max-width: 200px;
     overflow: hidden;
@@ -129,7 +129,7 @@
     flex: 1;
     min-width: 0;
     text-align: left;
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     font-size: var(--type-base);
     color: var(--color-text);
     overflow: hidden;
@@ -145,7 +145,7 @@
     text-align: center;
     color: var(--text-muted);
     font-size: var(--type-base);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
 }
 
 /* Why the confirm is disabled, tied to it with aria-describedby. */
@@ -338,7 +338,7 @@
     box-shadow: 0 20px 48px rgba(0,0,0,0.24);
     color: rgba(255,255,255,0.9);
     text-align: center;
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     font-size: var(--type-base);
     line-height: 1.35;
     backdrop-filter: blur(18px);
@@ -578,7 +578,7 @@ html.mobile .action-sheet-heading {
     max-width: 100%;
 }
 html.mobile .action-sheet-title {
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     font-size: var(--type-lg);
     line-height: 1.3;
     color: var(--color-text);
@@ -693,7 +693,7 @@ html.mobile .action-sheet-row {
     border-radius: var(--radius-md);
     background: transparent;
     color: var(--text-main);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     font-size: var(--type-md);
     text-align: left;
     cursor: pointer;

@@ -88,7 +88,7 @@
 }
 .notif-panel-title {
     font-size: var(--type-base);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     color: var(--text-main);
 }
 .notif-panel-actions {
@@ -102,7 +102,7 @@
     border: 1px solid var(--color-border-soft);
     color: var(--color-text-soft);
     font-size: var(--type-sm);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     letter-spacing: 0.01em;
     padding: 4px 10px;
     border-radius: var(--radius-sm);
@@ -131,7 +131,7 @@
 }
 .notif-section-label {
     font-size: var(--type-2xs);
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--text-muted);
@@ -189,7 +189,7 @@
 
 .notif-row-body { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .notif-row-title {
-    font-weight: 500;
+    font-weight: var(--weight-medium);
     color: var(--text-main);
     white-space: nowrap;
     overflow: hidden;
@@ -245,7 +245,7 @@
     color: var(--color-text-soft);
     font: inherit;
     font-size: var(--type-xs);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     line-height: 1.1;
     white-space: nowrap;
     cursor: pointer;
@@ -319,7 +319,7 @@
     opacity: 0.7;
 }
 .notif-empty-glyph svg { width: 22px; height: 22px; }
-.notif-empty-title { font-weight: 600; color: var(--text-main); font-size: var(--type-base); }
+.notif-empty-title { font-weight: var(--weight-semibold); color: var(--text-main); font-size: var(--type-base); }
 .notif-empty-body { font-size: var(--type-sm); line-height: 1.4; max-width: 240px; }
 
 
@@ -420,7 +420,7 @@
     border: none;
     font: inherit;
     font-size: var(--type-sm);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     color: var(--accent);
     cursor: pointer;
     white-space: nowrap;

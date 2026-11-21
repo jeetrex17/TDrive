@@ -19,7 +19,7 @@
     overflow: hidden;
     color: var(--viewer-text);
     font-size: var(--type-lg);
-    font-weight: 800;
+    font-weight: var(--weight-strong);
     line-height: 1.25;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -33,7 +33,7 @@
     margin-top: 3px;
     color: var(--viewer-text-muted);
     font-size: var(--type-xs);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
 }
 
 .viewer-meta:empty { display: none; }

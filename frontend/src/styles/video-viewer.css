@@ -151,14 +151,14 @@
     border: 1px solid rgba(255, 255, 255, 0.14);
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.42);
     font-size: var(--type-base);
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     text-align: center;
 }
 
 .video-standalone span {
     color: rgba(255, 255, 255, 0.7);
     font-size: var(--type-xs);
-    font-weight: 500;
+    font-weight: var(--weight-medium);
     line-height: 1.45;
 }
 
@@ -446,7 +446,7 @@
     box-shadow: 0 16px 48px rgba(0, 0, 0, 0.34);
     text-align: center;
     font-size: var(--type-base);
-    font-weight: 900;
+    font-weight: var(--weight-strong);
     font-variant-numeric: tabular-nums;
 }
 
@@ -479,7 +479,7 @@
     min-width: 46px;
     color: rgba(255, 255, 255, 0.86);
     font-size: var(--type-xs);
-    font-weight: 800;
+    font-weight: var(--weight-strong);
     font-variant-numeric: tabular-nums;
     text-align: center;
 }
@@ -574,7 +574,7 @@
     border: 1px solid rgba(255, 255, 255, 0.14);
     box-shadow: 0 12px 34px rgba(0, 0, 0, 0.34);
     font-size: var(--type-2xs);
-    font-weight: 800;
+    font-weight: var(--weight-strong);
     font-variant-numeric: tabular-nums;
     pointer-events: none;
     opacity: 0;
@@ -693,7 +693,7 @@
     background: transparent;
     color: #fff;
     font-size: var(--type-sm);
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     font-variant-numeric: tabular-nums;
     cursor: pointer;
     transition: background-color 160ms ease;
@@ -784,7 +784,7 @@
     color: rgba(255, 255, 255, 0.88);
     background: transparent;
     font-size: var(--type-xs);
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     outline: none;
     cursor: pointer;
     transition: background-color 180ms ease, color 180ms ease;
@@ -872,7 +872,7 @@
     padding: 4px 9px 6px;
     color: rgba(255, 255, 255, 0.58);
     font-size: var(--type-2xs);
-    font-weight: 800;
+    font-weight: var(--weight-strong);
     line-height: 1;
 }
 
@@ -889,7 +889,7 @@
     color: rgba(255, 255, 255, 0.82);
     background: transparent;
     font-size: var(--type-xs);
-    font-weight: 800;
+    font-weight: var(--weight-strong);
     cursor: pointer;
 }
 
@@ -936,7 +936,7 @@
     margin: 0 0 7px;
     color: rgba(255, 255, 255, 0.58);
     font-size: var(--type-2xs);
-    font-weight: 800;
+    font-weight: var(--weight-strong);
     line-height: 1;
 }
 
@@ -962,7 +962,7 @@
     background: rgba(255, 255, 255, 0.06);
     color: #fff;
     font-size: var(--type-xs);
-    font-weight: 800;
+    font-weight: var(--weight-strong);
     line-height: 36px;
     text-align: center;
     outline: none;
@@ -988,7 +988,7 @@
     justify-self: center;
     color: rgba(255, 255, 255, 0.68);
     font-size: var(--type-xs);
-    font-weight: 800;
+    font-weight: var(--weight-strong);
     line-height: 1;
 }
 
@@ -1006,7 +1006,7 @@
     background: var(--video-accent);
     border-radius: var(--radius-sm);
     font-size: var(--type-xs);
-    font-weight: 800;
+    font-weight: var(--weight-strong);
     line-height: 1;
     transition: filter 0.12s ease, transform 0.12s ease;
 }
@@ -1064,7 +1064,7 @@
 .video-loading-status {
     color: rgba(237, 241, 255, 0.72);
     font-size: var(--type-sm);
-    font-weight: 650;
+    font-weight: var(--weight-semibold);
     line-height: 1.2;
     letter-spacing: 0;
     text-shadow: 0 1px 8px rgba(0, 0, 0, 0.32);
@@ -1098,7 +1098,7 @@
     display: block;
     color: #fff;
     font-size: var(--type-base);
-    font-weight: 800;
+    font-weight: var(--weight-strong);
     line-height: 1.25;
 }
 
@@ -1106,7 +1106,7 @@
     margin: 4px 0 0;
     color: rgba(232, 236, 249, 0.76);
     font-size: var(--type-sm);
-    font-weight: 650;
+    font-weight: var(--weight-semibold);
     line-height: 1.42;
 }
 
@@ -1128,7 +1128,7 @@
     justify-content: center;
     font: inherit;
     font-size: var(--type-sm);
-    font-weight: 800;
+    font-weight: var(--weight-strong);
     line-height: 1;
     cursor: pointer;
     transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;

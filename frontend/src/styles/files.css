@@ -34,7 +34,7 @@
 .file-lock-badge svg { width: 14px; height: 14px; }
 .breadcrumb-link {
     background: transparent; border: none; padding: 6px 8px; border-radius: var(--radius-md);
-    color: var(--text-main); font-weight: 600; cursor: pointer; transition: background 0.15s ease;
+    color: var(--text-main); font-weight: var(--weight-semibold); cursor: pointer; transition: background 0.15s ease;
     max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     /* Middle crumbs give way first, and each may go to a few characters; the
        root and the folder being looked at are the two a reader needs whole. */
@@ -206,7 +206,7 @@
 .file-state-title {
     color: var(--text-main);
     font-size: var(--type-md);
-    font-weight: 800;
+    font-weight: var(--weight-strong);
 }
 .file-state-body {
     max-width: 420px;

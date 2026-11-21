@@ -264,7 +264,7 @@
     .updates-header h2 {
         margin: 0;
         font-size: var(--type-md);
-        font-weight: 650;
+        font-weight: var(--weight-semibold);
         letter-spacing: 0;
         color: var(--color-text);
     }
@@ -279,7 +279,7 @@
     }
     .updates-app-name {
         font-size: var(--type-base);
-        font-weight: 650;
+        font-weight: var(--weight-semibold);
         letter-spacing: 0;
     }
     .updates-app-meta {
@@ -302,16 +302,16 @@
         margin: 0;
         color: var(--color-text-soft);
         font-size: var(--type-sm);
-        font-weight: 550;
+        font-weight: var(--weight-medium);
         line-height: 1.38;
     }
-    .updates-status.muted { color: var(--color-text-muted); font-weight: 450; }
+    .updates-status.muted { color: var(--color-text-muted); font-weight: var(--weight-regular); }
 
     .updates-message { display: flex; flex-direction: column; gap: 3px; }
     .updates-message-title {
         color: var(--color-text-soft);
         font-size: var(--type-sm);
-        font-weight: 650;
+        font-weight: var(--weight-semibold);
         line-height: 1.35;
     }
     .updates-message-detail {
@@ -360,7 +360,7 @@
         border: 1px solid transparent;
         border-radius: var(--radius-md);
         font-size: var(--type-xs);
-        font-weight: 650;
+        font-weight: var(--weight-semibold);
         cursor: pointer;
         transition: background var(--motion-fast) var(--ease-standard),
             transform var(--motion-fast) var(--ease-standard),
@@ -380,7 +380,7 @@
     }
     .updates-btn.ghost:hover { color: var(--color-text); background: var(--overlay-white-1); }
     .updates-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-    .updates-btn-size { opacity: 0.75; font-weight: 600; }
+    .updates-btn-size { opacity: 0.75; font-weight: var(--weight-semibold); }
 
     .updates-sublinks {
         display: flex;
@@ -396,12 +396,12 @@
         background: transparent;
         border: none;
         font-size: var(--type-xs);
-        font-weight: 700;
+        font-weight: var(--weight-strong);
         cursor: pointer;
     }
     .updates-link:hover { text-decoration: underline; }
     .updates-link:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-xs); }
-    .updates-link.subtle { color: var(--color-text-subtle); font-weight: 600; }
+    .updates-link.subtle { color: var(--color-text-subtle); font-weight: var(--weight-semibold); }
     .updates-link.subtle:hover { color: var(--color-text-muted); }
     .updates-link:disabled { opacity: 0.5; cursor: default; text-decoration: none; }
 
@@ -449,7 +449,7 @@
     .updates-preference-title {
         color: var(--color-text-soft);
         font-size: var(--type-xs);
-        font-weight: 600;
+        font-weight: var(--weight-semibold);
         line-height: 1.3;
     }
     .updates-preference-description {
@@ -499,7 +499,7 @@
         border: none;
         border-radius: var(--radius-sm);
         font-size: var(--type-xs);
-        font-weight: 600;
+        font-weight: var(--weight-semibold);
         cursor: pointer;
         transition: background var(--motion-fast) var(--ease-standard),
             color var(--motion-fast) var(--ease-standard);

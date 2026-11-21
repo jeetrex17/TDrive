@@ -103,7 +103,7 @@
     .mount-drive-title {
         overflow: hidden;
         font-size: var(--font-size-sm);
-        font-weight: 800;
+        font-weight: var(--weight-strong);
         text-overflow: ellipsis;
         white-space: nowrap;
     }

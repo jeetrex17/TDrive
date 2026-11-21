@@ -380,7 +380,7 @@
         min-width: 0;
         color: var(--color-text);
         font-size: var(--type-base);
-        font-weight: 600;
+        font-weight: var(--weight-semibold);
     }
     .drive-title-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .drive-badge {
@@ -388,14 +388,14 @@
         padding: 2px 7px;
         color: var(--accent);
         font-size: var(--type-2xs);
-        font-weight: 700;
+        font-weight: var(--weight-strong);
         letter-spacing: 0.02em;
         background: var(--overlay-accent-1);
         border-radius: var(--radius-pill);
     }
     .drive-choice-meta { display: flex; flex-wrap: wrap; color: var(--text-muted); font-size: var(--type-xs); }
     .drive-choice-meta > span + span::before { margin: 0 6px; content: '·'; }
-    .drive-choice-meta .in-use { color: var(--color-success); font-weight: 600; }
+    .drive-choice-meta .in-use { color: var(--color-success); font-weight: var(--weight-semibold); }
 
     .drive-check {
         display: grid;
@@ -496,7 +496,7 @@
         color: var(--color-text-soft);
         font: inherit;
         font-size: var(--type-base);
-        font-weight: 600;
+        font-weight: var(--weight-semibold);
         background: transparent;
         border: 0;
         border-radius: var(--radius-md);
@@ -532,7 +532,7 @@
         color: var(--color-on-accent);
         font: inherit;
         font-size: var(--type-sm);
-        font-weight: 700;
+        font-weight: var(--weight-strong);
         background: var(--accent);
         border: 0;
         border-radius: var(--radius-md);

@@ -29,7 +29,7 @@
     background: transparent;
     color: var(--text-main);
     font-size: var(--type-base);
-    font-weight: 500;
+    font-weight: var(--weight-medium);
     text-align: left;
     cursor: pointer;
     transition: background 0.15s ease, color 0.15s ease;
@@ -151,7 +151,7 @@ html.mobile .upload-menu.is-sheet .upload-sheet-close:focus-visible {
 
 .drop-overlay-title {
     font-size: var(--type-lg);
-    font-weight: 700;
+    font-weight: var(--weight-strong);
 }
 
 @media (prefers-reduced-motion: reduce) {

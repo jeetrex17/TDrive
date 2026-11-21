@@ -41,7 +41,7 @@
     background: var(--bg-panel);
     color: #0b0c10;
     font-size: var(--type-xs);
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     letter-spacing: 0.02em;
     flex-shrink: 0;
     overflow: hidden;
@@ -90,7 +90,7 @@
 .profile-menu-meta { min-width: 0; flex: 1; }
 .profile-menu-name {
     color: var(--text-main);
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     font-size: var(--type-md);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -189,7 +189,7 @@
 .join-request-meta { min-width: 0; }
 .join-request-name {
     color: var(--text-main);
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     font-size: var(--type-base);
 }
 .join-request-detail {

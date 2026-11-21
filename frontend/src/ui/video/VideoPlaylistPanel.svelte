@@ -267,7 +267,7 @@
         color: #7a889f;
         font-size: var(--type-2xs);
         font-variant-numeric: tabular-nums;
-        font-weight: 650;
+        font-weight: var(--weight-semibold);
         text-align: right;
     }
 
@@ -285,7 +285,7 @@
         overflow: hidden;
         color: #e4eaf6;
         font-size: var(--type-sm);
-        font-weight: 650;
+        font-weight: var(--weight-semibold);
         line-height: 1.3;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -386,7 +386,7 @@
     .video-playlist-auto-next-label {
         color: #c8d2e4;
         font-size: var(--type-xs);
-        font-weight: 600;
+        font-weight: var(--weight-semibold);
     }
 
     .video-playlist-switch {

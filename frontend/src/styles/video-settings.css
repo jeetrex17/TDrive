@@ -42,7 +42,7 @@
     background: transparent;
     color: #9aa6bd;
     font-size: var(--type-2xs);
-    font-weight: 650;
+    font-weight: var(--weight-semibold);
     cursor: pointer;
     transition: color 160ms var(--ease-standard);
 }
@@ -116,7 +116,7 @@
     background: var(--video-accent, #7aa2f7);
     color: #080b12;
     font-size: var(--type-xs);
-    font-weight: 750;
+    font-weight: var(--weight-strong);
     cursor: pointer;
     transition: background-color 120ms var(--ease-standard), scale 120ms var(--ease-standard);
 }

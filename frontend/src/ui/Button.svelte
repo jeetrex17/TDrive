@@ -50,7 +50,7 @@
         background: transparent;
         font: inherit;
         font-size: var(--font-size-sm);
-        font-weight: 800;
+        font-weight: var(--weight-strong);
         line-height: 1;
         cursor: pointer;
         user-select: none;

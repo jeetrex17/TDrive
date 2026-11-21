@@ -106,7 +106,7 @@
         background: transparent;
         border-radius: var(--radius-md);
         font-size: var(--type-xs);
-        font-weight: 600;
+        font-weight: var(--weight-semibold);
     }
     :global(html.mobile) .selection-actions.with-copy .selection-btn {
         flex: 1 1 0;

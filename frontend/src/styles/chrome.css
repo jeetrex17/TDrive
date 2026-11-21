@@ -18,7 +18,7 @@
     gap: 9px;
     margin-bottom: 40px;
     font-size: var(--type-xl);
-    font-weight: 800;
+    font-weight: var(--weight-strong);
     color: var(--color-text);
     letter-spacing: -0.5px;
 }
@@ -85,7 +85,7 @@
 .pending-drive-tag {
     flex-shrink: 0;
     font-size: 0.625rem;
-    font-weight: 800;
+    font-weight: var(--weight-strong);
     letter-spacing: 0.05em;
     text-transform: uppercase;
     color: var(--accent);

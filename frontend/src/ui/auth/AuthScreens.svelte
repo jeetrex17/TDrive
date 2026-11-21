@@ -502,7 +502,7 @@
         margin-bottom: 0.4rem;
         color: var(--color-text-soft);
         font-size: var(--type-sm);
-        font-weight: 600;
+        font-weight: var(--weight-semibold);
     }
 
     .auth-field input {
@@ -583,7 +583,7 @@
         padding: 0;
         color: var(--accent);
         font: inherit;
-        font-weight: 600;
+        font-weight: var(--weight-semibold);
         background: none;
         border: 0;
         border-radius: var(--radius-xs);
