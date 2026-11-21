@@ -297,8 +297,8 @@ html:not(.mobile) .main-content {
 /* The keyboard-active row is clearly ringed, but only while the list actually
    holds focus, so the mark never lingers after the reader has moved on. The
    ring is inset so the list edge never clips it. */
-.file-row:focus-visible,
-.file-list-box:focus-within .file-row.is-keyboard-active {
+html[data-input="keyboard"] .file-row:focus-visible,
+html[data-input="keyboard"] .file-list-box:focus-visible .file-row.is-keyboard-active {
     outline: none;
     box-shadow: inset var(--focus-ring);
     border-radius: var(--radius-sm);
