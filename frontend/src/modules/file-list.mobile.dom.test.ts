@@ -12,7 +12,6 @@ const api = vi.hoisted(() => ({
     playHaptic: vi.fn(),
     getFolderContents: vi.fn(() => Promise.resolve({ folders: [], files: [] })),
     getFileList: vi.fn(() => Promise.resolve([])),
-    getAllFsMsgIds: vi.fn(() => Promise.resolve([])),
     getStorageUsed: vi.fn(() => Promise.resolve(0)),
 }));
 const actions = vi.hoisted(() => ({

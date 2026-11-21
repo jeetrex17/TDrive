@@ -14,8 +14,6 @@ const notifications = vi.hoisted(() => ({ notify: vi.fn() }));
 vi.mock('../app-actions', () => ({ appActions: () => actions }));
 vi.mock('../notifications', () => notifications);
 vi.mock('../../api', () => ({
-    getPreviewFile: vi.fn(),
-    getPreviewThumbnail: vi.fn(),
     hasOperationErrorCode: vi.fn(),
     isMobilePlatform: vi.fn(() => false),
     onRuntimeEvent: vi.fn(() => vi.fn()),

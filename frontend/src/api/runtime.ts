@@ -152,26 +152,6 @@ export function flushRuntimeEvents(timeoutMs = 2000): Promise<void> {
     });
 }
 
-/**
- * Registers native file-drop handling. Wails v3 has no JS-level "enable file
- * drop" call: drops are delivered to Go as a native window event, and Go
- * re-emits it to the frontend as the ordinary `files_dropped` custom event.
- * This just gives that event a positional (x, y, paths) callback shape.
- */
-export function onNativeFileDrop(callback: (x: number, y: number, paths: string[]) => void): RuntimeUnsubscribe {
-    return onRuntimeEvent("files_dropped", (payload) => {
-        const record = payload !== null && typeof payload === "object" && !Array.isArray(payload)
-            ? payload as Record<string, unknown>
-            : {};
-        const paths = Array.isArray(record.paths)
-            ? record.paths.filter((path): path is string => typeof path === "string")
-            : [];
-        const x = Number(record.x);
-        const y = Number(record.y);
-        callback(Number.isFinite(x) ? x : 0, Number.isFinite(y) ? y : 0, paths);
-    });
-}
-
 /** Opens a URL natively when available and otherwise uses the browser fallback. */
 export function openExternalUrl(url: string): void {
     if (isGatewayReady()) {

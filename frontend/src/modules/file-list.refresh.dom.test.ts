@@ -8,7 +8,6 @@ const api = vi.hoisted(() => ({
     onRuntimeEvent: () => () => {},
     getFolderContents: vi.fn<() => Promise<FolderContents>>(),
     getFileList: vi.fn<() => Promise<RootFile[]>>(),
-    getAllFsMsgIds: vi.fn<() => Promise<number[]>>(),
     getStorageUsed: vi.fn<() => Promise<number>>(),
 }));
 const deps = vi.hoisted(() => ({
@@ -60,7 +59,6 @@ beforeEach(() => {
     vi.resetAllMocks();
     api.getFolderContents.mockResolvedValue({ folders: [], files: [file()] });
     api.getFileList.mockResolvedValue([]);
-    api.getAllFsMsgIds.mockResolvedValue([]);
     api.getStorageUsed.mockResolvedValue(1024);
     deps.stats.mockResolvedValue(new Map());
     deps.ensureUsers.mockResolvedValue();
@@ -97,7 +95,6 @@ it('merges root files without duplicating projected messages and shows plaintext
         { msgId: 41, name: 'duplicate.txt', size: 1000, date: 100, accessHash: 0 },
         { msgId: 99, name: 'raw.txt', size: 2000, date: 101, accessHash: 0 },
     ]);
-    api.getAllFsMsgIds.mockResolvedValue([41]);
     state.pendingFolderOps.set('new', { parentId: '', name: 'Creating here' });
     state.pendingFolderOps.set('elsewhere', { parentId: 'other', name: 'Not here' });
     refreshFiles();
@@ -108,20 +105,17 @@ it('merges root files without duplicating projected messages and shows plaintext
     expect(list.querySelector('[data-name="secret.txt"]')?.textContent).toContain('25 B');
     expect(list.querySelector('[data-name="Work"]')?.textContent).toContain('4 KB');
     expect(state.telegramRootCacheDriveKey).toBe('1');
-    expect(api.getAllFsMsgIds).not.toHaveBeenCalled();
 });
 
-it('keeps direct file de-duplication when folder stats fail without loading the full index', async () => {
+it('keeps direct file de-duplication when folder stats fail', async () => {
     vi.spyOn(console, 'warn').mockImplementation(() => {});
     api.getFolderContents.mockResolvedValue({ folders: [{ id: 'folder', name: 'Work', parentId: '' }], files: [file()] });
     api.getFileList.mockResolvedValue([{ msgId: 41, name: 'duplicate.txt', size: 1, date: 1, accessHash: 0 }]);
-    api.getAllFsMsgIds.mockRejectedValue(new Error('index unavailable'));
     deps.stats.mockRejectedValue(new Error('stats unavailable'));
     refreshFiles();
     await expectText('report.txt');
     expect(list.querySelectorAll('[data-type="file"]')).toHaveLength(1);
     expect(list.textContent).toContain('Work');
-    expect(api.getAllFsMsgIds).not.toHaveBeenCalled();
 });
 
 it('loads nested folders without fetching raw Telegram root files', async () => {
@@ -130,7 +124,6 @@ it('loads nested folders without fetching raw Telegram root files', async () => 
     await expectText('report.txt');
     expect(api.getFolderContents).toHaveBeenCalledWith('nested');
     expect(api.getFileList).not.toHaveBeenCalled();
-    expect(api.getAllFsMsgIds).not.toHaveBeenCalled();
 });
 
 it('rejects old drive results and old storage totals after navigation', async () => {

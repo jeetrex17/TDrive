@@ -69,7 +69,6 @@ export async function removePhotoBackupSource(id: string): Promise<void> { await
 function toBackendAsset(asset: PhotoBackupAsset) {
     return { id: asset.id, version: asset.version, name: asset.name, media_type: asset.mediaType, modified_at: asset.modifiedAt, created_at: asset.createdAt, size: asset.size, resource_id: asset.resourceId ?? '', rel_dir: asset.relDir ?? '' };
 }
-export async function enqueuePhotoBackupAssets(sourceID: string, assets: PhotoBackupAsset[]): Promise<void> { await invokeBackend(binding('EnqueuePhotoBackupAssets'), sourceID, assets.map(toBackendAsset)); }
 export async function commitPhotoBackupScanPage(sourceID: string, previousCursor: string, nextCursor: string, assets: PhotoBackupAsset[]): Promise<void> { await invokeBackend(binding('CommitPhotoBackupScanPage'), sourceID, previousCursor, nextCursor, assets.map(toBackendAsset)); }
 export async function resetPhotoBackupScan(sourceID: string): Promise<void> { await invokeBackend(binding('ResetPhotoBackupScan'), sourceID); }
 
