@@ -170,12 +170,10 @@ describe('theme controller', () => {
         });
         controller.start();
 
-        controller.setPreferredTheme('dark', 'nord', { x: 120, y: 84 });
+        controller.setPreferredTheme('dark', 'nord');
 
         expect(startViewTransition).toHaveBeenCalledOnce();
         expect(document.documentElement.dataset.theme).toBe('nord');
-        expect(document.documentElement.style.getPropertyValue('--theme-origin-x')).toBe('120px');
-        expect(document.documentElement.style.getPropertyValue('--theme-origin-y')).toBe('84px');
         controller.destroy();
     });
 
@@ -219,7 +217,7 @@ describe('theme controller', () => {
         });
         controller.start();
 
-        controller.setPreferredTheme('dark', 'catppuccin-mocha', { x: 10, y: 10 });
+        controller.setPreferredTheme('dark', 'catppuccin-mocha');
 
         expect(startViewTransition).not.toHaveBeenCalled();
         expect(document.documentElement.dataset.theme).toBe('catppuccin-mocha');
@@ -239,7 +237,6 @@ describe('theme controller', () => {
 
         expect(document.documentElement.dataset.theme).toBe('dracula');
         expect(document.documentElement.classList.contains('theme-transition-fallback')).toBe(true);
-        expect(document.documentElement.style.getPropertyValue('--theme-origin-x')).toBe(`${window.innerWidth / 2}px`);
 
         vi.advanceTimersByTime(239);
         expect(document.documentElement.classList.contains('theme-transition-fallback')).toBe(true);
@@ -267,12 +264,11 @@ describe('theme controller', () => {
         });
         controller.start();
 
-        controller.setPreferredTheme('dark', 'nord', { x: 120, y: 84 });
+        controller.setPreferredTheme('dark', 'nord');
 
         expect(startViewTransition).not.toHaveBeenCalled();
         expect(document.documentElement.dataset.theme).toBe('nord');
         expect(document.documentElement.classList.contains('theme-transition-fallback')).toBe(true);
-        expect(document.documentElement.style.getPropertyValue('--theme-origin-x')).toBe('120px');
 
         vi.advanceTimersByTime(240);
         expect(document.documentElement.classList.contains('theme-transition-fallback')).toBe(false);

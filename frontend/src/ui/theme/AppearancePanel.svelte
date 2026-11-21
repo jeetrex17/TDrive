@@ -14,7 +14,6 @@
         setPreferredTheme,
         setThemeMode,
         themeState,
-        type ThemeChangeOrigin,
     } from './theme-controller';
 
     interface Props {
@@ -51,16 +50,12 @@
         });
     });
 
-    function originFrom(event: MouseEvent): ThemeChangeOrigin {
-        return { x: event.clientX, y: event.clientY };
+    function selectMode(mode: ThemeMode): void {
+        setThemeMode(mode);
     }
 
-    function selectMode(event: MouseEvent, mode: ThemeMode): void {
-        setThemeMode(mode, originFrom(event));
-    }
-
-    function selectTheme(event: MouseEvent, theme: ThemeDefinition): void {
-        setPreferredTheme(theme.appearance, theme.id, originFrom(event));
+    function selectTheme(theme: ThemeDefinition): void {
+        setPreferredTheme(theme.appearance, theme.id);
     }
 
     async function moveModeFocus(event: KeyboardEvent, index: number): Promise<void> {
@@ -125,7 +120,7 @@
                     aria-checked={selected}
                     aria-label={option.label}
                     tabindex={selected ? 0 : -1}
-                    onclick={(event) => selectMode(event, option.id)}
+                    onclick={() => selectMode(option.id)}
                     onkeydown={(event) => void moveModeFocus(event, index)}
                 >
                     <span class="mode-icon"><Icon size={17} strokeWidth={2} aria-hidden="true" /></span>
@@ -153,7 +148,7 @@
                     aria-label={theme.name}
                     tabindex={selected ? 0 : -1}
                     style={previewStyle(theme)}
-                    onclick={(event) => selectTheme(event, theme)}
+                    onclick={() => selectTheme(theme)}
                     onkeydown={(event) => void moveThemeFocus(event, index)}
                 >
                     <span class="theme-preview" aria-hidden="true">

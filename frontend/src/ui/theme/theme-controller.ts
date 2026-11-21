@@ -31,11 +31,6 @@ const FALLBACK_CLEANUP_DELAY_MS = 240;
 
 type ThemeStorage = Pick<Storage, 'getItem' | 'setItem'>;
 
-export interface ThemeChangeOrigin {
-    readonly x: number;
-    readonly y: number;
-}
-
 export interface ThemeState {
     readonly preference: ThemePreference;
     readonly resolvedAppearance: ThemeAppearance;
@@ -54,12 +49,8 @@ export interface ThemeController {
     readonly state: Readable<ThemeState>;
     start(): void;
     destroy(): void;
-    setMode(mode: ThemeMode, origin?: ThemeChangeOrigin): void;
-    setPreferredTheme(
-        appearance: ThemeAppearance,
-        themeId: ThemeId,
-        origin?: ThemeChangeOrigin,
-    ): void;
+    setMode(mode: ThemeMode): void;
+    setPreferredTheme(appearance: ThemeAppearance, themeId: ThemeId): void;
 }
 
 interface ResolvedEnvironment {
@@ -105,7 +96,7 @@ export function createThemeController(
         applyState(nextState);
     }
 
-    function applyWithFallback(nextState: ThemeState, origin?: ThemeChangeOrigin): void {
+    function applyWithFallback(nextState: ThemeState): void {
         const targetDocument = activeEnvironment?.document;
         const root = targetDocument?.documentElement;
         if (!root) {
@@ -113,7 +104,7 @@ export function createThemeController(
             return;
         }
 
-        const generation = beginTransition(targetDocument, THEME_FALLBACK_CLASS, origin);
+        const generation = beginTransition(targetDocument, THEME_FALLBACK_CLASS);
         // A transition only runs if there is a style recalculation where it is
         // already armed and the old colour is still current. Adding the class
         // and swapping the palette in one task gives the browser a single
@@ -130,7 +121,7 @@ export function createThemeController(
         }, FALLBACK_CLEANUP_DELAY_MS);
     }
 
-    function applyWithViewTransition(nextState: ThemeState, origin?: ThemeChangeOrigin): boolean {
+    function applyWithViewTransition(nextState: ThemeState): boolean {
         const targetDocument = activeEnvironment?.document;
         const startViewTransition = targetDocument?.startViewTransition;
         if (!targetDocument || typeof startViewTransition !== 'function') return false;
@@ -139,7 +130,7 @@ export function createThemeController(
         // transition, which only animates colour.
         if (viewTransitionUnreliable(activeEnvironment?.userAgent)) return false;
 
-        const generation = beginTransition(targetDocument, THEME_TRANSITION_CLASS, origin);
+        const generation = beginTransition(targetDocument, THEME_TRANSITION_CLASS);
         let stateApplied = false;
 
         try {
@@ -169,20 +160,20 @@ export function createThemeController(
             return true;
         } catch {
             finishTransition(targetDocument, generation);
-            if (!stateApplied) applyWithFallback(nextState, origin);
+            if (!stateApplied) applyWithFallback(nextState);
             return true;
         }
     }
 
-    function transitionTo(nextState: ThemeState, origin?: ThemeChangeOrigin): void {
+    function transitionTo(nextState: ThemeState): void {
         const themeChanged = nextState.resolvedThemeId !== currentState.resolvedThemeId;
         if (!themeChanged || prefersReducedMotion(activeEnvironment?.reducedMotion)) {
             applyInstantly(nextState);
             return;
         }
 
-        if (!applyWithViewTransition(nextState, origin)) {
-            applyWithFallback(nextState, origin);
+        if (!applyWithViewTransition(nextState)) {
+            applyWithFallback(nextState);
         }
     }
 
@@ -207,31 +198,27 @@ export function createThemeController(
         started = false;
     }
 
-    function updatePreference(preference: ThemePreference, origin?: ThemeChangeOrigin): void {
+    function updatePreference(preference: ThemePreference): void {
         if (preferencesEqual(preference, latestPreference)) return;
 
         latestPreference = preference;
         writePreference(activeEnvironment?.storage, preference);
-        transitionTo(createThemeState(preference), origin);
+        transitionTo(createThemeState(preference));
     }
 
-    function setMode(mode: ThemeMode, origin?: ThemeChangeOrigin): void {
+    function setMode(mode: ThemeMode): void {
         if (!isThemeMode(mode)) return;
         start();
-        updatePreference(normalizeThemePreference({ ...latestPreference, mode }), origin);
+        updatePreference(normalizeThemePreference({ ...latestPreference, mode }));
     }
 
-    function setPreferredTheme(
-        appearance: ThemeAppearance,
-        themeId: ThemeId,
-        origin?: ThemeChangeOrigin,
-    ): void {
+    function setPreferredTheme(appearance: ThemeAppearance, themeId: ThemeId): void {
         if (!isThemeAppearance(appearance) || !isThemeForAppearance(themeId, appearance)) return;
         start();
         const preference = appearance === 'light'
             ? { ...latestPreference, lightThemeId: themeId }
             : { ...latestPreference, darkThemeId: themeId };
-        updatePreference(normalizeThemePreference(preference), origin);
+        updatePreference(normalizeThemePreference(preference));
     }
 
     return {
@@ -245,11 +232,9 @@ export function createThemeController(
     function beginTransition(
         targetDocument: Document,
         className: string,
-        origin?: ThemeChangeOrigin,
     ): number {
         stopTransition();
         const generation = transitionGeneration;
-        setTransitionOrigin(targetDocument, origin);
         targetDocument.documentElement.classList.add(className);
         return generation;
     }
@@ -405,24 +390,6 @@ function applyThemeAttributes(targetDocument: Document | undefined, state: Theme
     root.style.colorScheme = state.resolvedAppearance;
 }
 
-function setTransitionOrigin(targetDocument: Document, origin?: ThemeChangeOrigin): void {
-    const root = targetDocument.documentElement;
-    const viewportWidth = targetDocument.defaultView?.innerWidth || root.clientWidth;
-    const viewportHeight = targetDocument.defaultView?.innerHeight || root.clientHeight;
-    const x = normalizedCoordinate(origin?.x, viewportWidth);
-    const y = normalizedCoordinate(origin?.y, viewportHeight);
-
-    root.style.setProperty('--theme-origin-x', `${x}px`);
-    root.style.setProperty('--theme-origin-y', `${y}px`);
-}
-
-function normalizedCoordinate(value: number | undefined, viewportSize: number): number {
-    const fallback = Math.max(0, viewportSize / 2);
-    if (typeof value !== 'number' || !Number.isFinite(value)) return fallback;
-    if (viewportSize <= 0) return Math.max(0, value);
-    return Math.min(Math.max(0, value), viewportSize);
-}
-
 function removeTransitionClasses(targetDocument?: Document): void {
     targetDocument?.documentElement.classList.remove(THEME_TRANSITION_CLASS, THEME_FALLBACK_CLASS);
 }
@@ -442,14 +409,10 @@ export function initializeTheme(): () => void {
     return () => themeController.destroy();
 }
 
-export function setThemeMode(mode: ThemeMode, origin?: ThemeChangeOrigin): void {
-    themeController.setMode(mode, origin);
+export function setThemeMode(mode: ThemeMode): void {
+    themeController.setMode(mode);
 }
 
-export function setPreferredTheme(
-    appearance: ThemeAppearance,
-    themeId: ThemeId,
-    origin?: ThemeChangeOrigin,
-): void {
-    themeController.setPreferredTheme(appearance, themeId, origin);
+export function setPreferredTheme(appearance: ThemeAppearance, themeId: ThemeId): void {
+    themeController.setPreferredTheme(appearance, themeId);
 }
