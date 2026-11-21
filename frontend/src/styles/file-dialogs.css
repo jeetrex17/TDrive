@@ -407,7 +407,7 @@
     position: fixed;
     min-width: 190px;
     background: var(--color-surface-0);
-    border: 1px solid var(--border);
+    border: 1px solid var(--color-border-soft);
     border-radius: var(--radius-lg);
     padding: var(--space-1);
     box-shadow: var(--shadow-lg);
@@ -458,11 +458,11 @@
     font-weight: var(--weight-regular);
 }
 @media (hover: hover) {
-    .context-menu button:hover { background: var(--bg-panel); }
+    .context-menu button:hover { background: var(--overlay-neutral-2); }
 }
 .context-menu button:focus-visible {
     outline: none;
-    background: var(--bg-panel);
+    background: var(--overlay-neutral-2);
     box-shadow: inset 0 0 0 1px var(--overlay-accent-3);
 }
 .context-menu button:active { transform: translateY(0.5px); }

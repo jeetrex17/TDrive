@@ -53,7 +53,7 @@
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-lg);
     box-shadow: var(--shadow-lg), 0 1px 0 var(--glass-highlight) inset;
-    padding: 6px;
+    padding: var(--space-1);
     z-index: var(--z-popover);
     overflow: hidden;
     transform-origin: top right;
@@ -75,7 +75,7 @@
     display: flex;
     gap: 12px;
     align-items: center;
-    padding: 10px 10px 12px;
+    padding: var(--space-2);
 }
 .profile-menu-meta { min-width: 0; flex: 1; }
 .profile-menu-name {
@@ -96,8 +96,8 @@
 }
 .profile-menu-divider {
     height: 1px;
-    background: var(--border);
-    margin: 4px 6px;
+    background: var(--color-border-soft);
+    margin: var(--space-1) var(--space-2);
 }
 .profile-menu-divider[hidden] { display: none; }
 .profile-menu-item {
@@ -107,8 +107,10 @@
     width: 100%;
     background: transparent;
     border: none;
-    border-radius: var(--radius-md);
-    padding: 9px 10px;
+    /* Every menu row is the same 32px line: account, upload and context. */
+    min-height: var(--control-md);
+    border-radius: var(--radius-sm);
+    padding: 0 var(--space-2);
     color: var(--text-main);
     font-size: var(--type-base);
     cursor: pointer;
