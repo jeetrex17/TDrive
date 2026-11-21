@@ -87,18 +87,9 @@
     {/if}
 {/snippet}
 
-<!-- Semantic dashboard chrome remains mounted after runtime startup. The typed
-     root owns visibility; FeatureLayer owns the surfaces imperative controllers
-     still fill in (the file list, the gallery, the selection bar, the upload
-     menu) plus the modal layer.
-
-     The live chrome this shell renders itself -- the drive lists, the bell, the
-     account menu, the breadcrumb -- is gated on dashboardVisible so it lives
-     exactly as long as the dashboard does, which is what it did when a portal
-     mounted it. Built earlier it would sit behind the login screen with its
-     window listeners, its registered drag root and the last session's drive rows
-     still live under a hidden container, and logging out would stop clearing any
-     of that. -->
+<!-- The desktop dashboard. The typed root owns visibility; FeatureLayer owns
+     the modal layer. Live chrome is gated on dashboardVisible so its listeners
+     and the last session's rows live exactly as long as the dashboard does. -->
 <div
     id="success-screen"
     class="dashboard-container"
@@ -115,10 +106,6 @@
             <div class="drives-scroll">
                 <div class="drives-section">
                     <div class="drives-section-title">My Drive</div>
-                    <!-- The .drives-list wrapper is the column the rows stack in
-                         and the sibling the Photos row takes its top margin
-                         from, so it stays put; only the id a portal aimed at is
-                         gone. -->
                     <div class="drives-list">
                         {#if dashboardVisible}
                             <DriveList kind="personal" onDriveClick={handleDriveClick} />
@@ -209,13 +196,7 @@
                     <NotifBell onCancelDirection={cancelTransfersInDirection} onCancelFile={cancelUploadFile} onClearHistory={clearHistory} />
                 {/if}
 
-                <!-- .upload-menu-wrap is position: relative, and it is what the
-                     menu's own absolutely positioned popover anchors to, so the
-                     wrapper stays exactly where it was; only the id a portal
-                     aimed at is gone. Held back until the dashboard is up so the
-                     menu's window and document listeners live no longer than the
-                     dashboard does, which is what a portal that only ran on the
-                     dashboard view gave it. -->
+                <!-- The menu's popover anchors to this relative wrapper. -->
                 <div class="upload-menu-wrap">
                     {#if dashboardVisible}
                         <UploadMenu
@@ -311,11 +292,8 @@
             </div>
             <div class="col-actions" role="columnheader" aria-colindex="4">
                 <span>Actions</span>
-                <!-- The bar covers the Actions column while rows are selected,
-                     so it keeps its id and its inline display: none: the
-                     selection controller is what reveals it, by flipping that
-                     style once a row is picked. Only the portal that filled it
-                     from elsewhere is gone. -->
+                <!-- Covers the Actions column while rows are selected; the
+                     selection controller reveals it. -->
                 <div id="selection-bar" class="selection-bar" style="display: none;" role="status" aria-live="polite">
                     {#if dashboardVisible}
                         <SelectionBar
@@ -331,14 +309,8 @@
 
         <div id="file-list" class="file-list-box" data-file-drop-target role="grid" aria-label="Files" aria-multiselectable="true" aria-colcount="4" tabindex="-1"></div>
 
-        <!-- #gallery-view is the gallery's scroll container, not a seam: the
-             component measures it, the thumbnail controller uses it as its
-             IntersectionObserver root, and the click delegation, the preview
-             modal's return-to-grid and the phone's scroll-to-top all look it up
-             by this id. So the element stays exactly as it was and only the
-             portal that filled it from elsewhere is gone. Held back until the
-             dashboard is up so the grid's window listeners and resize observer
-             live no longer than the dashboard does. -->
+        <!-- The gallery's scroll container: the thumbnail observer, click
+             delegation and the viewer's return-to-grid find it by this id. -->
         <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Media">
             {#if dashboardVisible}
                 <PhotosSurface />

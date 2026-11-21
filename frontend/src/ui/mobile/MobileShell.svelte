@@ -213,14 +213,8 @@
                 aria-colcount="4"
                 tabindex="-1"
             ></div>
-            <!-- #gallery-view is the gallery's scroll container, not a seam: the
-                 component measures it, the thumbnail controller uses it as its
-                 IntersectionObserver root, and the click delegation, the preview
-                 modal's return-to-grid and this shell's scroll-to-top all look
-                 it up by this id. So the element stays exactly as it was and only the
-                 portal that filled it from elsewhere is gone. Held back until the
-                 dashboard is up so the grid's window listeners and resize observer
-                 live no longer than the dashboard does. -->
+            <!-- The gallery's scroll container: the thumbnail observer, click
+                 delegation and scroll-to-top find it by this id. -->
             <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Media">
                 {#if dashboardVisible}
                     <PhotosSurface />
