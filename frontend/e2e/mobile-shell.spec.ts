@@ -161,7 +161,9 @@ for (const name of ['TDrive-v1.6.0-linux-amd64.zip', 'notes.txt']) {
         const openNameBounds = await row.locator('.row-name').boundingBox();
         expect(openBounds?.x).toBeCloseTo(bounds.x, 0);
         expect(openBounds?.width).toBeCloseTo(bounds.width, 0);
-        expect(openNameBounds?.x).toBeLessThan(nameBounds.x - 40);
+        // The details slide by the icon and its gap (28 + 12px), which brings the
+        // name to the row's leading padding.
+        expect(openNameBounds?.x).toBeLessThanOrEqual(nameBounds.x - 39);
         const actions = await row.locator('.row-swipe-actions').boundingBox();
         expect(actions?.width).toBeLessThanOrEqual(140);
         const tail = await row.locator('.row-label-tail').boundingBox();
@@ -311,13 +313,10 @@ test('the bars carry safe-area padding', async ({ page }) => {
     const shell = page.locator('#success-screen.mobile-shell');
     await expect(shell).toHaveCSS('position', 'fixed');
 
-    // The tab bar floats: its slot holds it --tabbar-inset clear of every edge,
-    // and adds the home-indicator inset underneath (0px without a notch in the
-    // harness). So the gap below it is the inset, not zero -- what matters is
-    // that the slot reserves the safe area rather than letting the bar sit on
-    // it. This asserted flush-to-the-bottom for as long as the bar has floated;
-    // nothing caught it because CI only runs on a pull request, and this branch
-    // had 123 commits before it opened one.
+    // The tab bar is attached to the bottom edge; its slot adds the
+    // home-indicator inset underneath. The harness has no notch, so a 34px
+    // inset is simulated: the gap below the bar must be exactly that reserve.
+    await page.evaluate(() => document.documentElement.style.setProperty('--inset-bottom', '34px'));
     const box = await page.locator('.tab-bar').boundingBox();
     const size = page.viewportSize();
     expect(box).not.toBeNull();
@@ -327,7 +326,7 @@ test('the bars carry safe-area padding', async ({ page }) => {
         const style = getComputedStyle(el);
         return Number.parseFloat(style.paddingBottom);
     });
-    expect(reserved).toBeGreaterThan(0);
+    expect(reserved).toBe(34);
     expect(Math.abs(gapBelow - reserved)).toBeLessThan(2);
     const pad = await page.locator('.mobile-tabbar-slot').evaluate((el) => getComputedStyle(el).paddingBottom);
     expect(pad).toMatch(/px$/);
