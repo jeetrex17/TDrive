@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { navDirection } from './file-list/nav-direction';
     import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
     import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
@@ -75,6 +76,8 @@
         return $fileSortState.direction === 'asc' ? 'ascending' : 'descending';
     }
 
+    // The list slides a little in the direction the reader moved, like the phone.
+    const folderMove = navDirection();
 </script>
 
 {#snippet sortIndicator(key: FileSortKey)}
@@ -298,7 +301,7 @@
             </div>
         </div>
 
-        <div id="file-list" class="file-list-box" data-file-drop-target role="grid" aria-label="Files" aria-multiselectable="true" aria-colcount="4" tabindex="-1"></div>
+        <div id="file-list" class="file-list-box" data-file-drop-target data-nav={$folderMove ?? undefined} role="grid" aria-label="Files" aria-multiselectable="true" aria-colcount="4" tabindex="-1"></div>
 
         <!-- Floats over the list while rows are selected; the selection
              controller reveals it. -->

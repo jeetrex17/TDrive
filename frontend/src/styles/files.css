@@ -516,15 +516,21 @@ html.mobile .file-list-box {
 /* Walking into a folder pushes the list in from the right, coming back pops it
    in from the left. Short and transform-only, so it reads as depth rather than
    as a page reload, and never blocks the rows becoming tappable. */
-html.mobile .file-list-box[data-nav="forward"] { animation: tdrive-nav-push var(--motion-slow) var(--ease-enter) both; }
-html.mobile .file-list-box[data-nav="back"] { animation: tdrive-nav-pop var(--motion-slow) var(--ease-enter) both; }
+/* Desktop moves less than the phone: the list is wider and the eye is closer. */
+.file-list-box { --nav-shift: 8px; }
+html.mobile .file-list-box { --nav-shift: 18px; }
+.file-list-box[data-nav="forward"] { animation: tdrive-nav-push var(--motion-slow) var(--ease-enter) both; }
+.file-list-box[data-nav="back"] { animation: tdrive-nav-pop var(--motion-slow) var(--ease-enter) both; }
 @keyframes tdrive-nav-push {
-    from { opacity: 0; transform: translateX(18px); }
+    from { opacity: 0; transform: translateX(var(--nav-shift)); }
     to { opacity: 1; transform: translateX(0); }
 }
 @keyframes tdrive-nav-pop {
-    from { opacity: 0; transform: translateX(-18px); }
+    from { opacity: 0; transform: translateX(calc(var(--nav-shift) * -1)); }
     to { opacity: 1; transform: translateX(0); }
+}
+@media (prefers-reduced-motion: reduce) {
+    .file-list-box[data-nav] { animation: none; }
 }
 
 html.mobile .file-row {
