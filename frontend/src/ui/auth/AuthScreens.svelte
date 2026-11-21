@@ -5,10 +5,6 @@
     import tdriveLogo from '../../assets/images/tdrive-logo.png';
     import EyeIcon from '@lucide/svelte/icons/eye';
     import EyeOffIcon from '@lucide/svelte/icons/eye-off';
-    import KeyRoundIcon from '@lucide/svelte/icons/key-round';
-    import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
-    import MailIcon from '@lucide/svelte/icons/mail';
-    import SettingsIcon from '@lucide/svelte/icons/settings';
     import { tick } from 'svelte';
     import { isMobilePlatform, openExternalUrl } from '../../api';
     import { authScreen } from '../app/app-store';
@@ -191,9 +187,6 @@
         onsubmit={(event) => submit(event, 'setup', () => onSetup(apiId, apiHash))}
     >
         <div class="auth-page-body">
-            <div class="auth-icon-box">
-                <SettingsIcon size={32} strokeWidth={1.5} aria-hidden="true" />
-            </div>
             <h2 id="auth-setup-title">Connect to Telegram</h2>
             <p id="telegram-credentials-help" class="auth-intro">
                 Create an app at
@@ -283,9 +276,6 @@
         onsubmit={(event) => submit(event, 'phone', sendPhone)}
     >
         <div class="auth-page-body">
-            <div class="auth-icon-box">
-                <LockKeyholeIcon size={32} strokeWidth={1.5} aria-hidden="true" />
-            </div>
             <h2 id="auth-phone-title">Sign in to Telegram</h2>
             <p class="auth-intro">Enter the number on your Telegram account. Telegram will send you a code.</p>
             <div class="phone-entry">
@@ -337,9 +327,6 @@
         onsubmit={(event) => submit(event, 'code', () => onCode(code))}
     >
         <div class="auth-page-body">
-            <div class="auth-icon-box">
-                <MailIcon size={32} strokeWidth={1.5} aria-hidden="true" />
-            </div>
             <h2 id="auth-code-title">Verify your account</h2>
             <p class="auth-intro">Enter the login code Telegram sent you.</p>
             {#if $authPhone}
@@ -392,9 +379,6 @@
         onsubmit={(event) => submit(event, 'password', () => onPassword(password))}
     >
         <div class="auth-page-body">
-            <div class="auth-icon-box">
-                <KeyRoundIcon size={32} strokeWidth={1.5} aria-hidden="true" />
-            </div>
             <h2 id="auth-password-title">Two-step verification</h2>
             <p class="auth-intro">Enter your Telegram password to finish signing in.</p>
             {#if $authHint}
