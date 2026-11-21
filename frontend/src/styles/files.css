@@ -195,34 +195,32 @@ html:not(.mobile) .main-content {
 }
 
 .file-state {
-    min-height: 220px;
-    padding: 46px 20px;
+    /* Said where the content would have been: left-aligned at the top of the
+       list, at the list's own size, rather than a centred poster. */
+    min-height: 0;
+    padding: 28px 18px;
     display: flex;
     flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 8px;
-    text-align: center;
-    color: var(--text-muted);
+    align-items: flex-start;
+    justify-content: flex-start;
+    gap: 6px;
+    text-align: left;
+    color: var(--color-text-muted);
 }
 .file-state-icon {
-    width: 40px;
-    height: 40px;
     display: grid;
     place-items: center;
-    border-radius: var(--radius-lg);
+    margin-bottom: 4px;
     color: var(--color-text-subtle);
-    background: var(--overlay-white-1);
-    border: 1px solid var(--border);
 }
 .file-state-icon svg {
-    width: 22px;
-    height: 22px;
+    width: 20px;
+    height: 20px;
 }
 .file-state-title {
-    color: var(--text-main);
-    font-size: var(--type-md);
-    font-weight: var(--weight-strong);
+    color: var(--color-text);
+    font-size: var(--type-base);
+    font-weight: var(--weight-medium);
 }
 .file-state-body {
     max-width: 420px;
@@ -233,10 +231,11 @@ html:not(.mobile) .main-content {
 .file-state-actions {
     display: flex;
     flex-wrap: wrap;
-    justify-content: center;
+    justify-content: flex-start;
     gap: var(--space-2);
     margin-top: var(--space-2);
 }
+.file-state-actions .secondary-btn { min-height: var(--control-md); padding: 0 var(--space-3); }
 /* The first action is the one the empty place is asking for. */
 .file-state-actions .secondary-btn:first-child {
     background: var(--color-action);
@@ -805,11 +804,16 @@ html.mobile .action-icon.row-more svg { width: 20px; height: 20px; }
 html.mobile .pending-folder .pending-indicator { margin: 0; }
 
 /* Empty and error states: one sentence, then the next action. */
+/* A phone keeps the empty place centred in the screen, as the system apps do. */
 html.mobile .file-state {
     min-height: 60vh;
     padding: 32px 24px;
     gap: 6px;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
 }
+html.mobile .file-state-actions { justify-content: center; }
 html.mobile .file-state-icon {
     width: 48px;
     height: 48px;
