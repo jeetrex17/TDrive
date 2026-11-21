@@ -11,6 +11,9 @@ export default defineConfig({
     timeout: 15_000,
     expect: {
         timeout: 5_000,
+        // Small enough that a moved panel or a changed colour fails, large
+        // enough to absorb antialiasing differences between two Macs.
+        toHaveScreenshot: { maxDiffPixelRatio: 0.01, animations: 'disabled', caret: 'hide' },
     },
     outputDir: 'test-results',
     reporter: inCI ? 'github' : 'list',
@@ -23,16 +26,18 @@ export default defineConfig({
     projects: [
         {
             name: 'chromium',
+            // Pixel baselines are recorded in WebKit on macOS; see visual.spec.ts.
+            testIgnore: /visual\.spec\.ts/,
             use: {
                 ...devices['Desktop Chrome'],
                 viewport: { width: 1280, height: 800 },
             },
         },
-        // Cover platform media selection, biometric fallback, and scrollbar
-        // visibility in the engine Apple apps use.
+        // Cover platform media selection, biometric fallback, scrollbar
+        // visibility and the screenshot guard in the engine Apple apps use.
         {
             name: 'webkit-media',
-            testMatch: /(video|biometric|scrollbars)\.spec\.ts/,
+            testMatch: /(video|biometric|scrollbars|visual)\.spec\.ts/,
             use: {
                 ...devices['Desktop Safari'],
                 viewport: { width: 1280, height: 800 },
