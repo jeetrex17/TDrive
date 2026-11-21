@@ -33,7 +33,7 @@
     font-weight: var(--weight-medium);
     text-align: left;
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
+    transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
 }
 @media (hover: hover) {
     .upload-menu-item:hover { background: var(--overlay-accent-1); color: var(--accent); }

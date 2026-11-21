@@ -58,7 +58,7 @@
     cursor: pointer;
     padding: 4px 8px;
     border-radius: var(--radius-md);
-    transition: background 0.15s ease, color 0.15s ease;
+    transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
 }
 
 @media (hover: hover) {
@@ -112,7 +112,7 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    transition: background var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
 }
 @media (hover: hover) {
     .input-with-action .input-action-btn:hover {

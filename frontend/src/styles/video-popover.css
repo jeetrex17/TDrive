@@ -42,9 +42,9 @@
     user-select: none;
     transform-origin: 100% 100%;
     transition:
-        opacity 200ms var(--ease-standard),
-        transform 200ms var(--ease-standard),
-        visibility 200ms var(--ease-standard);
+        opacity var(--motion-med) var(--ease-standard),
+        transform var(--motion-med) var(--ease-standard),
+        visibility var(--motion-med) var(--ease-standard);
 }
 
 @supports ((-webkit-backdrop-filter: blur(1px)) or (backdrop-filter: blur(1px))) {
@@ -65,7 +65,7 @@
     pointer-events: none;
     transform: scale(0.96) translateY(4px);
     /* Exits stay shorter than entrances: attention is already moving on. */
-    transition-duration: 140ms;
+    transition-duration: var(--motion-fast);
 }
 
 .video-popover-header {
@@ -109,9 +109,9 @@
     color: #96a2b8;
     cursor: pointer;
     transition:
-        color 120ms var(--ease-standard),
-        background-color 120ms var(--ease-standard),
-        scale 120ms var(--ease-standard);
+        color var(--motion-fast) var(--ease-standard),
+        background-color var(--motion-fast) var(--ease-standard),
+        scale var(--motion-fast) var(--ease-standard);
 }
 
 @media (hover: hover) {

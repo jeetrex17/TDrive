@@ -42,11 +42,11 @@ body { background-color: var(--bg-dark); color: var(--text-main); height: 100vh;
 html.theme-transition-fallback #app,
 html.theme-transition-fallback #app *:not(img):not(video):not(canvas) {
     transition:
-        background-color 200ms var(--ease-standard),
-        border-color 200ms var(--ease-standard),
-        color 200ms var(--ease-standard),
-        fill 200ms var(--ease-standard),
-        stroke 200ms var(--ease-standard);
+        background-color var(--motion-med) var(--ease-standard),
+        border-color var(--motion-med) var(--ease-standard),
+        color var(--motion-med) var(--ease-standard),
+        fill var(--motion-med) var(--ease-standard),
+        stroke var(--motion-med) var(--ease-standard);
 }
 @keyframes theme-old-fade {
     to { opacity: 0.94; }

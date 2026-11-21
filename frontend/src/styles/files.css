@@ -50,7 +50,7 @@ html:not(.mobile) .main-content {
 .file-lock-badge svg { width: 14px; height: 14px; }
 .breadcrumb-link {
     background: transparent; border: none; padding: 4px 6px; border-radius: var(--radius-sm);
-    color: var(--color-text-muted); font-size: var(--type-base); font-weight: var(--weight-medium); cursor: pointer; transition: background 0.15s ease;
+    color: var(--color-text-muted); font-size: var(--type-base); font-weight: var(--weight-medium); cursor: pointer; transition: background var(--motion-fast) var(--ease-standard);
     max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     /* Middle crumbs give way first, and each may go to a few characters; the
        root and the folder being looked at are the two a reader needs whole. */
@@ -374,7 +374,7 @@ html[data-input="keyboard"] .file-list-box:focus-visible .file-row.is-keyboard-a
     object-fit: cover;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 100ms var(--ease-standard);
+    transition: opacity var(--motion-fast) var(--ease-standard);
 }
 .row-thumbnail-loaded .row-thumbnail-image { opacity: 1; }
 .row-thumbnail::after {
@@ -539,7 +539,7 @@ html.mobile .file-row {
     background: var(--color-canvas);
     border-radius: 0;
     overflow: hidden;
-    transition: background-color 80ms var(--ease-standard);
+    transition: background-color var(--motion-fast) var(--ease-standard);
     touch-action: manipulation;
     -webkit-tap-highlight-color: transparent;
     -webkit-touch-callout: none;

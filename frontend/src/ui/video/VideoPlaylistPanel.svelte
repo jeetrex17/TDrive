@@ -248,8 +248,8 @@
         text-align: left;
         cursor: pointer;
         transition:
-            background-color 120ms var(--ease-standard),
-            color 120ms var(--ease-standard);
+            background-color var(--motion-fast) var(--ease-standard),
+            color var(--motion-fast) var(--ease-standard);
     }
 
     .video-playlist-row:hover {
@@ -404,7 +404,7 @@
         height: 20px;
         border-radius: 999px;
         background: rgba(255, 255, 255, 0.14);
-        transition: background-color 140ms var(--ease-standard);
+        transition: background-color var(--motion-fast) var(--ease-standard);
     }
 
     .video-playlist-switch-thumb {
@@ -416,8 +416,8 @@
         border-radius: 50%;
         background: #cdd6e6;
         transition:
-            translate 140ms var(--ease-standard),
-            background-color 140ms var(--ease-standard);
+            translate var(--motion-fast) var(--ease-standard),
+            background-color var(--motion-fast) var(--ease-standard);
     }
 
     .video-playlist-switch:checked + .video-playlist-switch-track {

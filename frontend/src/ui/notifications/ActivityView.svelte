@@ -261,7 +261,7 @@
     .item-summary[data-tone='danger'] { color: var(--color-danger); }
     .item-summary.clamp { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .item-bar { display: block; height: 3px; margin-top: var(--space-1); border-radius: var(--radius-pill); background: var(--overlay-neutral-2); overflow: hidden; }
-    .item-bar span { display: block; height: 100%; border-radius: inherit; background: var(--color-accent); transition: width 200ms ease-out; }
+    .item-bar span { display: block; height: 100%; border-radius: inherit; background: var(--color-accent); transition: width var(--motion-med) var(--ease-standard); }
     .activity-empty { display: grid; gap: var(--space-1); padding: var(--space-5) var(--space-6) var(--space-6); color: var(--color-text-muted); font-size: var(--type-sm); }
     .activity-empty h3 { margin: 0; color: var(--color-text); font-size: var(--type-sm); font-weight: var(--weight-medium); }
     .activity-empty p { margin: 0; font-size: var(--type-xs); line-height: var(--leading-normal); }

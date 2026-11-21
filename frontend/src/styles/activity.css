@@ -11,7 +11,7 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+    transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
     padding: 0;
 }
 @media (hover: hover) {
@@ -158,7 +158,7 @@
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-lg);
     font-size: var(--type-base);
-    transition: background 140ms ease, transform 140ms ease;
+    transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
 }
 @media (hover: hover) {
     .notif-row:hover { background: var(--overlay-white-2); }
@@ -230,7 +230,7 @@
     font-size: var(--type-lg);
     line-height: 1;
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
+    transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
 }
 @media (hover: hover) {
     .notif-row-cancel:hover { background: var(--overlay-danger-1); color: var(--danger); }
@@ -268,7 +268,7 @@
     height: 100%;
     background: var(--accent);
     border-radius: var(--radius-pill);
-    transition: width 200ms ease;
+    transition: width var(--motion-med) var(--ease-standard);
 }
 /* The files in flight, under the row that aggregates them. They span from the
    title's column to the edge so a filename has the whole width to be clipped
@@ -451,7 +451,7 @@
     cursor: pointer;
     border-radius: var(--radius-sm);
     padding: 0;
-    transition: background 120ms ease, color 120ms ease;
+    transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
 }
 .toast-close svg { width: 14px; height: 14px; }
 @media (hover: hover) {

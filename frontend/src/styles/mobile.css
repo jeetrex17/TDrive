@@ -1252,7 +1252,7 @@ html.mobile .row-swipe-btn.is-delete {
     color: var(--color-danger);
 }
 
-html.mobile .row-more { transition: opacity 100ms var(--ease-standard); }
+html.mobile .row-more { transition: opacity var(--motion-fast) var(--ease-standard); }
 html.mobile .file-row.is-revealing .row-more {
     opacity: 0;
     pointer-events: none;

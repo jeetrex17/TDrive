@@ -193,7 +193,7 @@
     z-index: 4;
     opacity: 0;
     pointer-events: none;
-    transition: opacity 160ms ease, transform 160ms ease;
+    transition: opacity var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
 }
 
 .video-topbar {
@@ -281,7 +281,7 @@
     color: rgba(255, 255, 255, 0.88);
     background: transparent;
     cursor: pointer;
-    transition: background-color 180ms ease, color 180ms ease, transform 180ms ease;
+    transition: background-color var(--motion-med) var(--ease-standard), color var(--motion-med) var(--ease-standard), transform var(--motion-med) var(--ease-standard);
     flex-shrink: 0;
 }
 
@@ -351,7 +351,7 @@
     opacity: 0;
     pointer-events: none;
     transform: translate(-50%, -50%) scale(0.94);
-    transition: opacity 180ms ease, transform 180ms ease;
+    transition: opacity var(--motion-med) var(--ease-standard), transform var(--motion-med) var(--ease-standard);
 }
 
 .video-center-play,
@@ -365,7 +365,7 @@
     background: rgba(9, 12, 21, 0.68);
     box-shadow: 0 18px 58px rgba(0, 0, 0, 0.38);
     cursor: pointer;
-    transition: background 180ms ease, transform 180ms ease, border-color 180ms ease, opacity 180ms ease;
+    transition: background var(--motion-med) var(--ease-standard), transform var(--motion-med) var(--ease-standard), border-color var(--motion-med) var(--ease-standard), opacity var(--motion-med) var(--ease-standard);
 }
 
 .video-center-play {
@@ -518,7 +518,7 @@
     height: 4px;
     border-radius: var(--radius-pill);
     transform: translateY(-50%);
-    transition: height 160ms ease;
+    transition: height var(--motion-fast) var(--ease-standard);
 }
 
 .video-scrubber-track {
@@ -555,7 +555,7 @@
     background: #fff;
     box-shadow: 0 4px 16px rgba(0, 0, 0, 0.35);
     transform: translate(-50%, -50%) scale(0);
-    transition: transform 160ms ease;
+    transition: transform var(--motion-fast) var(--ease-standard);
 }
 
 .video-scrubber-tooltip {
@@ -579,7 +579,7 @@
     pointer-events: none;
     opacity: 0;
     transform: translateX(-50%);
-    transition: opacity 140ms ease;
+    transition: opacity var(--motion-fast) var(--ease-standard);
 }
 
 .video-scrubber-tooltip.has-thumbnail,
@@ -655,7 +655,7 @@
     margin-left: 0;
     opacity: 0;
     pointer-events: none;
-    transition: width 180ms ease, margin-left 180ms ease, opacity 180ms ease;
+    transition: width var(--motion-med) var(--ease-standard), margin-left var(--motion-med) var(--ease-standard), opacity var(--motion-med) var(--ease-standard);
     height: 28px;
     cursor: pointer;
     outline: none;
@@ -696,7 +696,7 @@
     font-weight: var(--weight-strong);
     font-variant-numeric: tabular-nums;
     cursor: pointer;
-    transition: background-color 160ms ease;
+    transition: background-color var(--motion-fast) var(--ease-standard);
 }
 .video-time-display .video-time { font-size: inherit; font-weight: inherit; }
 .video-time-separator { padding: 0 4px; }
@@ -716,7 +716,7 @@
     opacity: 0;
     visibility: hidden;
     will-change: max-width, margin-left, opacity;
-    transition: max-width 220ms ease, margin-left 220ms ease, opacity 180ms ease, visibility 0s 220ms;
+    transition: max-width var(--motion-slow) var(--ease-standard), margin-left var(--motion-slow) var(--ease-standard), opacity var(--motion-med) var(--ease-standard), visibility 0s var(--motion-slow);
 }
 .video-end-time > span { display: inline-block; }
 .video-end-time.is-visible { max-width: 24ch; margin-left: 8px; opacity: 1; visibility: visible; transition-delay: 0s; }
@@ -735,7 +735,7 @@
 .video-volume-fill {
     width: 100%;
     background: var(--video-accent);
-    transition: width 80ms linear;
+    transition: width var(--motion-fast) linear;
 }
 
 .video-volume-thumb {
@@ -748,7 +748,7 @@
     background: #fff;
     box-shadow: 0 5px 16px rgba(0, 0, 0, 0.36);
     transform: translate(-50%, -50%) scale(0.74);
-    transition: transform 140ms ease, box-shadow 140ms ease, left 80ms linear;
+    transition: transform var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), left var(--motion-fast) linear;
 }
 
 .video-volume-slider:focus-visible .video-volume-thumb {
@@ -787,7 +787,7 @@
     font-weight: var(--weight-strong);
     outline: none;
     cursor: pointer;
-    transition: background-color 180ms ease, color 180ms ease;
+    transition: background-color var(--motion-med) var(--ease-standard), color var(--motion-med) var(--ease-standard);
 }
 
 @media (hover: hover) {
@@ -1008,7 +1008,7 @@
     font-size: var(--type-xs);
     font-weight: var(--weight-strong);
     line-height: 1;
-    transition: filter 0.12s ease, transform 0.12s ease;
+    transition: filter var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
 }
 
 /* Own hover/focus/active so the faint generic menu-button hover can't wash
@@ -1131,7 +1131,7 @@
     font-weight: var(--weight-strong);
     line-height: 1;
     cursor: pointer;
-    transition: background 160ms ease, border-color 160ms ease, box-shadow 160ms ease, transform 160ms ease;
+    transition: background var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
 }
 
 .video-error-retry {

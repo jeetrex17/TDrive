@@ -88,7 +88,7 @@ html:not(.mobile) .gallery-group-header { background: var(--color-surface-0); }
     object-fit: cover;
     display: block;
     opacity: 0;
-    transition: opacity 180ms var(--ease-enter);
+    transition: opacity var(--motion-med) var(--ease-enter);
 }
 .gallery-cell.is-loaded .gallery-thumb { opacity: 1; }
 
@@ -174,7 +174,7 @@ html:not(.mobile) .gallery-group-header { background: var(--color-surface-0); }
     backdrop-filter: blur(14px);
     box-shadow: 0 14px 40px rgba(0,0,0,0.22);
     opacity: 0.55;
-    transition: opacity 0.16s ease, background 0.16s ease, transform 0.16s ease;
+    transition: opacity var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
 }
 @media (hover: hover) {
     .preview-nav:hover:not(:disabled) { opacity: 1; background: rgba(20, 23, 34, 0.7); }
@@ -221,7 +221,7 @@ html:not(.mobile) .gallery-group-header { background: var(--color-surface-0); }
     isolation: isolate;
     opacity: 0;
     transform: translateX(18px) scale(0.99);
-    transition: opacity 0.24s ease, transform 0.28s cubic-bezier(0.22, 1, 0.36, 1);
+    transition: opacity var(--motion-slow) var(--ease-standard), transform var(--motion-slow) cubic-bezier(0.22, 1, 0.36, 1);
     pointer-events: none;
 }
 .preview-info::before {
@@ -263,7 +263,7 @@ html:not(.mobile) .gallery-group-header { background: var(--color-surface-0); }
     font-size: var(--type-md);
     line-height: 1;
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
+    transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
 }
 @media (hover: hover) {
     .preview-info-close:hover { background: rgba(255, 255, 255, 0.16); color: #fff; }
@@ -307,7 +307,7 @@ html:not(.mobile) .gallery-group-header { background: var(--color-surface-0); }
     font-size: var(--type-sm);
     font-weight: var(--weight-strong);
     cursor: pointer;
-    transition: background 0.15s ease;
+    transition: background var(--motion-fast) var(--ease-standard);
 }
 @media (hover: hover) {
     .info-map-link:hover { background: rgba(255, 255, 255, 0.09); }
@@ -403,7 +403,7 @@ html:not(.mobile) .gallery-group-header { background: var(--color-surface-0); }
     border: 1px solid color-mix(in srgb, var(--accent) 26%, transparent);
     -webkit-backdrop-filter: blur(28px) saturate(1.4);
     backdrop-filter: blur(28px) saturate(1.4);
-    transition: border-color 0.18s ease;
+    transition: border-color var(--motion-med) var(--ease-standard);
 }
 .preview-unlock-bar:focus-within {
     border-color: color-mix(in srgb, var(--accent) 60%, transparent);
@@ -436,7 +436,7 @@ html:not(.mobile) .gallery-group-header { background: var(--color-surface-0); }
     background: transparent;
     color: var(--viewer-text-muted);
     cursor: pointer;
-    transition: color 0.15s ease, background 0.15s ease;
+    transition: color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
 }
 @media (hover: hover) {
     .preview-unlock-eye:hover { color: var(--viewer-text); background: var(--viewer-overlay-2); }
@@ -455,7 +455,7 @@ html:not(.mobile) .gallery-group-header { background: var(--color-surface-0); }
     background: var(--viewer-accent);
     color: var(--viewer-on-accent);
     cursor: pointer;
-    transition: filter 0.15s ease, transform 0.15s ease;
+    transition: filter var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
 }
 @media (hover: hover) {
     .preview-unlock-go:hover { filter: brightness(1.08); transform: translateX(1px); }

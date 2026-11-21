@@ -1130,7 +1130,7 @@
     .is-mobile .channel-row {
         border-radius: 0;
         background: var(--color-surface-0);
-        transition: background-color 80ms var(--ease-standard);
+        transition: background-color var(--motion-fast) var(--ease-standard);
     }
 
     .is-mobile .channel-row:first-child { border-radius: var(--radius-xl) var(--radius-xl) 0 0; }

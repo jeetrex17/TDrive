@@ -559,7 +559,7 @@
     color: var(--viewer-text-muted);
     font: inherit;
     cursor: pointer;
-    transition: background 0.14s ease, color 0.14s ease;
+    transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
 }
 
 @media (hover: hover) {

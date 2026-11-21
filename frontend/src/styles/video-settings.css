@@ -27,7 +27,7 @@
     background: var(--video-accent-bg, rgba(122, 162, 247, 0.2));
     box-shadow: 0 0 0 1px var(--video-accent-ring, rgba(122, 162, 247, 0.28));
     translate: calc(var(--video-settings-tab, 0) * 100%) 0;
-    transition: translate 260ms var(--ease-standard);
+    transition: translate var(--motion-slow) var(--ease-standard);
 }
 .video-settings-tabs:has(button:nth-child(1)[aria-pressed=true]) { --video-settings-tab: 0; }
 .video-settings-tabs:has(button:nth-child(2)[aria-pressed=true]) { --video-settings-tab: 1; }
@@ -44,7 +44,7 @@
     font-size: var(--type-2xs);
     font-weight: var(--weight-semibold);
     cursor: pointer;
-    transition: color 160ms var(--ease-standard);
+    transition: color var(--motion-fast) var(--ease-standard);
 }
 @media (hover: hover) {
     .video-settings-tabs button:hover { color: #dbe4f7; }
@@ -82,7 +82,7 @@
     background: rgba(255, 255, 255, 0.05);
     color: inherit;
     cursor: pointer;
-    transition: background-color 120ms var(--ease-standard), border-color 120ms var(--ease-standard);
+    transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
 }
 @media (hover: hover) {
     .video-picture-options button:hover { background: rgba(255, 255, 255, 0.08); }
@@ -118,7 +118,7 @@
     font-size: var(--type-xs);
     font-weight: var(--weight-strong);
     cursor: pointer;
-    transition: background-color 120ms var(--ease-standard), scale 120ms var(--ease-standard);
+    transition: background-color var(--motion-fast) var(--ease-standard), scale var(--motion-fast) var(--ease-standard);
 }
 .video-settings-save:active { scale: 0.96; }
 @media (hover: hover) {
