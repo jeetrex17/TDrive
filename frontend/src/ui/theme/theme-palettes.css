@@ -37,7 +37,6 @@
     --viewer-focus-ring: 0 0 0 3px rgba(122, 162, 247, 0.42);
 }
 
-:root:not([data-theme]),
 :root[data-theme="graphite"] {
     color-scheme: dark;
 
@@ -144,6 +143,7 @@
     --overlay-success-2: rgba(23, 116, 74, 0.27);
 }
 
+:root:not([data-theme]),
 :root[data-theme="quiet-relay"] {
     color-scheme: dark;
 

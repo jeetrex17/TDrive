@@ -83,7 +83,7 @@ describe('theme controller', () => {
         });
 
         controller.start();
-        expect(document.documentElement.dataset.theme).toBe('graphite');
+        expect(document.documentElement.dataset.theme).toBe('quiet-relay');
         expect(document.documentElement.dataset.themeAppearance).toBe('dark');
         expect(get(controller.state)).not.toHaveProperty('systemAppearance');
 
@@ -137,10 +137,10 @@ describe('theme controller', () => {
 
         const after = get(first.state).preference;
         expect(after).not.toBe(before);
-        expect(before.darkThemeId).toBe('graphite');
+        expect(before.darkThemeId).toBe('quiet-relay');
         expect(after).toEqual({
             mode: 'dark',
-            lightThemeId: 'chalk',
+            lightThemeId: 'daybreak',
             darkThemeId: 'dracula',
         });
         expect(JSON.parse(storage.getItem(THEME_STORAGE_KEY) ?? '')).toEqual(after);
@@ -322,7 +322,7 @@ describe('theme controller', () => {
         expect(get(controller.state).preference).toEqual({
             mode: 'light',
             lightThemeId: 'catppuccin-latte',
-            darkThemeId: 'graphite',
+            darkThemeId: 'quiet-relay',
         });
         expect(document.documentElement.dataset.theme).toBe('catppuccin-latte');
         controller.destroy();

@@ -48,8 +48,8 @@ describe('theme model', () => {
     it('defaults unknown or appearance-incompatible persisted values to the TDrive pair', () => {
         expect(DEFAULT_THEME_PREFERENCE).toEqual({
             mode: 'dark',
-            lightThemeId: 'chalk',
-            darkThemeId: 'graphite',
+            lightThemeId: 'daybreak',
+            darkThemeId: 'quiet-relay',
         });
         expect(
             normalizeThemePreference({

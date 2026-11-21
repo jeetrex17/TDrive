@@ -1,5 +1,4 @@
 export const THEME_IDS = [
-    'chalk',
     'daybreak',
     'porcelain',
     'catppuccin-latte',
@@ -7,7 +6,6 @@ export const THEME_IDS = [
     'gruvbox-light',
     'rose-pine-dawn',
     'everforest-light',
-    'graphite',
     'quiet-relay',
     'tokyo-night',
     'catppuccin-mocha',
@@ -18,6 +16,8 @@ export const THEME_IDS = [
     'everforest-dark',
     'ayu-dark',
     'rose-pine',
+    'chalk',
+    'graphite',
 ] as const;
 
 export type ThemeId = (typeof THEME_IDS)[number];
@@ -51,12 +51,6 @@ function defineTheme(definition: ThemeDefinition): ThemeDefinition {
  * must never be promoted into this list.
  */
 export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
-    defineTheme({
-        id: 'chalk',
-        name: 'Chalk',
-        appearance: 'light',
-        preview: ['#f4f5f6', '#eeeff1', '#1a6dc2', '#0b0c0e'],
-    }),
     defineTheme({
         id: 'daybreak',
         name: 'Daybreak',
@@ -98,12 +92,6 @@ export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
         name: 'Everforest Light',
         appearance: 'light',
         preview: ['#fffbef', '#f2efdf', '#4c7a1a', '#5c6a72'],
-    }),
-    defineTheme({
-        id: 'graphite',
-        name: 'Graphite',
-        appearance: 'dark',
-        preview: ['#08090a', '#1a1b1d', '#4ea7f0', '#f7f8f8'],
     }),
     defineTheme({
         id: 'quiet-relay',
@@ -165,12 +153,24 @@ export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
         appearance: 'dark',
         preview: ['#191724', '#26233a', '#c4a7e7', '#e0def4'],
     }),
+    defineTheme({
+        id: 'chalk',
+        name: 'Chalk',
+        appearance: 'light',
+        preview: ['#f4f5f6', '#eeeff1', '#1a6dc2', '#0b0c0e'],
+    }),
+    defineTheme({
+        id: 'graphite',
+        name: 'Graphite',
+        appearance: 'dark',
+        preview: ['#08090a', '#1a1b1d', '#4ea7f0', '#f7f8f8'],
+    }),
 ]);
 
 export const DEFAULT_THEME_PREFERENCE: ThemePreference = Object.freeze({
     mode: 'dark',
-    lightThemeId: 'chalk',
-    darkThemeId: 'graphite',
+    lightThemeId: 'daybreak',
+    darkThemeId: 'quiet-relay',
 });
 
 const THEME_ID_SET: ReadonlySet<string> = new Set(THEME_IDS);

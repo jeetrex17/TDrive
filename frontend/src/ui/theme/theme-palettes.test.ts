@@ -112,8 +112,8 @@ function expectReadablePair(
 }
 
 describe('theme palettes', () => {
-    it('uses Graphite as the deterministic pre-controller fallback', () => {
-        expect(paletteSource).toContain(':root:not([data-theme]),\n:root[data-theme="graphite"] {');
+    it('uses Quiet Relay as the deterministic pre-controller fallback', () => {
+        expect(paletteSource).toContain(':root:not([data-theme]),\n:root[data-theme="quiet-relay"] {');
         expect(paletteSource).not.toContain('prefers-color-scheme');
     });
 
