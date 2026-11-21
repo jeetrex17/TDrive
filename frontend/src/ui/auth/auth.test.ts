@@ -105,13 +105,13 @@ describe('AuthScreens', () => {
         expect(body).toContain('That code was incorrect.');
     });
 
-    it('keeps the desktop card free of phone-only markup', () => {
+    it('keeps phone-only markup off the desktop card but links my.telegram.org', () => {
         showAuthView('setup');
         const { body } = render(AuthScreens, { props });
         expect(body).not.toContain('auth-welcome');
         expect(body).not.toContain('enterkeyhint');
         expect(body).not.toContain('input-with-action');
-        expect(body).not.toContain('auth-inline-link');
+        expect(body).toContain('auth-inline-link');
         expect(body).toContain('auth-page-body');
         expect(body).toContain('auth-actions');
     });

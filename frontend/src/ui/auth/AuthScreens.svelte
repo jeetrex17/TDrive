@@ -195,22 +195,15 @@
                 <SettingsIcon size={32} strokeWidth={1.5} aria-hidden="true" />
             </div>
             <h2 id="auth-setup-title">Connect to Telegram</h2>
-            {#if mobile}
-                <p id="telegram-credentials-help" class="auth-intro">
-                    Create an app at
-                    <button
-                        class="auth-inline-link"
-                        type="button"
-                        onclick={() => openExternalUrl(TELEGRAM_APPS_URL)}
-                    >my.telegram.org/apps</button>
-                    and copy its API ID and API hash here.
-                </p>
-            {:else}
-                <p class="auth-intro">Use API credentials created for your own Telegram account.</p>
-                <p id="telegram-credentials-help" class="auth-guidance">
-                    Open <strong>my.telegram.org/apps</strong>, create an app, then copy its API ID and API hash.
-                </p>
-            {/if}
+            <p id="telegram-credentials-help" class="auth-intro">
+                Create an app at
+                <button
+                    class="auth-inline-link"
+                    type="button"
+                    onclick={() => openExternalUrl(TELEGRAM_APPS_URL)}
+                >my.telegram.org/apps</button>
+                and copy its API ID and API hash here.
+            </p>
             <div class="auth-fields">
                 <div class="auth-field">
                     <label for="telegram-api-id">API ID</label>
@@ -294,7 +287,7 @@
                 <LockKeyholeIcon size={32} strokeWidth={1.5} aria-hidden="true" />
             </div>
             <h2 id="auth-phone-title">Sign in to Telegram</h2>
-            <p class="auth-intro">Telegram will send a login code to your account.</p>
+            <p class="auth-intro">Enter the number on your Telegram account. Telegram will send you a code.</p>
             <div class="phone-entry">
                 <div class="auth-field country-field">
                     <label for="telegram-country">Country / code</label>
@@ -314,7 +307,7 @@
                         autocomplete="tel"
                         autocapitalize="none"
                         spellcheck="false"
-                        placeholder={country ? "Your phone number" : "+1 202 555 0123"}
+                        placeholder={country ? "Phone number" : "+1 202 555 0123"}
                         required
                         disabled={$authSubmission.phone.busy}
                         aria-invalid={$authSubmission.phone.error ? 'true' : undefined}
@@ -322,7 +315,6 @@
                     />
                 </div>
             </div>
-            <p class="auth-intro phone-hint">Use the number linked to your Telegram account.</p>
             <p id="phone-session-note" class="auth-privacy">
                 Your signed-in session is kept locally on this device and is not synced by TDrive.
             </p>
@@ -478,10 +470,6 @@
         min-width: 0;
     }
 
-    .phone-hint {
-        margin-top: 0;
-    }
-
     .auth-form {
         display: flex;
         flex-direction: column;
@@ -491,24 +479,12 @@
         margin: 0 0 1rem;
     }
 
-    .auth-guidance,
     .auth-privacy {
         margin: 0 0 1rem;
         color: var(--color-text-muted);
         font-size: 0.8rem;
         line-height: 1.5;
         text-align: left;
-    }
-
-    .auth-guidance {
-        padding: 0.75rem 0;
-        border-top: 1px solid var(--border);
-        border-bottom: 1px solid var(--border);
-    }
-
-    .auth-guidance strong {
-        color: var(--color-text-soft);
-        font-weight: 600;
     }
 
     .auth-fields {
@@ -603,7 +579,7 @@
         font-size: 1.75rem;
     }
 
-    :global(html.mobile) .auth-inline-link {
+    .auth-inline-link {
         padding: 0;
         color: var(--accent);
         font: inherit;
@@ -614,7 +590,7 @@
         cursor: pointer;
     }
 
-    :global(html.mobile) .auth-inline-link:focus-visible {
+    .auth-inline-link:focus-visible {
         outline: none;
         box-shadow: var(--focus-ring);
     }
