@@ -165,7 +165,7 @@
                     {/if}
                 {/if}
                 {#if count === 0}
-                    <div class="activity-empty"><BellIcon size={28} aria-hidden="true" /><h3>{query || filter !== 'All' ? 'No matching activity' : tab === 'transfers' ? 'No transfers yet' : 'All caught up'}</h3><p>{query || filter !== 'All' ? 'Try another search or filter.' : tab === 'transfers' ? 'Uploads and downloads will appear here.' : 'Your notifications will appear here.'}</p></div>
+                    <div class="activity-empty"><h3>{query || filter !== 'All' ? 'No matching activity' : tab === 'transfers' ? 'No transfers yet' : 'All caught up'}</h3><p>{query || filter !== 'All' ? 'Try another search or filter.' : tab === 'transfers' ? 'Uploads and downloads will appear here.' : 'Your notifications will appear here.'}</p></div>
                 {:else}
                     <ul class="activity-list" aria-label={tab === 'transfers' ? 'Transfers' : 'Notifications'}>
                         {#if tab === 'transfers'}
@@ -211,6 +211,10 @@
 
 <style>
     :global(.activity-card) { max-width: 1060px; height: min(82dvh, 800px); display: flex; flex-direction: column; padding: 0; overflow: hidden; color: var(--color-text-soft); }
+    /* With nothing to show, the window is only as big as what it says. */
+    @media (min-width: 701px) {
+        :global(.activity-card:has(.activity-content.empty)) { max-width: 520px; height: auto; }
+    }
     .activity-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-5) var(--space-6) var(--space-4); }
     .activity-heading { min-width: 0; }
     h2 { margin: 0; font-size: var(--type-xl); font-weight: var(--weight-strong); }
@@ -258,8 +262,8 @@
     .item-summary.clamp { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .item-bar { display: block; height: 3px; margin-top: var(--space-1); border-radius: var(--radius-pill); background: var(--overlay-neutral-2); overflow: hidden; }
     .item-bar span { display: block; height: 100%; border-radius: inherit; background: var(--color-accent); transition: width 200ms ease-out; }
-    .activity-empty { display: grid; justify-items: center; gap: var(--space-2); padding: var(--space-8) var(--space-6); text-align: center; color: var(--color-text-muted); font-size: var(--type-sm); }
-    .activity-empty h3 { margin: var(--space-2) 0 0; color: var(--color-text-soft); font-size: var(--type-base); font-weight: var(--weight-semibold); }
+    .activity-empty { display: grid; gap: var(--space-1); padding: var(--space-5) var(--space-6) var(--space-6); color: var(--color-text-muted); font-size: var(--type-sm); }
+    .activity-empty h3 { margin: 0; color: var(--color-text); font-size: var(--type-sm); font-weight: var(--weight-medium); }
     .activity-empty p { margin: 0; font-size: var(--type-xs); line-height: var(--leading-normal); }
     .failure-reports { padding: var(--space-2) var(--space-3) 0; }
     .notice-details { padding: var(--space-6); }
