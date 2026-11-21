@@ -240,4 +240,21 @@ describe('bindPullToRefresh', () => {
         touch('touchend', 260);
         expect(refresh).not.toHaveBeenCalled();
     });
+
+    it('only blocks scrolling for a touch that starts at the top', () => {
+        const add = vi.spyOn(host, 'addEventListener');
+        const remove = vi.spyOn(host, 'removeEventListener');
+        bindPullToRefresh(host, vi.fn());
+        expect(add.mock.calls.some(([type]) => type === 'touchmove')).toBe(false);
+
+        Object.defineProperty(host, 'scrollTop', { value: 40, configurable: true });
+        touch('touchstart', 100);
+        expect(add.mock.calls.some(([type]) => type === 'touchmove')).toBe(false);
+
+        Object.defineProperty(host, 'scrollTop', { value: 0, configurable: true });
+        touch('touchstart', 100);
+        expect(add).toHaveBeenCalledWith('touchmove', expect.any(Function), { passive: false });
+        touch('touchend', 100);
+        expect(remove).toHaveBeenCalledWith('touchmove', expect.any(Function));
+    });
 });
