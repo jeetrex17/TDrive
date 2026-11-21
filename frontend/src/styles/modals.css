@@ -189,11 +189,11 @@ html.mobile .modal-sheet .modal-sheet-body {
 html.mobile .modal-sheet .modal-title { font-size: var(--type-lg); }
 html.mobile .modal-sheet .modal-subtitle { font-size: var(--type-base); }
 
-/* 16px inputs stop iOS zooming the page on focus (the global input rule is
-   0.95rem). Full-height controls meet the 44 touch-target floor. */
+/* 16px is a floor, not a size: iOS zooms the page into any smaller input, and
+   a smaller Dynamic Type setting shrinks 1rem below it. */
 html.mobile .modal-sheet input,
 html.mobile .modal-sheet textarea,
-html.mobile .modal-sheet select { font-size: var(--type-md); }
+html.mobile .modal-sheet select { font-size: max(16px, var(--type-md)); }
 
 /* Actions become a stacked, full-width, thumb-reachable footer. Primary on
    top so it sits closest to the content it confirms. */

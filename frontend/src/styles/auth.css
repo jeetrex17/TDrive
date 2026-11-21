@@ -226,8 +226,9 @@ html.mobile .auth-box input {
     min-height: 48px;
     padding: 12px 14px;
     margin-bottom: 0;
-    /* 16px is the floor: iOS zooms the page into anything smaller. */
-    font-size: var(--type-md);
+    /* 16px is the floor: iOS zooms the page into anything smaller, and a
+       smaller Dynamic Type setting shrinks 1rem below it. */
+    font-size: max(16px, var(--type-md));
     background: var(--color-surface-1);
     border-radius: var(--radius-lg);
 }

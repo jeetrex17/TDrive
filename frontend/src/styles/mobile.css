@@ -72,7 +72,8 @@ html.mobile [role="button"],
 html.mobile [role="menuitem"],
 html.mobile [role="menuitemradio"],
 html.mobile .gallery-cell,
-html.mobile .album-tile {
+html.mobile .album-tile,
+html.mobile .preview-overlay img {
     -webkit-tap-highlight-color: transparent;
     -webkit-touch-callout: none;
 }
@@ -439,7 +440,7 @@ html.mobile .topbar-search input {
     height: 40px;
     margin: 0;
     padding: 0 14px 0 40px;
-    font-size: var(--type-md);
+    font-size: max(16px, var(--type-md));
     color: var(--color-text);
     background: var(--color-surface-2);
     border: 1px solid transparent;
