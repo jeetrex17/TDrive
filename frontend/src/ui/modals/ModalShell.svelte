@@ -262,6 +262,67 @@
         },
     });
 
+    // A pull down on the body of a sheet scrolled to its top drags the sheet, as
+    // iOS sheets do; anywhere else the body just scrolls. Touch events, not
+    // pointer events, because the browser cancels a pointer the moment it
+    // starts panning, and the blocking touchmove is only attached for a touch
+    // that starts at the top.
+    function pullBodyToDismiss(body: HTMLElement) {
+        const BODY_SLOP_PX = 8;
+        let start: { x: number; y: number } | null = null;
+        const asPointer = (touch: Touch, event: TouchEvent, clientY = touch.clientY) => ({
+            clientY, timeStamp: event.timeStamp, target: body, currentTarget: null, pointerId: touch.identifier,
+        }) as unknown as PointerEvent;
+        const stop = () => body.removeEventListener('touchmove', onMove);
+        const onStart = (event: TouchEvent) => {
+            start = event.touches.length === 1 && body.scrollTop <= 0
+                ? { x: event.touches[0].clientX, y: event.touches[0].clientY }
+                : null;
+            if (start) body.addEventListener('touchmove', onMove, { passive: false });
+        };
+        const onMove = (event: TouchEvent) => {
+            const touch = event.touches[0];
+            if (!touch) return;
+            if (sheetDrag.isDragging()) {
+                event.preventDefault();
+                sheetDrag.onPointerMove(asPointer(touch, event));
+                return;
+            }
+            if (!start) return;
+            const dy = touch.clientY - start.y;
+            const dx = touch.clientX - start.x;
+            if (Math.abs(dy) < BODY_SLOP_PX && Math.abs(dx) < BODY_SLOP_PX) return;
+            const origin = start;
+            start = null;
+            if (dy <= Math.abs(dx) || body.scrollTop > 0) {
+                stop();
+                return;
+            }
+            event.preventDefault();
+            sheetDrag.onPointerDown(asPointer(touch, event, origin.y));
+            sheetDrag.onPointerMove(asPointer(touch, event));
+        };
+        const onEnd = (event: TouchEvent) => {
+            stop();
+            start = null;
+            if (!sheetDrag.isDragging()) return;
+            const touch = event.changedTouches[0];
+            if (event.type === 'touchcancel' || !touch) sheetDrag.cancel();
+            else sheetDrag.onPointerUp(asPointer(touch, event));
+        };
+        body.addEventListener('touchstart', onStart, { passive: true });
+        body.addEventListener('touchend', onEnd);
+        body.addEventListener('touchcancel', onEnd);
+        return {
+            destroy() {
+                stop();
+                body.removeEventListener('touchstart', onStart);
+                body.removeEventListener('touchend', onEnd);
+                body.removeEventListener('touchcancel', onEnd);
+            },
+        };
+    }
+
     $effect(() => {
         if (dismissible) return;
         sheetDrag.cancel();
@@ -324,7 +385,7 @@
         {/if}
 
         {#if asSheet}
-            <div class="modal-sheet-body">
+            <div class="modal-sheet-body" use:pullBodyToDismiss>
                 {@render children?.()}
             </div>
         {:else}
