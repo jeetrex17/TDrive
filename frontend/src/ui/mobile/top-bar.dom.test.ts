@@ -1,5 +1,7 @@
 // The phone top bar's two modes: the drive header, and the selection header
 // that replaces it. Both are about what one tap does.
+import { fileSortState } from '../file-list/file-sort-store';
+import { DEFAULT_FILE_SORT } from '../file-list/file-sort';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 import { get } from 'svelte/store';
@@ -119,6 +121,22 @@ describe('drive header', () => {
 
         expect(target.querySelector('[role="menu"]')).toBeNull();
         await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
+    });
+
+    it('shows which way the checked sort runs', () => {
+        fileSortState.set({ key: 'name', direction: 'asc' });
+        render();
+        target.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')?.click();
+        flushSync();
+        const checked = () => target.querySelector<HTMLElement>('[role="menuitemradio"][aria-checked="true"]');
+        expect(checked()?.querySelector('.lucide-arrow-up')).not.toBeNull();
+        expect(checked()?.textContent).toContain('ascending');
+
+        fileSortState.set({ key: 'name', direction: 'desc' });
+        flushSync();
+        expect(checked()?.querySelector('.lucide-arrow-down')).not.toBeNull();
+        expect(checked()?.textContent).toContain('descending');
+        fileSortState.set(DEFAULT_FILE_SORT);
     });
 
     it('offers Select, Refresh and Trash beside the sort options', () => {

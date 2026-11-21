@@ -3,7 +3,8 @@
     import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
     import SearchIcon from '@lucide/svelte/icons/search';
     import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
-    import CheckIcon from '@lucide/svelte/icons/check';
+    import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
+    import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
     import { tick } from 'svelte';
     import { breadcrumbPath } from '../chrome/breadcrumb-store';
     import { openActivity } from '../notifications/activity-store';
@@ -359,7 +360,13 @@
                                 >
                                     <span>{option.label}</span>
                                     {#if $fileSortState.key === option.key}
-                                        <CheckIcon size={16} strokeWidth={2.5} aria-hidden="true" />
+                                        <!-- Choosing it again flips the order, so the order shows. -->
+                                        {#if $fileSortState.direction === 'asc'}
+                                            <ArrowUpIcon size={16} strokeWidth={2.5} aria-hidden="true" />
+                                        {:else}
+                                            <ArrowDownIcon size={16} strokeWidth={2.5} aria-hidden="true" />
+                                        {/if}
+                                        <span class="sr-only">{$fileSortState.direction === 'asc' ? 'ascending' : 'descending'}</span>
                                     {/if}
                                 </button>
                             {/each}
