@@ -362,6 +362,7 @@ async function openGalleryVideo(item: GalleryItem): Promise<void> {
         name: item.name,
         size: item.encrypted && item.plaintextSize > 0 ? item.plaintextSize : item.size,
         encrypted: item.encrypted,
+        posterUrl: cachedThumb(channelId, item.msgId) || undefined,
     }, undefined, { accountId, channelId });
 }
 

@@ -820,6 +820,15 @@ function preloadPoster(url: string, token: string) {
     image.src = url;
 }
 
+function preloadOpeningPoster(url: string, attempt: VideoOpenAttempt) {
+    const image = new Image();
+    image.onload = () => {
+        const video = videoDOM.video;
+        if (video && isOpen() && activeOpenAttempt === attempt && !video.poster) video.poster = url;
+    };
+    image.src = url;
+}
+
 function setProtectedPlayback(protectedContent: boolean): void {
     activeMediaProtected = protectedContent;
     if (protectedContent && isMobilePlatform()) {
@@ -1326,6 +1335,9 @@ async function openVideoTarget(
 
     updateMediaText(target.name || "Video", target.size || 0, target.title);
     videoDOM.video.removeAttribute("poster");
+    // The thumbnail the user just tapped stands in for the first frame, so a
+    // slow first byte shows the video rather than a black stage.
+    if (target.posterUrl && !target.protected) preloadOpeningPoster(target.posterUrl, attempt);
     clearError();
     setLoadingStatusOverride("");
     setLoading(true);
