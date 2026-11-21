@@ -256,7 +256,7 @@
     </div>
 
     <!-- Viewer controllers stay lazy because they load media/runtime dependencies only when used. -->
-    <div id="viewer-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
+    <div id="viewer-modal" class="modal-overlay file-viewer-overlay" style="display: none;" aria-hidden="true">
         <FileViewerModal
             onClose={() => {
                 void import('../../modules/modals/file-viewer').then(({ closeFileViewer }) => closeFileViewer());
