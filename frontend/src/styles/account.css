@@ -6,30 +6,20 @@
     align-items: center;
     gap: 6px;
     background: transparent;
-    border: 1px solid var(--border);
+    border: 0;
     border-radius: var(--radius-pill);
-    padding: 3px 8px 3px 3px;
+    padding: 2px;
     cursor: pointer;
-    color: var(--text-muted);
-    transition: border-color 120ms ease, color 120ms ease, background 120ms ease;
+    color: var(--color-text-muted);
+    transition: box-shadow var(--motion-fast) var(--ease-standard);
 }
-.profile-trigger[aria-expanded="true"] {
-    border-color: var(--accent);
-    color: var(--text-main);
-    background: var(--bg-panel);
-}
+/* Just the avatar: a ring when it is open or pointed at, no pill around it. */
+.profile-trigger[aria-expanded="true"] { box-shadow: 0 0 0 2px var(--color-border); }
 @media (hover: hover) {
-    .profile-trigger:hover {
-        border-color: var(--accent);
-        color: var(--text-main);
-        background: var(--bg-panel);
-    }
+    .profile-trigger:hover { box-shadow: 0 0 0 2px var(--color-border-soft); }
 }
-.profile-trigger .profile-chevron {
-    width: 14px;
-    height: 14px;
-    flex-shrink: 0;
-}
+.profile-trigger:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+.profile-trigger .profile-chevron { display: none; }
 
 .profile-avatar {
     display: inline-flex;

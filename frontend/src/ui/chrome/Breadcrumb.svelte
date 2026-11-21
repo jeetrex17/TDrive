@@ -59,7 +59,7 @@
     }
 </script>
 
-<!-- Hidden rather than removed at the root, so the path does not shift. -->
+<!-- Absent at the root, where the drive name is the whole title. -->
 <button
     id="breadcrumb-back"
     class="icon-btn back-btn"
@@ -95,5 +95,6 @@
 </nav>
 
 <style>
-    .is-hidden { visibility: hidden; }
+    /* At the root there is nowhere to go back to, and the title starts flush. */
+    .is-hidden { display: none; }
 </style>

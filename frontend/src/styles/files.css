@@ -1,26 +1,39 @@
 .main-content { position: relative; flex: 1; min-width: 0; min-height: 0; padding: 0; display: flex; flex-direction: column; background: var(--bg-dark); }
-
-.main-content > header {
-    min-height: 56px; flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; gap: var(--space-4);
-    padding: 0 var(--space-6); border-bottom: 1px solid var(--border);
+/* On desktop the content is one raised panel inset from the window edge. */
+/* Name takes the room; date and size are narrow, right-hand instrument
+   columns, so the eye reads a name and its figures without crossing a void. */
+.main-content { --file-columns: minmax(0, 1fr) minmax(112px, 150px) minmax(64px, 96px) 76px; }
+html:not(.mobile) .main-content {
+    margin: 8px 8px 8px 0;
+    overflow: hidden;
+    background: var(--color-surface-0);
+    border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-lg);
 }
 
-.search-bar { position: relative; width: 300px; min-width: 0; flex: 0 1 300px; }
-.search-bar input { width: 100%; min-width: 0; margin: 0; padding-left: 36px; background: var(--bg-sidebar); border: none; }
-.search-icon { position: absolute; left: 10px; top: 12px; width: 16px; height: 16px; color: var(--text-muted); }
+.main-content > header {
+    min-height: 48px; flex-shrink: 0; display: flex; justify-content: space-between; align-items: center; gap: var(--space-3);
+    padding: 0 10px 0 12px; border-bottom: 1px solid var(--color-border-soft);
+}
 
-.header-actions { display: flex; flex-shrink: 0; gap: var(--space-3); align-items: center; }
-.upload-btn { width: auto; padding: 8px 20px; font-size: var(--type-base); }
+.search-bar { position: relative; width: 240px; min-width: 0; flex: 0 1 240px; }
+.search-bar input {
+    width: 100%; min-width: 0; height: 30px; margin: 0; padding: 0 10px 0 30px;
+    background: var(--color-surface-1); border: 1px solid var(--color-border-soft); border-radius: var(--radius-md);
+    font-size: var(--type-sm);
+}
+.search-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); width: 14px; height: 14px; color: var(--color-text-subtle); pointer-events: none; }
+
+.header-actions { display: flex; flex-shrink: 0; gap: var(--space-2); align-items: center; }
+.upload-btn { width: auto; height: 30px; padding: 0 12px; font-size: var(--type-sm); }
 .btn-icon { width: 16px; height: 16px; }
 /* BREADCRUMB */
 .drive-breadcrumb {
-    min-height: 44px; flex-shrink: 0; display: flex; align-items: center; gap: 10px;
-    padding: 0 var(--space-6); border-bottom: 1px solid var(--border);
-    background: color-mix(in srgb, var(--color-surface-0) 58%, transparent);
+    flex: 1 1 auto; min-width: 0; display: flex; align-items: center; gap: var(--space-1-5);
 }
-.back-btn { width: 32px; height: 32px; }
-.back-btn svg { width: 18px; height: 18px; }
-.breadcrumb-path { display: flex; align-items: center; gap: 8px; overflow: hidden; }
+.back-btn { width: 28px; height: 28px; border: 0; }
+.back-btn svg { width: 16px; height: 16px; }
+.breadcrumb-path { display: flex; align-items: center; gap: 2px; min-width: 0; overflow: hidden; }
 
 /* Per-row lock badge for encrypted files. */
 .file-lock-badge {
@@ -33,8 +46,8 @@
 }
 .file-lock-badge svg { width: 14px; height: 14px; }
 .breadcrumb-link {
-    background: transparent; border: none; padding: 6px 8px; border-radius: var(--radius-md);
-    color: var(--text-main); font-weight: var(--weight-semibold); cursor: pointer; transition: background 0.15s ease;
+    background: transparent; border: none; padding: 4px 6px; border-radius: var(--radius-sm);
+    color: var(--color-text-muted); font-size: var(--type-base); font-weight: var(--weight-medium); cursor: pointer; transition: background 0.15s ease;
     max-width: 260px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     /* Middle crumbs give way first, and each may go to a few characters; the
        root and the folder being looked at are the two a reader needs whole. */
@@ -43,10 +56,12 @@
 .breadcrumb-path > .breadcrumb-link:first-child,
 .breadcrumb-path > .breadcrumb-link:last-child { flex-shrink: 0; min-width: 0; }
 @media (hover: hover) {
-    .breadcrumb-link:hover { background: var(--bg-panel); }
+    .breadcrumb-link:hover { background: var(--overlay-neutral-1); color: var(--color-text); }
 }
 .breadcrumb-link:active { transform: translateY(0.5px); }
-.breadcrumb-sep { color: var(--text-muted); }
+.breadcrumb-sep { color: var(--color-text-subtle); opacity: 0.6; }
+/* The folder being looked at is the page title. */
+.breadcrumb-path > .breadcrumb-link:last-child { color: var(--color-text); }
 .selection-bar {
     position: absolute;
     z-index: var(--z-selection);

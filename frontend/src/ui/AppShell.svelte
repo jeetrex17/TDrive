@@ -104,8 +104,9 @@
 
         <nav id="drives-nav" class="drives-nav" tabindex="-1" aria-label="Drives">
             <div class="drives-scroll">
+                <!-- The drive's own places lead the sidebar without a heading:
+                     the drive row already says "My Drive". -->
                 <div class="drives-section">
-                    <div class="drives-section-title">My Drive</div>
                     <div class="drives-list">
                         {#if dashboardVisible}
                             <DriveList kind="personal" onDriveClick={handleDriveClick} />
@@ -185,7 +186,37 @@
     </aside>
 
     <main class="main-content" class:channel-mode={dashboardVisible && $openChannel !== null}>
+        <!-- The folder path is the page title, so it leads the top bar
+             instead of taking a band of its own under it. -->
         <header>
+            <div class="drive-breadcrumb">
+                <!-- The back button and the crumb trail are flex items of this row.
+                     The host they used to arrive in was display:contents, so it was
+                     never a box of its own and taking it away moves nothing. -->
+                {#if dashboardVisible}
+                    <Breadcrumb onNavigate={navigateToIndex} onBack={navigateBack} drag={breadcrumbDrag} />
+                {/if}
+                <div id="gallery-title" class="gallery-title">Media</div>
+                <PhotosModeBar />
+                <div id="trash-title" class="trash-title">Trash</div>
+                <!-- Destructive and irreversible, so it only ever opens the
+                     confirmation. With nothing to empty it is absent rather than
+                     disabled: a dead control invites a click that cannot do
+                     anything. It is disabled only while a mutation is in flight. -->
+                {#if $trashEntries.length > 0}
+                    <button
+                        id="trash-empty-btn"
+                        class="trash-empty-btn"
+                        type="button"
+                        disabled={$trashBusyKey !== ''}
+                        onclick={askEmptyTrash}
+                    >
+                        <Trash2Icon size={15} strokeWidth={2} aria-hidden="true" />
+                        <span>Empty trash</span>
+                    </button>
+                {/if}
+            </div>
+
             <div class="search-bar">
                 <SearchIcon class="search-icon" size={16} strokeWidth={2} aria-hidden="true" />
                 <input id="search-input" type="text" placeholder="Search files..." autocomplete="off" spellcheck="false" aria-label="Search files">
@@ -224,34 +255,6 @@
                 {/if}
             </div>
         </header>
-
-        <div class="drive-breadcrumb">
-            <!-- The back button and the crumb trail are flex items of this row.
-                 The host they used to arrive in was display:contents, so it was
-                 never a box of its own and taking it away moves nothing. -->
-            {#if dashboardVisible}
-                <Breadcrumb onNavigate={navigateToIndex} onBack={navigateBack} drag={breadcrumbDrag} />
-            {/if}
-            <div id="gallery-title" class="gallery-title">Media</div>
-            <PhotosModeBar />
-            <div id="trash-title" class="trash-title">Trash</div>
-            <!-- Destructive and irreversible, so it only ever opens the
-                 confirmation. With nothing to empty it is absent rather than
-                 disabled: a dead control invites a click that cannot do
-                 anything. It is disabled only while a mutation is in flight. -->
-            {#if $trashEntries.length > 0}
-                <button
-                    id="trash-empty-btn"
-                    class="trash-empty-btn"
-                    type="button"
-                    disabled={$trashBusyKey !== ''}
-                    onclick={askEmptyTrash}
-                >
-                    <Trash2Icon size={15} strokeWidth={2} aria-hidden="true" />
-                    <span>Empty trash</span>
-                </button>
-            {/if}
-        </div>
 
         <div class="file-table-header" role="row" aria-rowindex="1">
             <div class="col-name" role="columnheader" aria-colindex="1" aria-sort={sortAriaValue('name')}>
