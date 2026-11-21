@@ -2,28 +2,24 @@
     import type { Snippet } from 'svelte';
     import type { HTMLButtonAttributes } from 'svelte/elements';
 
-    type ButtonVariant = 'primary' | 'secondary' | 'danger';
+    type ButtonVariant = 'primary' | 'secondary';
     type ButtonSize = 'sm' | 'md';
 
     type ButtonProps = Omit<HTMLButtonAttributes, 'children'> & {
         variant?: ButtonVariant;
         size?: ButtonSize;
-        loading?: boolean;
         children?: Snippet;
     };
 
     let {
         variant = 'primary',
         size = 'md',
-        loading = false,
         disabled = false,
         type = 'button',
         class: className = '',
         children,
         ...rest
     }: ButtonProps = $props();
-
-    const isDisabled = $derived(disabled || loading);
 </script>
 
 <button
@@ -31,15 +27,10 @@
     class={`ui-button ${className}`.trim()}
     class:is-primary={variant === 'primary'}
     class:is-secondary={variant === 'secondary'}
-    class:is-danger={variant === 'danger'}
     class:is-small={size === 'sm'}
     {type}
-    disabled={isDisabled}
-    aria-busy={loading ? 'true' : undefined}
+    {disabled}
 >
-    {#if loading}
-        <span class="ui-button-spinner" aria-hidden="true"></span>
-    {/if}
     <span class="ui-button-content">
         {@render children?.()}
     </span>
@@ -59,7 +50,7 @@
         background: transparent;
         font: inherit;
         font-size: var(--font-size-sm);
-        font-weight: 800;
+        font-weight: var(--weight-strong);
         line-height: 1;
         cursor: pointer;
         user-select: none;
@@ -80,36 +71,24 @@
     }
 
     .is-primary {
-        color: var(--color-on-accent);
-        background: var(--accent);
-        border-color: var(--accent);
+        color: var(--color-on-action);
+        background: var(--color-action);
+        border-color: var(--color-action);
     }
 
     .is-primary:hover:not(:disabled) {
-        background: var(--accent-hover);
-        border-color: var(--accent-hover);
+        background: var(--color-action-hover);
+        border-color: var(--color-action-hover);
     }
 
     .is-secondary {
-        color: var(--text-main);
-        background: transparent;
-        border-color: var(--border);
+        color: var(--color-text);
+        background: var(--color-surface-1);
+        border-color: var(--color-border-soft);
     }
 
     .is-secondary:hover:not(:disabled) {
-        background: var(--surface-control);
-        border-color: var(--color-surface-3);
-    }
-
-    .is-danger {
-        color: var(--color-on-danger);
-        background: var(--danger);
-        border-color: var(--danger);
-    }
-
-    .is-danger:hover:not(:disabled) {
-        background: color-mix(in srgb, var(--danger) 88%, white);
-        border-color: color-mix(in srgb, var(--danger) 88%, white);
+        background: var(--color-surface-2);
     }
 
     .is-small {
@@ -133,19 +112,6 @@
         transform: none;
     }
 
-    .ui-button-spinner {
-        width: 14px;
-        height: 14px;
-        border-radius: var(--radius-pill);
-        border: 2px solid currentColor;
-        border-top-color: transparent;
-        animation: ui-button-spin 720ms linear infinite;
-    }
-
-    @keyframes ui-button-spin {
-        to { transform: rotate(360deg); }
-    }
-
     /* Phones: a 44px target without changing the desktop control. */
     :global(html.mobile) .ui-button {
         min-height: 44px;
@@ -165,10 +131,6 @@
 
         .ui-button:active:not(:disabled) {
             transform: none;
-        }
-
-        .ui-button-spinner {
-            animation: none;
         }
     }
 </style>

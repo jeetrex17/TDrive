@@ -127,16 +127,19 @@
         justify-content: center;
         gap: var(--space-2);
         width: 100%;
-        min-height: 48px;
-        padding: var(--space-3);
-        border: 1px solid var(--border);
+        /* The phone field's height and fill, so the two read as one row. */
+        min-height: 40px;
+        padding: 0 var(--space-3);
+        border: 1px solid var(--color-border-soft);
         border-radius: var(--radius-md);
-        background: var(--bg-dark);
-        color: var(--text-main);
+        background: var(--color-surface-1);
+        color: var(--color-text);
         font: inherit;
+        font-size: var(--type-base);
         white-space: nowrap;
         cursor: pointer;
     }
+    :global(html.mobile) .country-code-trigger { min-height: 48px; font-size: max(16px, var(--type-md)); }
     .country-code-trigger:disabled { opacity: 0.6; cursor: default; }
     .country-code-trigger:hover:not(:disabled), .country-code-option:hover { background: var(--bg-panel); }
     .country-code-trigger:focus-visible, .country-code-option:focus-visible {

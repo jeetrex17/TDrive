@@ -81,10 +81,9 @@
 
     // Seeds the spacers for the frames before measureRow reports a real row.
     // A wrong seed is visible: the list scrolls to a stale offset and jumps
-    // once the measurement lands. Desktop is the 40px chip plus the row's 12px
-    // padding either side plus its 2px gap; the phone row is its own
-    // min-height, which is taller than the 44px chip it holds.
-    const ESTIMATED_ROW_HEIGHT = mobile ? 68 : 66;
+    // once the measurement lands. Each is the row's own min-height: the
+    // 40px desktop row and the 60px two-line phone row.
+    const ESTIMATED_ROW_HEIGHT = mobile ? 60 : 40;
     const WINDOW_OVERSCAN = 8;
     let scrollTop = $state(0);
     let viewportHeight = $state(0);
@@ -424,16 +423,14 @@
                                     {/if}
                                 </span>
                             {/if}
-                            {#if mobile && stateInfo.needsExplanation}
+                            {#if stateInfo.needsExplanation}
                                 <span class="row-explain" data-tone={stateInfo.tone}>{stateInfo.detail}</span>
                             {/if}
                         </span>
                     </div>
-                    {#if mobile}
-                        <div class="row-status">
-                            <ItemStatus state={state} onOpenQueue={() => activeTab.set('transfers')} />
-                        </div>
-                    {/if}
+                    <div class="row-status">
+                        <ItemStatus state={state} onOpenQueue={() => activeTab.set('transfers')} />
+                    </div>
                     <div class={`row-actions${row.actionsInline ? ' is-inline' : ''}`}>
                         {#if row.actionsInline}
                             <!-- Few, important, and with no menu behind them, so the
@@ -452,10 +449,10 @@
                         {/if}
                     </div>
                 </div>
-                {#if mobile && !row.actionsInline}
+                {#if !row.actionsInline}
                     <!-- Revealed by a trailing swipe. Delete is available only
-                         where the item may be deleted, and still opens the
-                         existing Trash confirmation rather than acting on swipe.
+                         where the item may be deleted; it moves the item to
+                         the Trash, with Undo in the toast.
                          Hidden from assistive tech because it duplicates what
                          the always-visible overflow button already offers; a
                          screen reader should not meet the same action twice. -->

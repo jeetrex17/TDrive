@@ -90,10 +90,10 @@
         height: 56px;
         display: grid;
         place-items: center;
-        border: 1px solid var(--overlay-danger-strong);
+        border: 1px solid var(--overlay-danger-2);
         border-radius: var(--radius-lg);
         color: var(--danger);
-        background: var(--overlay-danger-soft);
+        background: var(--overlay-danger-1);
     }
 
     .recovery-content {

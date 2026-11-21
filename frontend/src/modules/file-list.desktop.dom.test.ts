@@ -19,7 +19,7 @@ const dragDrop = vi.hoisted(() => ({
     performDropMove: vi.fn(),
 }));
 const modals = vi.hoisted(() => ({
-    openDeleteModal: vi.fn(),
+    moveToTrash: vi.fn(),
     openRenameModal: vi.fn(),
     openMoveModal: vi.fn(),
     openNewFolderModal: vi.fn(),
@@ -33,7 +33,7 @@ const actions = vi.hoisted(() => ({
 
 vi.mock('../api', () => api);
 vi.mock('./drag-drop', () => dragDrop);
-vi.mock('./modals/delete', () => ({ openDeleteModal: modals.openDeleteModal }));
+vi.mock('./modals/delete', () => ({ moveToTrash: modals.moveToTrash }));
 vi.mock('./modals/rename', () => ({ openRenameModal: modals.openRenameModal }));
 vi.mock('./modals/move', () => ({ openMoveModal: modals.openMoveModal }));
 vi.mock('./modals/folder', () => ({ openNewFolderModal: modals.openNewFolderModal }));
@@ -117,7 +117,7 @@ describe('acting on a row from the keyboard', () => {
     it('deletes with the size and source the list published for the row', () => {
         press(row('file:41'), 'Delete');
 
-        expect(modals.openDeleteModal).toHaveBeenCalledWith({
+        expect(modals.moveToTrash).toHaveBeenCalledWith({
             type: 'file',
             id: 41,
             name: 'plan.pdf',
@@ -129,12 +129,27 @@ describe('acting on a row from the keyboard', () => {
         });
     });
 
+    it('deletes the whole selection when the focused row is part of it', () => {
+        row('folder:design').dispatchEvent(new MouseEvent('click', { bubbles: true }));
+        row('file:41').dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true, ctrlKey: true }));
+        flushSync();
+        expect(state.selectedItems.size).toBe(2);
+
+        press(row('file:41'), 'Backspace');
+
+        expect(modals.moveToTrash).toHaveBeenCalledOnce();
+        expect(modals.moveToTrash).toHaveBeenCalledWith(expect.objectContaining({
+            type: 'bulk',
+            items: [expect.objectContaining({ id: 'design' }), expect.objectContaining({ id: 41 })],
+        }));
+    });
+
     it('refuses to delete a row the published row says cannot be deleted, and says why', () => {
         publish({ canDelete: false });
 
         press(row('file:41'), 'Delete');
 
-        expect(modals.openDeleteModal).not.toHaveBeenCalled();
+        expect(modals.moveToTrash).not.toHaveBeenCalled();
         expect(actions.notify).toHaveBeenCalledWith(expect.objectContaining({ title: expect.stringContaining('delete') }));
     });
 
@@ -170,7 +185,7 @@ describe('acting on a row from the keyboard', () => {
         press(stale, 'Delete');
         press(stale, 'F2');
 
-        expect(modals.openDeleteModal).not.toHaveBeenCalled();
+        expect(modals.moveToTrash).not.toHaveBeenCalled();
         expect(modals.openRenameModal).not.toHaveBeenCalled();
     });
 });
@@ -327,7 +342,7 @@ describe('desktop activation and lifecycle', () => {
         drag(row('folder:design').querySelector('.row-name')!, 'dragstart');
         expect(actions.navigateToFolder).not.toHaveBeenCalled();
         expect(modals.openRenameModal).not.toHaveBeenCalled();
-        expect(modals.openDeleteModal).not.toHaveBeenCalled();
+        expect(modals.moveToTrash).not.toHaveBeenCalled();
         expect(dragDrop.beginRowDrag).not.toHaveBeenCalled();
         expect(state.selectedItems.size).toBe(0);
     });
@@ -368,7 +383,7 @@ describe('desktop keyboard focus', () => {
         row('file:41').append(input);
         press(input, 'Delete');
         press(row('file:41').querySelector('button')!, 'Delete');
-        expect(modals.openDeleteModal).not.toHaveBeenCalled();
+        expect(modals.moveToTrash).not.toHaveBeenCalled();
     });
 
     it('opens the context menu at the row for keyboard users', () => {
@@ -507,7 +522,7 @@ it('does not apply late folder descendants after a drag has ended', async () => 
 
 it('deletes a folder and renames a Telegram file with their original identifiers', () => {
     press(row('folder:design'), 'Backspace');
-    expect(modals.openDeleteModal).toHaveBeenCalledWith({ type: 'folder', id: 'design', name: 'Design', parentId: '', channelId: 1 });
+    expect(modals.moveToTrash).toHaveBeenCalledWith({ type: 'folder', id: 'design', name: 'Design', parentId: '', channelId: 1 });
     renderFileListRows(list, [buildFileRow({ id: 99, name: 'raw.zip', source: 'tg', size: 300 }, 'origin')]);
     flushSync();
     press(row('file:99'), 'F2');

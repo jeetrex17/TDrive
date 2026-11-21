@@ -2231,20 +2231,24 @@ public class MainActivity extends AppCompatActivity {
      * only leave when it reports the press unhandled. Going through the
      * dispatcher rather than overriding onBackPressed() keeps this working
      * under the predictive back gesture.
+     *
+     * Leaving moves the task to the background instead of finishing it:
+     * onDestroy shuts the Go runtime down, which would cut off uploads the
+     * foreground service is keeping alive.
      */
     private void registerBackHandler() {
         getOnBackPressedDispatcher().addCallback(this, new OnBackPressedCallback(true) {
             @Override
             public void handleOnBackPressed() {
                 if (webView == null) {
-                    finish();
+                    moveTaskToBack(true);
                     return;
                 }
                 webView.evaluateJavascript(
                         "(function(){try{return !!(window.__tdriveHandleBack && window.__tdriveHandleBack());}"
                                 + "catch(e){return false;}})()",
                         value -> {
-                            if (!"true".equals(value)) finish();
+                            if (!"true".equals(value)) moveTaskToBack(true);
                         });
             }
         });

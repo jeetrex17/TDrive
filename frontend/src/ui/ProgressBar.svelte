@@ -1,22 +1,16 @@
 <script lang="ts">
-    type ProgressTone = 'accent' | 'success' | 'danger';
-
     type ProgressBarProps = {
         value?: number;
         max?: number;
         label?: string;
-        showValue?: boolean;
         indeterminate?: boolean;
-        tone?: ProgressTone;
     };
 
     let {
         value = 0,
         max = 100,
         label = '',
-        showValue = false,
         indeterminate = false,
-        tone = 'accent',
     }: ProgressBarProps = $props();
 
     const normalizedMax = $derived(Math.max(1, max));
@@ -24,17 +18,7 @@
     const percent = $derived(Math.round((clampedValue / normalizedMax) * 100));
 </script>
 
-<div class="ui-progress" class:is-indeterminate={indeterminate} class:is-success={tone === 'success'} class:is-danger={tone === 'danger'}>
-    {#if label || showValue}
-        <div class="ui-progress-header">
-            {#if label}
-                <span>{label}</span>
-            {/if}
-            {#if showValue && !indeterminate}
-                <span>{percent}%</span>
-            {/if}
-        </div>
-    {/if}
+<div class="ui-progress" class:is-indeterminate={indeterminate}>
     <div
         class="ui-progress-track"
         role="progressbar"
@@ -57,14 +41,6 @@
         line-height: 1.25;
     }
 
-    .ui-progress-header {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: var(--space-3);
-        min-width: 0;
-    }
-
     .ui-progress-track {
         position: relative;
         height: 6px;
@@ -78,14 +54,6 @@
         border-radius: inherit;
         background: var(--accent);
         transition: width var(--motion-med) var(--ease-standard);
-    }
-
-    .is-success .ui-progress-fill {
-        background: var(--success);
-    }
-
-    .is-danger .ui-progress-fill {
-        background: var(--danger);
     }
 
     .is-indeterminate .ui-progress-fill {

@@ -1,5 +1,5 @@
 import {
-    GetMediaFolderTimeline, GetMediaTimeline, GetMediaTimelineAnchors, GetMediaTimelineSummary,
+    GetMediaFolderTimeline, GetMediaTimelineAnchors, GetMediaTimelineSummary,
     ListMediaFolderPage, ListMediaFolders, ListMediaPage, LocateMedia,
 } from '../../bindings/TDrive/internal/app/app';
 import type { FileItem } from '../types';
@@ -122,9 +122,6 @@ export function normalizeMediaFolders(value: unknown): MediaFolder[] {
     return folders;
 }
 
-export async function getMediaTimeline(): Promise<MediaTimeline> {
-    return normalizeMediaTimeline(await invokeBackend(GetMediaTimeline));
-}
 export async function getMediaTimelineSummary(): Promise<MediaTimeline> {
     return normalizeMediaTimeline(await invokeBackend(GetMediaTimelineSummary), true);
 }

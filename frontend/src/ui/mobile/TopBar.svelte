@@ -3,9 +3,11 @@
     import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
     import SearchIcon from '@lucide/svelte/icons/search';
     import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
-    import CheckIcon from '@lucide/svelte/icons/check';
+    import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
+    import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
     import { tick } from 'svelte';
     import { breadcrumbPath } from '../chrome/breadcrumb-store';
+    import { openActivity } from '../notifications/activity-store';
     import { fileSortState, setFileSortKey } from '../file-list/file-sort-store';
     import type { FileSortKey } from '../file-list/file-sort';
     import { navigateBack } from '../../modules/navigation';
@@ -358,7 +360,13 @@
                                 >
                                     <span>{option.label}</span>
                                     {#if $fileSortState.key === option.key}
-                                        <CheckIcon size={16} strokeWidth={2.5} aria-hidden="true" />
+                                        <!-- Choosing it again flips the order, so the order shows. -->
+                                        {#if $fileSortState.direction === 'asc'}
+                                            <ArrowUpIcon size={16} strokeWidth={2.5} aria-hidden="true" />
+                                        {:else}
+                                            <ArrowDownIcon size={16} strokeWidth={2.5} aria-hidden="true" />
+                                        {/if}
+                                        <span class="sr-only">{$fileSortState.direction === 'asc' ? 'ascending' : 'descending'}</span>
                                     {/if}
                                 </button>
                             {/each}
@@ -432,9 +440,19 @@
         </div>
     </div>
 
-    <div class="topbar-context topbar-plain" hidden={selecting || active !== 'transfers'}>
+    <div class="topbar-context topbar-plain topbar-transfers" hidden={selecting || active !== 'transfers'}>
         <div class="topbar-row">
-            <h1 class="topbar-title">Transfers</h1>
+            <div class="topbar-plain-titles">
+                <h1 class="topbar-title">Transfers</h1>
+            </div>
+            <div class="topbar-actions">
+                <button
+                    id="mobile-view-activity"
+                    type="button"
+                    class="topbar-done"
+                    onclick={() => openActivity({ restoreFocus: '#mobile-view-activity' })}
+                >Activity</button>
+            </div>
         </div>
     </div>
 

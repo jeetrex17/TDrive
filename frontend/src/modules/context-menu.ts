@@ -4,7 +4,7 @@ import { state } from '../state';
 import { isApplePlatform } from '../utils';
 import { isMobilePlatform } from '../api';
 import { clearSelection, ensureRowSelectedForContextMenu, getSelectionPayload } from './selection';
-import { openDeleteModal } from './modals/delete';
+import { moveToTrash } from './modals/delete';
 import { openRenameModal } from './modals/rename';
 import { openMoveModal } from './modals/move';
 import { openNewFolderModal } from './modals/folder';
@@ -96,7 +96,7 @@ export function buildFolderContextMenuItems(
         { label: "Rename…", icon: 'rename', primary: tile, shortcut: 'F2', action: () => openRenameModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
         { label: "Move to…", icon: 'move', primary: tile, action: () => openMoveModal({ type: "folder", id: folderID, name: folderName, parentId: state.currentFolderId }) },
         { type: "divider" },
-        { label: 'Delete', icon: 'delete', danger: true, shortcut: DELETE_SHORTCUT, action: () => openDeleteModal({ type: "folder", id: folderID, name: folderName, channelId: Number(sourceChannelId) }) },
+        { label: 'Delete', icon: 'delete', danger: true, shortcut: DELETE_SHORTCUT, action: () => { void moveToTrash({ type: "folder", id: folderID, name: folderName, channelId: Number(sourceChannelId) }); } },
     );
     return items;
 }
@@ -135,7 +135,7 @@ export function buildFileContextMenuItems(row: FileListFileRow, { folderGroup = 
     // Upload/new-folder/refresh belong to the folder background, not to the
     // item's own menu; Delete sits apart behind a quiet separator.
     if (canDelete) {
-        items.push({ type: "divider" }, { label: 'Delete', icon: 'delete', danger: true, shortcut: DELETE_SHORTCUT, action: () => openDeleteModal({ ...fileTarget, parentId: row.parentId, channelId: Number(sourceChannelId) }) });
+        items.push({ type: "divider" }, { label: 'Delete', icon: 'delete', danger: true, shortcut: DELETE_SHORTCUT, action: () => { void moveToTrash({ ...fileTarget, parentId: row.parentId, channelId: Number(sourceChannelId) }); } });
     }
     return items;
 }
@@ -209,7 +209,7 @@ export function activateContextMenu(): () => void {
                 { label: `Move ${count} items…`, icon: 'move', action: () => openMoveModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId }) },
                 ...(copy ? [copy] : []),
                 { type: "divider" },
-                { label: `Delete ${count} items`, icon: 'delete', danger: true, shortcut: DELETE_SHORTCUT, action: () => openDeleteModal({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId }) },
+                { label: `Delete ${count} items`, icon: 'delete', danger: true, shortcut: DELETE_SHORTCUT, action: () => { void moveToTrash({ type: "bulk", items: getSelectionPayload(), parentId: state.currentFolderId }); } },
                 { type: "divider" },
                 { label: "Clear selection", icon: 'clear', action: () => clearSelection() },
                 { label: "Refresh", icon: 'refresh', action: () => { void appActions().triggerRefresh(); } },

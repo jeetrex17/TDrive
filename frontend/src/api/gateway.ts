@@ -58,20 +58,6 @@ export async function invokeBackend<Args extends unknown[], Result>(
     }
 }
 
-/** Invokes a synchronous native runtime method without losing its receiver. */
-export function invokeRuntime<Args extends unknown[], Result>(
-    method: string,
-    target: object,
-    binding: (...args: Args) => Result,
-    ...args: Args
-): Result {
-    try {
-        return binding.apply(target, args);
-    } catch (cause) {
-        throw new RuntimeInvocationError(method, cause);
-    }
-}
-
 /** Normalizes a sync-or-Promise runtime result and preserves rejected causes. */
 export async function invokeRuntimeAsync<Args extends unknown[], Result>(
     method: string,

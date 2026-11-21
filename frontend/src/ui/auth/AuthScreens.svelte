@@ -5,10 +5,6 @@
     import tdriveLogo from '../../assets/images/tdrive-logo.png';
     import EyeIcon from '@lucide/svelte/icons/eye';
     import EyeOffIcon from '@lucide/svelte/icons/eye-off';
-    import KeyRoundIcon from '@lucide/svelte/icons/key-round';
-    import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
-    import MailIcon from '@lucide/svelte/icons/mail';
-    import SettingsIcon from '@lucide/svelte/icons/settings';
     import { tick } from 'svelte';
     import { isMobilePlatform, openExternalUrl } from '../../api';
     import { authScreen } from '../app/app-store';
@@ -19,6 +15,7 @@
         authSubmission,
         type AuthFlow,
     } from './auth-store';
+    import { pushSheet } from '../modals/sheet-stack';
     import { personalDriveSetup } from './personal-drive-store';
     import PersonalDriveSetup from './PersonalDriveSetup.svelte';
     import { installUpdate, openReleasePage } from '../../modules/updates';
@@ -55,6 +52,18 @@
     const mobile = isMobilePlatform();
     let welcomed = $state(false);
     const step = $derived(mobile && $authScreen === 'setup' && !welcomed ? 'welcome' : $authScreen);
+
+    // Phone BACK steps back through sign-in the way the on-screen links do,
+    // instead of falling through to the host and leaving the app.
+    $effect(() => {
+        if (!mobile) return;
+        const back = step === 'code' && !$authSubmission.code.busy ? onBackToPhone
+            : step === 'setup' ? () => { welcomed = false; }
+            : null;
+        if (!back) return;
+        const sheet = pushSheet(back);
+        return () => sheet.release();
+    });
 
     // Update discoverability for users who are stuck before login (e.g. a
     // Telegram API change breaks sign-in). The updater runs independently of
@@ -178,26 +187,16 @@
         onsubmit={(event) => submit(event, 'setup', () => onSetup(apiId, apiHash))}
     >
         <div class="auth-page-body">
-            <div class="auth-icon-box">
-                <SettingsIcon size={32} strokeWidth={1.5} aria-hidden="true" />
-            </div>
             <h2 id="auth-setup-title">Connect to Telegram</h2>
-            {#if mobile}
-                <p id="telegram-credentials-help" class="auth-intro">
-                    Create an app at
-                    <button
-                        class="auth-inline-link"
-                        type="button"
-                        onclick={() => openExternalUrl(TELEGRAM_APPS_URL)}
-                    >my.telegram.org/apps</button>
-                    and copy its API ID and API hash here.
-                </p>
-            {:else}
-                <p class="auth-intro">Use API credentials created for your own Telegram account.</p>
-                <p id="telegram-credentials-help" class="auth-guidance">
-                    Open <strong>my.telegram.org/apps</strong>, create an app, then copy its API ID and API hash.
-                </p>
-            {/if}
+            <p id="telegram-credentials-help" class="auth-intro">
+                Create an app at
+                <button
+                    class="auth-inline-link"
+                    type="button"
+                    onclick={() => openExternalUrl(TELEGRAM_APPS_URL)}
+                >my.telegram.org/apps</button>
+                and copy its API ID and API hash here.
+            </p>
             <div class="auth-fields">
                 <div class="auth-field">
                     <label for="telegram-api-id">API ID</label>
@@ -277,11 +276,8 @@
         onsubmit={(event) => submit(event, 'phone', sendPhone)}
     >
         <div class="auth-page-body">
-            <div class="auth-icon-box">
-                <LockKeyholeIcon size={32} strokeWidth={1.5} aria-hidden="true" />
-            </div>
             <h2 id="auth-phone-title">Sign in to Telegram</h2>
-            <p class="auth-intro">Telegram will send a login code to your account.</p>
+            <p class="auth-intro">Enter the number on your Telegram account. Telegram will send you a code.</p>
             <div class="phone-entry">
                 <div class="auth-field country-field">
                     <label for="telegram-country">Country / code</label>
@@ -301,7 +297,7 @@
                         autocomplete="tel"
                         autocapitalize="none"
                         spellcheck="false"
-                        placeholder={country ? "Your phone number" : "+1 202 555 0123"}
+                        placeholder={country ? "Phone number" : "+1 202 555 0123"}
                         required
                         disabled={$authSubmission.phone.busy}
                         aria-invalid={$authSubmission.phone.error ? 'true' : undefined}
@@ -309,7 +305,6 @@
                     />
                 </div>
             </div>
-            <p class="auth-intro phone-hint">Use the number linked to your Telegram account.</p>
             <p id="phone-session-note" class="auth-privacy">
                 Your signed-in session is kept locally on this device and is not synced by TDrive.
             </p>
@@ -332,9 +327,6 @@
         onsubmit={(event) => submit(event, 'code', () => onCode(code))}
     >
         <div class="auth-page-body">
-            <div class="auth-icon-box">
-                <MailIcon size={32} strokeWidth={1.5} aria-hidden="true" />
-            </div>
             <h2 id="auth-code-title">Verify your account</h2>
             <p class="auth-intro">Enter the login code Telegram sent you.</p>
             {#if $authPhone}
@@ -387,9 +379,6 @@
         onsubmit={(event) => submit(event, 'password', () => onPassword(password))}
     >
         <div class="auth-page-body">
-            <div class="auth-icon-box">
-                <KeyRoundIcon size={32} strokeWidth={1.5} aria-hidden="true" />
-            </div>
             <h2 id="auth-password-title">Two-step verification</h2>
             <p class="auth-intro">Enter your Telegram password to finish signing in.</p>
             {#if $authHint}
@@ -465,10 +454,6 @@
         min-width: 0;
     }
 
-    .phone-hint {
-        margin-top: 0;
-    }
-
     .auth-form {
         display: flex;
         flex-direction: column;
@@ -478,24 +463,12 @@
         margin: 0 0 1rem;
     }
 
-    .auth-guidance,
     .auth-privacy {
         margin: 0 0 1rem;
         color: var(--color-text-muted);
-        font-size: 0.8rem;
+        font-size: var(--type-sm);
         line-height: 1.5;
         text-align: left;
-    }
-
-    .auth-guidance {
-        padding: 0.75rem 0;
-        border-top: 1px solid var(--border);
-        border-bottom: 1px solid var(--border);
-    }
-
-    .auth-guidance strong {
-        color: var(--color-text-soft);
-        font-weight: 600;
     }
 
     .auth-fields {
@@ -512,8 +485,8 @@
         display: block;
         margin-bottom: 0.4rem;
         color: var(--color-text-soft);
-        font-size: 0.82rem;
-        font-weight: 600;
+        font-size: var(--type-sm);
+        font-weight: var(--weight-semibold);
     }
 
     .auth-field input {
@@ -527,7 +500,7 @@
     .auth-error {
         margin: 0 0 0.8rem;
         color: var(--danger);
-        font-size: 0.82rem;
+        font-size: var(--type-sm);
         line-height: 1.4;
         text-align: left;
     }
@@ -551,7 +524,7 @@
     }
 
     .auth-form .primary-btn:disabled:hover {
-        background: var(--accent);
+        background: var(--color-action);
         transform: none;
     }
 
@@ -560,7 +533,7 @@
        spacing to the mobile scale (15 body, 13 fine print, 16 inputs). */
     :global(html.mobile) .auth-intro {
         margin: 0 0 1.5rem;
-        font-size: 0.9375rem;
+        font-size: var(--mobile-type-body);
         line-height: 1.5;
     }
 
@@ -587,21 +560,21 @@
     }
 
     :global(html.mobile) .auth-welcome h2 {
-        font-size: 1.75rem;
+        font-size: var(--type-3xl);
     }
 
-    :global(html.mobile) .auth-inline-link {
+    .auth-inline-link {
         padding: 0;
         color: var(--accent);
         font: inherit;
-        font-weight: 600;
+        font-weight: var(--weight-semibold);
         background: none;
         border: 0;
         border-radius: var(--radius-xs);
         cursor: pointer;
     }
 
-    :global(html.mobile) .auth-inline-link:focus-visible {
+    .auth-inline-link:focus-visible {
         outline: none;
         box-shadow: var(--focus-ring);
     }
@@ -611,7 +584,7 @@
     :global(html.mobile) .auth-privacy {
         order: 1;
         margin: 0 0 1rem;
-        font-size: 0.8125rem;
+        font-size: var(--type-sm);
         color: var(--color-text-muted);
     }
 
@@ -622,7 +595,7 @@
 
     :global(html.mobile) .auth-field > label {
         margin-bottom: 0.375rem;
-        font-size: 0.8125rem;
+        font-size: var(--type-sm);
     }
 
     :global(html.mobile) .auth-field:not(.auth-fields .auth-field) {
@@ -635,7 +608,7 @@
 
     :global(html.mobile) .auth-error {
         margin: -0.25rem 0 1rem;
-        font-size: 0.875rem;
+        font-size: var(--type-base);
         line-height: 1.45;
     }
 

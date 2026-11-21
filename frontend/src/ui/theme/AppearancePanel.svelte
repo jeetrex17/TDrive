@@ -14,7 +14,6 @@
         setPreferredTheme,
         setThemeMode,
         themeState,
-        type ThemeChangeOrigin,
     } from './theme-controller';
 
     interface Props {
@@ -51,16 +50,12 @@
         });
     });
 
-    function originFrom(event: MouseEvent): ThemeChangeOrigin {
-        return { x: event.clientX, y: event.clientY };
+    function selectMode(mode: ThemeMode): void {
+        setThemeMode(mode);
     }
 
-    function selectMode(event: MouseEvent, mode: ThemeMode): void {
-        setThemeMode(mode, originFrom(event));
-    }
-
-    function selectTheme(event: MouseEvent, theme: ThemeDefinition): void {
-        setPreferredTheme(theme.appearance, theme.id, originFrom(event));
+    function selectTheme(theme: ThemeDefinition): void {
+        setPreferredTheme(theme.appearance, theme.id);
     }
 
     async function moveModeFocus(event: KeyboardEvent, index: number): Promise<void> {
@@ -125,7 +120,7 @@
                     aria-checked={selected}
                     aria-label={option.label}
                     tabindex={selected ? 0 : -1}
-                    onclick={(event) => selectMode(event, option.id)}
+                    onclick={() => selectMode(option.id)}
                     onkeydown={(event) => void moveModeFocus(event, index)}
                 >
                     <span class="mode-icon"><Icon size={17} strokeWidth={2} aria-hidden="true" /></span>
@@ -153,7 +148,7 @@
                     aria-label={theme.name}
                     tabindex={selected ? 0 : -1}
                     style={previewStyle(theme)}
-                    onclick={(event) => selectTheme(event, theme)}
+                    onclick={() => selectTheme(theme)}
                     onkeydown={(event) => void moveThemeFocus(event, index)}
                 >
                     <span class="theme-preview" aria-hidden="true">
@@ -205,8 +200,8 @@
     .appearance-header h2 {
         margin: 0;
         color: var(--color-text);
-        font-size: 1.05rem;
-        font-weight: 800;
+        font-size: var(--type-lg);
+        font-weight: var(--weight-strong);
         letter-spacing: 0;
     }
 
@@ -220,8 +215,8 @@
         min-height: 20px;
         margin-bottom: 8px;
         color: var(--color-text-muted);
-        font-size: 0.69rem;
-        font-weight: 800;
+        font-size: var(--type-2xs);
+        font-weight: var(--weight-strong);
         letter-spacing: 0.07em;
         text-transform: uppercase;
     }
@@ -244,8 +239,8 @@
         background: var(--overlay-white-1);
         border: 1px solid var(--color-border-soft);
         border-radius: var(--radius-lg);
-        font-size: 0.75rem;
-        font-weight: 750;
+        font-size: var(--type-xs);
+        font-weight: var(--weight-strong);
         cursor: pointer;
         transition: transform var(--motion-med) var(--ease-standard),
             background var(--motion-med) var(--ease-standard),
@@ -255,7 +250,7 @@
     }
 
     .mode-card:hover { transform: translateY(-1px); color: var(--color-text); }
-    .mode-card:active { transform: translateY(0) scale(0.98); }
+    .mode-card:active { transform: scale(var(--press-scale)); }
     .mode-card:focus-visible { outline: none; box-shadow: var(--focus-ring); }
     .mode-card.selected {
         color: var(--color-accent);
@@ -300,7 +295,7 @@
     }
 
     .theme-card:hover { transform: translateY(-2px); border-color: var(--color-border); }
-    .theme-card:active { transform: translateY(0) scale(0.985); }
+    .theme-card:active { transform: scale(var(--press-scale)); }
     .theme-card:focus-visible { outline: none; box-shadow: var(--focus-ring); }
     .theme-card.selected {
         background: var(--overlay-accent-1);
@@ -351,8 +346,8 @@
     .theme-name {
         display: block;
         overflow: hidden;
-        font-size: 0.75rem;
-        font-weight: 800;
+        font-size: var(--type-xs);
+        font-weight: var(--weight-strong);
         line-height: 1.25;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -522,7 +517,7 @@
         border-radius: var(--radius-pill);
     }
 
-    :global(html.mobile) .theme-name { font-size: 0.8125rem; }
+    :global(html.mobile) .theme-name { font-size: var(--type-sm); }
     :global(html.mobile) .theme-check { top: 14px; right: 14px; }
 
     @media (prefers-reduced-motion: reduce) {

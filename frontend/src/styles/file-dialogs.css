@@ -34,7 +34,7 @@
     align-items: center;
     justify-content: center;
     cursor: pointer;
-    transition: background 0.15s ease, border-color 0.15s ease;
+    transition: background var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
 }
 .move-back-btn svg { width: 16px; height: 16px; }
 @media (hover: hover) {
@@ -59,13 +59,13 @@
     padding: 4px 8px;
     border-radius: var(--radius-md);
     color: var(--text-main);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     cursor: pointer;
     max-width: 200px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    transition: background 0.15s ease;
+    transition: background var(--motion-fast) var(--ease-standard);
 }
 @media (hover: hover) {
     .move-crumb:hover { background: var(--bg-panel); }
@@ -89,7 +89,7 @@
     background: transparent;
     color: var(--text-main);
     cursor: pointer;
-    transition: background 0.12s ease, border-color 0.12s ease;
+    transition: background var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
 }
 @media (hover: hover) {
     .move-item:hover {
@@ -129,8 +129,8 @@
     flex: 1;
     min-width: 0;
     text-align: left;
-    font-weight: 600;
-    font-size: 0.9rem;
+    font-weight: var(--weight-semibold);
+    font-size: var(--type-base);
     color: var(--color-text);
     overflow: hidden;
     text-overflow: ellipsis;
@@ -144,8 +144,8 @@
     padding: 22px 12px;
     text-align: center;
     color: var(--text-muted);
-    font-size: 0.85rem;
-    font-weight: 600;
+    font-size: var(--type-base);
+    font-weight: var(--weight-semibold);
 }
 
 /* Why the confirm is disabled, tied to it with aria-describedby. */
@@ -173,9 +173,11 @@
     opacity: 0.5;
     cursor: not-allowed;
 }
-.move-modal-footer .primary-btn:disabled:hover {
-    transform: none;
-    background: var(--accent);
+@media (hover: hover) {
+    .move-modal-footer .primary-btn:disabled:hover {
+        transform: none;
+        background: var(--color-action);
+    }
 }
 
 .preview-overlay {
@@ -223,75 +225,27 @@
 
 .preview-chrome {
     position: absolute;
-    top: 22px;
-    left: 24px;
-    right: 24px;
+    top: 0;
+    left: 0;
+    right: 0;
     /* The original photo is also positioned. Keep the visible controls above
        it so Android hit-testing reaches the buttons instead of the image. */
     z-index: 6;
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 18px;
+    padding: 18px 20px 40px 24px;
+    background: linear-gradient(to bottom, rgba(5, 7, 12, 0.78), rgba(5, 7, 12, 0.34) 52%, rgba(5, 7, 12, 0));
     opacity: 0;
-    transform: translateY(-10px);
-    transition: opacity 0.22s ease, transform 0.22s ease;
+    transform: translateY(-8px);
+    transition: opacity var(--motion-slow) var(--ease-standard), transform var(--motion-slow) var(--ease-standard);
+    /* Swipes on the scrim reach the photo; only the buttons take taps. */
     pointer-events: none;
 }
 
-.preview-overlay.is-chrome-visible .preview-chrome {
+.preview-chrome .viewer-icon-btn { pointer-events: auto; }
+
+.preview-overlay.is-chrome-visible .preview-chrome,
+.preview-overlay.is-preview-error .preview-chrome {
     opacity: 1;
     transform: translateY(0);
-}
-
-.preview-filename,
-.preview-close-btn {
-    pointer-events: auto;
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
-}
-
-.preview-filename {
-    min-width: 0;
-    max-width: min(68vw, 760px);
-    padding: 11px 16px;
-    border-radius: var(--radius-pill);
-    background: rgba(12, 14, 22, 0.56);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 14px 40px rgba(0,0,0,0.22);
-    color: rgba(255,255,255,0.94);
-    font-size: 0.92rem;
-    font-weight: 700;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    letter-spacing: 0.01em;
-}
-
-.preview-close-btn {
-    width: 46px;
-    height: 46px;
-    flex-shrink: 0;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: var(--radius-pill);
-    background: rgba(12, 14, 22, 0.56);
-    color: rgba(255, 255, 255, 0.9);
-    font-size: 1.45rem;
-    line-height: 1;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 14px 40px rgba(0,0,0,0.22);
-    transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
-}
-
-.preview-close-btn:hover,
-.preview-close-btn:focus-visible {
-    background: rgba(20, 23, 34, 0.74);
-    border-color: rgba(255, 255, 255, 0.16);
-    transform: translateY(-1px);
-    outline: none;
 }
 
 .preview-content {
@@ -330,7 +284,7 @@
 .preview-original {
     z-index: 2;
     opacity: 0;
-    transition: opacity 160ms cubic-bezier(0.22, 1, 0.36, 1);
+    transition: opacity var(--motion-fast) cubic-bezier(0.22, 1, 0.36, 1);
 }
 .preview-overlay.is-original-ready .preview-original { opacity: 1; }
 
@@ -356,11 +310,19 @@
 }
 
 .preview-loading-fill {
-    width: 0%;
+    width: 36%;
     height: 100%;
     border-radius: var(--radius-pill);
     background: var(--color-accent);
-    transition: width 0.12s linear;
+}
+/* The original's size is not known while it streams, so the bar says
+   "working" rather than pretending to measure. */
+.preview-overlay.is-preview-loading .preview-loading-fill {
+    animation: preview-loading-sweep 1.2s var(--ease-standard) infinite;
+}
+@keyframes preview-loading-sweep {
+    from { transform: translateX(-100%); }
+    to { transform: translateX(280%); }
 }
 
 .preview-error {
@@ -370,53 +332,43 @@
     transform: translate(-50%, -50%);
     max-width: min(460px, calc(100vw - 48px));
     padding: 14px 18px;
-    border-radius: var(--radius-pill);
+    border-radius: var(--radius-lg);
     background: rgba(18, 20, 29, 0.82);
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 20px 48px rgba(0,0,0,0.24);
     color: rgba(255,255,255,0.9);
     text-align: center;
-    font-weight: 700;
-    font-size: 0.9rem;
+    font-weight: var(--weight-strong);
+    font-size: var(--type-base);
     line-height: 1.35;
     backdrop-filter: blur(18px);
     -webkit-backdrop-filter: blur(18px);
     z-index: 3;
 }
-
-.preview-overlay.is-preview-error .preview-close-btn {
-    opacity: 1;
+.preview-error-text { margin: 0 0 var(--space-3); }
+.preview-error-retry {
+    padding: var(--space-1-5) var(--space-4);
+    border: 1px solid rgba(255, 255, 255, 0.16);
+    border-radius: var(--radius-pill);
+    background: rgba(255, 255, 255, 0.08);
+    color: inherit;
+    font: inherit;
+    font-weight: var(--weight-semibold);
+    cursor: pointer;
 }
+.preview-error-retry:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
-.preview-overlay.is-preview-loading .preview-filename {
+.preview-overlay:is(.is-preview-loading, .is-preview-error) .preview-chrome .viewer-title {
     opacity: 0;
-    transform: translateY(-10px);
-    pointer-events: none;
-}
-.preview-overlay.is-preview-error .preview-filename {
-    opacity: 0;
-    transform: translateY(-10px);
-    pointer-events: none;
 }
 
 @media (max-width: 720px) {
     .preview-chrome {
-        top: 16px;
-        left: 16px;
-        right: 16px;
-        gap: 12px;
+        padding: 12px 12px 36px 16px;
     }
 
-    .preview-filename {
-        max-width: calc(100vw - 96px);
-        padding: 10px 14px;
-        font-size: 0.86rem;
-    }
-
-    .preview-close-btn {
-        width: 42px;
-        height: 42px;
-        font-size: 1.3rem;
+    .preview-chrome .viewer-title {
+        font-size: var(--type-base);
     }
 
     .preview-content {
@@ -455,7 +407,7 @@
     position: fixed;
     min-width: 190px;
     background: var(--color-surface-0);
-    border: 1px solid var(--border);
+    border: 1px solid var(--color-border-soft);
     border-radius: var(--radius-lg);
     padding: var(--space-1);
     box-shadow: var(--shadow-lg);
@@ -506,14 +458,14 @@
     font-weight: var(--weight-regular);
 }
 @media (hover: hover) {
-    .context-menu button:hover { background: var(--bg-panel); }
+    .context-menu button:hover { background: var(--overlay-neutral-2); }
 }
 .context-menu button:focus-visible {
     outline: none;
-    background: var(--bg-panel);
+    background: var(--overlay-neutral-2);
     box-shadow: inset 0 0 0 1px var(--overlay-accent-3);
 }
-.context-menu button:active { transform: translateY(0.5px); }
+.context-menu button:active { transform: scale(var(--press-scale)); }
 .context-menu button.danger,
 .context-menu button.danger svg { color: var(--danger); }
 .context-menu .divider {
@@ -626,8 +578,8 @@ html.mobile .action-sheet-heading {
     max-width: 100%;
 }
 html.mobile .action-sheet-title {
-    font-weight: 700;
-    font-size: 1.125rem;
+    font-weight: var(--weight-strong);
+    font-size: var(--type-lg);
     line-height: 1.3;
     color: var(--color-text);
     /* The name is the subject of the sheet, so it wraps to a second line
@@ -668,7 +620,7 @@ html.mobile .action-sheet-tile:focus-visible {
 html.mobile .action-sheet-tile:disabled { opacity: 0.4; }
 html.mobile .action-sheet-tile-label {
     color: var(--color-text-soft);
-    font-size: 0.75rem;
+    font-size: var(--type-xs);
     font-weight: var(--weight-semibold);
     line-height: 1;
 }
@@ -741,7 +693,7 @@ html.mobile .action-sheet-row {
     border-radius: var(--radius-md);
     background: transparent;
     color: var(--text-main);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     font-size: var(--type-md);
     text-align: left;
     cursor: pointer;

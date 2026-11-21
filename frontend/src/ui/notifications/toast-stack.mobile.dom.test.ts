@@ -19,7 +19,6 @@ function toast(overrides: Partial<ToastItem> = {}): ToastItem {
         level: 'error',
         title: 'Upload failed',
         body: 'The connection was interrupted. Try again when you are online.',
-        sticky: false,
         spinner: false,
         durationMs: 8000,
         expiresAt: Date.now() + 8000,

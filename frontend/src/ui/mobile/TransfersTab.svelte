@@ -3,7 +3,6 @@
     import { failedUploadReports, dismissFailedUploadReport } from '../modals/failed-uploads-store';
     import { reviewFailedUploads } from '../../modules/transfers';
     import ArrowDownUpIcon from '@lucide/svelte/icons/arrow-down-up';
-    import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
     import { type TransferEvent } from '../notifications/notif-store';
     import { visibleActiveTransfers, visibleRecentEvents, standaloneResumableUploads as resumableUploads } from '../notifications/visible-history';
     import { openActivity } from '../notifications/activity-store';
@@ -160,15 +159,9 @@
             </div>
         {/if}
     {/if}
-    <button id="mobile-view-activity" type="button" class="transfers-activity-link" onclick={() => openActivity({ restoreFocus: '#mobile-view-activity' })}>
-        <span>View all activity</span><ChevronRightIcon size={18} strokeWidth={2} aria-hidden="true" />
-    </button>
 </div>
 
 <style>
-    .transfers-activity-link { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: var(--touch-target); margin-top: var(--space-5); padding: var(--space-3) var(--space-4); border: 0; border-radius: var(--radius-lg); background: var(--color-surface-1); color: var(--color-text-soft); font: inherit; font-size: var(--type-sm); text-align: left; cursor: pointer; }
-    .transfers-activity-link :global(svg) { color: var(--color-text-muted); }
-    .transfers-activity-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
     /* The card separates its own rows. A row cannot see its siblings -- each one
        is its own component -- and the separation is a property of the stack
        rather than of anything in it. */

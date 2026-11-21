@@ -29,7 +29,6 @@ export interface MountNotice {
     level: 'info' | 'success' | 'error';
     title: string;
     body?: string;
-    sticky?: boolean;
     spinner?: boolean;
 }
 

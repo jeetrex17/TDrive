@@ -1,11 +1,11 @@
 // Builds the lightbox info panel (the Apple-style "ⓘ" card). Pure rendering:
-// given the active item, the loaded full-image data URL, and the displayed
-// dimensions, it parses EXIF and returns the panel's inner HTML. Every dynamic
-// string is escaped; sections that have no data are omitted.
+// given the active item, the original's EXIF and the displayed dimensions, it
+// returns the panel's inner HTML. Every dynamic string is escaped; sections
+// that have no data are omitted.
 
 import { escapeHtml, formatBytes, splitNameAndExt } from '../../utils';
 import { state } from '../../state';
-import { parseExif, dataUrlToBytes, type ImageExif } from '../exif';
+import type { ImageExif } from '../exif';
 
 export interface PreviewInfoItem {
     name?: string;
@@ -17,14 +17,13 @@ export interface PreviewInfoItem {
 
 export interface InfoInput {
     item: PreviewInfoItem;
-    fullSrc: string; // data URL of the full image, or "" if not loaded yet
+    exif: ImageExif; // the original's metadata; empty until read, or for a derivative
     naturalWidth: number;
     naturalHeight: number;
 }
 
 export function renderImageInfoHTML(input: InfoInput): string {
-    const { item, fullSrc, naturalWidth, naturalHeight } = input;
-    const exif: ImageExif = fullSrc ? exifFromDataUrl(fullSrc) : {};
+    const { item, exif, naturalWidth, naturalHeight } = input;
 
     const when = exif.takenTime || Number(item.uploadTime || 0);
     const width = exif.width || naturalWidth || 0;
@@ -73,11 +72,6 @@ export function renderImageInfoHTML(input: InfoInput): string {
         return `<div class="info-empty">No details available.</div>`;
     }
     return sections.join('');
-}
-
-function exifFromDataUrl(dataUrl: string): ImageExif {
-    const bytes = dataUrlToBytes(dataUrl);
-    return bytes ? parseExif(bytes) : {};
 }
 
 function cameraBlock(exif: ImageExif): string {

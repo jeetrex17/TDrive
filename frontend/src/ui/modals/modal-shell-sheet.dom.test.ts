@@ -65,6 +65,26 @@ function drag(handle: HTMLElement, from: number, to: number): void {
     flushSync();
 }
 
+function touchAt(target: HTMLElement, type: string, y: number): Event {
+    const point = { clientX: 50, clientY: y, identifier: 1, target } as unknown as Touch;
+    const event = new Event(type, { bubbles: true, cancelable: true });
+    Object.defineProperties(event, {
+        touches: { value: type === 'touchend' ? [] : [point] },
+        changedTouches: { value: [point] },
+    });
+    target.dispatchEvent(event);
+    return event;
+}
+
+/** Start, one move and a release; returns the move so callers can see if it was claimed. */
+function touchDrag(target: HTMLElement, from: number, to: number): Event {
+    touchAt(target, 'touchstart', from);
+    const move = touchAt(target, 'touchmove', to);
+    touchAt(target, 'touchend', to);
+    flushSync();
+    return move;
+}
+
 beforeEach(() => {
     host = document.createElement('div');
     host.id = 'sheet-host';
@@ -174,6 +194,24 @@ describe('ModalShell sheet presentation', () => {
             expect(sheet.style.transform).toBe('');
             expect(host.style.getPropertyValue('--sheet-scrim')).toBe('1');
         });
+    });
+
+    it('dismisses on a pull down from the body when it is scrolled to the top', async () => {
+        const onClose = mountShell('sheet');
+        const body = host.querySelector('.modal-sheet-body') as HTMLElement;
+
+        touchDrag(body, 100, 420);
+        await vi.waitFor(() => expect(onClose).toHaveBeenCalledTimes(1));
+    });
+
+    it('lets a scrolled body scroll instead of dragging the sheet', () => {
+        const onClose = mountShell('sheet');
+        const body = host.querySelector('.modal-sheet-body') as HTMLElement;
+        body.scrollTop = 120;
+
+        const move = touchDrag(body, 100, 420);
+        expect(move.defaultPrevented).toBe(false);
+        expect(onClose).not.toHaveBeenCalled();
     });
 
     it('springs back on a short drag and does not dismiss', () => {

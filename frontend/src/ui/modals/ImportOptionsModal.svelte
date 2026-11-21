@@ -77,7 +77,8 @@
     $effect(() => {
         if ($view.open && !wasOpen) {
             extract = false;
-            encrypt = false;
+            // Starts from the remembered upload choice; the plan was made with it.
+            encrypt = $view.payload?.encrypt === true;
         }
         wasOpen = $view.open;
     });

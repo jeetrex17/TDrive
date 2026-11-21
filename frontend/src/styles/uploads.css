@@ -8,7 +8,7 @@
     display: flex;
     flex-direction: column;
     min-width: 170px;
-    padding: 6px;
+    padding: var(--space-1);
     border-radius: var(--radius-lg);
     background: var(--glass-bg);
     border: 1px solid var(--glass-border);
@@ -23,18 +23,21 @@
     align-items: center;
     gap: 10px;
     width: 100%;
-    padding: 9px 10px;
+    min-height: var(--control-md);
+    padding: 0 var(--space-2);
     border: none;
-    border-radius: var(--radius-md);
+    border-radius: var(--radius-sm);
     background: transparent;
     color: var(--text-main);
-    font-size: 0.9rem;
-    font-weight: 500;
+    font-size: var(--type-base);
+    font-weight: var(--weight-medium);
     text-align: left;
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
+    transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
 }
-.upload-menu-item:hover { background: var(--overlay-accent-1); color: var(--accent); }
+@media (hover: hover) {
+    .upload-menu-item:hover { background: var(--overlay-accent-1); color: var(--accent); }
+}
 /* Focus carries the ring on top of the hover tint; hover alone is not a focus
    indicator, because a keyboard user never produces one. */
 .upload-menu-item:focus-visible {
@@ -89,7 +92,7 @@ html.mobile .upload-menu.is-sheet .upload-sheet-close:focus-visible {
 .import-options-note {
     margin: 2px 0 0;
     color: var(--text-muted);
-    font-size: 0.82rem;
+    font-size: var(--type-sm);
     line-height: 1.4;
 }
 
@@ -149,7 +152,7 @@ html.mobile .upload-menu.is-sheet .upload-sheet-close:focus-visible {
 
 .drop-overlay-title {
     font-size: var(--type-lg);
-    font-weight: 700;
+    font-weight: var(--weight-strong);
 }
 
 @media (prefers-reduced-motion: reduce) {

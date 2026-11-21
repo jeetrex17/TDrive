@@ -88,13 +88,10 @@ describe('notification expiry scheduling', () => {
         expect(get(toasts)).toHaveLength(0);
     });
 
-    it('bounds old sticky and zero-duration requests, including progress spinners', () => {
-        notify({ id: 'legacy-sticky', title: 'Working', sticky: true, spinner: true });
+    it('bounds zero-duration requests, including progress spinners', () => {
+        notify({ id: 'spinner', title: 'Working', spinner: true });
         notify({ id: 'legacy-zero', level: 'warning', title: 'Offline', durationMs: 0 });
-        expect(get(toasts).map(({ sticky, durationMs }) => ({ sticky, durationMs }))).toEqual([
-            { sticky: false, durationMs: 4_000 },
-            { sticky: false, durationMs: 6_000 },
-        ]);
+        expect(get(toasts).map(({ durationMs }) => durationMs)).toEqual([4_000, 6_000]);
         vi.advanceTimersByTime(6_000);
         expect(get(toasts)).toHaveLength(0);
     });
@@ -286,5 +283,25 @@ describe('notification expiry scheduling', () => {
         expect(expired).toHaveBeenCalledOnce();
         clearAllNotifications();
         expect(cleared).toHaveBeenCalledOnce();
+    });
+});
+
+describe('notification history', () => {
+    it('keeps problems and opted-in results, not confirmations of the user’s own action', async () => {
+        const { historyEvents } = await import('../ui/notifications/notif-store');
+        historyEvents.set([]);
+
+        notify({ level: 'success', title: 'Folder created' });
+        notify({ level: 'info', title: 'Link copied' });
+        notify({ level: 'error', title: 'Could not create folder' });
+        notify({ level: 'warning', title: 'Copy did not finish' });
+        notify({ level: 'error', title: 'Upload failed', history: false });
+        notify({ level: 'info', title: 'TDrive 9.9.9 is available', history: true });
+
+        expect(get(historyEvents).map((event) => ('title' in event ? event.title : '')).sort()).toEqual([
+            'Copy did not finish',
+            'Could not create folder',
+            'TDrive 9.9.9 is available',
+        ]);
     });
 });

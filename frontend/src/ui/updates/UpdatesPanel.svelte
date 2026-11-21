@@ -263,8 +263,8 @@
     }
     .updates-header h2 {
         margin: 0;
-        font-size: 0.94rem;
-        font-weight: 650;
+        font-size: var(--type-md);
+        font-weight: var(--weight-semibold);
         letter-spacing: 0;
         color: var(--color-text);
     }
@@ -278,8 +278,8 @@
         border-bottom: 1px solid var(--color-border-soft);
     }
     .updates-app-name {
-        font-size: 0.9rem;
-        font-weight: 650;
+        font-size: var(--type-base);
+        font-weight: var(--weight-semibold);
         letter-spacing: 0;
     }
     .updates-app-meta {
@@ -288,7 +288,7 @@
         align-items: center;
         gap: 4px;
         color: var(--color-text-muted);
-        font-size: 0.72rem;
+        font-size: var(--type-xs);
         line-height: 1.35;
     }
     .dot-sep { opacity: 0.6; }
@@ -301,22 +301,22 @@
         gap: 7px;
         margin: 0;
         color: var(--color-text-soft);
-        font-size: 0.82rem;
-        font-weight: 550;
+        font-size: var(--type-sm);
+        font-weight: var(--weight-medium);
         line-height: 1.38;
     }
-    .updates-status.muted { color: var(--color-text-muted); font-weight: 450; }
+    .updates-status.muted { color: var(--color-text-muted); font-weight: var(--weight-regular); }
 
     .updates-message { display: flex; flex-direction: column; gap: 3px; }
     .updates-message-title {
         color: var(--color-text-soft);
-        font-size: 0.84rem;
-        font-weight: 650;
+        font-size: var(--type-sm);
+        font-weight: var(--weight-semibold);
         line-height: 1.35;
     }
     .updates-message-detail {
         color: var(--color-text-muted);
-        font-size: 0.73rem;
+        font-size: var(--type-xs);
         line-height: 1.4;
     }
 
@@ -345,7 +345,7 @@
         justify-content: space-between;
         margin-top: 6px;
         color: var(--color-text-muted);
-        font-size: 0.74rem;
+        font-size: var(--type-xs);
         font-variant-numeric: tabular-nums;
     }
 
@@ -359,19 +359,19 @@
         padding: 7px 12px;
         border: 1px solid transparent;
         border-radius: var(--radius-md);
-        font-size: 0.78rem;
-        font-weight: 650;
+        font-size: var(--type-xs);
+        font-weight: var(--weight-semibold);
         cursor: pointer;
         transition: background var(--motion-fast) var(--ease-standard),
             transform var(--motion-fast) var(--ease-standard),
             border-color var(--motion-fast) var(--ease-standard);
     }
     .updates-btn.primary {
-        color: var(--color-on-accent);
-        background: var(--color-accent);
+        color: var(--color-on-action);
+        background: var(--color-action);
     }
-    .updates-btn.primary:hover { background: var(--color-accent-hover); }
-    .updates-btn.primary:active { transform: translateY(0.5px); }
+    .updates-btn.primary:hover { background: var(--color-action-hover); }
+    .updates-btn.primary:active { transform: scale(var(--press-scale)); }
     .updates-btn.primary:disabled { opacity: 0.6; cursor: default; }
     .updates-btn.ghost {
         color: var(--color-text-muted);
@@ -380,7 +380,7 @@
     }
     .updates-btn.ghost:hover { color: var(--color-text); background: var(--overlay-white-1); }
     .updates-btn:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-    .updates-btn-size { opacity: 0.75; font-weight: 600; }
+    .updates-btn-size { opacity: 0.75; font-weight: var(--weight-semibold); }
 
     .updates-sublinks {
         display: flex;
@@ -395,13 +395,13 @@
         color: var(--color-accent);
         background: transparent;
         border: none;
-        font-size: 0.78rem;
-        font-weight: 700;
+        font-size: var(--type-xs);
+        font-weight: var(--weight-strong);
         cursor: pointer;
     }
     .updates-link:hover { text-decoration: underline; }
     .updates-link:focus-visible { outline: none; box-shadow: var(--focus-ring); border-radius: var(--radius-xs); }
-    .updates-link.subtle { color: var(--color-text-subtle); font-weight: 600; }
+    .updates-link.subtle { color: var(--color-text-subtle); font-weight: var(--weight-semibold); }
     .updates-link.subtle:hover { color: var(--color-text-muted); }
     .updates-link:disabled { opacity: 0.5; cursor: default; text-decoration: none; }
 
@@ -415,7 +415,7 @@
         margin: 0 0 10px;
         padding-left: 18px;
         color: var(--color-text-muted);
-        font-size: 0.79rem;
+        font-size: var(--type-sm);
         line-height: 1.5;
     }
     .updates-confirm-buttons { display: flex; gap: 8px; }
@@ -429,7 +429,7 @@
         color: var(--color-danger);
         background: var(--overlay-danger-1);
         border-radius: var(--radius-md);
-        font-size: 0.78rem;
+        font-size: var(--type-xs);
         line-height: 1.4;
     }
     :global(.updates-error svg) { flex-shrink: 0; margin-top: 1px; }
@@ -448,14 +448,14 @@
     .updates-preference-copy { min-width: 0; }
     .updates-preference-title {
         color: var(--color-text-soft);
-        font-size: 0.76rem;
-        font-weight: 600;
+        font-size: var(--type-xs);
+        font-weight: var(--weight-semibold);
         line-height: 1.3;
     }
     .updates-preference-description {
         margin-top: 2px;
         color: var(--color-text-muted);
-        font-size: 0.68rem;
+        font-size: var(--type-2xs);
         line-height: 1.35;
     }
     .updates-switch {
@@ -491,15 +491,15 @@
         gap: 12px;
         padding: 0 9px 6px 12px;
     }
-    .updates-checked { color: var(--color-text-subtle); font-size: 0.68rem; }
+    .updates-checked { color: var(--color-text-subtle); font-size: var(--type-2xs); }
     .updates-check {
         padding: 5px 7px;
         color: var(--color-accent);
         background: transparent;
         border: none;
         border-radius: var(--radius-sm);
-        font-size: 0.72rem;
-        font-weight: 600;
+        font-size: var(--type-xs);
+        font-weight: var(--weight-semibold);
         cursor: pointer;
         transition: background var(--motion-fast) var(--ease-standard),
             color var(--motion-fast) var(--ease-standard);

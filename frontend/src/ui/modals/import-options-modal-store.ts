@@ -23,6 +23,8 @@ export interface ImportOptionsPayload {
     queued?: boolean;
     destination?: string;
     names?: readonly string[];
+    /** The encryption choice the dialog opens with. */
+    encrypt?: boolean;
 }
 
 export const importOptionsModal = createModalController<ImportOptionsPayload>();

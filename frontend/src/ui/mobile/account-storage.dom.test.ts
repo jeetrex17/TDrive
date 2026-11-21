@@ -5,10 +5,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, unmount } from 'svelte';
 
-const mocks = vi.hoisted(() => ({ getStorageUsed: vi.fn() }));
+const mocks = vi.hoisted(() => ({ getStorageUsed: vi.fn(), getAppVersion: vi.fn(async () => ({ version: '2.3.0' })) }));
 
 vi.mock('../../api', () => ({
     getStorageUsed: mocks.getStorageUsed,
+    getAppVersion: mocks.getAppVersion,
     isMobilePlatform: () => true,
 }));
 vi.mock('../../modules/channels', () => ({ switchActiveChannel: vi.fn() }));
@@ -141,6 +142,12 @@ describe('Account storage row', () => {
 
         await vi.waitFor(() => expect(storageRow()).toContain('1.5 KB'));
         expect(mocks.getStorageUsed).toHaveBeenCalledTimes(1);
+    });
+
+    it('shows the app version under About', async () => {
+        mocks.getStorageUsed.mockResolvedValue(0);
+        app = mount(AccountTab, { target: host });
+        await vi.waitFor(() => expect(host.querySelector('.account-about-version')?.textContent).toBe('Version 2.3.0'));
     });
 
     it('says so rather than showing a wrong figure when the drive will not answer', async () => {

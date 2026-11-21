@@ -17,8 +17,8 @@
     border-radius: var(--radius-pill);
     background: var(--overlay-accent-1);
     color: var(--color-accent);
-    font-size: 0.68rem;
-    font-weight: 800;
+    font-size: var(--type-2xs);
+    font-weight: var(--weight-strong);
     letter-spacing: 0.02em;
 }
 .profile-menu.updates-view { min-width: min(348px, calc(100vw - 32px)); }
@@ -45,13 +45,15 @@
     box-shadow: var(--shadow-sm);
     -webkit-backdrop-filter: blur(18px) saturate(150%);
     backdrop-filter: blur(18px) saturate(150%);
-    font-size: 0.78rem;
-    font-weight: 650;
+    font-size: var(--type-xs);
+    font-weight: var(--weight-semibold);
     cursor: pointer;
     transition: color var(--motion-fast) var(--ease-standard),
         border-color var(--motion-fast) var(--ease-standard);
 }
-.auth-update-footer button:hover { color: var(--color-text); border-color: var(--color-accent); }
+@media (hover: hover) {
+    .auth-update-footer button:hover { color: var(--color-text); border-color: var(--color-accent); }
+}
 .auth-update-footer button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-.auth-update-footer .auth-update-accent { color: var(--color-accent); font-weight: 800; }
+.auth-update-footer .auth-update-accent { color: var(--color-accent); font-weight: var(--weight-strong); }
 

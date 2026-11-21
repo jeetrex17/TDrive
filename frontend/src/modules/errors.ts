@@ -42,7 +42,6 @@ type AppErrorVariant<Kind extends AppErrorKind> = Readonly<{
     kind: Kind;
     title: string;
     message: string;
-    retryable: boolean;
     source: AppErrorSource;
     code?: OperationErrorCode;
     details: SafeErrorDetails;
@@ -63,7 +62,6 @@ interface ErrorPresentation {
     kind: AppErrorKind;
     title: string;
     message: string;
-    retryable: boolean;
 }
 
 const OPERATION_PRESENTATIONS: Record<OperationErrorCode, ErrorPresentation> = {
@@ -71,133 +69,111 @@ const OPERATION_PRESENTATIONS: Record<OperationErrorCode, ErrorPresentation> = {
         kind: 'unexpected',
         title: 'Action failed',
         message: '',
-        retryable: true,
     },
     backend_unavailable: {
         kind: 'unavailable',
         title: 'TDrive is not ready',
         message: 'TDrive is not ready yet. Try again.',
-        retryable: true,
     },
     encryption_password_required: {
         kind: 'authentication',
         title: 'Password required',
         message: 'Enter your encryption password first.',
-        retryable: false,
     },
     invalid_encryption_password: {
         kind: 'authentication',
         title: 'Password not accepted',
         message: 'That encryption password is incorrect.',
-        retryable: false,
     },
     encryption_password_already_set: {
         kind: 'conflict',
         title: 'Encryption already configured',
         message: 'Encryption is already configured.',
-        retryable: false,
     },
     encryption_policy_unavailable: {
         kind: 'unavailable',
         title: 'Encryption unavailable',
         message: 'Encryption is unavailable for this drive.',
-        retryable: false,
     },
     biometric_canceled: {
         kind: 'canceled',
         title: 'Biometric unlock canceled',
         message: 'Biometric unlock was canceled. Enter your password or try again.',
-        retryable: false,
     },
     biometric_unavailable: {
         kind: 'unavailable',
         title: 'Biometrics unavailable',
         message: 'Biometrics are unavailable on this device. Use your encryption password.',
-        retryable: false,
     },
     biometric_invalidated: {
         kind: 'authentication',
         title: 'Enable biometrics again',
         message: 'Biometric enrollment changed. Enter your password, then enable biometrics again in encryption settings.',
-        retryable: false,
     },
     biometric_not_enrolled: {
         kind: 'authentication',
         title: 'Biometrics not enabled',
         message: 'Use your encryption password, then enable biometrics on this device in encryption settings.',
-        retryable: false,
     },
     biometric_busy: {
         kind: 'conflict',
         title: 'Biometric authentication in progress',
         message: 'Another biometric prompt is active. Finish or cancel it, then try again.',
-        retryable: false,
     },
     biometric_failed: {
         kind: 'authentication',
         title: 'Biometric authentication failed',
         message: 'Biometric authentication failed. Try again or use your encryption password.',
-        retryable: false,
     },
     biometric_cleanup_required: {
         kind: 'storage',
         title: 'Review biometric enrollment',
         message: 'Biometric enrollment could not be removed. Open encryption settings and disable biometric unlock before trying again.',
-        retryable: false,
     },
     biometric_locked_out: {
         kind: 'authentication',
         title: 'Biometrics locked',
         message: 'Biometrics are temporarily locked. Unlock your device or enter your encryption password.',
-        retryable: false,
     },
     canceled: {
         kind: 'canceled',
         title: 'Canceled',
         message: 'Canceled.',
-        retryable: false,
     },
     deadline_exceeded: {
         kind: 'timeout',
         title: 'Request timed out',
         message: 'The request took too long. Try again.',
-        retryable: true,
     },
     not_found: {
         kind: 'not_found',
         title: 'Item not found',
         message: 'That item no longer exists. Refresh and try again.',
-        retryable: true,
     },
     permission_denied: {
         kind: 'permission',
         title: 'Permission denied',
         message: "You don't have permission to do that.",
-        retryable: false,
     },
     already_exists: {
         kind: 'conflict',
         title: 'Item already exists',
         message: 'This item is already there.',
-        retryable: false,
     },
     insufficient_storage: {
         kind: 'storage',
         title: 'Not enough storage',
         message: 'There is not enough free disk space to finish this action.',
-        retryable: false,
     },
     network_unavailable: {
         kind: 'network',
         title: 'Telegram is unavailable',
         message: 'Telegram is not reachable right now. Try again.',
-        retryable: true,
     },
     file_too_large: {
         kind: 'validation',
         title: 'File is too large',
         message: 'This file is too large to upload.',
-        retryable: false,
     },
 };
 
@@ -352,7 +328,6 @@ function telegramPresentation(code: string): ErrorPresentation {
         kind: forbidden ? 'permission' : 'unavailable',
         title: forbidden ? 'Not allowed' : 'Telegram refused that',
         message: known ?? `Telegram answered ${code.toLowerCase().replace(/_/g, ' ')}. Try again.`,
-        retryable: !forbidden && !known?.startsWith('Telegram no longer'),
     };
 }
 
@@ -365,7 +340,6 @@ function classifyMessage(raw: string, source: AppErrorSource): ErrorPresentation
             kind: 'render',
             title: 'This screen needs a reset',
             message: "TDrive couldn't finish drawing this screen. Your stored files are safe.",
-            retryable: true,
         };
     }
     if (lower.includes('move would create cycle') || lower.includes('own subfolder')) {
@@ -373,11 +347,10 @@ function classifyMessage(raw: string, source: AppErrorSource): ErrorPresentation
             kind: 'validation',
             title: 'Folder cannot be moved there',
             message: "Can't move a folder into itself or one of its subfolders.",
-            retryable: false,
         };
     }
     if (lower.includes('only the uploader can')) {
-        return { kind: 'permission', title: 'Uploader permission required', message, retryable: false };
+        return { kind: 'permission', title: 'Uploader permission required', message };
     }
     if (lower.includes('file is already in this folder') || lower.includes('folder is already here')) {
         return OPERATION_PRESENTATIONS.already_exists;
@@ -387,7 +360,6 @@ function classifyMessage(raw: string, source: AppErrorSource): ErrorPresentation
             kind: 'validation',
             title: 'Destination unavailable',
             message: 'Choose a valid destination folder.',
-            retryable: false,
         };
     }
     if (lower.includes('not found')) return OPERATION_PRESENTATIONS.not_found;
@@ -399,7 +371,6 @@ function classifyMessage(raw: string, source: AppErrorSource): ErrorPresentation
             kind: 'validation',
             title: 'Check the phone number',
             message: 'Enter a valid phone number, including the country code.',
-            retryable: false,
         };
     }
     if (lower.includes('phone_code_invalid') || lower.includes('invalid code')) {
@@ -407,7 +378,6 @@ function classifyMessage(raw: string, source: AppErrorSource): ErrorPresentation
             kind: 'authentication',
             title: 'Code not accepted',
             message: 'That code was incorrect. Check it and try again.',
-            retryable: false,
         };
     }
     if (lower.includes('password_hash_invalid') || lower.includes('invalid password')) {
@@ -415,7 +385,6 @@ function classifyMessage(raw: string, source: AppErrorSource): ErrorPresentation
             kind: 'authentication',
             title: 'Password not accepted',
             message: 'That two-step verification password was incorrect.',
-            retryable: false,
         };
     }
     if (lower.includes('flood_wait') || lower.includes('flood wait') || lower.includes('too many requests')) {
@@ -423,7 +392,6 @@ function classifyMessage(raw: string, source: AppErrorSource): ErrorPresentation
             kind: 'network',
             title: 'Try again shortly',
             message: 'Telegram is temporarily limiting requests. Wait a moment and try again.',
-            retryable: true,
         };
     }
     if (lower.includes('auth_key_unregistered') || lower.includes('session expired')) {
@@ -431,7 +399,6 @@ function classifyMessage(raw: string, source: AppErrorSource): ErrorPresentation
             kind: 'authentication',
             title: 'Sign in again',
             message: 'Your Telegram session expired. Sign in again.',
-            retryable: false,
         };
     }
     if (lower.includes('permission denied') || lower.includes('not authorized')) {
@@ -456,7 +423,6 @@ function classifyMessage(raw: string, source: AppErrorSource): ErrorPresentation
             kind: 'unavailable',
             title: 'Catalog is busy',
             message: "TDrive's local catalog is busy. Try again in a moment.",
-            retryable: true,
         };
     }
     if (lower.includes('connection dead') || lower.includes('engine forcibly closed') || lower.includes('engine was closed')) {
@@ -467,7 +433,6 @@ function classifyMessage(raw: string, source: AppErrorSource): ErrorPresentation
             kind: 'unexpected',
             title: 'Interrupted',
             message: 'That was interrupted before it finished. Try again.',
-            retryable: true,
         };
     }
     if (lower.includes('tg client') || lower.includes('telegram') || lower.includes('network')) {
@@ -478,7 +443,6 @@ function classifyMessage(raw: string, source: AppErrorSource): ErrorPresentation
             kind: 'unavailable',
             title: 'TDrive could not start',
             message: 'TDrive could not finish starting. Reload the app and try again.',
-            retryable: true,
         };
     }
     if (source === 'runtime') {
@@ -486,14 +450,12 @@ function classifyMessage(raw: string, source: AppErrorSource): ErrorPresentation
             kind: 'unavailable',
             title: 'Desktop services unavailable',
             message: 'TDrive lost access to its desktop services. Reload the app and try again.',
-            retryable: true,
         };
     }
     return {
         kind: 'unexpected',
         title: 'Something went wrong',
         message: message || 'Something went wrong. Try again.',
-        retryable: true,
     };
 }
 
@@ -505,8 +467,7 @@ export function isAppError(value: unknown): value is AppError {
         && typeof source === 'string'
         && Object.prototype.hasOwnProperty.call(APP_ERROR_SOURCES, source)
         && typeof property(value, 'title') === 'string'
-        && typeof property(value, 'message') === 'string'
-        && typeof property(value, 'retryable') === 'boolean';
+        && typeof property(value, 'message') === 'string';
 }
 
 /** Normalize any thrown value without coercing arbitrary objects into user copy. */
@@ -528,7 +489,6 @@ export function toAppError(error: unknown, options: AppErrorOptions = {}): AppEr
                 message: presentation.message,
                 kind: presentation.kind,
                 title: presentation.title,
-                retryable: presentation.retryable,
             };
     }
 

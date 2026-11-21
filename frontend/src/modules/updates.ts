@@ -144,12 +144,14 @@ function maybeAnnounce(next: UpdateState): void {
         notify({
             level: 'info',
             title: `TDrive ${next.latest.version} is ready`,
+            history: true,
             body: 'Restart to update from the account menu.',
         });
     } else {
         notify({
             level: 'info',
             title: `TDrive ${next.latest.version} is available`,
+            history: true,
             body: 'Open the account menu to update.',
         });
     }

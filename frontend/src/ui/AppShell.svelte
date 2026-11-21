@@ -1,4 +1,5 @@
 <script lang="ts">
+    import { navDirection } from './file-list/nav-direction';
     import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
     import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
@@ -26,7 +27,7 @@
         showPostActions,
     } from '../modules/channel-sources';
     import { openSourceCopy } from '../modules/source-copies';
-    import { clearSelection, openSelectedItemsDelete, openSelectedItemsDownload, openSelectedItemsMove } from '../modules/selection';
+    import { clearSelection, trashSelectedItems, openSelectedItemsDownload, openSelectedItemsMove } from '../modules/selection';
     import { chooseFilesForCurrentFolder, chooseFolderForCurrentFolder } from '../modules/transfers';
     import { openNewFolderModal } from '../modules/modals/folder';
     import {
@@ -75,6 +76,8 @@
         return $fileSortState.direction === 'asc' ? 'ascending' : 'descending';
     }
 
+    // The list slides a little in the direction the reader moved, like the phone.
+    const folderMove = navDirection();
 </script>
 
 {#snippet sortIndicator(key: FileSortKey)}
@@ -87,18 +90,9 @@
     {/if}
 {/snippet}
 
-<!-- Semantic dashboard chrome remains mounted after runtime startup. The typed
-     root owns visibility; FeatureLayer owns the surfaces imperative controllers
-     still fill in (the file list, the gallery, the selection bar, the upload
-     menu) plus the modal layer.
-
-     The live chrome this shell renders itself -- the drive lists, the bell, the
-     account menu, the breadcrumb -- is gated on dashboardVisible so it lives
-     exactly as long as the dashboard does, which is what it did when a portal
-     mounted it. Built earlier it would sit behind the login screen with its
-     window listeners, its registered drag root and the last session's drive rows
-     still live under a hidden container, and logging out would stop clearing any
-     of that. -->
+<!-- The desktop dashboard. The typed root owns visibility; FeatureLayer owns
+     the modal layer. Live chrome is gated on dashboardVisible so its listeners
+     and the last session's rows live exactly as long as the dashboard does. -->
 <div
     id="success-screen"
     class="dashboard-container"
@@ -113,12 +107,9 @@
 
         <nav id="drives-nav" class="drives-nav" tabindex="-1" aria-label="Drives">
             <div class="drives-scroll">
+                <!-- The drive's own places lead the sidebar without a heading:
+                     the drive row already says "My Drive". -->
                 <div class="drives-section">
-                    <div class="drives-section-title">My Drive</div>
-                    <!-- The .drives-list wrapper is the column the rows stack in
-                         and the sibling the Photos row takes its top margin
-                         from, so it stays put; only the id a portal aimed at is
-                         gone. -->
                     <div class="drives-list">
                         {#if dashboardVisible}
                             <DriveList kind="personal" onDriveClick={handleDriveClick} />
@@ -193,12 +184,42 @@
         </nav>
 
         <div class="storage-info">
-            <p>Storage:<span id="storage-used">0 B / Unlimited</span></p>
+            <p>Storage<span id="storage-used">—</span></p>
         </div>
     </aside>
 
     <main class="main-content" class:channel-mode={dashboardVisible && $openChannel !== null}>
+        <!-- The folder path is the page title, so it leads the top bar
+             instead of taking a band of its own under it. -->
         <header>
+            <div class="drive-breadcrumb">
+                <!-- The back button and the crumb trail are flex items of this row.
+                     The host they used to arrive in was display:contents, so it was
+                     never a box of its own and taking it away moves nothing. -->
+                {#if dashboardVisible}
+                    <Breadcrumb onNavigate={navigateToIndex} onBack={navigateBack} drag={breadcrumbDrag} />
+                {/if}
+                <div id="gallery-title" class="gallery-title">Media</div>
+                <PhotosModeBar />
+                <div id="trash-title" class="trash-title">Trash</div>
+                <!-- Destructive and irreversible, so it only ever opens the
+                     confirmation. With nothing to empty it is absent rather than
+                     disabled: a dead control invites a click that cannot do
+                     anything. It is disabled only while a mutation is in flight. -->
+                {#if $trashEntries.length > 0}
+                    <button
+                        id="trash-empty-btn"
+                        class="trash-empty-btn"
+                        type="button"
+                        disabled={$trashBusyKey !== ''}
+                        onclick={askEmptyTrash}
+                    >
+                        <Trash2Icon size={15} strokeWidth={2} aria-hidden="true" />
+                        <span>Empty trash</span>
+                    </button>
+                {/if}
+            </div>
+
             <div class="search-bar">
                 <SearchIcon class="search-icon" size={16} strokeWidth={2} aria-hidden="true" />
                 <input id="search-input" type="text" placeholder="Search files..." autocomplete="off" spellcheck="false" aria-label="Search files">
@@ -209,13 +230,7 @@
                     <NotifBell onCancelDirection={cancelTransfersInDirection} onCancelFile={cancelUploadFile} onClearHistory={clearHistory} />
                 {/if}
 
-                <!-- .upload-menu-wrap is position: relative, and it is what the
-                     menu's own absolutely positioned popover anchors to, so the
-                     wrapper stays exactly where it was; only the id a portal
-                     aimed at is gone. Held back until the dashboard is up so the
-                     menu's window and document listeners live no longer than the
-                     dashboard does, which is what a portal that only ran on the
-                     dashboard view gave it. -->
+                <!-- The menu's popover anchors to this relative wrapper. -->
                 <div class="upload-menu-wrap">
                     {#if dashboardVisible}
                         <UploadMenu
@@ -243,34 +258,6 @@
                 {/if}
             </div>
         </header>
-
-        <div class="drive-breadcrumb">
-            <!-- The back button and the crumb trail are flex items of this row.
-                 The host they used to arrive in was display:contents, so it was
-                 never a box of its own and taking it away moves nothing. -->
-            {#if dashboardVisible}
-                <Breadcrumb onNavigate={navigateToIndex} onBack={navigateBack} drag={breadcrumbDrag} />
-            {/if}
-            <div id="gallery-title" class="gallery-title">Media</div>
-            <PhotosModeBar />
-            <div id="trash-title" class="trash-title">Trash</div>
-            <!-- Destructive and irreversible, so it only ever opens the
-                 confirmation. With nothing to empty it is absent rather than
-                 disabled: a dead control invites a click that cannot do
-                 anything. It is disabled only while a mutation is in flight. -->
-            {#if $trashEntries.length > 0}
-                <button
-                    id="trash-empty-btn"
-                    class="trash-empty-btn"
-                    type="button"
-                    disabled={$trashBusyKey !== ''}
-                    onclick={askEmptyTrash}
-                >
-                    <Trash2Icon size={15} strokeWidth={2} aria-hidden="true" />
-                    <span>Empty trash</span>
-                </button>
-            {/if}
-        </div>
 
         <div class="file-table-header" role="row" aria-rowindex="1">
             <div class="col-name" role="columnheader" aria-colindex="1" aria-sort={sortAriaValue('name')}>
@@ -310,35 +297,27 @@
                 </button>
             </div>
             <div class="col-actions" role="columnheader" aria-colindex="4">
-                <span>Actions</span>
-                <!-- The bar covers the Actions column while rows are selected,
-                     so it keeps its id and its inline display: none: the
-                     selection controller is what reveals it, by flipping that
-                     style once a row is picked. Only the portal that filled it
-                     from elsewhere is gone. -->
-                <div id="selection-bar" class="selection-bar" style="display: none;" role="status" aria-live="polite">
-                    {#if dashboardVisible}
-                        <SelectionBar
-                            onDownload={openSelectedItemsDownload}
-                            onMove={openSelectedItemsMove}
-                            onDelete={openSelectedItemsDelete}
-                            onClear={clearSelection}
-                        />
-                    {/if}
-                </div>
+                <span class="sr-only">Actions</span>
             </div>
         </div>
 
-        <div id="file-list" class="file-list-box" data-file-drop-target role="grid" aria-label="Files" aria-multiselectable="true" aria-colcount="4" tabindex="-1"></div>
+        <div id="file-list" class="file-list-box" data-file-drop-target data-nav={$folderMove ?? undefined} role="grid" aria-label="Files" aria-multiselectable="true" aria-colcount="4" tabindex="-1"></div>
 
-        <!-- #gallery-view is the gallery's scroll container, not a seam: the
-             component measures it, the thumbnail controller uses it as its
-             IntersectionObserver root, and the click delegation, the preview
-             modal's return-to-grid and the phone's scroll-to-top all look it up
-             by this id. So the element stays exactly as it was and only the
-             portal that filled it from elsewhere is gone. Held back until the
-             dashboard is up so the grid's window listeners and resize observer
-             live no longer than the dashboard does. -->
+        <!-- Floats over the list while rows are selected; the selection
+             controller reveals it. -->
+        <div id="selection-bar" class="selection-bar" style="display: none;" role="toolbar" aria-label="Selection">
+            {#if dashboardVisible}
+                <SelectionBar
+                    onDownload={openSelectedItemsDownload}
+                    onMove={openSelectedItemsMove}
+                    onDelete={trashSelectedItems}
+                    onClear={clearSelection}
+                />
+            {/if}
+        </div>
+
+        <!-- The gallery's scroll container: the thumbnail observer, click
+             delegation and the viewer's return-to-grid find it by this id. -->
         <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Media">
             {#if dashboardVisible}
                 <PhotosSurface />

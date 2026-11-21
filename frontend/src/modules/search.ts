@@ -16,10 +16,11 @@ import { setPhotosMode } from './gallery';
 import { setTrashMode } from './trash/view';
 import { closeChannel } from '../ui/channels/channel-store';
 import { getFolderIndexDriveKey, refreshFolderIndex } from './folder-index';
-import { canOpenFileViewer, isVideoFile } from './media-types';
+import { canOpenFileViewer, isImageFile, isVideoFile } from './media-types';
+import { openImagePreview } from './image-preview';
 import { enqueueDownload, enqueueFolderDownload } from './transfers';
 import { appActions } from './app-actions';
-import type { FileListAction, FileListRow } from '../ui/file-list/types';
+import type { FileListAction, FileListFileRow, FileListRow } from '../ui/file-list/types';
 import { fileListColumnMode } from '../ui/file-list/column-mode-store';
 import { getFileList, isMobilePlatform, search } from '../api';
 import type { RootFile, SearchHit } from '../types';
@@ -30,6 +31,11 @@ let disconnectSearchBar: (() => void) | null = null;
 let telegramRootRequest: Promise<RootFile[]> | null = null;
 let telegramRootRequestDriveKey: string | null = null;
 const inFlightSearches = new Map<string, Promise<SearchHit[]>>();
+
+/** The location shown for a hit at the drive root: the active drive's name. */
+function driveRootLabel(): string {
+    return state.activeChannel?.title?.trim() || 'My Drive';
+}
 
 function setHeaderMode(isSearch: boolean) {
 	fileListColumnMode.set(isSearch ? "location" : "date");
@@ -102,7 +108,7 @@ function renderSearchResults(results: SearchHit[], query: string) {
             rows.push(buildFolderRow(result, String(result.parentId || ""), {
                 key: `search:folder:${id}`,
                 channelId: sourceChannelId,
-                metaLabel: String(result.path || "My Drive"),
+                metaLabel: String(result.path || driveRootLabel()),
                 sizeLabel: "—",
                 actions: [{
                     kind: "download",
@@ -160,22 +166,20 @@ function renderSearchResults(results: SearchHit[], query: string) {
             const size = Number(result.size || 0);
             const encrypted = Boolean(result.encrypted);
             const actions: FileListAction[] = [];
+            // One way to open a result, whichever control asked: the row's
+            // button, a double click, or a tap on a phone.
+            let fileRow: FileListFileRow | null = null;
+            const viewable = isVideoFile(name) || isImageFile(name) || canOpenFileViewer(name);
+            const open = () => {
+                if (isVideoFile(name)) void appActions().playVideo({ id, channelId: sourceChannelId, name, size, encrypted });
+                else if (isImageFile(name) && fileRow) void openImagePreview(fileRow);
+                else if (canOpenFileViewer(name)) void appActions().openFile({ id, name, size, encrypted });
+                else void openFileResult(String(id || ''), String(result.parentId || ''));
+            };
             if (isVideoFile(name)) {
-                actions.push({
-                    kind: "play",
-                    className: "play-video",
-                    title: "Play",
-                    label: "Play video",
-                    onClick: () => { void appActions().playVideo({ id, channelId: sourceChannelId, name, size, encrypted }); },
-                });
-            } else if (canOpenFileViewer(name)) {
-                actions.push({
-                    kind: "open",
-                    className: "open-file",
-                    title: "Open",
-                    label: "Open file",
-                    onClick: () => { void appActions().openFile({ id, name, size, encrypted }); },
-                });
+                actions.push({ kind: "play", className: "play-video", title: "Play", label: "Play video", onClick: open });
+            } else if (viewable) {
+                actions.push({ kind: "open", className: "open-file", title: "Open", label: "Open file", onClick: open });
             }
             actions.push({
                 kind: "download",
@@ -184,7 +188,7 @@ function renderSearchResults(results: SearchHit[], query: string) {
                 label: "Download",
                 onClick: () => enqueueDownload(id, name, size, sourceChannelId),
             });
-            rows.push(buildFileRow({
+            fileRow = buildFileRow({
                 id,
                 name,
                 size,
@@ -199,20 +203,10 @@ function renderSearchResults(results: SearchHit[], query: string) {
             }, String(result.parentId || ""), {
                 key: `search:file:${String(result.source || "fs")}:${id}`,
                 channelId: sourceChannelId,
-                metaLabel: String(result.path || "My Drive"),
+                metaLabel: String(result.path || driveRootLabel()),
                 sizeLabel: formatBytes(size),
                 actions,
-                onDoubleClick: () => {
-                    if (isVideoFile(name)) {
-                        void appActions().playVideo({ id, channelId: sourceChannelId, name, size, encrypted });
-                        return;
-                    }
-                    if (canOpenFileViewer(name)) {
-                        void appActions().openFile({ id, name, size, encrypted });
-                        return;
-                    }
-                    openFileResult(String(id || ""), String(result.parentId || ""));
-                },
+                onDoubleClick: open,
                 onClick: (event) => {
                     const target = event.target as HTMLElement;
                     if (target.closest("button")) return;
@@ -222,13 +216,7 @@ function renderSearchResults(results: SearchHit[], query: string) {
                     if (isMobilePlatform()) {
                         if (state.selectedItems.size === 0) {
                             event.stopPropagation();
-                            if (isVideoFile(name)) {
-                                void appActions().playVideo({ id, channelId: sourceChannelId, name, size, encrypted });
-                            } else if (canOpenFileViewer(name)) {
-                                void appActions().openFile({ id, name, size, encrypted });
-                            } else {
-                                void openFileResult(String(id || ''), String(result.parentId || ''));
-                            }
+                            open();
                             return;
                         }
                         if (isRowSelected(row)) deselectRow(row);
@@ -240,7 +228,8 @@ function renderSearchResults(results: SearchHit[], query: string) {
                     }
                     handleRowSelection(row, event, logicalRows);
                 },
-            }));
+            });
+            rows.push(fileRow);
         }
     });
 
@@ -350,7 +339,7 @@ export async function runGlobalSearch() {
         // De-dupe search hits against those roots so a visible TDrive file does
         // not appear twice while avoiding a whole-drive managed-ID fetch.
         const [fsResults, tgFiles] = await Promise.all([
-            searchDrive(query, 200).catch(() => []),
+            searchDrive(query, 200),
             getTelegramRootFiles(driveKey),
         ]);
         if (token !== activeToken || (getFolderIndexDriveKey() ?? 'none') !== driveKey) return;
@@ -377,7 +366,7 @@ export async function runGlobalSearch() {
                 uploaderId: file.uploaderId ?? 0,
                 encrypted: false,
                 plaintextSize: 0,
-                path: 'My Drive',
+                path: driveRootLabel(),
                 source: 'tg',
                 ...(file.copyIdentity ? { copyIdentity: file.copyIdentity } : {}),
             }));
@@ -385,7 +374,8 @@ export async function runGlobalSearch() {
         renderSearchResults([...fs, ...tgMatches], query);
     } catch (err) {
         if (token !== activeToken || (getFolderIndexDriveKey() ?? 'none') !== driveKey) return;
-        renderFileState(list, 'error', 'Search failed', 'Try again or refine your query.');
+        renderFileState(list, 'error', 'Search failed', 'Check your connection, then try again.',
+            { label: 'Try again', onClick: () => { void runGlobalSearch(); } });
         console.error('Search failed:', err);
     }
 }
@@ -440,17 +430,9 @@ export function activateSearchBar(): () => void {
             if (isMobilePlatform()) input.blur();
         }
     };
-    const handleFindShortcut = (event: KeyboardEvent) => {
-        const isFind = (event.metaKey || event.ctrlKey) && event.key.toLowerCase() === 'f';
-        if (!isFind || document.activeElement === input) return;
-        event.preventDefault();
-        input.focus();
-        input.select();
-    };
 
     input.addEventListener('input', handleInput);
     input.addEventListener('keydown', handleKeydown);
-    window.addEventListener('keydown', handleFindShortcut);
 
     const disconnect = () => {
         if (disconnectSearchBar !== disconnect) return;
@@ -458,7 +440,6 @@ export function activateSearchBar(): () => void {
         cancelScheduledSearch();
         input.removeEventListener('input', handleInput);
         input.removeEventListener('keydown', handleKeydown);
-        window.removeEventListener('keydown', handleFindShortcut);
     };
     disconnectSearchBar = disconnect;
     return disconnect;

@@ -7,7 +7,7 @@
     import { navigateToIndex } from '../../modules/navigation';
     import { enterPhotos, exitPhotos } from '../../modules/gallery';
     import { closeTrash } from '../../modules/trash/controller';
-    import { clearSelection, openSelectedItemsDelete, openSelectedItemsDownload, openSelectedItemsMove } from '../../modules/selection';
+    import { clearSelection, trashSelectedItems, openSelectedItemsDownload, openSelectedItemsMove } from '../../modules/selection';
     import { selectedSharedDriveCopyAction } from '../../modules/context-menu';
     import { selectionBarState } from '../selection/selection-bar-store';
     import FeatureLayer from '../app/FeatureLayer.svelte';
@@ -20,6 +20,7 @@
     import TabBar from './TabBar.svelte';
     import TopBar from './TopBar.svelte';
     import TransfersTab from './TransfersTab.svelte';
+    import { rememberPlace } from '../../modules/place-memory';
     import { activateMobileBack } from './mobile-back';
     import { activateSafeArea } from './safe-area';
     import { activateKeyboardInsets } from './keyboard-insets';
@@ -28,7 +29,7 @@
     import { scrollBehavior } from './motion';
     import { activeTab, keyboardOpen, markTransfersSeen, transferAttentionCount, type MobileTab } from './mobile-shell-store';
     import { sidebarState } from '../sidebar/sidebar-store';
-    import { breadcrumbPath } from '../chrome/breadcrumb-store';
+    import { navDirection } from '../file-list/nav-direction';
     import { fileListView } from '../file-list/file-list-store';
     import ChannelView from '../channels/ChannelView.svelte';
     import { sourceKey } from '../channels/channel-model';
@@ -85,22 +86,7 @@
 
     // Walking into a folder pushes from the right and coming back pops to it,
     // so the list carries the same sense of depth the back chevron promises.
-    // Only the direction lives here; the movement itself is CSS, which keeps it
-    // off the main thread and lets prefers-reduced-motion drop it wholesale.
-    let navDirection = $state<'forward' | 'back' | null>(null);
-    let lastDepth = -1;
-    let navTimer: ReturnType<typeof setTimeout> | undefined;
-
-    $effect(() => {
-        const depth = $breadcrumbPath.length;
-        if (lastDepth >= 0 && depth !== lastDepth) {
-            navDirection = depth > lastDepth ? 'forward' : 'back';
-            clearTimeout(navTimer);
-            // Cleared so a re-render mid-animation does not replay it.
-            navTimer = setTimeout(() => { navDirection = null; }, 280);
-        }
-        lastDepth = depth;
-    });
+    const folderMove = navDirection();
 
     // Files and Photos share the drive's content region; Photos is reached
     // through its own tab but is the gallery view of the same drive, keyed by
@@ -172,14 +158,15 @@
         const disposeKeyboard = activateKeyboardInsets();
         const disposeBackground = activateBackgroundTransfers();
         const disposeNotificationActions = activateNotificationActions();
+        const disposePlace = rememberPlace();
 
         return () => {
+            disposePlace();
             disposeNotificationActions();
             disposeBack();
             disposeSafeArea();
             disposeKeyboard();
             disposeBackground();
-            clearTimeout(navTimer);
         };
     });
 </script>
@@ -206,21 +193,15 @@
                 id="file-list"
                 class="file-list-box"
                 data-file-drop-target
-                data-nav={navDirection ?? undefined}
+                data-nav={$folderMove ?? undefined}
                 role="grid"
                 aria-label="Files"
                 aria-multiselectable="true"
                 aria-colcount="4"
                 tabindex="-1"
             ></div>
-            <!-- #gallery-view is the gallery's scroll container, not a seam: the
-                 component measures it, the thumbnail controller uses it as its
-                 IntersectionObserver root, and the click delegation, the preview
-                 modal's return-to-grid and this shell's scroll-to-top all look
-                 it up by this id. So the element stays exactly as it was and only the
-                 portal that filled it from elsewhere is gone. Held back until the
-                 dashboard is up so the grid's window listeners and resize observer
-                 live no longer than the dashboard does. -->
+            <!-- The gallery's scroll container: the thumbnail observer, click
+                 delegation and scroll-to-top find it by this id. -->
             <div id="gallery-view" class="gallery-view" tabindex="-1" aria-label="Media">
                 {#if dashboardVisible}
                     <PhotosSurface />
@@ -265,15 +246,15 @@
         id="selection-bar"
         class="selection-bar mobile-selection-bar"
         style="display: none;"
-        role="status"
-        aria-live="polite"
+        role="toolbar"
+        aria-label="Selection"
     >
         {#if dashboardVisible}
             <SelectionBar
                 onDownload={openSelectedItemsDownload}
                 onMove={openSelectedItemsMove}
                 onCopy={selectionCopy?.action}
-                onDelete={openSelectedItemsDelete}
+                onDelete={trashSelectedItems}
                 onClear={clearSelection}
             />
         {/if}

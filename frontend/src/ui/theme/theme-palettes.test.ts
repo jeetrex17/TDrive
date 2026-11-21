@@ -113,8 +113,7 @@ function expectReadablePair(
 
 describe('theme palettes', () => {
     it('uses Quiet Relay as the deterministic pre-controller fallback', () => {
-        expect(paletteSource).toContain(':root:not([data-theme]),');
-        expect(paletteSource).toContain(':root[data-theme="quiet-relay"] {');
+        expect(paletteSource).toContain(':root:not([data-theme]),\n:root[data-theme="quiet-relay"] {');
         expect(paletteSource).not.toContain('prefers-color-scheme');
     });
 

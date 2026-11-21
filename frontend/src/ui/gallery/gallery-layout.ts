@@ -51,8 +51,10 @@ export function createGalleryScrollSpace(logicalHeight: number, viewportHeight: 
 
 /** Only month summaries are measured. No row/item array is built for offscreen photos. */
 export function createGalleryLayout(buckets: readonly MediaBucket[], width: number, mobile: boolean): GalleryLayout {
-    const gap = mobile ? 2 : 5;
-    const columns = Math.max(1, Math.floor((Math.max(1, width) + gap) / ((mobile ? 112 : 172) + gap)));
+    // Photos meet at a hairline on every platform, so the pictures form one
+    // surface instead of a grid of separate cards.
+    const gap = 2;
+    const columns = Math.max(1, Math.floor((Math.max(1, width) + gap) / ((mobile ? 112 : 160) + gap)));
     const cellSize = Math.max(1, (width - gap * (columns - 1)) / columns);
     const rowPitch = cellSize + gap;
     const headerHeight = mobile ? 44 : 48;

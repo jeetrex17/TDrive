@@ -19,7 +19,6 @@ export interface ToastItem {
     level: ToastLevel;
     title: string;
     body: string;
-    sticky: boolean;
     spinner: boolean;
     durationMs: number;
     // Absolute deadline for auto-dismiss. The nearest-

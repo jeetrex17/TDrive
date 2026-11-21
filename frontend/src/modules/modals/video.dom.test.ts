@@ -536,6 +536,27 @@ describe("mobile video gestures", () => {
     });
 });
 
+describe("video opening poster", () => {
+    it("shows the tapped thumbnail while the stream opens", async () => {
+        class LoadingImage {
+            onload: (() => void) | null = null;
+            set src(_value: string) { queueMicrotask(() => this.onload?.()); }
+        }
+        vi.stubGlobal("Image", LoadingImage);
+        let finishOpen: (value: unknown) => void = () => {};
+        apiMocks.openMedia.mockReturnValue(new Promise((resolve) => { finishOpen = resolve; }));
+        const controller = await import("./video");
+        deactivateVideo = controller.activateVideoModal();
+        const opening = controller.openVideoModal({ id: 7, name: "clip-7.mp4", size: 1024, posterUrl: "blob:thumb-7" });
+        const video = document.querySelector<HTMLVideoElement>("#video-player")!;
+
+        await vi.waitFor(() => expect(video.poster).toBe("blob:thumb-7"));
+        finishOpen(mediaOpenResult(7, SHARED_SESSION_ID));
+        await opening;
+        vi.unstubAllGlobals();
+    });
+});
+
 describe("video keyboard ownership", () => {
     async function openPlayback() {
         apiMocks.openMedia.mockResolvedValue(mediaOpenResult(7, SHARED_SESSION_ID));

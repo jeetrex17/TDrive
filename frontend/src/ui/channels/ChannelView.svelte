@@ -976,14 +976,14 @@
 
     .channel-row-title {
         color: var(--color-text);
-        font-size: 0.9rem;
+        font-size: var(--type-base);
         font-weight: var(--weight-semibold);
         line-height: 1.35;
     }
 
     .channel-row-meta {
         color: var(--text-muted);
-        font-size: 0.8rem;
+        font-size: var(--type-sm);
         font-weight: var(--weight-medium);
         font-variant-numeric: tabular-nums;
         line-height: 1.35;
@@ -1130,7 +1130,7 @@
     .is-mobile .channel-row {
         border-radius: 0;
         background: var(--color-surface-0);
-        transition: background-color 80ms var(--ease-standard);
+        transition: background-color var(--motion-fast) var(--ease-standard);
     }
 
     .is-mobile .channel-row:first-child { border-radius: var(--radius-xl) var(--radius-xl) 0 0; }

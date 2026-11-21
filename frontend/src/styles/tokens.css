@@ -28,14 +28,14 @@
     --inset-left: env(safe-area-inset-left, 0px);
     --inset-right: env(safe-area-inset-right, 0px);
 
-    --font-ui: 'Nunito', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    --font-ui: 'Inter Variable', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
     /* Body and metadata read at regular; labels and file names at medium;
        headings, buttons and the active item at semibold; strong is for the
        one title a screen has. */
     --weight-regular: 400;
     --weight-medium: 500;
-    --weight-semibold: 600;
-    --weight-strong: 700;
+    --weight-semibold: 560;
+    --weight-strong: 620;
     --radius-xs: 4px;
     --radius-sm: 6px;
     --radius-md: 8px;
@@ -55,6 +55,17 @@
     --space-5: 20px;
     --space-6: 24px;
     --space-8: 32px;
+
+    /* Desktop frame. The content panel sits --window-inset from the window on
+       every side, including the sidebar's; everything inside it starts and
+       ends --gutter from its edges, so left and right margins always match. */
+    --window-inset: 8px;
+    --gutter: 16px;
+    /* One height for every control in a toolbar row. */
+    --toolbar-control: 32px;
+    /* How far a control gives under a press. Small glyph targets (the tab
+       icons, the floating add button) press deeper so the give is visible. */
+    --press-scale: 0.97;
 
     --motion-fast: 120ms;
     --motion-med: 180ms;
@@ -98,6 +109,17 @@
     /* Accent used as text. A palette whose accent is too light to read on its
        own surfaces points this at a darker step; the rest inherit the accent. */
     --color-accent-text: var(--color-accent);
+
+    /* The primary action. Most palettes fill it with their accent; Graphite and
+       Chalk use a neutral so colour stays reserved for focus and selection. */
+    --color-action: var(--color-accent);
+    --color-action-hover: var(--color-accent-hover);
+    --color-on-action: var(--color-on-accent);
+
+    /* Where you are: the active sidebar place, tab and sort column. Each palette
+       marks it in its accent; Graphite and Chalk keep it neutral. */
+    --color-current-bg: var(--overlay-accent-1);
+    --color-current-text: var(--color-accent);
 
     /* Compatibility aliases used by the current frontend modules. */
     --bg-dark: var(--color-canvas);

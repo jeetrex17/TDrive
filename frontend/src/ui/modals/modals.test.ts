@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { render } from 'svelte/server';
-import DeleteModal from './DeleteModal.svelte';
 import EncryptionPasswordModal from './EncryptionPasswordModal.svelte';
 import ImportOptionsModal from './ImportOptionsModal.svelte';
 import JoinRequestsModal from './JoinRequestsModal.svelte';
@@ -9,7 +8,6 @@ import LogoutModal from './LogoutModal.svelte';
 import MoveModal from './MoveModal.svelte';
 import RenameModal from './RenameModal.svelte';
 import UploadOptionsModal from './UploadOptionsModal.svelte';
-import { closeDeleteModalView, openDeleteModalView } from './delete-modal-store';
 import {
     closeRenameModalView,
     openRenameModalView,
@@ -44,7 +42,6 @@ function makePlan(overrides: Partial<ImportOptionsPlan> = {}): ImportOptionsPlan
 }
 
 afterEach(() => {
-    closeDeleteModalView();
     closeRenameModalView();
     encryptionPasswordModal.close();
     importOptionsModal.close();
@@ -55,60 +52,6 @@ afterEach(() => {
     moveModal.close();
     resetMoveBrowse('');
     uploadOptionsModal.close();
-});
-
-describe('DeleteModal', () => {
-    it('renders nothing while closed', () => {
-        const { body } = render(DeleteModal, { props: { onConfirm: () => {} } });
-        expect(body).not.toContain('modal-card');
-    });
-
-    it('renders the pre-computed copy and a danger confirm', () => {
-        openDeleteModalView({
-            title: 'Delete file?',
-            itemName: 'notes.txt',
-            subtitle: "This will remove the file from your Telegram channel. The action can't be undone.",
-            confirmLabel: 'Delete file',
-        });
-
-        const { body } = render(DeleteModal, { props: { onConfirm: () => {} } });
-
-        expect(body).toContain('Delete file?');
-        expect(body).toContain('class="delete-target-name"');
-        expect(body).toContain('notes.txt');
-        expect(body).toContain('This will remove the file from your Telegram channel.');
-        expect(body).toContain('danger-btn');
-        expect(body).toContain('>Delete file</button>');
-        expect(body).toContain('aria-labelledby="delete-modal-title"');
-    });
-
-    it('escapes untrusted names in the item label', () => {
-        openDeleteModalView({
-            title: 'Delete file?',
-            itemName: '<img src=x>',
-            subtitle: 'sub',
-            confirmLabel: 'Delete',
-        });
-
-        const { body } = render(DeleteModal, { props: { onConfirm: () => {} } });
-
-        expect(body).not.toContain('<img src=x>');
-    });
-
-    it('keeps long delete targets out of the heading', () => {
-        const longName = '@Jesseverse_The_Mentalist_S02E05_720p_WEB_DL_x264_350MB_PaHe_in.mkv';
-        openDeleteModalView({
-            title: 'Delete file?',
-            itemName: longName,
-            subtitle: 'sub',
-            confirmLabel: 'Delete',
-        });
-
-        const { body } = render(DeleteModal, { props: { onConfirm: () => {} } });
-
-        expect(body).toContain('<h3 id="delete-modal-title" class="modal-title">Delete file?</h3>');
-        expect(body).toContain(longName);
-    });
 });
 
 describe('RenameModal', () => {

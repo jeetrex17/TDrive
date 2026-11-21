@@ -2,7 +2,7 @@
 
 import { state } from '../state';
 import { getInteractiveFileListRows } from '../ui/file-list/file-list-store';
-import { openDeleteModal } from './modals/delete';
+import { moveToTrash } from './modals/delete';
 import { openMoveModal } from './modals/move';
 import { enqueueDownload, enqueueFolderDownload } from './transfers';
 import { notify } from './notifications';
@@ -97,11 +97,21 @@ function renderedRowsByKey(list: HTMLElement): Map<string, HTMLElement> {
         .map((row) => [getRowKey(row), row] as const)
         .filter(([key]) => Boolean(key)));
 }
+/** The selection's total size; unknown as soon as it includes a folder. */
+function selectionBytes(): number | null {
+    let total = 0;
+    for (const item of state.selectedItems.values()) {
+        if (item.type === 'folder') return null;
+        total += Math.max(0, Number(item.size) || 0);
+    }
+    return total;
+}
+
 export function updateSelectionBar(): void {
     syncSelectedRowKeys();
     if (!state.selectionBarEl) return;
     const count = state.selectedItems.size;
-    setSelectionCount(count);
+    setSelectionCount(count, selectionBytes());
     state.selectionBarEl.style.display = count === 0 ? 'none' : 'flex';
 }
 
@@ -309,9 +319,9 @@ export function getSelectionPayload(): FileCommandItem[] {
     return Array.from(state.selectedItems.values(), ({ row: _row, ...payload }) => payload);
 }
 
-export function openSelectedItemsDelete(): void {
+export function trashSelectedItems(): void {
     if (state.selectedItems.size === 0) return;
-    openDeleteModal({ type: 'bulk', items: getSelectionPayload(), parentId: state.currentFolderId });
+    void moveToTrash({ type: 'bulk', items: getSelectionPayload(), parentId: state.currentFolderId });
 }
 
 export function openSelectedItemsMove(): void {

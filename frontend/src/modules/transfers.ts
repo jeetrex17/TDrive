@@ -29,6 +29,7 @@ import { humanizeBackendError } from './errors';
 import { appActions } from './app-actions';
 import { loadEncryptionStatus } from './encryption';
 import { openUploadOptionsModal, cancelUploadOptions } from './modals/upload-options';
+import { encryptUploads, setEncryptUploads } from './upload-preferences';
 import { activateFileSelectionProgress } from './file-selection';
 import { openImportOptionsModal, cancelImportOptions } from './modals/import-options';
 import { openEncryptionSetupModal } from './modals/encryption-setup';
@@ -404,7 +405,7 @@ function notifyDownloadFailure(item: DownloadQueueItem, error: OperationError | 
         history: false,
         action: {
             label: 'Retry',
-            // One shot. The toast is sticky, so without this it sits there
+            // One shot. The toast stays up for a while, so without this it sits there
             // offering to retry a download that is already running again, and
             // a second tap re-queues a key that is mid-flight -- which resets
             // the queue entry's progress under it.
@@ -1166,12 +1167,14 @@ async function importAndroidFolder(parentID: string, destination: UploadDestinat
             folders: folderPathsFor(manifest).length, bytes: manifest.files.reduce((sum, file) => sum + file.size, 0),
             oversize: 0, empty: encrypt ? 0 : emptyFiles, archives: 0, ignored: 0,
             maxBytes: 0, maxItems: 10_000, limitExceeded: manifest.files.length > 10_000, errorCount: 0, errors: [] });
-        const plan = planFor(false);
+        const encryptDefault = destination.personal && get(encryptUploads) === true;
+        const plan = planFor(encryptDefault);
         if (destination.personal) await loadEncryptionStatus();
         if (!isCurrentDestination(destination)) return;
-        const choice = await openImportOptionsModal({ plan, personal: destination.personal, hasArchives: false,
+        const choice = await openImportOptionsModal({ plan, personal: destination.personal, hasArchives: false, encrypt: encryptDefault,
             queued: selectionIsQueued(), destination: destination.destination, names: [manifest.root], replan: async (encrypt) => planFor(encrypt) });
         if (!choice || !isCurrentDestination(destination)) return;
+        if (destination.personal) setEncryptUploads(choice.encrypt);
         if (choice.encrypt && !state.encryption.passwordRemembered) {
             const ok = state.encryption.passwordSet ? await openEncryptionPasswordModal() : await openEncryptionSetupModal();
             if (!ok || !isCurrentDestination(destination)) return;
@@ -1436,9 +1439,10 @@ async function importSelection(parentID: string, paths: string[], destination: U
     if (!paths.length) return;
     let enqueued = false;
     try {
+        const remembered = get(encryptUploads);
         const [, plan] = await Promise.all([
             destination.personal ? loadEncryptionStatus() : Promise.resolve(),
-            planImport(paths, false, false).catch(() => null),
+            planImport(paths, destination.personal && remembered === true, false).catch(() => null),
         ]);
         if (!isCurrentDestination(destination)) return;
         if (!plan) { notify({ level: 'error', title: 'Could not read the selection', body: 'Please try again.' }); return; }
@@ -1453,15 +1457,20 @@ async function importSelection(parentID: string, paths: string[], destination: U
         let extract = false;
         if (complex) {
             const choice = await openImportOptionsModal({ plan, personal: destination.personal, hasArchives: plan.archives > 0,
-                queued, destination: destination.destination, names,
+                queued, destination: destination.destination, names, encrypt: destination.personal && remembered === true,
                 replan: (encrypt, extract) => planImport(paths, encrypt, extract) });
             if (!choice || !isCurrentDestination(destination)) return;
             ({ encrypt, extract } = choice);
-        } else if (destination.personal || queued) {
-            const choice = await openUploadOptionsModal({ count: plan.files || paths.length, personal: destination.personal,
+            if (destination.personal) setEncryptUploads(encrypt);
+        } else if (destination.personal && remembered === null) {
+            // Asked once; the answer becomes the default for later uploads.
+            const choice = await openUploadOptionsModal({ count: plan.files || paths.length, personal: true,
                 queued, destination: destination.destination, names });
             if (!choice || !isCurrentDestination(destination)) return;
-            encrypt = destination.personal && choice.encrypt;
+            encrypt = choice.encrypt;
+            setEncryptUploads(encrypt);
+        } else if (destination.personal) {
+            encrypt = remembered === true;
         }
         if (encrypt && !state.encryption.passwordRemembered) {
             const ok = state.encryption.passwordSet ? await openEncryptionPasswordModal() : await openEncryptionSetupModal();

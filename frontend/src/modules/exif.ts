@@ -2,8 +2,7 @@
 // Apple-style info card shows from a JPEG's APP1 block (capture date, camera,
 // exposure, dimensions, GPS) and returns whatever it can; any malformed or
 // missing field is simply absent. It never throws: callers render whatever is
-// present. The lightbox already holds the full image bytes, so parsing here
-// costs nothing extra.
+// present. The viewer reads only the start of the original, where APP1 sits.
 
 export interface ImageExif {
     takenTime?: number; // unix seconds, from DateTimeOriginal
@@ -41,17 +40,32 @@ const TAG_GPS_LON = 0x0004;
 // Bytes per EXIF/TIFF field type, indexed by type id. 0 marks types we ignore.
 const TYPE_SIZE: Record<number, number> = { 1: 1, 2: 1, 3: 2, 4: 4, 5: 8, 7: 1, 9: 4, 10: 8 };
 
-/** Decode a base64 data URL into raw bytes, or null if it is not one. */
-export function dataUrlToBytes(dataUrl: string): Uint8Array | null {
-    const comma = dataUrl.indexOf(",");
-    if (comma < 0 || !/;base64/i.test(dataUrl.slice(0, comma))) return null;
+// APP1 is capped at 64 KB and leads the file in camera JPEGs; the margin covers
+// an APP0/JFIF segment ahead of it.
+const EXIF_PREFIX_BYTES = 128 * 1024;
+
+/**
+ * Reads EXIF from the start of an image stream. The media server answers
+ * ranges; a server that ignores the range is cut off at the same length.
+ */
+export async function readExif(url: string, signal?: AbortSignal): Promise<ImageExif> {
     try {
-        const bin = atob(dataUrl.slice(comma + 1));
-        const out = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
-        return out;
+        const response = await fetch(url, { headers: { Range: `bytes=0-${EXIF_PREFIX_BYTES - 1}` }, signal });
+        if (!response.ok || !response.body) return {};
+        const reader = response.body.getReader();
+        const bytes = new Uint8Array(EXIF_PREFIX_BYTES);
+        let length = 0;
+        while (length < bytes.length) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            const take = Math.min(value.byteLength, bytes.length - length);
+            bytes.set(value.subarray(0, take), length);
+            length += take;
+        }
+        void reader.cancel().catch(() => {});
+        return parseExif(bytes.subarray(0, length));
     } catch {
-        return null;
+        return {};
     }
 }
 

@@ -193,7 +193,9 @@ static void tdriveInstallEdgeBackGesture(WailsViewController *controller) {
     gesture.delaysTouchesEnded = NO;
     [controller.view addGestureRecognizer:gesture];
     UIView *indicator = [[UIView alloc] initWithFrame:CGRectZero];
-    indicator.backgroundColor = [UIColor colorWithRed:0.0 green:0.478 blue:1.0 alpha:1.0];
+    // Follows light and dark like system chrome, rather than a fixed blue
+    // that clashes with whichever accent the theme uses.
+    indicator.backgroundColor = UIColor.labelColor;
     indicator.layer.cornerRadius = 2.5;
     indicator.userInteractionEnabled = NO;
     indicator.accessibilityElementsHidden = YES;
