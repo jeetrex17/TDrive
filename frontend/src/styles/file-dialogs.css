@@ -225,82 +225,27 @@
 
 .preview-chrome {
     position: absolute;
-    top: 22px;
-    left: 24px;
-    right: 24px;
+    top: 0;
+    left: 0;
+    right: 0;
     /* The original photo is also positioned. Keep the visible controls above
        it so Android hit-testing reaches the buttons instead of the image. */
     z-index: 6;
-    display: flex;
-    align-items: flex-start;
-    justify-content: space-between;
-    gap: 18px;
+    padding: 18px 20px 40px 24px;
+    background: linear-gradient(to bottom, rgba(5, 7, 12, 0.78), rgba(5, 7, 12, 0.34) 52%, rgba(5, 7, 12, 0));
     opacity: 0;
-    transform: translateY(-10px);
+    transform: translateY(-8px);
     transition: opacity 0.22s ease, transform 0.22s ease;
+    /* Swipes on the scrim reach the photo; only the buttons take taps. */
     pointer-events: none;
 }
 
-.preview-overlay.is-chrome-visible .preview-chrome {
+.preview-chrome .viewer-icon-btn { pointer-events: auto; }
+
+.preview-overlay.is-chrome-visible .preview-chrome,
+.preview-overlay.is-preview-error .preview-chrome {
     opacity: 1;
     transform: translateY(0);
-}
-
-.preview-filename,
-.preview-close-btn {
-    pointer-events: auto;
-    backdrop-filter: blur(18px);
-    -webkit-backdrop-filter: blur(18px);
-}
-
-.preview-filename {
-    min-width: 0;
-    max-width: min(68vw, 760px);
-    padding: 11px 16px;
-    border-radius: var(--radius-pill);
-    background: rgba(12, 14, 22, 0.56);
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    box-shadow: 0 14px 40px rgba(0,0,0,0.22);
-    color: rgba(255,255,255,0.94);
-    font-size: var(--type-base);
-    font-weight: 700;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    letter-spacing: 0.01em;
-}
-
-.preview-close-btn {
-    width: 44px;
-    height: 44px;
-    flex-shrink: 0;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: var(--radius-pill);
-    background: rgba(12, 14, 22, 0.56);
-    color: rgba(255, 255, 255, 0.9);
-    font-size: var(--type-2xl);
-    line-height: 1;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 14px 40px rgba(0,0,0,0.22);
-    transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
-}
-
-.preview-close-btn:focus-visible {
-    background: rgba(20, 23, 34, 0.74);
-    border-color: rgba(255, 255, 255, 0.16);
-    transform: translateY(-1px);
-    outline: none;
-}
-@media (hover: hover) {
-    .preview-close-btn:hover {
-        background: rgba(20, 23, 34, 0.74);
-        border-color: rgba(255, 255, 255, 0.16);
-        transform: translateY(-1px);
-        outline: none;
-    }
 }
 
 .preview-content {
@@ -413,39 +358,17 @@
 }
 .preview-error-retry:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
-.preview-overlay.is-preview-error .preview-close-btn {
-    opacity: 1;
-}
-
-.preview-overlay.is-preview-loading .preview-filename {
+.preview-overlay:is(.is-preview-loading, .is-preview-error) .preview-chrome .viewer-title {
     opacity: 0;
-    transform: translateY(-10px);
-    pointer-events: none;
-}
-.preview-overlay.is-preview-error .preview-filename {
-    opacity: 0;
-    transform: translateY(-10px);
-    pointer-events: none;
 }
 
 @media (max-width: 720px) {
     .preview-chrome {
-        top: 16px;
-        left: 16px;
-        right: 16px;
-        gap: 12px;
+        padding: 12px 12px 36px 16px;
     }
 
-    .preview-filename {
-        max-width: calc(100vw - 96px);
-        padding: 10px 14px;
+    .preview-chrome .viewer-title {
         font-size: var(--type-base);
-    }
-
-    .preview-close-btn {
-        width: 42px;
-        height: 42px;
-        font-size: var(--type-xl);
     }
 
     .preview-content {

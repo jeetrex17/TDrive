@@ -155,37 +155,6 @@
 }
 
 /* ----- Lightbox: download, list navigation, counter ----- */
-.preview-chrome-actions { display: flex; align-items: center; gap: 10px; pointer-events: auto; }
-.preview-icon-btn {
-    width: 46px; height: 46px;
-    flex-shrink: 0;
-    display: flex; align-items: center; justify-content: center;
-    border: 1px solid rgba(255, 255, 255, 0.08);
-    border-radius: var(--radius-pill);
-    background: rgba(12, 14, 22, 0.56);
-    color: rgba(255, 255, 255, 0.9);
-    cursor: pointer;
-    -webkit-backdrop-filter: blur(18px);
-    backdrop-filter: blur(18px);
-    box-shadow: 0 14px 40px rgba(0,0,0,0.22);
-    transition: transform 0.16s ease, background 0.16s ease, border-color 0.16s ease;
-}
-.preview-icon-btn:focus-visible {
-    background: rgba(20, 23, 34, 0.74);
-    border-color: rgba(255, 255, 255, 0.16);
-    transform: translateY(-1px);
-    outline: none;
-}
-@media (hover: hover) {
-    .preview-icon-btn:hover {
-        background: rgba(20, 23, 34, 0.74);
-        border-color: rgba(255, 255, 255, 0.16);
-        transform: translateY(-1px);
-        outline: none;
-    }
-}
-.preview-icon-btn svg { width: 20px; height: 20px; }
-
 .preview-nav {
     position: absolute;
     top: 50%;
@@ -686,31 +655,21 @@ html.mobile .preview-original {
     height: 100%;
 }
 html.mobile .preview-chrome {
-    top: calc(var(--inset-top) + 10px);
     /* Held sideways the sensor housing eats one edge, so the close button has
        to start after it rather than under it. */
-    left: calc(var(--inset-left) + 12px);
-    right: calc(var(--inset-right) + 12px);
-    gap: 10px;
+    padding: calc(var(--inset-top) + 8px) calc(var(--inset-right) + 8px) 44px calc(var(--inset-left) + 16px);
+    gap: 12px;
 }
-html.mobile .preview-filename,
-html.mobile .preview-close-btn,
-html.mobile .preview-icon-btn,
+html.mobile .preview-chrome .viewer-title {
+    font-size: var(--mobile-type-body);
+    font-weight: var(--weight-strong);
+}
 html.mobile .preview-counter {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
     background: rgba(12, 14, 22, 0.74);
     box-shadow: none;
 }
-html.mobile .preview-filename {
-    flex: 1 1 auto;
-    max-width: none;
-    padding: 10px 14px;
-    font-size: var(--type-base);
-}
-html.mobile .preview-close-btn,
-html.mobile .preview-icon-btn { width: 44px; height: 44px; }
-html.mobile .preview-chrome-actions { gap: 8px; }
 html.mobile .preview-nav { display: none; }
 html.mobile .preview-counter { bottom: calc(var(--inset-bottom) + 16px); }
 html.mobile .preview-loading { width: min(200px, calc(100vw - 80px)); }

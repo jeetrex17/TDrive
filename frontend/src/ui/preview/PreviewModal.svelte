@@ -9,23 +9,20 @@
     import InfoIcon from '@lucide/svelte/icons/info';
     import LockIcon from '@lucide/svelte/icons/lock';
     import XIcon from '@lucide/svelte/icons/x';
+    import ViewerTopBar from '../viewers/ViewerTopBar.svelte';
 </script>
 
 <div id="preview-shell" class="preview-shell" role="dialog" aria-modal="true" aria-labelledby="preview-filename">
-    <div class="preview-chrome">
-        <div id="preview-filename" class="preview-filename" aria-live="polite"></div>
-        <div class="preview-chrome-actions">
-            <button id="preview-info-btn" class="preview-icon-btn" type="button" aria-label="Photo info" aria-pressed="false" title="Info (i)">
+    <ViewerTopBar class="preview-chrome" titleId="preview-filename" liveTitle closeId="preview-close" closeLabel="Close preview">
+        {#snippet actions()}
+            <button id="preview-info-btn" class="viewer-icon-btn" type="button" aria-label="Photo info" aria-pressed="false" title="Info (i)">
                 <InfoIcon aria-hidden="true" />
             </button>
-            <button id="preview-download" class="preview-icon-btn" type="button" aria-label="Download original" title="Download original">
+            <button id="preview-download" class="viewer-icon-btn" type="button" aria-label="Download original" title="Download original">
                 <DownloadIcon aria-hidden="true" />
             </button>
-            <button id="preview-close" class="preview-close-btn" type="button" aria-label="Close preview" title="Close preview">
-                <XIcon aria-hidden="true" />
-            </button>
-        </div>
-    </div>
+        {/snippet}
+    </ViewerTopBar>
 
     <button id="preview-prev" class="preview-nav preview-nav-prev" type="button" aria-label="Previous image" hidden>
         <ChevronLeftIcon aria-hidden="true" />
