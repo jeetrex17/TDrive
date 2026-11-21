@@ -8,6 +8,7 @@
 @import './styles/activity.css';
 @import './styles/files.css';
 @import './styles/modals.css';
+@import './styles/viewer-topbar.css';
 @import './styles/document-viewers.css';
 @import './styles/account.css';
 @import './styles/file-dialogs.css';

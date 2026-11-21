@@ -1,0 +1,82 @@
+/* ----- Viewer top bar: shared by the photo, video and document viewers ----- */
+/* Owners place the bar and fade it; this sets what is inside it. */
+.viewer-topbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: var(--space-4);
+    min-width: 0;
+    color: var(--viewer-text);
+}
+
+.viewer-title-group {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.viewer-title {
+    margin: 0;
+    overflow: hidden;
+    color: var(--viewer-text);
+    font-size: var(--type-lg);
+    font-weight: 800;
+    line-height: 1.25;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.viewer-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    margin-top: 3px;
+    color: var(--viewer-text-muted);
+    font-size: var(--type-xs);
+    font-weight: 600;
+}
+
+.viewer-meta:empty { display: none; }
+
+.viewer-actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    flex: 0 0 auto;
+}
+
+.viewer-icon-btn {
+    width: 44px;
+    height: 44px;
+    flex-shrink: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 0;
+    border-radius: var(--radius-pill);
+    background: transparent;
+    color: var(--viewer-text);
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: background-color var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
+}
+
+.viewer-icon-btn svg { width: 20px; height: 20px; }
+
+@media (hover: hover) {
+    .viewer-icon-btn:hover { background: var(--viewer-overlay-3); }
+}
+
+.viewer-icon-btn:active { background: var(--viewer-overlay-2); transform: scale(0.96); }
+.viewer-icon-btn[aria-pressed="true"] { background: var(--viewer-overlay-3); }
+
+.viewer-icon-btn:focus-visible {
+    outline: none;
+    box-shadow: var(--viewer-focus-ring);
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .viewer-icon-btn { transition: none; }
+    .viewer-icon-btn:active { transform: none; }
+}
