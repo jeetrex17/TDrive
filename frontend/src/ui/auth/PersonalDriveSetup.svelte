@@ -542,17 +542,6 @@
     button:disabled { opacity: 0.5; cursor: default; }
     button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
-    .sr-only {
-        position: absolute;
-        width: 1px;
-        height: 1px;
-        padding: 0;
-        margin: -1px;
-        overflow: hidden;
-        clip: rect(0, 0, 0, 0);
-        white-space: nowrap;
-        border: 0;
-    }
 
     @keyframes drive-spin { to { transform: rotate(360deg); } }
     @keyframes drive-scan-slide {

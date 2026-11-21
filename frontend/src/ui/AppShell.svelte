@@ -291,7 +291,7 @@
                 </button>
             </div>
             <div class="col-actions" role="columnheader" aria-colindex="4">
-                <span>Actions</span>
+                <span class="sr-only">Actions</span>
             </div>
         </div>
 

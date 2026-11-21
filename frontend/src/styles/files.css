@@ -204,7 +204,17 @@
     line-height: 1.45;
 }
 .file-state-actions {
-    margin-top: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: var(--space-2);
+    margin-top: var(--space-2);
+}
+/* The first action is the one the empty place is asking for. */
+.file-state-actions .secondary-btn:first-child {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: var(--color-on-accent);
 }
 .file-state.is-loading {
     display: block;
@@ -212,7 +222,6 @@
     min-height: 0;
     padding: 0;
 }
-.file-state .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0; }
 /* The skeleton is the real row's shape -- same height, tile and columns, and no
    dividers -- so the list does not jump when the rows land over it. */
 .file-state-skeleton { display: grid; width: 100%; }
@@ -358,8 +367,6 @@
     font-size: var(--type-base);
     font-weight: var(--weight-medium);
     white-space: nowrap;
-    user-select: text;
-    -webkit-user-select: text;
 }
 .row-label {
     flex: 1 1 auto;
@@ -780,9 +787,6 @@ html.mobile .file-state-body {
     text-wrap: pretty;
 }
 html.mobile .file-state-actions {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
     gap: 10px;
     margin-top: 14px;
 }
@@ -790,11 +794,6 @@ html.mobile .file-state-actions .secondary-btn {
     min-height: var(--touch-target);
     padding: 0 18px;
     font-size: var(--mobile-type-body);
-}
-html.mobile .file-state-actions .secondary-btn:first-child {
-    background: var(--accent);
-    border-color: var(--accent);
-    color: var(--color-on-accent);
 }
 html.mobile .file-state-actions .secondary-btn:active { transform: scale(0.97); }
 
