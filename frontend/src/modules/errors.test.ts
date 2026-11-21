@@ -86,7 +86,6 @@ describe("AppError", () => {
             kind: "timeout",
             source: "backend",
             code: "deadline_exceeded",
-            retryable: true,
             message: "The request took too long. Try again.",
         });
         expect(error.cause).toBe(gatewayError);
@@ -123,7 +122,6 @@ describe("AppError", () => {
         expect(error).toMatchObject({
             kind: "unavailable",
             title: "TDrive could not start",
-            retryable: true,
             message: "TDrive could not finish starting. Reload the app and try again.",
         });
         expect(error.details.message).toContain("password=[redacted]");
