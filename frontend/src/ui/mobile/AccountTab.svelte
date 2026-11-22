@@ -192,7 +192,7 @@
     {#if $accountDetail}
         <section class="account-detail" aria-label={ACCOUNT_DETAIL_TITLES[$accountDetail]}>
             {#if $accountDetail === 'appearance'}
-                <AppearancePanel autofocus />
+                <AppearancePanel autofocus layout="settings" />
             {:else}
                 <PhotoBackupPanel page />
             {/if}
