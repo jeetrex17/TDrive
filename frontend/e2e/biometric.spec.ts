@@ -1,3 +1,4 @@
+import { openSettingsSection } from './settings-helpers';
 import { bootTDrive, deferred, expect, resolves, test } from './wails-mock';
 import type { Page } from '@playwright/test';
 import { FIRST_PHOTO, SECOND_PHOTO, galleryPlans, previewImageContents, routeRenditions } from './gallery-fixtures';
@@ -160,8 +161,7 @@ test('the gallery lightbox discards late biometric capability from the previous 
 });
 
 async function openBackup(page: Page) {
-    await page.locator('#profile-trigger').click();
-    await page.getByRole('menuitem', { name: 'Photo & video backup' }).click();
+    await openSettingsSection(page, 'Photo backup');
     return page.getByRole('region', { name: 'Photo and video backup' });
 }
 
@@ -232,8 +232,7 @@ test('device enrollment is explicit and Touch ID unlock is reused for the curren
         EnableBiometricUnlock: resolves({ ok: true }), UseBiometricUnlock: resolves({ ok: true }),
         GetPhotoBackupState: resolves(backup), RunPhotoBackup: resolves({ ok: true }),
     });
-    await page.locator('#profile-trigger').click();
-    await page.locator('#profile-menu-encryption-settings').click();
+    await (await openSettingsSection(page, 'Encryption')).getByRole('button', { name: 'Manage…' }).click();
     const settings = page.getByRole('dialog', { name: 'Encryption settings' });
     await expect(settings).toBeVisible();
     await settings.getByRole('button', { name: 'Device unlock', exact: true }).click();
@@ -299,8 +298,7 @@ test('canceled enrollment reports remaining device access when native cleanup fa
         EnableBiometricUnlock: deferred('cleanup-failure', { ok: false, error: { code: 'biometric_cleanup_required', message: 'Private native details' } }),
         CancelBiometricUnlock: resolves({ ok: true }),
     });
-    await page.locator('#profile-trigger').click();
-    await page.locator('#profile-menu-encryption-settings').click();
+    await (await openSettingsSection(page, 'Encryption')).getByRole('button', { name: 'Manage…' }).click();
     const settings = page.getByRole('dialog', { name: 'Encryption settings' });
     await settings.getByRole('button', { name: 'Device unlock', exact: true }).click();
     await settings.locator('#encryption-biometric-password').fill('device-password');
@@ -325,8 +323,7 @@ for (const platform of ['desktop', 'android'] as const) {
             await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Account', exact: true }).click();
             await page.getByRole('button', { name: 'Encryption settings', exact: true }).click();
         } else {
-            await page.locator('#profile-trigger').click();
-            await page.locator('#profile-menu-encryption-settings').click();
+            await (await openSettingsSection(page, 'Encryption')).getByRole('button', { name: 'Manage…' }).click();
         }
         const settings = page.getByRole('dialog', { name: 'Encryption settings' });
         await expect(settings).toBeVisible();
