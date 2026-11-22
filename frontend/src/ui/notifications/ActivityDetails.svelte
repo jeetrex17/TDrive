@@ -18,7 +18,7 @@
     import { fileTypeFamily, fileTypeIcon } from '../file-list/file-type';
     import { uploadsPaused, type UploadActivityFile } from './upload-activity-store';
     import type { ActivityEntry } from './activity-model';
-    import { activityTimestamp, batchLabel, fileCountLabel, groupFilesByFolder, isBatchPaused } from './activity-model';
+    import { activityTimestamp, batchFailedFileCount, batchLabel, fileCountLabel, groupFilesByFolder, isBatchPaused } from './activity-model';
     import { etaSeconds, formatEta, formatSizePair, transferPercent, transferredBytes } from './transfer-view';
     import TransferRow from './TransferRow.svelte';
     import ResumableUploadRow from './ResumableUploadRow.svelte';
@@ -125,7 +125,7 @@
         // The title already says done or canceled; a failure says how much.
         if (batch.status === 'done' || batch.status === 'canceled') return '';
         if (batch.status === 'failed' && !linkedJobs.length) {
-            const failed = batch.files.filter((file) => file.status === 'failed').length;
+            const failed = batchFailedFileCount(batch);
             return failed ? `${failed} of ${fileCountLabel(batch.fileCount)} didn't upload` : batchLabel(batch, $resumableUploads, activeDriveId);
         }
         if (batch.status !== 'queued' || paused) return batchLabel(batch, $resumableUploads, activeDriveId);
@@ -211,6 +211,9 @@
 
         <section class="files-section" aria-label="Files in upload">
             {#if batch.files.length > 0}
+                {#if (batch.failedFileCount ?? 0) > batch.files.length}
+                    <p class="detail-note">Showing {batch.files.length.toLocaleString()} of {batch.failedFileCount?.toLocaleString()} failed files.</p>
+                {/if}
                 {#if chips.length}
                     <div class="file-chips" role="group" aria-label="Show files">
                         {#each chips as chip (chip.filter)}

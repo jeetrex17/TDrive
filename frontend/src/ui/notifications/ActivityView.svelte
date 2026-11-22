@@ -25,6 +25,7 @@
     import { historyEvents, type NoticeEvent } from './notif-store';
     import { visibleHistory } from './visible-history';
     import { uploadActivities, uploadsPaused, clearUploadActivityHistory } from './upload-activity-store';
+    import { failedUploadHistory } from './failed-upload-history';
     import { activityView, closeActivity, type ActivityTab } from './activity-store';
     import { ACTIVITY_FILTERS, activityEntries, activityTimestamp, isBatchPaused, matchesActivity, type ActivityEntry, type ActivityFilter } from './activity-model';
     import { formatAge, transferPercent } from './transfer-view';
@@ -53,7 +54,11 @@
         return () => clearInterval(timer);
     });
     const activeDriveId = $derived($sidebarState.activeChannelId);
-    const entries = $derived(activityEntries($uploadActivities, $visibleHistory, $resumableUploads, $resumableDownloads,
+    const batches = $derived.by(() => {
+        const sessionIds = new Set($uploadActivities.map((batch) => batch.id));
+        return [...$uploadActivities, ...$failedUploadHistory.filter((batch) => !sessionIds.has(batch.id))];
+    });
+    const entries = $derived(activityEntries(batches, $visibleHistory, $resumableUploads, $resumableDownloads,
         { allEvents: $historyEvents, activeDriveId, now: $clock, uploadsPaused: $uploadsPaused, sourceCopies: $sourceCopyActivity, checkingCopies: $activeCopyChecks }));
     const transfers = $derived(entries.filter((entry) => (
         filter === 'All' || entry.status === filter ||
@@ -73,7 +78,7 @@
     });
     const uploadRunning = $derived($uploadActivities.some((entry) => entry.status === 'active'));
     // Reports from a batch still listed belong to its detail page, not a second card.
-    const orphanReports = $derived($failedUploadReports.filter((report) => !report.activityId || !$uploadActivities.some((entry) => entry.id === report.activityId)));
+    const orphanReports = $derived($failedUploadReports.filter((report) => !report.activityId || !batches.some((entry) => entry.id === report.activityId)));
     // Search and filters only appear once the tab has something to narrow.
     const tabHasItems = $derived(tab === 'transfers'
         ? entries.length > 0 || orphanReports.length > 0
@@ -90,7 +95,7 @@
         return parts.length ? parts.join(' · ') : 'Nothing in progress';
     });
     const canClear = $derived($historyEvents.some((entry) => entry.kind === 'event' || !['queued', 'active', 'paused', 'canceling'].includes(entry.status))
-        || $uploadActivities.some((entry) => entry.status !== 'queued' && entry.status !== 'active')
+        || batches.some((entry) => entry.status !== 'queued' && entry.status !== 'active')
         || $sourceCopyActivity.some((entry) => entry.status !== 'pending'));
 
     $effect(() => {

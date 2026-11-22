@@ -19,6 +19,10 @@ export function fileCountLabel(count: number): string {
     return `${count.toLocaleString()} ${count === 1 ? 'file' : 'files'}`;
 }
 
+export function batchFailedFileCount(batch: UploadActivity): number {
+    return batch.failedFileCount ?? batch.files.filter((file) => file.status === 'failed').length;
+}
+
 /** A queued batch only runs while its drive is open; the backend rejects any other. */
 export function isBatchPaused(batch: UploadActivity, activeDriveId: number | null | undefined): boolean {
     return batch.status === 'queued' && typeof activeDriveId === 'number' && batch.driveId !== activeDriveId;
@@ -41,7 +45,7 @@ export function batchLabel(batch: UploadActivity, jobs: readonly ResumableUpload
 /** The list line: the state first, then the one figure worth reading beside it. */
 export function batchSummary(batch: UploadActivity, jobs: readonly ResumableUpload[] = [], activeDriveId?: number | null, transfer?: TransferEvent, now = Date.now(), paused = false): string {
     const label = batchLabel(batch, jobs, activeDriveId, paused);
-    const failed = batch.files.filter((file) => file.status === 'failed').length;
+    const failed = batchFailedFileCount(batch);
     const percent = batch.status === 'active' && transfer ? transferPercent(transfer) : null;
     const figure = percent !== null ? `${Math.round(percent)}%`
         : batch.status === 'failed' && failed > 0 ? `${failed} of ${fileCountLabel(batch.fileCount)} failed`

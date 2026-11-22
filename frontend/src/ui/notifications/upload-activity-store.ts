@@ -1,4 +1,5 @@
 import { get, writable } from 'svelte/store';
+import { clearFailedUploadHistory, rememberFailedUploadActivity } from './failed-upload-history';
 
 export type UploadActivityStatus = 'queued' | 'active' | 'done' | 'failed' | 'canceled';
 export interface UploadActivityFile {
@@ -24,6 +25,8 @@ export interface UploadActivity {
     status: UploadActivityStatus;
     files: readonly UploadActivityFile[];
     fileCount: number;
+    /** Failed files in the original batch when saved details were capped. */
+    failedFileCount?: number;
     transferId?: string;
     error?: string;
     resumableJobIds?: readonly string[];
@@ -115,6 +118,10 @@ export function finishUploadActivity(id: string, status: UploadActivityStatus, f
             message: failed.get(file.index)?.message ?? file.message,
         })),
     } : entry));
+    if (status === 'failed' || status === 'canceled') {
+        const finished = get(uploadActivities).find((entry) => entry.id === id);
+        if (finished) rememberFailedUploadActivity(finished);
+    }
 }
 export function uploadActivityFilesPage(id: string, offset = 0, limit = 50): readonly UploadActivityFile[] {
     return get(uploadActivities).find((entry) => entry.id === id)?.files.slice(Math.max(0, offset), Math.max(0, offset) + Math.min(100, Math.max(0, limit))) ?? [];
@@ -123,4 +130,5 @@ export function clearUploadActivities(): void { uploadActivities.set([]); }
 
 export function clearUploadActivityHistory(): void {
     uploadActivities.update((current) => current.filter((entry) => entry.status === 'active' || entry.status === 'queued'));
+    clearFailedUploadHistory();
 }

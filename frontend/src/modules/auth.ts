@@ -51,16 +51,39 @@ import {
     appView,
 } from '../ui/app/app-store';
 import { parseDriveScanProgress, personalDriveSetup } from '../ui/auth/personal-drive-store';
+import { setFailedUploadHistoryAccount } from '../ui/notifications/failed-upload-history';
 
 let personalDriveFlowVersion = 0;
+let uploadHistorySuspended = false;
+
+function publishDashboardIdentity(userID: number): void {
+    state.myUserID = userID;
+    if (!uploadHistorySuspended) setFailedUploadHistoryAccount(userID);
+}
 
 function startPersonalDriveFlow(): number {
     personalDriveFlowVersion += 1;
+    publishDashboardIdentity(0);
     return personalDriveFlowVersion;
 }
 
 function isCurrentPersonalDriveFlow(version: number): boolean {
     return version === personalDriveFlowVersion;
+}
+
+/** Reset the dashboard identity and invalidate any lookup still in flight. */
+export function resetDashboardIdentity(): void {
+    startPersonalDriveFlow();
+}
+
+/** Keep a late identity lookup or upload from restoring history during a full reset. */
+export function suspendUploadHistoryForLogout(): () => void {
+    uploadHistorySuspended = true;
+    setFailedUploadHistoryAccount(0);
+    return () => {
+        uploadHistorySuspended = false;
+        if (get(appView).kind === 'dashboard') setFailedUploadHistoryAccount(state.myUserID);
+    };
 }
 
 // Wails rejects bindings with a plain string; keep whatever text we get so
@@ -76,7 +99,6 @@ async function showDashboardForFlow(flowVersion: number): Promise<void> {
     showDashboardView();
     state.currentFolderId = "";
     state.folderPath = [];
-    state.myUserID = 0;
     resetFolderHistory();
     renderBreadcrumb();
 
@@ -109,7 +131,7 @@ async function showDashboardForFlow(flowVersion: number): Promise<void> {
     // Owner-only shared-drive actions remain default-deny until identity resolves.
     const userID = await userIDPromise;
     if (!isCurrentPersonalDriveFlow(flowVersion)) return;
-    state.myUserID = Number(userID) || 0;
+    publishDashboardIdentity(Number(userID) || 0);
 
     // A phone the OS closed in the background reopens where it was left.
     await restorePlace();
