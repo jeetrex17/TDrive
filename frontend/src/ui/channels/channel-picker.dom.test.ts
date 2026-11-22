@@ -49,7 +49,7 @@ function render({ onAdd = vi.fn(async () => {}), open = writable(true), added = 
 }
 
 function rows(): HTMLButtonElement[] {
-    return Array.from(host?.querySelectorAll<HTMLButtonElement>('.channel-picker-row:not(.is-placeholder)') ?? []);
+    return Array.from(host?.querySelectorAll<HTMLButtonElement>('.channel-picker-row:not(.is-placeholder, .channel-picker-lookup, .channel-picker-public-result)') ?? []);
 }
 
 function search(value: string): HTMLInputElement {
@@ -103,10 +103,10 @@ describe('ChannelPickerModal', () => {
         expect(rows().every((row) => !row.disabled)).toBe(true);
     });
 
-    it('checks a public channel link before connecting and states that it will not join Telegram', async () => {
+    it('looks up a pasted public link from the search box and states that it will not join Telegram', async () => {
         const props = render();
         await settle();
-        const input = host!.querySelector<HTMLInputElement>('#channel-public-link')!;
+        const input = host!.querySelector<HTMLInputElement>('#channel-picker-search')!;
         input.value = 'https://t.me/fieldrecordings';
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
@@ -115,29 +115,49 @@ describe('ChannelPickerModal', () => {
         expect(props.resolvePublic).toHaveBeenCalledWith('https://t.me/fieldrecordings');
         expect(host?.textContent).toContain("won't join the channel or send messages");
         expect(host?.querySelector('.channel-picker-public-result')?.textContent).toContain('Field Recordings');
+        // The joined chat with the same name still lists below the result.
+        expect(rows().map((row) => row.getAttribute('aria-label'))).toEqual(['Open Field Recordings, already connected']);
 
         props.resolvePublic.mockRejectedValueOnce(new Error('This link is not a public channel you can access. Check the link or choose a chat from the list'));
         input.value = '@sk_movies1_bot';
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
         await settle();
-        expect(host?.querySelector('#channel-public-link-error')?.textContent)
+        expect(host?.querySelector('#channel-picker-lookup-error')?.textContent)
             .toBe('This link is not a public channel you can access. Check the link or choose a chat from the list');
         expect(host?.querySelector('.channel-picker-public-result')).toBeNull();
+        expect(input.getAttribute('aria-invalid')).toBe('true');
+
+        // Typing again clears the answer to the old text.
+        input.value = '@sk_movies';
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+        await settle();
+        expect(host?.querySelector('#channel-picker-lookup-error')).toBeNull();
+        expect(host?.querySelector('.channel-picker-lookup')?.textContent).toContain('Look up @sk_movies');
     });
 
-    it('ignores Enter in the public link while another source is connecting', async () => {
+    it('only filters joined chats for plain words', async () => {
+        const props = render();
+        await settle();
+        search('tech');
+        await settle();
+        expect(host?.querySelector('.channel-picker-lookup')).toBeNull();
+        expect(rows().map((row) => row.getAttribute('aria-label'))).toEqual(['Connect Tech Talks']);
+        expect(props.resolvePublic).not.toHaveBeenCalled();
+    });
+
+    it('ignores a lookup while another source is connecting', async () => {
         let finishAdd!: () => void;
         const props = render({ onAdd: vi.fn(() => new Promise<void>((resolve) => { finishAdd = resolve; })) });
         await settle();
         rows()[0].click();
         await settle();
 
-        const input = host!.querySelector<HTMLInputElement>('#channel-public-link')!;
+        const input = host!.querySelector<HTMLInputElement>('#channel-picker-search')!;
         input.value = '@fieldrecordings';
         input.dispatchEvent(new Event('input', { bubbles: true }));
         await settle();
-        expect(host?.querySelector<HTMLButtonElement>('.channel-picker-check')?.disabled).toBe(true);
+        expect(host?.querySelector<HTMLButtonElement>('.channel-picker-lookup')?.disabled).toBe(true);
         input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
         await settle();
         expect(props.resolvePublic).not.toHaveBeenCalled();
@@ -153,7 +173,7 @@ describe('ChannelPickerModal', () => {
             onAdd: vi.fn(() => new Promise<void>((resolve) => { finishAdd = resolve; })),
         });
         await settle();
-        const input = host!.querySelector<HTMLInputElement>('#channel-public-link')!;
+        const input = host!.querySelector<HTMLInputElement>('#channel-picker-search')!;
         input.value = '@fieldrecordings';
         input.dispatchEvent(new Event('input', { bubbles: true }));
         input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));

@@ -10,6 +10,7 @@ import {
     isOpenable,
     mediaActionLabel,
     mediaTitle,
+    publicLookup,
     restrictionLabel,
     sourceKey,
     sourcePeerLabel,
@@ -170,6 +171,18 @@ describe('boundedSearch', () => {
     it('keeps a query within the 120-byte backend limit without splitting a character', () => {
         expect(new TextEncoder().encode(boundedSearch('🎬'.repeat(80)))).toHaveLength(120);
         expect(boundedSearch(`${'a'.repeat(119)}é`)).toBe('a'.repeat(119));
+    });
+});
+
+describe('publicLookup', () => {
+    it('reads a pasted @name or t.me link and leaves plain words to the chat filter', () => {
+        expect(publicLookup('  @publicradio ')).toBe('@publicradio');
+        expect(publicLookup('https://t.me/publicradio')).toBe('@publicradio');
+        expect(publicLookup('t.me/publicradio/42')).toBe('@publicradio');
+        expect(publicLookup('www.t.me/publicradio')).toBe('@publicradio');
+        expect(publicLookup('public radio')).toBeNull();
+        expect(publicLookup('@')).toBeNull();
+        expect(publicLookup('https://example.com/t.me/x')).toBeNull();
     });
 });
 

@@ -350,8 +350,9 @@ test('the picker distinguishes joined chat types and verifies a public link befo
     const dialog = page.getByRole('dialog', { name: 'Add a source' });
     await expect(dialog.getByRole('button', { name: 'Connect Mina' })).toBeVisible();
     await expect(dialog.getByText('Direct message', { exact: true })).toBeVisible();
-    await dialog.getByLabel('Public channel link').fill('https://t.me/publicradio');
-    await dialog.getByRole('button', { name: 'Check link' }).click();
+    await dialog.getByLabel('Search chats or paste a t.me link').fill('https://t.me/publicradio');
+    await expect(dialog.getByText("Looking up a link won't join the channel or send messages.")).toBeVisible();
+    await dialog.getByRole('button', { name: /Look up @publicradio/ }).click();
     await expect(dialog.getByRole('button', { name: /Public Radio/ })).toBeVisible();
     await dialog.getByRole('button', { name: /Public Radio/ }).click();
     expect((await mock.calls('ConnectChannelSource')).map((call) => call.args)).toEqual([['channel', 89, 'publicradio', 7]]);
@@ -375,10 +376,10 @@ test('390x844 mobile source picker has no sheet bleed', async ({ page }) => {
     await page.getByRole('button', { name: /Switch drive/ }).click();
     await page.locator('.channel-nav-title').getByRole('button', { name: 'Add a source', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Add a source' });
-    const link = dialog.getByLabel('Public channel link');
+    const link = dialog.getByLabel('Search chats or paste a t.me link');
     expect(await link.evaluate((input) => parseFloat(getComputedStyle(input).fontSize))).toBeGreaterThanOrEqual(16);
     await link.fill('@techtalks');
-    await dialog.getByRole('button', { name: 'Check link' }).click();
+    await link.press('Enter');
     const result = dialog.getByRole('button', { name: 'Connect Tech Talks' });
     await expect(result).toBeVisible();
     expect((await result.boundingBox())!.height).toBeGreaterThanOrEqual(60);
