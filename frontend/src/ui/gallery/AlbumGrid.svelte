@@ -16,6 +16,7 @@
     const SKELETON_TILES = 8;
 
     let root = $state<HTMLElement | null>(null);
+    let grid = $state<HTMLElement | null>(null);
     let width = $state(900);
     let height = $state(800);
     let scrollTop = $state(0);
@@ -48,8 +49,13 @@
 
     function measure(): void {
         if (!root || root.clientWidth === 0) return;
-        const style = getComputedStyle(root);
-        width = Math.max(1, root.clientWidth - parseFloat(style.paddingLeft || '0') - parseFloat(style.paddingRight || '0'));
+        // The scroller's padding and the grid's own both narrow the rows.
+        const inset = (element: HTMLElement | null) => {
+            if (!element) return 0;
+            const style = getComputedStyle(element);
+            return parseFloat(style.paddingLeft || '0') + parseFloat(style.paddingRight || '0');
+        };
+        width = Math.max(1, root.clientWidth - inset(root) - inset(grid));
         height = root.clientHeight || 800;
         scrollTop = root.scrollTop;
     }
@@ -120,6 +126,7 @@
      and a cover that derives its own height collapses to nothing on a
      webview that will not resolve a ratio from a stretched flex item. -->
 <div
+    bind:this={grid}
     class="album-grid-root"
     style:--album-label-height={`${ALBUM_LABEL_HEIGHT}px`}
     style:--album-gap={`${ALBUM_TILE_GAP}px`}
