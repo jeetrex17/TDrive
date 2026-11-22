@@ -24,6 +24,7 @@ import {
     onRuntimeEvent,
 } from '../api';
 import { renderBreadcrumb } from './navigation';
+import { resetFolderHistory } from './folder-history';
 import { restorePlace } from './place-memory';
 import { loadChannels } from './channels';
 import { loadEncryptionStatus } from './encryption';
@@ -76,6 +77,7 @@ async function showDashboardForFlow(flowVersion: number): Promise<void> {
     state.currentFolderId = "";
     state.folderPath = [];
     state.myUserID = 0;
+    resetFolderHistory();
     renderBreadcrumb();
 
     // Identity is independent of channel discovery. Resolve both together,

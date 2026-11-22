@@ -74,6 +74,22 @@ describe('Breadcrumb', () => {
     });
 });
 
+describe('Breadcrumb history buttons', () => {
+    it('are absent until there is a visited folder to return to', () => {
+        const { body } = render(Breadcrumb, { props: breadcrumbProps });
+        expect(body).not.toContain('breadcrumb-history-back');
+        expect(body).not.toContain('breadcrumb-history-forward');
+    });
+
+    it('render as a pair with the unavailable direction disabled', () => {
+        const { body } = render(Breadcrumb, { props: { ...breadcrumbProps, canGoBack: true } });
+        expect(body).toMatch(/id="breadcrumb-history-back"[^>]*aria-label="Back"/);
+        expect(body).not.toMatch(/id="breadcrumb-history-back"[^>]*disabled/);
+        expect(body).toMatch(/id="breadcrumb-history-forward"[^>]*disabled/);
+        expect(body).toMatch(/aria-keyshortcuts="(Alt\+ArrowLeft|Meta\+BracketLeft)"/);
+    });
+});
+
 describe('Avatar', () => {
     it('renders a photo background when available', () => {
         const { body } = render(Avatar, { props: { user: { photoBase64: 'Zm9v' } } });

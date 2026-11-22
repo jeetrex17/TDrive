@@ -25,6 +25,7 @@
 .main-content.photos-mode #file-list,
 .main-content.photos-mode .file-table-header { display: none; }
 .main-content.photos-mode #breadcrumb-back,
+.main-content.photos-mode .history-btn,
 .main-content.photos-mode .breadcrumb-path { display: none; }
 .main-content.photos-mode .gallery-view { display: block; }
 

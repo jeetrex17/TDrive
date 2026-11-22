@@ -4,11 +4,13 @@ import { state } from '../state';
 import { canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop';
 import { appActions } from './app-actions';
 import { breadcrumbPath, type BreadcrumbDrag } from '../ui/chrome/breadcrumb-store';
+import { recordFolderPlace, stepFolderHistory } from './folder-history';
 
 // renderBreadcrumb mirrors state.folderPath (the source of truth, mutated by
 // several modules) into the breadcrumb store.
 export function renderBreadcrumb() {
     breadcrumbPath.set(state.folderPath.map((f) => ({ id: f.id, name: f.name })));
+    recordFolderPlace();
 }
 
 export const breadcrumbDrag: BreadcrumbDrag = {
@@ -56,6 +58,16 @@ export function navigateBack(): void {
     appActions().refreshFiles();
 }
 
+/** Back (-1) or forward (+1) through the folders visited in this drive. */
+export async function navigateHistory(delta: -1 | 1): Promise<void> {
+    const path = await stepFolderHistory(delta);
+    if (!path) return;
+    state.folderPath = path;
+    state.currentFolderId = path[path.length - 1]?.id ?? '';
+    state.virtualView = null;
+    renderBreadcrumb();
+    appActions().refreshFiles();
+}
 
 export function navigateToFolder(folderID: string, folderName: string) {
     state.folderPath = [...state.folderPath, { id: folderID, name: folderName }];

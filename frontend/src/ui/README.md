@@ -33,7 +33,9 @@ and search shortcuts work outside the file rows, including empty folders, and
 leave editors, overlays and alternate views alone. On non-Apple desktops,
 Backspace goes to the parent folder. The Mac Delete key sends Backspace and
 deletes through the file-list controller, which also owns row selection and
-other item actions.
+other item actions. Alt+Left/Right (Cmd+[/] on Apple) step through
+`folder-history.ts`, which `renderBreadcrumb` feeds with every folder shown in
+the active drive and resets on a drive switch.
 
 Playback engines, native player geometry and transport lifetime remain in the
 TypeScript video controller. Svelte owns the rendered controls and shell. The

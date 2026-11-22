@@ -40,6 +40,8 @@ html:not(.mobile) .main-content {
 }
 .back-btn { width: 28px; height: 28px; border: 0; }
 .back-btn svg { width: 16px; height: 16px; }
+/* Back or forward with nowhere to go stays in place, quiet and inert. */
+.history-btn:disabled { opacity: 0.35; cursor: default; pointer-events: none; }
 .breadcrumb-path { display: flex; align-items: center; gap: 2px; min-width: 0; overflow: hidden; }
 
 /* Per-row lock badge for encrypted files. */

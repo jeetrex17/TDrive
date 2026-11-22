@@ -134,6 +134,41 @@ test('keeps foreground navigation failures visible', async ({ page }) => {
     await expect(page.getByRole('alert')).toContainText('Folder is unavailable');
 });
 
+test('steps back and forward through visited folders from the keyboard', async ({ page }) => {
+    await bootTDrive(page, {
+        GetFolderContents: byFirstArg({
+            '': resolves({ folders: [{ id: 'reports', name: 'Reports', parent_id: '' }], files: [] }),
+            reports: resolves({ folders: [{ id: 'q4', name: 'Q4', parent_id: 'reports' }], files: [] }),
+            q4: resolves({ folders: [], files: [] }),
+        }),
+    });
+    const apple = await page.evaluate(() => /Mac|iPhone|iPad|iPod/i.test(navigator.platform));
+    const [back, forward] = apple ? ['Meta+BracketLeft', 'Meta+BracketRight'] : ['Alt+ArrowLeft', 'Alt+ArrowRight'];
+    const location = page.locator('#breadcrumb-path [aria-current="location"]');
+
+    await page.getByRole('row', { name: 'Folder: Reports' }).dblclick();
+    await page.getByRole('row', { name: 'Folder: Q4' }).dblclick();
+    await expect(location).toHaveText('Q4');
+
+    await page.keyboard.press(back);
+    await expect(location).toHaveText('Reports');
+    await page.keyboard.press(back);
+    await expect(page.getByRole('row', { name: 'Folder: Reports' })).toBeVisible();
+    await page.keyboard.press(forward);
+    await expect(location).toHaveText('Reports');
+    await expect(page.getByRole('row', { name: 'Folder: Q4' })).toBeVisible();
+
+    const backButton = page.getByRole('button', { name: 'Back', exact: true });
+    const forwardButton = page.getByRole('button', { name: 'Forward', exact: true });
+    await forwardButton.click();
+    await expect(location).toHaveText('Q4');
+    await expect(forwardButton).toBeDisabled();
+    await page.screenshot({ path: test.info().outputPath('history-buttons.png'), clip: { x: 230, y: 0, width: 520, height: 64 } });
+    await backButton.click();
+    await expect(location).toHaveText('Reports');
+    await expect(forwardButton).toBeEnabled();
+});
+
 test('moves row focus and previews a selected image with Space', async ({ page }) => {
     await routeRenditions(page);
     await bootTDrive(page, {
