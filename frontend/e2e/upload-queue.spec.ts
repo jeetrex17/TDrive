@@ -121,6 +121,9 @@ test('large selections keep the confirmation controls on screen', async ({ page 
     await expect(page.locator('#success-screen')).toBeVisible();
     await chooseUpload(page);
     const review = page.locator('#upload-options-modal').getByRole('dialog');
+    // One line names the selection; the list opens on request.
+    await expect(review).toContainText('project-notes-0.txt and 59 more');
+    await review.getByRole('button', { name: 'Show all 60' }).click();
     await expect(review.getByRole('list', { name: 'Selected files' }).getByRole('listitem')).toHaveCount(50);
     await expect(review.getByRole('button', { name: 'Continue', exact: true })).toBeInViewport();
     await expect(review.getByRole('button', { name: 'Cancel', exact: true })).toBeInViewport();
