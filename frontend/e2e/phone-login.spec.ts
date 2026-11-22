@@ -17,7 +17,7 @@ for (const platform of ['desktop', 'android', 'ios']) {
         await page.getByRole('textbox', { name: 'Phone number' }).fill('98765 43210');
         await expect(page.locator('#country-code-modal')).toBeHidden();
         await page.getByRole('button', { name: 'Send code', exact: true }).click();
-        await expect(page.getByRole('heading', { name: 'Verify your account' })).toBeVisible();
+        await expect(page.getByRole('heading', { name: 'Enter the login code' })).toBeVisible();
         expect(await mock.calls('LoginPhoneNumber')).toMatchObject([{ args: ['+919876543210'] }]);
     });
 }
@@ -37,6 +37,6 @@ test('mobile browser preview handles keyboard selection, international paste, an
     await page.getByRole('textbox', { name: 'Phone number' }).fill('+1 (416) 555-0123');
     await expect(picker).toHaveAccessibleName('Country code: Canada +1');
     await page.getByRole('button', { name: 'Send code', exact: true }).click();
-    await expect(page.getByRole('heading', { name: 'Verify your account' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Enter the login code' })).toBeVisible();
     expect(await mock.calls('LoginPhoneNumber')).toMatchObject([{ args: ['+14165550123'] }]);
 });

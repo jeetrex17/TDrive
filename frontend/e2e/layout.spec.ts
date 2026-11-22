@@ -131,18 +131,16 @@ test('every menu row is one height', async ({ page }) => {
     for (const item of await items.all()) near((await box(item)).height, CONTROL);
 });
 
-test('the sign-in fields and button share one height and one row line', async ({ page }) => {
+test('the sign-in phone field and button share one height and one width', async ({ page }) => {
     await bootTDrive(page, { CheckLoginStatus: resolves(false), LoginPhoneNumber: resolves(null) });
     await expect(page.locator('#telegram-country')).toBeVisible();
     await settle(page);
-    const country = await box(page.locator('#telegram-country'));
-    const phone = await box(page.locator('.auth-form input[type="tel"]'));
+    // The country code and the number sit inside one framed field.
+    const field = await box(page.locator('.phone-entry'));
     const send = await box(page.locator('.auth-form .primary-btn'));
-    near(country.height, phone.height);
-    near(send.height, phone.height);
-    near(country.y, phone.y);
-    near(country.x, send.x);
-    near(phone.x + phone.width, send.x + send.width);
+    near(send.height, field.height);
+    near(field.x, send.x);
+    near(field.x + field.width, send.x + send.width);
 });
 
 test.describe('phone', () => {

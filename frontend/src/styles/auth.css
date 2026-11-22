@@ -13,6 +13,62 @@
 /* The form's fields and its button share one 40px height. */
 .auth-box input { min-height: 40px; }
 
+/* Desktop sign-in: one calm centred column. The mark, heading and one line of
+   explanation are centred; fields keep a left edge for their labels; the
+   privacy line closes the column under the button. */
+html:not(.mobile) .auth-box { width: 360px; }
+/* Lifted a little above true centre, where a lone column looks centred. */
+html:not(.mobile) #auth-wrapper { padding-bottom: 8vh; }
+.auth-step-mark { display: block; width: 66px; height: auto; margin: 0 auto 24px; }
+html.mobile .auth-step-mark { display: none; }
+html:not(.mobile) .auth-mark { display: block; width: 112px; height: auto; margin: 0 auto 28px; }
+html:not(.mobile) .auth-box h2 {
+    margin-bottom: 8px;
+    text-align: center;
+    font-size: var(--type-2xl);
+    letter-spacing: -0.02em;
+    text-wrap: balance;
+}
+html:not(.mobile) .auth-welcome h2 { font-size: var(--type-3xl); }
+html:not(.mobile) .auth-box .auth-intro {
+    max-width: 320px;
+    margin: 0 auto 28px;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: var(--type-sm);
+    line-height: 1.55;
+    text-wrap: pretty;
+}
+html:not(.mobile) .auth-form .auth-privacy {
+    order: 1;
+    margin: 16px 0 0;
+    text-align: center;
+    color: var(--color-text-subtle);
+    font-size: var(--type-xs);
+    line-height: 1.5;
+}
+html:not(.mobile) .auth-box .primary-btn { min-height: 40px; }
+html:not(.mobile) .auth-form .auth-field { margin-bottom: 16px; }
+html:not(.mobile) .auth-form .auth-fields .auth-field { margin-bottom: 0; }
+html:not(.mobile) .auth-form .phone-entry { margin-bottom: 0; }
+html:not(.mobile) .auth-box .code-input {
+    min-height: 48px;
+    text-align: center;
+    font-size: var(--type-2xl);
+    letter-spacing: 0.35em;
+    /* Tracking trails after the last digit; indent by the same so the code
+       sits on the true centre. */
+    text-indent: 0.35em;
+    font-variant-numeric: tabular-nums;
+}
+html:not(.mobile) .auth-helper-pill {
+    padding: 0;
+    background: none;
+    border: 0;
+    color: var(--color-text);
+    font-variant-numeric: tabular-nums;
+}
+
 .auth-box h2 { color: var(--color-text); margin-bottom: 0.5rem; font-size: var(--type-xl); font-weight: var(--weight-semibold); letter-spacing: -0.01em; }
 .auth-box p { color: var(--text-muted); margin-bottom: 1.5rem; font-size: var(--type-base); }
 
@@ -308,4 +364,12 @@ html.mobile .auth-box button:focus-visible,
 html.mobile .auth-box input:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
+}
+/* Inside the combined phone field the frame draws the border and the ring. */
+html.mobile .auth-box .phone-entry input,
+html.mobile .auth-box .phone-entry input:focus-visible {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
 }

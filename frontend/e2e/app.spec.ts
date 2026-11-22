@@ -42,12 +42,12 @@ test('auth advances through the public login surface and handles runtime errors'
     });
 
     const phone = page.getByRole('textbox', { name: 'Phone number' });
-    await expect(page.getByRole('heading', { name: 'Sign in to Telegram' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Sign in with Telegram' })).toBeVisible();
     await expect(phone).toBeFocused();
 
     await phone.fill('+1 555 0100');
     await page.getByRole('button', { name: 'Send code' }).click();
-    await expect(page.getByRole('heading', { name: 'Verify your account' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Enter the login code' })).toBeVisible();
     await expect(page.getByText('+15550100')).toBeVisible();
     expect(await mock.calls('LoginPhoneNumber')).toMatchObject([
         { args: ['+15550100'], state: 'fulfilled' },

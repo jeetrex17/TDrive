@@ -187,6 +187,7 @@
         onsubmit={(event) => submit(event, 'setup', () => onSetup(apiId, apiHash))}
     >
         <div class="auth-page-body">
+            <img class="auth-step-mark" src={tdriveLogo} alt="" width="66" height="42" />
             <h2 id="auth-setup-title">Connect to Telegram</h2>
             <p id="telegram-credentials-help" class="auth-intro">
                 Create an app at
@@ -276,15 +277,15 @@
         onsubmit={(event) => submit(event, 'phone', sendPhone)}
     >
         <div class="auth-page-body">
-            <h2 id="auth-phone-title">Sign in to Telegram</h2>
-            <p class="auth-intro">Enter the number on your Telegram account. Telegram will send you a code.</p>
-            <div class="phone-entry">
-                <div class="auth-field country-field">
-                    <label for="telegram-country">Country / code</label>
+            <img class="auth-step-mark" src={tdriveLogo} alt="" width="66" height="42" />
+            <h2 id="auth-phone-title">Sign in with Telegram</h2>
+            <p class="auth-intro">Enter the phone number on your Telegram account. Telegram will send a login code to your app.</p>
+            <div class="auth-field">
+                <label for="telegram-phone">Phone number</label>
+                <!-- One field, as people read a phone number: the country code
+                     leads it and the number follows, inside a single frame. -->
+                <div class="phone-entry" class:is-invalid={Boolean($authSubmission.phone.error)}>
                     <CountryCodePicker {country} disabled={$authSubmission.phone.busy} onSelect={selectCountry} />
-                </div>
-                <div class="auth-field phone-field">
-                    <label for="telegram-phone">Phone number</label>
                     <input
                         bind:this={phoneEl}
                         value={phone}
@@ -306,7 +307,7 @@
                 </div>
             </div>
             <p id="phone-session-note" class="auth-privacy">
-                Your signed-in session is kept locally on this device and is not synced by TDrive.
+                Your session stays on this device. There is no TDrive server.
             </p>
             <p id="phone-error" class="auth-error" aria-live="polite" aria-atomic="true">
                 {$authSubmission.phone.error}
@@ -327,8 +328,9 @@
         onsubmit={(event) => submit(event, 'code', () => onCode(code))}
     >
         <div class="auth-page-body">
-            <h2 id="auth-code-title">Verify your account</h2>
-            <p class="auth-intro">Enter the login code Telegram sent you.</p>
+            <img class="auth-step-mark" src={tdriveLogo} alt="" width="66" height="42" />
+            <h2 id="auth-code-title">Enter the login code</h2>
+            <p class="auth-intro">Telegram sends it to your Telegram app. Check there first.</p>
             {#if $authPhone}
                 <div class="auth-helper-row">
                     <span class="auth-helper-label">Sent to</span>
@@ -379,6 +381,7 @@
         onsubmit={(event) => submit(event, 'password', () => onPassword(password))}
     >
         <div class="auth-page-body">
+            <img class="auth-step-mark" src={tdriveLogo} alt="" width="66" height="42" />
             <h2 id="auth-password-title">Two-step verification</h2>
             <p class="auth-intro">Enter your Telegram password to finish signing in.</p>
             {#if $authHint}
@@ -443,16 +446,44 @@
 {/if}
 
 <style>
+    /* The frame is the field: the code button and the number sit inside one
+       border and share one focus ring, so they read as a single phone number. */
     .phone-entry {
-        display: grid;
-        grid-template-columns: minmax(115px, 0.8fr) minmax(0, 1.4fr);
-        gap: 12px;
+        display: flex;
+        align-items: stretch;
+        min-height: 40px;
         margin-bottom: 0.75rem;
+        background: var(--color-surface-1);
+        border: 1px solid var(--color-border-soft);
+        border-radius: var(--radius-md);
+        transition: border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
     }
-
-    .phone-field {
+    .phone-entry:focus-within { border-color: var(--color-accent); box-shadow: var(--focus-ring); }
+    .phone-entry.is-invalid { border-color: var(--danger); }
+    .phone-entry :global(.country-code-trigger) {
+        flex: 0 0 auto;
+        width: auto;
+        min-height: 0;
+        padding: 0 10px 0 12px;
+        border: 0;
+        border-right: 1px solid var(--color-border-soft);
+        border-radius: var(--radius-md) 0 0 var(--radius-md);
+        background: transparent;
+        font-variant-numeric: tabular-nums;
+    }
+    .phone-entry :global(.country-code-trigger:focus-visible) { box-shadow: none; }
+    .phone-entry input,
+    .phone-entry input:focus {
+        flex: 1 1 auto;
         min-width: 0;
+        min-height: 0;
+        margin: 0;
+        background: transparent;
+        border: 0;
+        box-shadow: none;
+        font-variant-numeric: tabular-nums;
     }
+    :global(html.mobile) .phone-entry { min-height: 48px; }
 
     .auth-form {
         display: flex;
@@ -602,9 +633,6 @@
         margin-bottom: 1.25rem;
     }
 
-    :global(html.mobile) .phone-entry .auth-field {
-        margin-bottom: 0;
-    }
 
     :global(html.mobile) .auth-error {
         margin: -0.25rem 0 1rem;
