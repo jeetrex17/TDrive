@@ -83,7 +83,7 @@ describe('theme controller', () => {
         });
 
         controller.start();
-        expect(document.documentElement.dataset.theme).toBe('quiet-relay');
+        expect(document.documentElement.dataset.theme).toBe('tokyo-night');
         expect(document.documentElement.dataset.themeAppearance).toBe('dark');
         expect(get(controller.state)).not.toHaveProperty('systemAppearance');
 
@@ -137,7 +137,7 @@ describe('theme controller', () => {
 
         const after = get(first.state).preference;
         expect(after).not.toBe(before);
-        expect(before.darkThemeId).toBe('quiet-relay');
+        expect(before.darkThemeId).toBe('tokyo-night');
         expect(after).toEqual({
             mode: 'dark',
             lightThemeId: 'daybreak',
@@ -322,7 +322,7 @@ describe('theme controller', () => {
         expect(get(controller.state).preference).toEqual({
             mode: 'light',
             lightThemeId: 'catppuccin-latte',
-            darkThemeId: 'quiet-relay',
+            darkThemeId: 'tokyo-night',
         });
         expect(document.documentElement.dataset.theme).toBe('catppuccin-latte');
         controller.destroy();

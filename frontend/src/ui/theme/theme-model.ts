@@ -170,7 +170,7 @@ export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
 export const DEFAULT_THEME_PREFERENCE: ThemePreference = Object.freeze({
     mode: 'dark',
     lightThemeId: 'daybreak',
-    darkThemeId: 'quiet-relay',
+    darkThemeId: 'tokyo-night',
 });
 
 const THEME_ID_SET: ReadonlySet<string> = new Set(THEME_IDS);

@@ -147,7 +147,6 @@
     --overlay-success-2: rgba(23, 116, 74, 0.27);
 }
 
-:root:not([data-theme]),
 :root[data-theme="quiet-relay"] {
     color-scheme: dark;
 
@@ -198,6 +197,7 @@
     --overlay-success-2: rgba(73, 184, 137, 0.27);
 }
 
+:root:not([data-theme]),
 :root[data-theme="tokyo-night"] {
     color-scheme: dark;
 
