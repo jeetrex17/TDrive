@@ -52,6 +52,46 @@ func TestQueuedImportDoesNotCancelExistingUpload(t *testing.T) {
 	}
 }
 
+func TestQueuedFolderMergeUsesOriginalDestination(t *testing.T) {
+	a, db, _ := setupEncryptionAppWithPolicyRefresh(t, nil)
+	a.ctx = t.Context()
+	a.engine.SetActiveChannelID(testEncryptionChannelID)
+
+	folder, err := a.CreateFolderForDrive("Photos", "", testEncryptionChannelID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root := filepath.Join(t.TempDir(), "Photos")
+	if err := os.Mkdir(root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "new.txt"), []byte("new file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	result := a.MergeImportPathsForDrive([]string{root}, "", false, false, testEncryptionChannelID+1, "skip")
+	if result.OK {
+		t.Fatal("folder merge accepted a changed destination")
+	}
+	result = a.MergeImportPathsForDrive([]string{root}, "", false, false, testEncryptionChannelID, "")
+	if result.OK {
+		t.Fatal("folder merge accepted a missing conflict policy")
+	}
+	_, files, err := projection.ListFolderContents(db, testEncryptionChannelID, folder.ID)
+	if err != nil || len(files) != 0 {
+		t.Fatalf("refused merge left files = %+v, error = %v", files, err)
+	}
+
+	result = a.MergeImportPathsForDrive([]string{root}, "", false, false, testEncryptionChannelID, "skip")
+	if !result.OK {
+		t.Fatalf("queued folder merge failed: %+v", result.Error)
+	}
+	_, files, err = projection.ListFolderContents(db, testEncryptionChannelID, folder.ID)
+	if err != nil || len(files) != 1 || files[0].Name != "new.txt" {
+		t.Fatalf("merged folder files = %+v, error = %v", files, err)
+	}
+}
+
 func TestQueuedFolderRejectsChangedDriveBeforeWriting(t *testing.T) {
 	for _, expected := range []int64{0, testEncryptionChannelID + 1} {
 		t.Run(fmt.Sprintf("expected_%d", expected), func(t *testing.T) {

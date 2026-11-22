@@ -345,6 +345,14 @@ export function Me(): $CancellablePromise<$models.SelfUser> {
 }
 
 /**
+ * MergeImportPathsForDrive imports into matching folders and applies the chosen
+ * policy to files with matching names.
+ */
+export function MergeImportPathsForDrive(paths: string[] | null, parentID: string, encrypt: boolean, extractArchives: boolean, expectedChannelID: number, fileConflict: string): $CancellablePromise<$models.OperationResult> {
+    return $Call.ByID(1783983766, paths, parentID, encrypt, extractArchives, expectedChannelID, fileConflict);
+}
+
+/**
  * MountDrive attaches the active drive without changing it. The controller
  * pins this immutable drive record until the user disconnects it.
  */

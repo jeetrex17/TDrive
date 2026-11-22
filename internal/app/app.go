@@ -452,19 +452,32 @@ func (a *App) PlanImport(paths []string, encrypt bool, extractArchives bool) fil
 // is set, otherwise uploaded as-is. Progress flows through aggregate import_*
 // events.
 func (a *App) ImportPaths(paths []string, parentID string, encrypt bool, extractArchives bool) OperationResult {
-	return a.importPaths(paths, parentID, encrypt, extractArchives, a.ActiveChannelID(), false)
+	return a.importPaths(paths, parentID, encrypt, extractArchives, a.ActiveChannelID(), false, "")
 }
 
 // ImportPathsForDrive starts a waiting import only in its original drive and
 // never replaces an active upload.
 func (a *App) ImportPathsForDrive(paths []string, parentID string, encrypt bool, extractArchives bool, expectedChannelID int64) OperationResult {
+	return a.importPathsForDrive(paths, parentID, encrypt, extractArchives, expectedChannelID, "")
+}
+
+// MergeImportPathsForDrive imports into matching folders and applies the chosen
+// policy to files with matching names.
+func (a *App) MergeImportPathsForDrive(paths []string, parentID string, encrypt bool, extractArchives bool, expectedChannelID int64, fileConflict string) OperationResult {
+	if fileConflict != "skip" && fileConflict != "keep-both" {
+		return operationFailureMessage(errors.New("invalid import file conflict policy"), "Choose Skip or Keep Both for matching files")
+	}
+	return a.importPathsForDrive(paths, parentID, encrypt, extractArchives, expectedChannelID, fileConflict)
+}
+
+func (a *App) importPathsForDrive(paths []string, parentID string, encrypt bool, extractArchives bool, expectedChannelID int64, fileConflict string) OperationResult {
 	if expectedChannelID == 0 || a.ActiveChannelID() != expectedChannelID {
 		return operationFailureMessage(errors.New("upload destination changed"), "Switch back to the original drive before starting this import")
 	}
-	return a.importPaths(paths, parentID, encrypt, extractArchives, expectedChannelID, true)
+	return a.importPaths(paths, parentID, encrypt, extractArchives, expectedChannelID, true, fileConflict)
 }
 
-func (a *App) importPaths(paths []string, parentID string, encrypt bool, extractArchives bool, channelID int64, queued bool) OperationResult {
+func (a *App) importPaths(paths []string, parentID string, encrypt bool, extractArchives bool, channelID int64, queued bool, fileConflict string) OperationResult {
 	svc, err := a.requireFileService()
 	if err != nil {
 		return operationFailure(err)
@@ -482,6 +495,9 @@ func (a *App) importPaths(paths []string, parentID string, encrypt bool, extract
 	defer finish()
 	defer a.transfers.forgetPickerSources(paths)
 	a.sweepOrphanParts(ctx)
+	if fileConflict != "" {
+		return operationFailure(svc.RunImportWithFolderMerge(ctx, channelID, paths, parentID, encrypt, extractArchives, fileConflict))
+	}
 	return operationFailure(svc.RunImport(ctx, channelID, paths, parentID, encrypt, extractArchives))
 }
 

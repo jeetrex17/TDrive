@@ -1,20 +1,24 @@
 <script lang="ts">
     import ModalShell from './ModalShell.svelte';
     import SelectedUploadFiles from './SelectedUploadFiles.svelte';
-    import { importOptionsModal } from './import-options-modal-store';
+    import { importOptionsModal, type ImportChoice } from './import-options-modal-store';
+    import type { ImportFileConflict } from '../../types';
 
     interface Props {
         onCancel: () => void;
-        onConfirm: (choice: { encrypt: boolean; extract: boolean }) => void;
+        onConfirm: (choice: ImportChoice) => void;
         onToggle: (encrypt: boolean, extract: boolean) => void;
     }
 
     let { onCancel, onConfirm, onToggle }: Props = $props();
     let extract = $state(false);
     let encrypt = $state(false);
+    let merge = $state(false);
+    let fileConflict = $state<ImportFileConflict>('skip');
     let wasOpen = false;
 
     const view = importOptionsModal.state;
+    const canMerge = $derived($view.payload?.allowFolderMerge === true && $view.payload.plan.folders > 0);
 
     function humanBytes(n: number): string {
         if (!Number.isFinite(n) || n <= 0) return '0 B';
@@ -77,6 +81,8 @@
     $effect(() => {
         if ($view.open && !wasOpen) {
             extract = false;
+            merge = false;
+            fileConflict = 'skip';
             // Starts from the remembered upload choice; the plan was made with it.
             encrypt = $view.payload?.encrypt === true;
         }
@@ -113,6 +119,27 @@
             </span>
         </label>
     {/if}
+    {#if canMerge}
+        <label class="modal-choice-row">
+            <input id="import-options-merge" type="checkbox" bind:checked={merge} />
+            <span>
+                <strong>Merge matching folders</strong>
+                <small>Add to existing folders with the same name. Otherwise, import as separate folders.</small>
+            </span>
+        </label>
+        {#if merge}
+            <div role="radiogroup" aria-label="Files with the same name">
+                <label class="modal-choice-row">
+                    <input type="radio" name="import-file-conflict" value="skip" bind:group={fileConflict} />
+                    <span>Skip files with the same name</span>
+                </label>
+                <label class="modal-choice-row">
+                    <input type="radio" name="import-file-conflict" value="keep-both" bind:group={fileConflict} />
+                    <span>Keep both files</span>
+                </label>
+            </div>
+        {/if}
+    {/if}
     {#if note}
         <p id="import-options-note" class="import-options-note">{note}</p>
     {/if}
@@ -125,7 +152,7 @@
             type="button"
             disabled={$view.payload?.plan.limitExceeded || $view.payload?.replanning}
             aria-busy={$view.payload?.replanning}
-            onclick={() => onConfirm({ encrypt, extract })}
+            onclick={() => onConfirm({ encrypt, extract, ...(canMerge && merge ? { folderMerge: fileConflict } : {}) })}
         >
             {$view.payload?.replanning ? 'Checking…' : $view.payload?.queued ? 'Add to queue' : 'Import'}
         </button>

@@ -1,4 +1,11 @@
 import { createModalController } from './modal-store';
+import type { ImportFileConflict } from '../../types';
+
+export interface ImportChoice {
+    encrypt: boolean;
+    extract: boolean;
+    folderMerge?: ImportFileConflict;
+}
 
 export interface ImportOptionsPlan {
     files: number;
@@ -19,6 +26,7 @@ export interface ImportOptionsPayload {
     plan: ImportOptionsPlan;
     personal: boolean;
     hasArchives: boolean;
+    allowFolderMerge?: boolean;
     replanning?: boolean;
     queued?: boolean;
     destination?: string;

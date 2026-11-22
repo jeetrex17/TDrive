@@ -48,6 +48,8 @@ type uploadOptions struct {
 	resumable bool
 	// pausable files wait while the user has paused interactive uploads.
 	pausable bool
+	// The merge runner relies on a settled window before checking sibling names.
+	prioritizeFatalImportError bool
 }
 
 type uploadedResult struct {
@@ -126,7 +128,7 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 		if !errors.Is(err, errUploadCanceled) {
 			mu.Lock()
 			failed++
-			if firstErr == nil {
+			if firstErr == nil || (options.prioritizeFatalImportError && isFatalImportError(err) && !isFatalImportError(firstErr)) {
 				firstErr = err
 			}
 			mu.Unlock()
