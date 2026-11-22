@@ -4,6 +4,9 @@
     import type { CountryCode } from 'libphonenumber-js/min';
     import tdriveLogo from '../../assets/images/tdrive-logo.png';
     import EyeIcon from '@lucide/svelte/icons/eye';
+    import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
+    import SendIcon from '@lucide/svelte/icons/send';
+    import ServerOffIcon from '@lucide/svelte/icons/server-off';
     import EyeOffIcon from '@lucide/svelte/icons/eye-off';
     import { tick } from 'svelte';
     import { isMobilePlatform, openExternalUrl } from '../../api';
@@ -165,17 +168,31 @@
 {#if step === 'welcome'}
     <section class="auth-box auth-welcome" aria-labelledby="auth-welcome-title">
         <div class="auth-page-body">
-            <img class="auth-mark" src={tdriveLogo} alt="" width="112" height="112" />
+            <img class="auth-mark" src={tdriveLogo} alt="" width="132" height="84" />
             <h2 id="auth-welcome-title">Your Telegram, as a drive.</h2>
-            <p class="auth-intro">
-                TDrive keeps your files in a private channel on your own Telegram account. There is no TDrive
-                server in between, so you sign in with your own API credentials and phone number.
-            </p>
+            <p class="auth-intro">Store and open your files from your own Telegram account.</p>
+            <!-- Three facts, each one line, rather than a paragraph to read:
+                 where the files live, who is in between, and who can open them. -->
+            <ul class="welcome-points">
+                <li>
+                    <span class="welcome-icon" aria-hidden="true"><SendIcon size={18} strokeWidth={1.8} /></span>
+                    <span><strong>Kept in your Telegram</strong>Files live in a private channel on your account.</span>
+                </li>
+                <li>
+                    <span class="welcome-icon" aria-hidden="true"><ServerOffIcon size={18} strokeWidth={1.8} /></span>
+                    <span><strong>No TDrive server</strong>The app talks to Telegram directly.</span>
+                </li>
+                <li>
+                    <span class="welcome-icon" aria-hidden="true"><LockKeyholeIcon size={18} strokeWidth={1.8} /></span>
+                    <span><strong>Locked if you want</strong>Encrypt uploads with a password only you know.</span>
+                </li>
+            </ul>
         </div>
         <div class="auth-actions">
             <button class="primary-btn auth-submit" type="button" onclick={() => { welcomed = true; }}>
                 Continue
             </button>
+            <p class="welcome-next">Next, connect your own Telegram API keys.</p>
         </div>
     </section>
 {:else if step === 'setup'}
@@ -569,8 +586,51 @@
     }
 
     :global(html.mobile) .auth-welcome .auth-intro {
-        margin-bottom: 0;
+        margin: 0 auto 2rem;
+        max-width: 300px;
+        text-align: center;
     }
+
+    .welcome-points {
+        display: grid;
+        gap: 18px;
+        width: 100%;
+        max-width: 320px;
+        margin: 0 auto;
+        padding: 0;
+        list-style: none;
+        text-align: left;
+    }
+    .welcome-points li {
+        display: grid;
+        grid-template-columns: 36px minmax(0, 1fr);
+        align-items: start;
+        gap: 14px;
+        color: var(--color-text-muted);
+        font-size: var(--type-sm);
+        line-height: 1.45;
+    }
+    .welcome-points strong {
+        display: block;
+        margin-bottom: 2px;
+        color: var(--color-text);
+        font-weight: var(--weight-semibold);
+    }
+    /* As tall as the bold first line, so each icon sits beside its title. */
+    .welcome-icon {
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 1.45em;
+        color: var(--color-accent);
+    }
+    .welcome-next {
+        margin: 12px 0 0;
+        text-align: center;
+        color: var(--color-text-subtle);
+        font-size: var(--type-xs);
+    }
+    :global(html.mobile) .welcome-points li { font-size: var(--mobile-type-body); }
 
     /* Optically centred, not mathematically. A block placed at exact centre on
        a tall phone screen reads as having sunk, because the eye gives the upper
@@ -585,13 +645,15 @@
        the logo is the thing that says whose app this is. */
     :global(html.mobile) .auth-mark {
         display: block;
-        width: 112px;
+        width: 96px;
         height: auto;
-        margin: 0 auto 1.75rem;
+        margin: 0 auto 1.5rem;
     }
 
     :global(html.mobile) .auth-welcome h2 {
         font-size: var(--type-3xl);
+        text-align: center;
+        text-wrap: balance;
     }
 
     .auth-inline-link {
