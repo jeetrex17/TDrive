@@ -166,10 +166,14 @@ test('Activity restores and checks a pending copy with the source disconnected',
     await row.click();
     await expect(activity.getByText('Waiting for Telegram receipt')).toBeVisible();
     await activity.getByRole('button', { name: 'Check copy' }).click();
-    await expect(row).toContainText('Checking copy…');
-    await expect(row).toHaveAttribute('aria-pressed', 'true');
     const checking = activity.getByRole('button', { name: 'Checking…' });
     await expect(checking).toBeDisabled();
+    // The panel shows one item's details in the list's place; back to the
+    // list, the row says the check is running and is still the chosen one.
+    await activity.getByRole('button', { name: 'Activity', exact: true }).click();
+    await expect(row).toContainText('Checking copy…');
+    await expect(row).toHaveAttribute('aria-pressed', 'true');
+    await row.click();
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(checking).toBeVisible();

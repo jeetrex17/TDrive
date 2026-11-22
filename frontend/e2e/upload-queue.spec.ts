@@ -150,6 +150,7 @@ test('removing a waiting upload leaves the active batch running', async ({ page 
     expect(await mock.calls('CancelUpload')).toEqual([]);
     expect(await mock.calls('RetryUploadToDriveFS')).toMatchObject([{ state: 'pending' }]);
     await mock.release('active');
+    await activity.getByRole('button', { name: 'Activity', exact: true }).click();
     await activity.getByRole('button', { name: 'View first.txt', exact: true }).click();
     await expect(activity.getByRole('region', { name: 'Details for first.txt', exact: true })).toContainText('Completed');
     expect(await mock.calls('RetryUploadToDriveFS')).toMatchObject([{ state: 'fulfilled' }]);

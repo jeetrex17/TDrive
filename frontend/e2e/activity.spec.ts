@@ -23,6 +23,11 @@ test('clicking a hover-open notification preview opens Activity and preserves th
     await expect(details).toContainText('Failed');
     await expect(details).toContainText(/fresh reference/);
     await activity.screenshot({ path: test.info().outputPath('activity-failure-desktop.png') });
+    // The docked panel shows details in the list's place: Escape steps back
+    // to the list first, then puts the panel away.
+    await page.keyboard.press('Escape');
+    await expect(details).toBeHidden();
+    await expect(activity.getByRole('button', { name: 'View broken.bin', exact: true })).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(activity).toBeHidden();
     await expect(bell).toBeFocused();

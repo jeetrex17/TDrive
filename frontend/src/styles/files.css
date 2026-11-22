@@ -3,6 +3,10 @@
 /* Name takes the room; date and size are narrow, right-hand instrument
    columns, so the eye reads a name and its figures without crossing a void. */
 .main-content { --file-columns: minmax(0, 1fr) minmax(112px, 150px) minmax(64px, 96px) 76px; }
+/* Activity docks as a column on the right; the views beside it narrow to
+   make room rather than sit under it, so you can keep working. */
+html:not(.mobile) .main-content { --activity-panel-width: 400px; }
+html:not(.mobile) .main-content:has(> .activity-panel) > :not(header, .activity-panel) { margin-right: var(--activity-panel-width); }
 html:not(.mobile) .main-content {
     margin: var(--window-inset) var(--window-inset) var(--window-inset) 0;
     overflow: hidden;

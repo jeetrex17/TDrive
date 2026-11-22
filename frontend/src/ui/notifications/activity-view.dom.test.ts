@@ -61,14 +61,15 @@ describe('full activity view', () => {
         expect(get(activityView).open).toBe(true);
     });
 
-    it('owns Escape and restores the invoking button after closing', async () => {
+    it('closes on Escape from inside the panel and restores the invoking button', async () => {
         const invoker = document.createElement('button'); invoker.id = 'notif-bell'; document.body.appendChild(invoker); invoker.focus();
         openActivity(); await settle();
         // Nothing to search or filter yet, so neither is drawn.
         expect(host.querySelector('#activity-search')).toBeNull();
         expect(host.querySelector('.activity-filters')).toBeNull();
         expect(document.activeElement).toBe(host.querySelector('.close-activity'));
-        document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); await settle();
+        // The desktop panel is not modal: Escape closes it from inside it.
+        document.activeElement?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true })); await settle();
         expect(get(activityView).open).toBe(false);
         expect(document.activeElement).toBe(invoker);
         invoker.remove();
