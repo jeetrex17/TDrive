@@ -602,8 +602,12 @@ html.mobile .drive-row.is-selected {
     box-shadow: none;
 }
 html.mobile .file-row.is-keyboard-active:not(.is-selected) {
-    background: var(--color-surface-0);
+    background: var(--color-canvas);
     box-shadow: none;
+}
+/* A tablet with a hardware keyboard still sees which row the arrows are on. */
+html.mobile[data-input="keyboard"] .file-row.is-keyboard-active:not(.is-selected) {
+    background: var(--color-surface-0);
 }
 
 html.mobile .row-name {
