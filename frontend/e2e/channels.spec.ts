@@ -397,7 +397,9 @@ test('390x844 mobile source picker has no sheet bleed', async ({ page }) => {
     await link.press('Enter');
     const result = dialog.getByRole('button', { name: 'Connect Tech Talks' });
     await expect(result).toBeVisible();
-    expect((await result.boundingBox())!.height).toBeGreaterThanOrEqual(60);
+    // A 60px touch target; Linux layout can land the row a hair under on a
+    // fractional offset (59.99997), so the measurement is rounded.
+    expect(Math.round((await result.boundingBox())!.height)).toBeGreaterThanOrEqual(60);
     await page.screenshot({ path: 'test-results/source-picker-mobile-390x844.png', fullPage: true, animations: 'disabled' });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
