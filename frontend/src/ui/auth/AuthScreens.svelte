@@ -2,6 +2,7 @@
     import CountryCodePicker from './CountryCodePicker.svelte';
     import { normalizePhoneNumber, countryForInternationalNumber, nationalNumberForCountryChange } from './phone-number';
     import type { CountryCode } from 'libphonenumber-js/min';
+    import { welcomeSeen } from './welcome-store';
     import tdriveLogo from '../../assets/images/tdrive-logo.png';
     import EyeIcon from '@lucide/svelte/icons/eye';
     import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
@@ -49,19 +50,17 @@
 
     const TELEGRAM_APPS_URL = 'https://my.telegram.org/apps';
 
-    // Phones get full-bleed pages and a welcome page in front of the
-    // credentials form. The welcome is local presentation only: the auth
-    // state machine stays on 'setup' underneath it.
+    // A first run opens on the welcome page, in front of the credentials form.
+    // Phones also get full-bleed pages.
     const mobile = isMobilePlatform();
-    let welcomed = $state(false);
-    const step = $derived(mobile && $authScreen === 'setup' && !welcomed ? 'welcome' : $authScreen);
+    const step = $derived($authScreen === 'setup' && !$welcomeSeen ? 'welcome' : $authScreen);
 
     // Phone BACK steps back through sign-in the way the on-screen links do,
     // instead of falling through to the host and leaving the app.
     $effect(() => {
         if (!mobile) return;
         const back = step === 'code' && !$authSubmission.code.busy ? onBackToPhone
-            : step === 'setup' ? () => { welcomed = false; }
+            : step === 'setup' ? () => welcomeSeen.set(false)
             : null;
         if (!back) return;
         const sheet = pushSheet(back);
@@ -189,7 +188,7 @@
             </ul>
         </div>
         <div class="auth-actions">
-            <button class="primary-btn auth-submit" type="button" onclick={() => { welcomed = true; }}>
+            <button class="primary-btn auth-submit" type="button" onclick={() => welcomeSeen.set(true)}>
                 Continue
             </button>
             <p class="welcome-next">Next, connect your own Telegram API keys.</p>
@@ -596,7 +595,7 @@
         gap: 18px;
         width: 100%;
         max-width: 320px;
-        margin: 0 auto;
+        margin: 0 auto 32px;
         padding: 0;
         list-style: none;
         text-align: left;

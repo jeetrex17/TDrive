@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
+import { welcomeSeen } from './welcome-store';
 import AuthScreens from './AuthScreens.svelte';
 import { showAuthView, showStartupView } from '../app/app-store';
 import { beginAuthSubmission, resetAuthSubmissions } from './auth-store';
@@ -21,6 +22,7 @@ beforeEach(() => {
     window.history.replaceState(null, '', '/?mobile=1');
     showStartupView();
     resetAuthSubmissions();
+    welcomeSeen.set(false);
     host = document.createElement('div');
     document.body.appendChild(host);
     onBackToPhone = vi.fn<() => void>();
