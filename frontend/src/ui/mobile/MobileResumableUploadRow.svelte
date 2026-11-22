@@ -97,7 +97,7 @@
         align-items: start;
         column-gap: 12px;
         row-gap: 7px;
-        padding: 12px 14px;
+        padding: 12px 16px;
     }
     .glyph {
         display: grid;

@@ -162,11 +162,19 @@
 </div>
 
 <style>
-    /* The card separates its own rows. A row cannot see its siblings -- each one
-       is its own component -- and the separation is a property of the stack
-       rather than of anything in it. */
-    .transfers-group > :global(* + *) {
-        border-top: 1px solid var(--color-border-soft);
+    /* The list separates its own rows, from the text column (16px gutter, 28px
+       glyph, 12px gap) to the edge, as the Files list does. A row cannot see
+       its siblings -- each one is its own component -- so the stack draws it. */
+    .transfers-group > :global(* + *) { position: relative; }
+    .transfers-group > :global(* + *)::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 56px;
+        right: 0;
+        height: 1px;
+        background: var(--color-border-soft);
+        pointer-events: none;
     }
 
     /* Keep the quiet text treatment while giving the section actions an iOS

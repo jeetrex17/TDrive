@@ -690,12 +690,16 @@ html.mobile .mobile-selection-bar {
 }
 
 /* ============================ TRANSFERS TAB ============================ */
-html.mobile .transfers-tab { padding-top: var(--space-2); }
+/* A full-bleed list like Files: the rows run to the screen edges, so the
+   scroller only keeps the safe-area insets at its sides. */
+html.mobile .transfers-tab {
+    padding: var(--space-2) var(--inset-right) calc(var(--space-6) + var(--inset-bottom)) var(--inset-left);
+}
 html.mobile .transfers-section-head {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    padding: var(--space-4) var(--space-1) var(--space-2);
+    padding: var(--space-4) var(--space-4) var(--space-2);
 }
 html.mobile .transfers-section-head:first-child { padding-top: var(--space-1); }
 html.mobile .transfers-clear {
@@ -710,9 +714,6 @@ html.mobile .transfers-clear {
 html.mobile .transfers-group {
     display: flex;
     flex-direction: column;
-    background: var(--color-surface-1);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
 }
 /* Notices in Recent, which are still the bell's own row: transfers have the
    phone's row (ui/mobile/MobileTransferRow) and bring their own shape.
@@ -726,7 +727,7 @@ html.mobile .transfers-group .notif-row {
     grid-template-columns: 28px minmax(0, 1fr) auto;
     align-items: center;
     gap: 12px;
-    padding: 12px 14px;
+    padding: 12px 16px;
     background: transparent;
     border: 0;
     border-radius: 0;
@@ -795,9 +796,6 @@ html.mobile .mobile-section-label {
 html.mobile .account-card {
     display: flex;
     flex-direction: column;
-    background: var(--color-surface-1);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
 }
 html.mobile .account-row {
     display: flex;
@@ -1298,3 +1296,11 @@ html.mobile .file-row.is-revealing .row-more {
        state it is, so nothing is lost by holding it still. */
     html.mobile .item-status[data-spins="true"] svg { animation: none; }
 }
+/* Downloads bring a desktop row; on the phone list it takes the same column. */
+html.mobile .transfers-group .download-row {
+    grid-template-columns: 28px minmax(0, 1fr);
+    column-gap: 12px;
+    padding: 12px 16px;
+}
+/* The section head already sits on the gutter; its label adds no indent. */
+html.mobile .transfers-section-head .mobile-section-label { padding: 0; }
