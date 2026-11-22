@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import ProfileMenu from './ProfileMenu.svelte';
+import { get } from 'svelte/store';
 import {
     setPreferredTheme,
     setThemeMode,
-    THEME_TRANSITION_CLASS,
     themeController,
 } from '../theme/theme-controller';
+import { closeSettings, settingsView } from '../settings/settings-store';
 import { requestUpdatesPanel, updatesPanelRequest } from '../updates/update-store';
 import { encryptionEntryVisible, profileLoaded, profileUser } from './profile-store';
 
@@ -20,7 +21,6 @@ function setup(extra: { updaterAvailable?: boolean } = {}): void {
         target: host,
         props: {
             onOpen: vi.fn(),
-            onEncryptionSettings: vi.fn(),
             onLogout: vi.fn(),
             ...extra,
         },
@@ -33,20 +33,6 @@ function click(selector: string): void {
     if (!element) throw new Error(`missing ${selector}`);
     element.click();
     flushSync();
-}
-
-function rect(left: number, top: number, width: number, height: number): DOMRect {
-    return {
-        x: left,
-        y: top,
-        left,
-        top,
-        right: left + width,
-        bottom: top + height,
-        width,
-        height,
-        toJSON: () => ({}),
-    };
 }
 
 afterEach(async () => {
@@ -62,6 +48,8 @@ afterEach(async () => {
     profileLoaded.set(false);
     encryptionEntryVisible.set(false);
     updatesPanelRequest.set(0);
+    closeSettings();
+    settingsView.set({ open: false, section: 'account' });
 });
 
 describe('ProfileMenu appearance navigation', () => {
@@ -73,78 +61,22 @@ describe('ProfileMenu appearance navigation', () => {
         expect(host?.querySelector('.photo-cache-panel')).toBeNull();
     });
 
-    it('uses Escape to return to the account menu before closing the popover', async () => {
+    it('opens Settings from the menu and closes the menu', () => {
         setup();
         click('#profile-trigger');
-        click('#profile-menu-appearance');
-        await tick();
-        await Promise.resolve();
+        click('#profile-menu-settings');
 
-        const menu = host?.querySelector<HTMLElement>('#profile-menu');
-        expect(menu?.getAttribute('role')).toBe('dialog');
-        expect(menu?.getAttribute('aria-labelledby')).toBe('appearance-title');
-        expect(host?.textContent).not.toContain('System');
-        expect(host?.querySelectorAll('[data-appearance-mode]')).toHaveLength(2);
-        expect(host?.textContent).not.toContain('Automatic pair');
-        expect(host?.querySelector('.appearance-back')).toBeNull();
-        const selectedMode = host?.querySelector('[data-appearance-mode="dark"]');
-        expect(selectedMode).toBe(document.activeElement);
-
-        menu?.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
-        flushSync();
-        await tick();
-        await Promise.resolve();
-
-        expect(menu?.hidden).toBe(false);
-        expect(menu?.getAttribute('role')).toBe('menu');
-        expect(host?.querySelector('#profile-menu-appearance')).toBe(document.activeElement);
+        expect(host?.querySelector<HTMLElement>('#profile-menu')?.hidden).toBe(true);
+        expect(get(settingsView).open).toBe(true);
     });
 
-    it('stays open while previewing multiple palettes', async () => {
+    it('sends update requests to the Updates section of Settings', async () => {
         setup();
-        click('#profile-trigger');
-        click('#profile-menu-appearance');
-        await tick();
-
-        click('#appearance-theme-dracula');
-        await tick();
-        click('#appearance-theme-nord');
-        await tick();
-
-        const menu = host?.querySelector<HTMLElement>('#profile-menu');
-        expect(menu?.hidden).toBe(false);
-        expect(menu?.getAttribute('role')).toBe('dialog');
-        expect(host?.querySelector('#appearance-theme-nord')?.getAttribute('aria-checked')).toBe('true');
-        expect(host?.textContent).toContain('Nord is active.');
-    });
-
-    it('recovers a rapid palette click intercepted by the root transition layer', async () => {
-        setup();
-        click('#profile-trigger');
-        click('#profile-menu-appearance');
-        await tick();
-        await Promise.resolve();
-
-        const menu = host?.querySelector<HTMLElement>('#profile-menu');
-        const nord = host?.querySelector<HTMLButtonElement>('#appearance-theme-nord');
-        if (!menu || !nord) throw new Error('appearance controls did not render');
-        vi.spyOn(menu, 'getBoundingClientRect').mockReturnValue(rect(100, 100, 390, 680));
-        vi.spyOn(nord, 'getBoundingClientRect').mockReturnValue(rect(290, 360, 180, 100));
-        document.documentElement.classList.add(THEME_TRANSITION_CLASS);
-
-        document.documentElement.dispatchEvent(new MouseEvent('click', {
-            bubbles: true,
-            cancelable: true,
-            clientX: 340,
-            clientY: 410,
-        }));
+        requestUpdatesPanel();
         flushSync();
         await tick();
 
-        expect(menu.hidden).toBe(false);
-        expect(menu.getAttribute('role')).toBe('dialog');
-        expect(host?.querySelector('#appearance-theme-nord')?.getAttribute('aria-checked')).toBe('true');
-        expect(document.activeElement).toBe(host?.querySelector('#appearance-theme-nord'));
+        expect(get(settingsView)).toEqual({ open: true, section: 'updates' });
     });
 });
 
@@ -155,16 +87,16 @@ describe('ProfileMenu without an updater', () => {
         flushSync();
         await tick();
 
-        const menu = host?.querySelector<HTMLElement>('#profile-menu');
-        expect(menu?.hidden).toBe(true);
+        expect(get(settingsView).open).toBe(false);
 
         click('#profile-trigger');
         await tick();
         await Promise.resolve();
 
+        const menu = host?.querySelector<HTMLElement>('#profile-menu');
         expect(menu?.hidden).toBe(false);
         expect(menu?.getAttribute('role')).toBe('menu');
         expect(host?.querySelector('#profile-menu-updates')).toBeNull();
-        expect(host?.querySelector('#profile-menu-appearance')).toBe(document.activeElement);
+        expect(host?.querySelector('#profile-menu-settings')).toBe(document.activeElement);
     });
 });

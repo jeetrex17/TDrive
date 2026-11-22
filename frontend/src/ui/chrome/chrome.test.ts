@@ -20,7 +20,7 @@ const drag: BreadcrumbDrag = {
 };
 
 const breadcrumbProps = { onNavigate: noop, onBack: noop, drag };
-const profileProps = { onOpen: noop, onEncryptionSettings: noop, onLogout: noop };
+const profileProps = { onOpen: noop, onLogout: noop };
 const uploadProps = { onFiles: noop, onFolder: noop };
 
 afterEach(() => {
@@ -98,27 +98,29 @@ describe('ProfileMenu', () => {
         expect(body).toContain('Log out');
     });
 
-    it('renders name, handle, and the encryption entry when enabled', () => {
+    it('renders the name and handle above the Settings entry', () => {
         profileUser.set({ displayName: 'Ada L.', username: 'ada', userId: 7 });
         profileLoaded.set(true);
-        encryptionEntryVisible.set(true);
 
         const { body } = render(ProfileMenu, { props: profileProps });
 
         expect(body).toContain('Ada L.');
         expect(body).toContain('@ada');
-        expect(body).toContain('Encryption settings');
+        expect(body).toContain('id="profile-menu-settings"');
     });
 
-    it('does not render mount controls below encryption settings', () => {
+    it('keeps only Settings, updates and log out, in that order', () => {
         encryptionEntryVisible.set(true);
 
         const { body } = render(ProfileMenu, { props: profileProps });
-        const encryptionIndex = body.indexOf('id="profile-menu-encryption-settings"');
-        const logoutIndex = body.indexOf('id="profile-menu-logout"');
+        const order = ['profile-menu-settings', 'profile-menu-updates', 'profile-menu-logout']
+            .map((id) => body.indexOf(`id="${id}"`));
 
-        expect(encryptionIndex).toBeGreaterThanOrEqual(0);
-        expect(logoutIndex).toBeGreaterThan(encryptionIndex);
+        expect(order.every((index) => index >= 0)).toBe(true);
+        expect([...order].sort((a, b) => a - b)).toEqual(order);
+        for (const moved of ['appearance', 'photo-backup', 'encrypt-uploads', 'encryption-settings']) {
+            expect(body).not.toContain(`id="profile-menu-${moved}"`);
+        }
         expect(body).not.toContain('id="mount-drive-button"');
     });
 
@@ -126,7 +128,7 @@ describe('ProfileMenu', () => {
         const { body } = render(ProfileMenu, { props: { ...profileProps, updaterAvailable: false } });
 
         expect(body).not.toContain('id="profile-menu-updates"');
-        expect(body).toContain('id="profile-menu-appearance"');
+        expect(body).toContain('id="profile-menu-settings"');
         expect(body).toContain('id="profile-menu-logout"');
     });
 });

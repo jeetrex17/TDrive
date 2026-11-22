@@ -21,7 +21,6 @@
     font-weight: var(--weight-strong);
     letter-spacing: 0.02em;
 }
-.profile-menu.updates-view { min-width: min(348px, calc(100vw - 32px)); }
 
 /* Login-screen update hint. */
 .auth-update-footer {
