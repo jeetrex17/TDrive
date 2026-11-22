@@ -13,7 +13,7 @@ import { openRenameModal } from './modals/rename';
 import { moveToTrash } from './modals/delete';
 import { openNewFolderModal } from './modals/folder';
 import { notify } from './notifications';
-import { navigateToFolder } from './navigation';
+import { navigateBack, navigateToFolder } from './navigation';
 import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop';
 import {
     getFileList,
@@ -1189,9 +1189,14 @@ function handleListKeyDown(e: KeyboardEvent) {
             e.preventDefault();
             if (currentRow) renameRow(currentRow);
             return;
-        case 'Delete':
         case 'Backspace':
-            // A Mac keyboard's Delete key is Backspace.
+            // Match Windows File Explorer: Backspace navigates to the parent;
+            // Delete is the explicit destructive shortcut.
+            if (isTrashMode()) return;
+            e.preventDefault();
+            navigateBack();
+            return;
+        case 'Delete':
             e.preventDefault();
             // A focused row inside a multi-selection deletes the selection,
             // which is what the context menu offers under the same shortcut.
