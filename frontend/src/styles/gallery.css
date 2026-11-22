@@ -779,6 +779,9 @@ html.mobile .preview-unlock-go {
 }
 
 .album-grid-root { padding-top: 16px; }
+/* Albums are tiles with names under them, not the edge-to-edge timeline:
+   they stand off the panel's edges on the same gutter as the header above. */
+html:not(.mobile) .album-grid-root { padding-left: var(--gutter); padding-right: var(--gutter); }
 .album-row {
     display: grid;
     gap: var(--album-gap, 12px);
@@ -830,7 +833,7 @@ html.mobile .preview-unlock-go {
     height: var(--album-cover-size);
     overflow: hidden;
     border-radius: var(--radius-lg);
-    background: var(--bg-panel);
+    background: var(--color-surface-1);
 }
 .album-cover .gallery-thumb { border-radius: inherit; }
 .album-cover.is-loaded .gallery-thumb { opacity: 1; }
@@ -839,7 +842,14 @@ html.mobile .preview-unlock-go {
     inset: 0;
     display: grid;
     place-items: center;
-    color: var(--text-muted);
+    color: var(--color-text-subtle);
+}
+/* No picture to show: a flat tile with a hairline edge, so an album without
+   its cover still reads as a picture tile rather than a hole. */
+.album-cover-glyph.is-empty {
+    background: var(--color-surface-1);
+    box-shadow: inset 0 0 0 1px var(--color-border-soft);
+    border-radius: inherit;
 }
 
 /* The label lives under the image on a solid strip, never over it: a cover is

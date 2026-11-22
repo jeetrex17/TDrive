@@ -1,5 +1,6 @@
 <script lang="ts">
-    import FolderIcon from '@lucide/svelte/icons/folder';
+    import FilmIcon from '@lucide/svelte/icons/film';
+    import ImagesIcon from '@lucide/svelte/icons/images';
     import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
     import type { FileThumbnailIdentity } from '../file-list/types';
     import { registerCell, unregisterCell, type CellPatch, type CellStatus } from './gallery-controller';
@@ -18,13 +19,14 @@
     let src = $state('');
     let detail = $state('');
 
-    // Until a cover is actually on screen the tile draws a folder glyph: no
-    // cover at all, a stale revision, a failed fetch, and the whole wait in
-    // between, which on a cold drive is most of the time a person spends here.
-    // Never a broken image -- the tile still navigates, and saying "broken"
-    // about a folder that is perfectly fine would be a lie about the drive.
-    // A locked vault draws its own lock instead, so the two never stack.
-    const glyph = $derived(status !== 'loaded' && status !== 'locked');
+    // While a cover is on its way the tile is a quiet surface (a shimmer once
+    // the fetch starts), so a cold grid does not flash a glyph per tile. When
+    // there is no picture to show -- none renderable, a stale revision, a
+    // failed fetch -- the tile names what the album holds instead: photos, or
+    // a film for a video cover. Never a broken image, and never a folder: this
+    // is an album of pictures, not a place in the file tree. A locked vault
+    // draws its own lock, so the two never stack.
+    const glyph = $derived(tile.cover === undefined || status === 'failed' || status === 'missing');
     const image = $derived(tile.cover !== undefined && status !== 'failed' && status !== 'missing');
     const coverClass = $derived(
         `album-cover${status === 'loaded' ? ' is-loaded' : ''}${status === 'loading' ? ' is-loading' : ''}${status === 'locked' ? ' is-locked' : ''}`,
@@ -77,7 +79,9 @@
             <img class="gallery-thumb" alt="" width="512" height="512" decoding="async" src={src || undefined} />
         {/if}
         {#if glyph}
-            <span class="album-cover-glyph"><FolderIcon size={30} strokeWidth={1.5} aria-hidden="true" /></span>
+            <span class="album-cover-glyph is-empty">
+                {#if tile.coverIsVideo}<FilmIcon size={26} strokeWidth={1.5} aria-hidden="true" />{:else}<ImagesIcon size={26} strokeWidth={1.5} aria-hidden="true" />{/if}
+            </span>
         {/if}
         {#if status === 'locked'}
             <span class="album-cover-glyph"><LockKeyholeIcon size={26} strokeWidth={1.6} aria-hidden="true" /></span>
