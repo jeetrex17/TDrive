@@ -172,7 +172,7 @@ func (controller *Controller) startDrives(ctx context.Context, requested []Drive
 	if err != nil {
 		return controller.Status(), err
 	}
-	windowsDrive, err := normalizeWindowsDrive(options.WindowsDrive)
+	windowsDrive, err := NormalizeWindowsDrive(options.WindowsDrive)
 	if err != nil {
 		return controller.Status(), err
 	}
@@ -892,7 +892,9 @@ func closeWriteSession(ctx context.Context, writer WriteSession) error {
 	return writer.Close(ctx)
 }
 
-func normalizeWindowsDrive(value string) (string, error) {
+// NormalizeWindowsDrive accepts "Q" or "q:" and returns "Q:"; empty means the
+// default letter.
+func NormalizeWindowsDrive(value string) (string, error) {
 	value = strings.ToUpper(strings.TrimSpace(value))
 	if value == "" {
 		return defaultWindowsDrive, nil
@@ -938,7 +940,7 @@ func startFailureMessage(fallback string, cause error, active *session) string {
 		if active != nil && active.windowsDrive != "" {
 			drive = active.windowsDrive
 		}
-		return fmt.Sprintf("Windows drive %s is already in use. Free it and try again.", drive)
+		return fmt.Sprintf("Windows drive %s is already in use. Free it or choose another drive letter, then try again.", drive)
 	case errors.Is(cause, mountos.ErrWindowsWebDAVUnavailable):
 		return "Windows WebDAV is unavailable. Start or enable the WebClient service, then try again."
 	case errors.Is(cause, mountos.ErrLinuxDesktopUnavailable):

@@ -1,7 +1,7 @@
 import { writable } from 'svelte/store';
 
 /** The sections of the desktop Settings window, in sidebar order. */
-export type SettingsSection = 'account' | 'appearance' | 'backup' | 'encryption' | 'updates';
+export type SettingsSection = 'account' | 'appearance' | 'backup' | 'encryption' | 'mount' | 'updates';
 
 export interface SettingsView {
     open: boolean;

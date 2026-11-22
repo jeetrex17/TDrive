@@ -70,7 +70,7 @@ func (a *App) mountDriveNative() (MountView, error) {
 	if err != nil {
 		return MountView{}, mountsafe.SanitizeError(err)
 	}
-	status, err := controller.Start(ctx, drive, mountcontroller.StartOptions{Mode: mountcontroller.ModeAuto})
+	status, err := controller.Start(ctx, drive, mountStartOptions())
 	return mountView(status), mountsafe.SanitizeError(err)
 }
 
@@ -103,7 +103,7 @@ func (a *App) mountDrivesNative(channelIDs []int64) (MountView, error) {
 	if err != nil {
 		return MountView{}, mountsafe.SanitizeError(err)
 	}
-	status, err := aggregate.StartDrives(ctx, drives, mountcontroller.StartOptions{Mode: mountcontroller.ModeAuto})
+	status, err := aggregate.StartDrives(ctx, drives, mountStartOptions())
 	return mountView(status), mountsafe.SanitizeError(err)
 }
 

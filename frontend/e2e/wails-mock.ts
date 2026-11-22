@@ -132,6 +132,8 @@ const DEFAULT_METHODS: Record<string, MockPlan> = {
         mount: { mounted: true, phase: 'mounted', label: 'Tdrive' },
     }),
     MountStatus: resolves({ mounted: false, phase: 'idle', label: 'Tdrive personal' }),
+    GetMountDriveLetter: resolves({ available: false, letter: 'T:' }),
+    SetMountDriveLetter: resolves({ available: false, letter: 'T:' }),
     MyUserID: resolves(7),
     PreparePersonalDrive: resolves({ status: 'ready', active_channel_id: '1' }),
     ResolveUsernames: resolves({}),

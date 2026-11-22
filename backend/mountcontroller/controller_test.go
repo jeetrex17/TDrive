@@ -604,7 +604,7 @@ func TestStartReturnsOnlySafePlatformAttachGuidance(t *testing.T) {
 		{
 			name:           "occupied drive",
 			cause:          mountos.ErrDriveOccupied,
-			want:           "Windows drive T: is already in use. Free it and try again.",
+			want:           "Windows drive T: is already in use. Free it or choose another drive letter, then try again.",
 			classification: mountos.ErrDriveOccupied,
 		},
 		{

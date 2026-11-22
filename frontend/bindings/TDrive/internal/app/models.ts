@@ -151,6 +151,15 @@ export interface JoinRequestInfo {
     "about"?: string;
 }
 
+/**
+ * MountDriveLetterView is the drive letter the next Windows mount uses.
+ * Available is false on other platforms, which mount by volume name.
+ */
+export interface MountDriveLetterView {
+    "available": boolean;
+    "letter": string;
+}
+
 export interface MountDriveView {
     "id"?: number;
     "title"?: string;
