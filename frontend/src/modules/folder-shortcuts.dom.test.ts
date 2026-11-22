@@ -15,6 +15,11 @@ function press(target: EventTarget = document.body, overrides: KeyboardEventInit
     target.dispatchEvent(event);
     return event;
 }
+const parentShortcuts = [
+    { name: 'Alt+Up', keys: { key: 'ArrowUp', altKey: true } },
+    { name: 'Backspace', keys: { key: 'Backspace', altKey: false } },
+];
+
 beforeEach(() => {
     vi.clearAllMocks();
     actions.mobile = false;
@@ -34,9 +39,9 @@ afterEach(() => {
 });
 
 describe('folder shortcuts', () => {
-    it('navigates from body, toolbar and an empty folder without requiring a row', () => {
+    it.each(parentShortcuts)('navigates with $name from body, toolbar and an empty folder', ({ keys }) => {
         for (const target of [document.body, document.getElementById('toolbar')!, document.getElementById('file-list')!]) {
-            expect(press(target).defaultPrevented).toBe(true);
+            expect(press(target, keys).defaultPrevented).toBe(true);
         }
         expect(actions.navigateBack).toHaveBeenCalledTimes(3);
     });
@@ -48,37 +53,42 @@ describe('folder shortcuts', () => {
         press();
         expect(actions.navigateBack).toHaveBeenCalledTimes(2);
     });
-    it('does not hijack editing, composition, repeats or other modifier combinations', () => {
-        press(document.getElementById('search-input')!);
+    it('leaves Backspace available for row deletion on Apple platforms', () => {
+        actions.apple = true;
+        expect(press(document.body, { key: 'Backspace', altKey: false }).defaultPrevented).toBe(false);
+        expect(actions.navigateBack).not.toHaveBeenCalled();
+    });
+    it.each(parentShortcuts)('leaves editing, composition, repeats and other modifiers alone for $name', ({ keys }) => {
+        press(document.getElementById('search-input')!, keys);
         const editor = document.createElement('div');
         editor.contentEditable = 'true';
         document.body.append(editor);
-        press(editor);
+        press(editor, keys);
         for (const extra of [{ ctrlKey: true }, { shiftKey: true }, { metaKey: true }, { repeat: true }, { isComposing: true }]) {
-            press(document.body, extra);
+            press(document.body, { ...keys, ...extra });
         }
         expect(actions.navigateBack).not.toHaveBeenCalled();
     });
-    it('ignores root, alternate views, drive switching and mobile', () => {
+    it.each(parentShortcuts)('ignores root, alternate views, search, drive switching and mobile for $name', ({ keys }) => {
         state.folderPath = [];
-        press();
+        press(document.body, keys);
         state.folderPath = [{ id: 'folder', name: 'Folder' }];
         state.virtualView = 'photos';
-        press();
+        press(document.body, keys);
         state.virtualView = 'trash';
-        press();
+        press(document.body, keys);
         state.virtualView = null;
         state.searchQuery = 'query';
-        press();
+        press(document.body, keys);
         state.searchQuery = '';
         state.channelSwitchInProgress = true;
-        press();
+        press(document.body, keys);
         state.channelSwitchInProgress = false;
         openChannelKey.set('channel');
-        press();
+        press(document.body, keys);
         openChannelKey.set(null);
         actions.mobile = true;
-        press();
+        press(document.body, keys);
         expect(actions.navigateBack).not.toHaveBeenCalled();
     });
     it('leaves modal and menu ownership intact', () => {

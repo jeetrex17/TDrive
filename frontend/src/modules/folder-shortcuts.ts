@@ -17,8 +17,10 @@ function isVisible(element: HTMLElement): boolean {
 
 function handleFolderShortcut(event: KeyboardEvent): void {
     if (event.defaultPrevented || event.repeat || event.isComposing || isMobilePlatform()) return;
-    const parent = event.key === 'ArrowUp' && !event.ctrlKey && !event.shiftKey
+    const parentArrow = event.key === 'ArrowUp'
         && ((event.altKey && !event.metaKey) || (isApplePlatform() && event.metaKey && !event.altKey));
+    const parentBackspace = event.key === 'Backspace' && !event.altKey && !event.metaKey && !isApplePlatform();
+    const parent = !event.ctrlKey && !event.shiftKey && (parentArrow || parentBackspace);
     const search = event.key.toLowerCase() === 'f' && !event.altKey && !event.shiftKey
         && (event.ctrlKey !== event.metaKey);
     if (!parent && !search) return;
