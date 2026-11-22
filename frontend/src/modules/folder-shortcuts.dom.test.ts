@@ -172,4 +172,21 @@ describe('folder shortcuts', () => {
         press(document.body, { key: 'ArrowRight' });
         expect(actions.navigateHistory).not.toHaveBeenCalled();
     });
+    it('steps back and forward with the mouse side buttons, and blocks the webview history', () => {
+        const click = (button: number, target: EventTarget = document.body) => {
+            const event = new MouseEvent('mouseup', { button, bubbles: true, cancelable: true });
+            target.dispatchEvent(event);
+            return event;
+        };
+        expect(click(3).defaultPrevented).toBe(true);
+        expect(click(4, document.getElementById('file-list')!).defaultPrevented).toBe(true);
+        expect(click(0).defaultPrevented).toBe(false);
+        state.virtualView = 'photos';
+        expect(click(3).defaultPrevented).toBe(true);
+        state.virtualView = null;
+        actions.mobile = true;
+        expect(click(3).defaultPrevented).toBe(false);
+        expect(actions.navigateHistory.mock.calls).toEqual([[-1], [1]]);
+    });
 });
+

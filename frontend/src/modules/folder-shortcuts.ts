@@ -15,6 +15,13 @@ function isVisible(element: HTMLElement): boolean {
     return true;
 }
 
+// The folder view is in front: no overlay, menu, drive switch or other view.
+function folderViewOwnsInput(): boolean {
+    if (hasActiveModal() || get(contextMenuState).open || state.channelSwitchInProgress
+        || state.virtualView !== null || get(openChannelKey) !== null) return false;
+    return ![...document.querySelectorAll<HTMLElement>('[role="menu"], [role="dialog"], [role="alertdialog"]')].some(isVisible);
+}
+
 function handleFolderShortcut(event: KeyboardEvent): void {
     if (event.defaultPrevented || event.repeat || event.isComposing || isMobilePlatform()) return;
     const parentArrow = event.key === 'ArrowUp'
@@ -25,9 +32,7 @@ function handleFolderShortcut(event: KeyboardEvent): void {
         && (event.ctrlKey !== event.metaKey);
     const history = historyStep(event);
     if (!parent && !search && history === 0) return;
-    if (hasActiveModal() || get(contextMenuState).open || state.channelSwitchInProgress
-        || state.virtualView !== null || get(openChannelKey) !== null) return;
-    if ([...document.querySelectorAll<HTMLElement>('[role="menu"], [role="dialog"], [role="alertdialog"]')].some(isVisible)) return;
+    if (!folderViewOwnsInput()) return;
 
     const target = event.target instanceof Element ? event.target : null;
     const editor = target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]');
@@ -63,8 +68,22 @@ function historyStep(event: KeyboardEvent): -1 | 0 | 1 {
     return event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0;
 }
 
+// A mouse's side buttons step back (button 3) and forward (button 4), as in
+// File Explorer. Handling mouseup also stops the webview's own history step.
+function handleHistoryButton(event: MouseEvent): void {
+    const step = event.button === 3 ? -1 : event.button === 4 ? 1 : 0;
+    if (step === 0 || event.defaultPrevented || isMobilePlatform()) return;
+    event.preventDefault();
+    if (!folderViewOwnsInput() || state.searchQuery.trim()) return;
+    void navigateHistory(step);
+}
+
 /** Dashboard-owned shortcuts also work when a folder is empty or the toolbar has focus. */
 export function activateFolderShortcuts(): () => void {
     window.addEventListener('keydown', handleFolderShortcut);
-    return () => window.removeEventListener('keydown', handleFolderShortcut);
+    window.addEventListener('mouseup', handleHistoryButton);
+    return () => {
+        window.removeEventListener('keydown', handleFolderShortcut);
+        window.removeEventListener('mouseup', handleHistoryButton);
+    };
 }

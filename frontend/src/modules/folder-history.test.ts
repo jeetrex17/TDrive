@@ -6,7 +6,8 @@ vi.mock('./folder-index', () => ({
 }));
 
 import { state } from '../state';
-import { recordFolderPlace, resetFolderHistory, stepFolderHistory } from './folder-history';
+import { get } from 'svelte/store';
+import { folderHistoryState, recordFolderPlace, resetFolderHistory, stepFolderHistory } from './folder-history';
 
 function addFolder(id: string, name: string, parentId = ''): void {
     folders.set(id, { id, name, parentId });
@@ -83,6 +84,16 @@ describe('folder history', () => {
         resetFolderHistory();
         visit('a', 'b');
         expect(await step(-1)).toEqual([]);
+    });
+
+    it('publishes whether back and forward have somewhere to go', async () => {
+        expect(get(folderHistoryState)).toEqual({ canGoBack: false, canGoForward: false });
+        visit('a');
+        expect(get(folderHistoryState)).toEqual({ canGoBack: true, canGoForward: false });
+        await step(-1);
+        expect(get(folderHistoryState)).toEqual({ canGoBack: false, canGoForward: true });
+        resetFolderHistory();
+        expect(get(folderHistoryState)).toEqual({ canGoBack: false, canGoForward: false });
     });
 
     it('drops a second press while a step is still resolving', async () => {

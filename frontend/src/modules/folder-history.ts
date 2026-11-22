@@ -3,6 +3,7 @@
 // rebuilds the path from the folder index so renames and moves are followed
 // and deleted folders are skipped.
 
+import { writable, type Readable } from 'svelte/store';
 import { state, type DrivePathEntry } from '../state';
 import { refreshFolderIndex } from './folder-index';
 import type { FolderIndex } from './folder-index';
@@ -16,6 +17,23 @@ const HISTORY_LIMIT = 100;
 
 let entries: Place[] = [];
 let position = -1;
+
+export interface FolderHistoryState {
+    canGoBack: boolean;
+    canGoForward: boolean;
+}
+
+const availability = writable<FolderHistoryState>({ canGoBack: false, canGoForward: false });
+
+/** Whether a back or forward step has an entry to try, for the toolbar buttons. */
+export const folderHistoryState: Readable<FolderHistoryState> = { subscribe: availability.subscribe };
+
+function publish(): void {
+    const next = { canGoBack: position > 0, canGoForward: position >= 0 && position < entries.length - 1 };
+    availability.update((current) => (
+        current.canGoBack === next.canGoBack && current.canGoForward === next.canGoForward ? current : next
+    ));
+}
 
 function activeDriveId(): number {
     return Number(state.activeChannel?.id ?? 0);
@@ -39,11 +57,13 @@ export function recordFolderPlace(): void {
     const start = entries.length === 0 && folderId ? [{ driveId, folderId: '' }] : [];
     entries = [...entries.slice(0, position + 1), ...start, { driveId, folderId }].slice(-HISTORY_LIMIT);
     position = entries.length - 1;
+    publish();
 }
 
 export function resetFolderHistory(): void {
     entries = [];
     position = -1;
+    publish();
 }
 
 function pathTo(index: FolderIndex, folderId: string): DrivePathEntry[] | null {
@@ -70,7 +90,10 @@ export function stepFolderHistory(delta: -1 | 1): Promise<DrivePathEntry[] | nul
     // A press while the previous step is still resolving is dropped, so a step
     // is never applied twice.
     if (pending) return Promise.resolve(null);
-    pending = step(delta).finally(() => { pending = null; });
+    pending = step(delta).finally(() => {
+        pending = null;
+        publish();
+    });
     return pending;
 }
 

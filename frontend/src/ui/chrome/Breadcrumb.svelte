@@ -1,6 +1,8 @@
 <script lang="ts">
     import { isApplePlatform } from '../../utils';
-    import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
+    import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
+    import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
+    import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
     import { breadcrumbPath, type BreadcrumbDrag } from './breadcrumb-store';
     import { sidebarState } from '../sidebar/sidebar-store';
 
@@ -9,9 +11,14 @@
         onNavigate: (index: number) => void;
         onBack: () => void;
         drag: BreadcrumbDrag;
+        // Back (-1) and forward (+1) through visited folders.
+        onHistory?: (step: -1 | 1) => void;
+        canGoBack?: boolean;
+        canGoForward?: boolean;
     }
 
-    let { onNavigate, onBack, drag }: Props = $props();
+    let { onNavigate, onBack, drag, onHistory = () => undefined, canGoBack = false, canGoForward = false }: Props = $props();
+    const apple = isApplePlatform();
 
     interface CrumbItem {
         id: string;
@@ -59,19 +66,47 @@
     }
 </script>
 
+<!-- Back and forward appear once there is a visited folder to return to,
+     then stay put, disabled at either end, so neither jumps under the pointer. -->
+{#if canGoBack || canGoForward}
+    <button
+        id="breadcrumb-history-back"
+        class="icon-btn back-btn history-btn"
+        type="button"
+        title={apple ? "Back (⌘[)" : "Back (Alt+←)"}
+        aria-label="Back"
+        aria-keyshortcuts={apple ? "Meta+BracketLeft" : "Alt+ArrowLeft"}
+        disabled={!canGoBack}
+        onclick={() => onHistory(-1)}
+    >
+        <ArrowLeftIcon size={18} strokeWidth={2} aria-hidden="true" />
+    </button>
+    <button
+        id="breadcrumb-history-forward"
+        class="icon-btn back-btn history-btn"
+        type="button"
+        title={apple ? "Forward (⌘])" : "Forward (Alt+→)"}
+        aria-label="Forward"
+        aria-keyshortcuts={apple ? "Meta+BracketRight" : "Alt+ArrowRight"}
+        disabled={!canGoForward}
+        onclick={() => onHistory(1)}
+    >
+        <ArrowRightIcon size={18} strokeWidth={2} aria-hidden="true" />
+    </button>
+{/if}
 <!-- Absent at the root, where the drive name is the whole title. -->
 <button
     id="breadcrumb-back"
     class="icon-btn back-btn"
     class:is-hidden={atRoot}
     type="button"
-    title={isApplePlatform() ? "Parent folder (⌘↑ or Alt+↑)" : "Parent folder (Alt+↑)"}
+    title={apple ? "Parent folder (⌘↑ or Alt+↑)" : "Parent folder (Alt+↑ or Backspace)"}
     aria-label="Parent folder"
-    aria-keyshortcuts={isApplePlatform() ? "Meta+ArrowUp Alt+ArrowUp" : "Alt+ArrowUp"}
+    aria-keyshortcuts={apple ? "Meta+ArrowUp Alt+ArrowUp" : "Alt+ArrowUp Backspace"}
     disabled={atRoot}
     onclick={onBack}
 >
-    <ChevronLeftIcon size={18} strokeWidth={2} aria-hidden="true" />
+    <ArrowUpIcon size={18} strokeWidth={2} aria-hidden="true" />
 </button>
 <nav id="breadcrumb-path" class="breadcrumb-path" aria-label="Folder path">
     {#each items as item, idx (item.index === -1 ? 'root' : item.id)}

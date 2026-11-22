@@ -20,6 +20,7 @@
 /* There is no folder to be at, so there is no trail to show and nowhere for
    Back to go: leaving is the sidebar's job, the same as leaving Photos. */
 .main-content.trash-mode #breadcrumb-back,
+.main-content.trash-mode .history-btn,
 .main-content.trash-mode .breadcrumb-path { display: none; }
 
 /* Nothing can be added to the trash, so the control that adds things goes. */

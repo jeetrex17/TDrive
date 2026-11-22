@@ -11,7 +11,8 @@
     import tdriveLogo from '../assets/images/tdrive-logo.png';
     import { openEncryptionSettingsModal } from '../modules/modals/encryption-settings';
     import { openLogoutModal } from '../modules/modals/logout';
-    import { breadcrumbDrag, navigateBack, navigateToIndex } from '../modules/navigation';
+    import { breadcrumbDrag, navigateBack, navigateHistory, navigateToIndex } from '../modules/navigation';
+    import { folderHistoryState } from '../modules/folder-history';
     import { cancelTransfersInDirection, cancelUploadFile, clearHistory } from '../modules/notif-bell';
     import { ensureProfileLoaded } from '../modules/profile-menu';
     import { askEmptyTrash, openTrash, trashBusyKey, trashEntries } from '../modules/trash/controller';
@@ -199,7 +200,14 @@
                      The host they used to arrive in was display:contents, so it was
                      never a box of its own and taking it away moves nothing. -->
                 {#if dashboardVisible}
-                    <Breadcrumb onNavigate={navigateToIndex} onBack={navigateBack} drag={breadcrumbDrag} />
+                    <Breadcrumb
+                        onNavigate={navigateToIndex}
+                        onBack={navigateBack}
+                        onHistory={(step) => void navigateHistory(step)}
+                        canGoBack={$folderHistoryState.canGoBack}
+                        canGoForward={$folderHistoryState.canGoForward}
+                        drag={breadcrumbDrag}
+                    />
                 {/if}
                 <div id="gallery-title" class="gallery-title">Media</div>
                 <PhotosModeBar />
