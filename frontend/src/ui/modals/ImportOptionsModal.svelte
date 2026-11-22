@@ -128,14 +128,17 @@
             </span>
         </label>
         {#if merge}
-            <div role="radiogroup" aria-label="Files with the same name">
+            <div class="modal-choice-group" role="radiogroup" aria-label="Files with the same name">
                 <label class="modal-choice-row">
                     <input type="radio" name="import-file-conflict" value="skip" bind:group={fileConflict} />
                     <span>Skip files with the same name</span>
                 </label>
                 <label class="modal-choice-row">
                     <input type="radio" name="import-file-conflict" value="keep-both" bind:group={fileConflict} />
-                    <span>Keep both files</span>
+                    <span>
+                        Keep both files
+                        <small>The new copy gets a number, like Report (1).txt.</small>
+                    </span>
                 </label>
             </div>
         {/if}
