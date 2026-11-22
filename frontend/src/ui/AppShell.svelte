@@ -41,6 +41,7 @@
     import type { FileSortKey } from './file-list/file-sort';
     import Breadcrumb from './chrome/Breadcrumb.svelte';
     import ProfileMenu from './chrome/ProfileMenu.svelte';
+    import SettingsWindow from './settings/SettingsWindow.svelte';
     import UploadMenu from './chrome/UploadMenu.svelte';
     import PhotosModeBar from './gallery/PhotosModeBar.svelte';
     import PhotosSurface from './gallery/PhotosSurface.svelte';
@@ -252,7 +253,6 @@
                     <ProfileMenu
                         {updaterAvailable}
                         onOpen={ensureProfileLoaded}
-                        onEncryptionSettings={openEncryptionSettingsModal}
                         onLogout={openLogoutModal}
                     />
                 {/if}
@@ -340,6 +340,18 @@
             {/key}
         {/if}
     </main>
+</div>
+
+<!-- Before the feature layer, so a dialog Settings hands off to (logging out,
+     encryption) is drawn above it. -->
+<div id="settings-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
+    {#if dashboardVisible}
+        <SettingsWindow
+            {updaterAvailable}
+            onEncryptionSettings={openEncryptionSettingsModal}
+            onLogout={openLogoutModal}
+        />
+    {/if}
 </div>
 
 <FeatureLayer />

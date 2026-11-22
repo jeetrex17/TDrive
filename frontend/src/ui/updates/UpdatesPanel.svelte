@@ -28,6 +28,12 @@
         updateState,
     } from './update-store';
 
+    interface Props {
+        /** Inside a Settings page, which already titles the section. */
+        embedded?: boolean;
+    }
+
+    let { embedded = false }: Props = $props();
     let confirming = $state(false);
     let risks = $state<string[]>([]);
     let preparingRestart = $state(false);
@@ -85,10 +91,12 @@
     }
 </script>
 
-<section class="updates-panel" aria-labelledby="updates-title">
-    <header class="updates-header">
-        <h2 id="updates-title" tabindex="-1">Software Update</h2>
-    </header>
+<section class="updates-panel" class:is-embedded={embedded} aria-labelledby={embedded ? undefined : 'updates-title'} aria-label={embedded ? 'Software update' : undefined}>
+    {#if !embedded}
+        <header class="updates-header">
+            <h2 id="updates-title" tabindex="-1">Software Update</h2>
+        </header>
+    {/if}
 
     <div class="updates-summary">
         <div class="updates-app-name">TDrive</div>
@@ -255,6 +263,7 @@
         width: min(336px, calc(100vw - 44px));
         color: var(--color-text);
     }
+    .updates-panel.is-embedded { width: 100%; max-width: 520px; }
 
 
     .updates-header {

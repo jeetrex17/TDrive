@@ -18,6 +18,9 @@
 
     interface Props {
         autofocus?: boolean;
+        /** 'settings' fills a Settings page and shows both theme lists:
+         *  the light mode's and the dark mode's, since each mode keeps its own. */
+        layout?: 'popover' | 'settings';
     }
 
     interface ModeOption {
@@ -26,7 +29,7 @@
         icon: typeof SunIcon;
     }
 
-    let { autofocus = false }: Props = $props();
+    let { autofocus = false, layout = 'popover' }: Props = $props();
     let panel = $state<HTMLElement | null>(null);
 
     const modeOptions: readonly ModeOption[] = [
@@ -35,12 +38,20 @@
     ];
 
     const activeAppearance = $derived<ThemeAppearance>($themeState.resolvedAppearance);
-    const visibleThemes = $derived(themesForAppearance(activeAppearance));
-    const selectedThemeId = $derived(
-        activeAppearance === 'light'
-            ? $themeState.preference.lightThemeId
-            : $themeState.preference.darkThemeId,
+    const paletteAppearances = $derived<readonly ThemeAppearance[]>(
+        layout === 'settings' ? ['light', 'dark'] : [activeAppearance],
     );
+
+    function selectedFor(appearance: ThemeAppearance): string {
+        return appearance === 'light'
+            ? $themeState.preference.lightThemeId
+            : $themeState.preference.darkThemeId;
+    }
+
+    function paletteHeading(appearance: ThemeAppearance): string {
+        if (layout !== 'settings') return appearance === 'light' ? 'Light palettes' : 'Dark palettes';
+        return appearance === 'light' ? 'Light theme' : 'Dark theme';
+    }
     const resolvedThemeName = $derived(getThemeDefinition($themeState.resolvedThemeId).name);
 
     onMount(() => {
@@ -69,12 +80,12 @@
         document.getElementById(`appearance-mode-${nextMode}`)?.focus();
     }
 
-    async function moveThemeFocus(event: KeyboardEvent, index: number): Promise<void> {
-        const nextIndex = nextRadioIndex(event, index, visibleThemes.length);
+    async function moveThemeFocus(event: KeyboardEvent, index: number, themes: readonly ThemeDefinition[]): Promise<void> {
+        const nextIndex = nextRadioIndex(event, index, themes.length);
         if (nextIndex === null) return;
 
         event.preventDefault();
-        const nextTheme = visibleThemes[nextIndex];
+        const nextTheme = themes[nextIndex];
         setPreferredTheme(nextTheme.appearance, nextTheme.id);
         await tick();
         document.getElementById(`appearance-theme-${nextTheme.id}`)?.focus();
@@ -99,10 +110,12 @@
     }
 </script>
 
-<section bind:this={panel} class="appearance-panel" aria-labelledby="appearance-title">
-    <header class="appearance-header">
-        <h2 id="appearance-title">Appearance</h2>
-    </header>
+<section bind:this={panel} class="appearance-panel" class:is-settings={layout === 'settings'} aria-labelledby={layout === 'settings' ? undefined : 'appearance-title'} aria-label={layout === 'settings' ? 'Appearance' : undefined}>
+    {#if layout !== 'settings'}
+        <header class="appearance-header">
+            <h2 id="appearance-title">Appearance</h2>
+        </header>
+    {/if}
 
     <div class="appearance-section mode-section">
         <div class="mode-grid" role="radiogroup" aria-label="Appearance mode">
@@ -130,13 +143,18 @@
         </div>
     </div>
 
-    <div id="appearance-palette-panel" class="appearance-section palette-section">
+    {#each paletteAppearances as appearance (appearance)}
+    {@const themes = themesForAppearance(appearance)}
+    <div id={layout === 'settings' ? `appearance-palette-panel-${appearance}` : 'appearance-palette-panel'} class="appearance-section palette-section">
         <div class="section-heading">
-            <span>{activeAppearance === 'light' ? 'Light palettes' : 'Dark palettes'}</span>
+            <span>{paletteHeading(appearance)}</span>
+            {#if layout === 'settings'}
+                <span class="section-note">{activeAppearance === appearance ? 'In use now' : `Used in ${appearance === 'light' ? 'Light' : 'Dark'} mode`}</span>
+            {/if}
         </div>
-        <div class="theme-grid" role="radiogroup" aria-label="Theme palette">
-            {#each visibleThemes as theme, index (theme.id)}
-                {@const selected = selectedThemeId === theme.id}
+        <div class="theme-grid" role="radiogroup" aria-label={layout === 'settings' ? paletteHeading(appearance) : 'Theme palette'}>
+            {#each themes as theme, index (theme.id)}
+                {@const selected = selectedFor(appearance) === theme.id}
                 <button
                     id={`appearance-theme-${theme.id}`}
                     data-theme-hit-target
@@ -149,7 +167,7 @@
                     tabindex={selected ? 0 : -1}
                     style={previewStyle(theme)}
                     onclick={() => selectTheme(theme)}
-                    onkeydown={(event) => void moveThemeFocus(event, index)}
+                    onkeydown={(event) => void moveThemeFocus(event, index, themes)}
                 >
                     <span class="theme-preview" aria-hidden="true">
                         <span class="preview-sidebar">
@@ -171,6 +189,7 @@
             {/each}
         </div>
     </div>
+    {/each}
 
     <p class="appearance-status" aria-live="polite">
         {resolvedThemeName} is active.
@@ -185,6 +204,21 @@
         color: var(--color-text);
         --motion-enter-y: 4px;
         animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
+    }
+
+    /* On a Settings page the page owns the width, the scroll and the title. */
+    .appearance-panel.is-settings {
+        width: 100%;
+        max-height: none;
+        overflow: visible;
+        animation: none;
+    }
+    .appearance-panel.is-settings .appearance-section { padding-left: 0; padding-right: 0; }
+    .appearance-panel.is-settings .mode-section { padding-top: 0; }
+    .section-note {
+        color: var(--color-text-subtle);
+        font-size: var(--type-xs);
+        font-weight: var(--weight-regular);
     }
 
     .appearance-header {
@@ -273,6 +307,10 @@
 
     .palette-section { padding-bottom: 9px; }
     .theme-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    /* A Settings page is wide enough for three across, so both lists fit
+       without a long scroll; the phone keeps two. */
+    :global(html:not(.mobile)) .is-settings .theme-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    :global(html:not(.mobile)) .is-settings .theme-preview { flex-basis: 48px; height: 48px; }
 
     .theme-card {
         position: relative;
