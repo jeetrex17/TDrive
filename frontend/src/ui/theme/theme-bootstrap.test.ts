@@ -54,10 +54,10 @@ describe('pre-paint theme bootstrap', () => {
         expect(runBootstrap(saved)).toEqual({ theme: 'porcelain', themeAppearance: 'light' });
     });
 
-    it('normalizes missing and unknown persisted values to Quiet Relay', () => {
+    it('normalizes missing and unknown persisted values to Tokyo Night', () => {
         const invalid = JSON.stringify({ mode: 'sepia', lightThemeId: 'dracula', darkThemeId: 'missing' });
-        expect(runBootstrap(null)).toEqual({ theme: 'quiet-relay', themeAppearance: 'dark' });
-        expect(runBootstrap(invalid)).toEqual({ theme: 'quiet-relay', themeAppearance: 'dark' });
+        expect(runBootstrap(null)).toEqual({ theme: 'tokyo-night', themeAppearance: 'dark' });
+        expect(runBootstrap(invalid)).toEqual({ theme: 'tokyo-night', themeAppearance: 'dark' });
         expect(bootstrap).toContain('matchMedia');
         expect(bootstrap).toContain('prefers-color-scheme');
     });

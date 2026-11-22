@@ -13,6 +13,7 @@ import { activateSystemTextScale } from './ui/mobile/system-text-scale';
 import { initializeFileSortPersistence } from './ui/file-list/file-sort-store';
 import { initializeNativeTheme } from './ui/theme/native-theme';
 import { initializeTheme } from './ui/theme/theme-controller';
+import { trackInputModality } from './modules/input-modality';
 import { deriveVideoPlaylist } from './modules/video/video-playlist';
 import { activatePhotoBackup } from './modules/photo-backup/controller';
 import { activatePhotoBackupOnDashboard } from './modules/photo-backup/activation';
@@ -24,7 +25,7 @@ import type { FileListFileRow } from './ui/file-list/types';
 // early, where the platform is only known once the gateway hydrates below.
 applyMobilePlatformClasses();
 
-const disposers: Array<() => void> = [initializeTheme()];
+const disposers: Array<() => void> = [initializeTheme(), trackInputModality()];
 let started = false;
 let stopped = false;
 

@@ -226,7 +226,7 @@
     }
 
     .video-playlist-title {
-        font-size: 13px;
+        font-size: var(--type-sm);
     }
 
     .video-playlist-list {
@@ -248,8 +248,8 @@
         text-align: left;
         cursor: pointer;
         transition:
-            background-color 120ms var(--ease-standard),
-            color 120ms var(--ease-standard);
+            background-color var(--motion-fast) var(--ease-standard),
+            color var(--motion-fast) var(--ease-standard);
     }
 
     .video-playlist-row:hover {
@@ -265,9 +265,9 @@
 
     .video-playlist-index {
         color: #7a889f;
-        font-size: 11.5px;
+        font-size: var(--type-2xs);
         font-variant-numeric: tabular-nums;
-        font-weight: 650;
+        font-weight: var(--weight-semibold);
         text-align: right;
     }
 
@@ -284,8 +284,8 @@
     .video-playlist-row-name {
         overflow: hidden;
         color: #e4eaf6;
-        font-size: 13.5px;
-        font-weight: 650;
+        font-size: var(--type-sm);
+        font-weight: var(--weight-semibold);
         line-height: 1.3;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -300,7 +300,7 @@
         align-items: center;
         gap: 6px;
         color: #7a889f;
-        font-size: 11.5px;
+        font-size: var(--type-2xs);
         line-height: 1.2;
     }
 
@@ -363,7 +363,7 @@
         margin: 0;
         padding: 24px 12px;
         color: #7a889f;
-        font-size: 12.5px;
+        font-size: var(--type-xs);
         line-height: 1.5;
         text-align: center;
     }
@@ -385,8 +385,8 @@
 
     .video-playlist-auto-next-label {
         color: #c8d2e4;
-        font-size: 12px;
-        font-weight: 600;
+        font-size: var(--type-xs);
+        font-weight: var(--weight-semibold);
     }
 
     .video-playlist-switch {
@@ -404,7 +404,7 @@
         height: 20px;
         border-radius: 999px;
         background: rgba(255, 255, 255, 0.14);
-        transition: background-color 140ms var(--ease-standard);
+        transition: background-color var(--motion-fast) var(--ease-standard);
     }
 
     .video-playlist-switch-thumb {
@@ -416,8 +416,8 @@
         border-radius: 50%;
         background: #cdd6e6;
         transition:
-            translate 140ms var(--ease-standard),
-            background-color 140ms var(--ease-standard);
+            translate var(--motion-fast) var(--ease-standard),
+            background-color var(--motion-fast) var(--ease-standard);
     }
 
     .video-playlist-switch:checked + .video-playlist-switch-track {

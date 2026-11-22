@@ -1,3 +1,4 @@
+import { openSettingsSection } from './settings-helpers';
 import { bootTDrive, expect, resolves, test } from './wails-mock';
 import type { Page } from '@playwright/test';
 
@@ -10,8 +11,7 @@ type Platform = 'desktop' | 'android' | 'ios';
  */
 async function openPanel(page: Page, platform: Platform) {
     if (platform === 'desktop') {
-        await page.locator('#profile-trigger').click();
-        await page.getByRole('menuitem', { name: 'Photo & video backup' }).click();
+        await openSettingsSection(page, 'Photo backup');
     } else {
         await page.getByRole('navigation', { name: 'Primary' }).getByRole('button', { name: 'Account', exact: true }).click();
         await page.getByRole('button', { name: /Photo & video backup/ }).click();
@@ -113,7 +113,7 @@ test('empty backup settings fit the desktop viewport and guide source selection'
     await expect(panel.getByRole('switch', { name: 'Wi-Fi only' })).toHaveCount(0);
     // Full access is the expected case and earns no line of copy.
     await expect(panel).not.toContainText('managed by the device');
-    const bounds = await page.locator('#profile-menu').boundingBox();
+    const bounds = await page.locator('.settings-card').boundingBox();
     expect(bounds).not.toBeNull();
     expect(bounds!.x).toBeGreaterThanOrEqual(0);
     expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(768);

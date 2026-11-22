@@ -49,7 +49,7 @@ describe('theme model', () => {
         expect(DEFAULT_THEME_PREFERENCE).toEqual({
             mode: 'dark',
             lightThemeId: 'daybreak',
-            darkThemeId: 'quiet-relay',
+            darkThemeId: 'tokyo-night',
         });
         expect(
             normalizeThemePreference({

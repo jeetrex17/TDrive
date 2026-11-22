@@ -8,9 +8,9 @@ import { tick } from 'svelte';
 import { get } from 'svelte/store';
 import { breadcrumbPath } from '../ui/chrome/breadcrumb-store';
 import type { ContextMenuDetail } from '../ui/menus/context-menu-store';
-import { clearSelection, deselectRow, extendSelectionToIndex, handleRowSelection, isRowSelected, reconcileSelection, selectAllRows, selectRow, getRowKey } from './selection';
+import { clearSelection, deselectRow, extendSelectionToIndex, handleRowSelection, isRowSelected, trashSelectedItems, reconcileSelection, selectAllRows, selectRow, getRowKey } from './selection';
 import { openRenameModal } from './modals/rename';
-import { openDeleteModal } from './modals/delete';
+import { moveToTrash } from './modals/delete';
 import { openNewFolderModal } from './modals/folder';
 import { notify } from './notifications';
 import { navigateToFolder } from './navigation';
@@ -322,7 +322,7 @@ export function buildFolderRow(folder: FolderRowInput, parentId: string, overrid
         name,
         channelId: Number(overrides.channelId ?? state.activeChannel?.id ?? 0),
         parentId: String(overrides.parentId ?? folder.parentId ?? parentId ?? ''),
-        metaLabel: overrides.metaLabel ?? '—',
+        metaLabel: overrides.metaLabel ?? '',
         sizeLabel: overrides.sizeLabel ?? '…',
         size: folderSize,
         modifiedTime: folderModified,
@@ -547,7 +547,7 @@ function deleteRow(row: InteractiveFileListRow) {
     if (isTrashMode()) return;
 
     if (row.kind === "folder") {
-        openDeleteModal({
+        void moveToTrash({
             type: "folder",
             id: row.id,
             name: row.name,
@@ -560,7 +560,7 @@ function deleteRow(row: InteractiveFileListRow) {
         notify({ level: 'info', title: 'You can only delete files you uploaded' });
         return;
     }
-    openDeleteModal({
+    void moveToTrash({
         ...fileCommandFor(row, row.parentId),
         canDelete: row.canDelete,
         channelId: row.channelId,
@@ -653,21 +653,24 @@ function isCurrentFileRequest(request: FileRefreshRequest): boolean {
     );
 }
 
+// The drive the footer's number belongs to. Folder changes keep showing it
+// while the refresh runs; only a drive change blanks it.
+let storageDriveId: number | null = null;
+
 function refreshStorageUsage(request: FileRefreshRequest, storageUsed: HTMLElement | null): void {
     if (!storageUsed) return;
-    if (request.presentation === 'foreground-navigation') {
-        storageUsed.innerText = 'Calculating... / Unlimited';
+    if (storageDriveId !== request.view.channelId) {
+        storageDriveId = request.view.channelId;
+        storageUsed.textContent = '—';
     }
     void getStorageUsed()
         .then((bytes) => {
             if (!isCurrentFileRequest(request)) return;
             const value = Number(bytes);
-            storageUsed.innerText = Number.isFinite(value) && value >= 0
-                ? `${formatBytes(value)} / Unlimited`
-                : '— / Unlimited';
+            storageUsed.textContent = Number.isFinite(value) && value >= 0 ? formatBytes(value) : '—';
         })
         .catch(() => {
-            if (isCurrentFileRequest(request)) storageUsed.innerText = '— / Unlimited';
+            if (isCurrentFileRequest(request)) storageUsed.textContent = '—';
         });
 }
 
@@ -715,7 +718,7 @@ function rowsForLoadedData(data: LoadedFileData, view: FileViewIdentity): FileLi
                 // A folder shows a size only once one is known. Zero reads as "no
                 // files", which is rarely true and never useful, so it stays blank.
                 sizeLabel: size > 0 ? formatBytes(size) : '',
-                metaLabel: modifiedTime > 0 ? formatDate(modifiedTime) : '—',
+                metaLabel: modifiedTime > 0 ? formatDate(modifiedTime) : '',
             });
         });
 
@@ -1190,7 +1193,13 @@ function handleListKeyDown(e: KeyboardEvent) {
         case 'Backspace':
             // A Mac keyboard's Delete key is Backspace.
             e.preventDefault();
-            if (currentRow) deleteRow(currentRow);
+            // A focused row inside a multi-selection deletes the selection,
+            // which is what the context menu offers under the same shortcut.
+            if (state.selectedItems.size > 1 && isRowSelected(current)) {
+                if (!isTrashMode()) trashSelectedItems();
+            } else if (currentRow) {
+                deleteRow(currentRow);
+            }
             return;
         case 'ContextMenu':
             e.preventDefault();

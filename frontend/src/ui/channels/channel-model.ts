@@ -48,6 +48,16 @@ export function sourceHandle(source: Pick<ChannelSource, 'peerKind' | 'username'
     return sourcePeerLabel(source);
 }
 
+// publicLookup reads a pasted @name or t.me link as the public channel it
+// names, so the picker can offer to look it up. Plain words return null and
+// only filter the joined chats. The backend still validates what it is sent.
+export function publicLookup(input: string): string | null {
+    const value = input.trim();
+    if (/^@\S/.test(value)) return value;
+    const link = /^(?:https?:\/\/)?(?:www\.)?t\.me\/([^/?#\s]+)/i.exec(value);
+    return link ? `@${link[1]}` : null;
+}
+
 export interface ChannelMediaItem {
     msgId: number;
     topicId?: number;

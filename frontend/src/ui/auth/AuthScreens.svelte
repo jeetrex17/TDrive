@@ -2,13 +2,13 @@
     import CountryCodePicker from './CountryCodePicker.svelte';
     import { normalizePhoneNumber, countryForInternationalNumber, nationalNumberForCountryChange } from './phone-number';
     import type { CountryCode } from 'libphonenumber-js/min';
+    import { welcomeSeen } from './welcome-store';
     import tdriveLogo from '../../assets/images/tdrive-logo.png';
     import EyeIcon from '@lucide/svelte/icons/eye';
-    import EyeOffIcon from '@lucide/svelte/icons/eye-off';
-    import KeyRoundIcon from '@lucide/svelte/icons/key-round';
     import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
-    import MailIcon from '@lucide/svelte/icons/mail';
-    import SettingsIcon from '@lucide/svelte/icons/settings';
+    import SendIcon from '@lucide/svelte/icons/send';
+    import ServerOffIcon from '@lucide/svelte/icons/server-off';
+    import EyeOffIcon from '@lucide/svelte/icons/eye-off';
     import { tick } from 'svelte';
     import { isMobilePlatform, openExternalUrl } from '../../api';
     import { authScreen } from '../app/app-store';
@@ -19,6 +19,7 @@
         authSubmission,
         type AuthFlow,
     } from './auth-store';
+    import { pushSheet } from '../modals/sheet-stack';
     import { personalDriveSetup } from './personal-drive-store';
     import PersonalDriveSetup from './PersonalDriveSetup.svelte';
     import { installUpdate, openReleasePage } from '../../modules/updates';
@@ -49,12 +50,22 @@
 
     const TELEGRAM_APPS_URL = 'https://my.telegram.org/apps';
 
-    // Phones get full-bleed pages and a welcome page in front of the
-    // credentials form. The welcome is local presentation only: the auth
-    // state machine stays on 'setup' underneath it.
+    // A first run opens on the welcome page, in front of the credentials form.
+    // Phones also get full-bleed pages.
     const mobile = isMobilePlatform();
-    let welcomed = $state(false);
-    const step = $derived(mobile && $authScreen === 'setup' && !welcomed ? 'welcome' : $authScreen);
+    const step = $derived($authScreen === 'setup' && !$welcomeSeen ? 'welcome' : $authScreen);
+
+    // Phone BACK steps back through sign-in the way the on-screen links do,
+    // instead of falling through to the host and leaving the app.
+    $effect(() => {
+        if (!mobile) return;
+        const back = step === 'code' && !$authSubmission.code.busy ? onBackToPhone
+            : step === 'setup' ? () => welcomeSeen.set(false)
+            : null;
+        if (!back) return;
+        const sheet = pushSheet(back);
+        return () => sheet.release();
+    });
 
     // Update discoverability for users who are stuck before login (e.g. a
     // Telegram API change breaks sign-in). The updater runs independently of
@@ -156,17 +167,31 @@
 {#if step === 'welcome'}
     <section class="auth-box auth-welcome" aria-labelledby="auth-welcome-title">
         <div class="auth-page-body">
-            <img class="auth-mark" src={tdriveLogo} alt="" width="112" height="112" />
+            <img class="auth-mark" src={tdriveLogo} alt="" width="132" height="84" />
             <h2 id="auth-welcome-title">Your Telegram, as a drive.</h2>
-            <p class="auth-intro">
-                TDrive keeps your files in a private channel on your own Telegram account. There is no TDrive
-                server in between, so you sign in with your own API credentials and phone number.
-            </p>
+            <p class="auth-intro">Store and open your files from your own Telegram account.</p>
+            <!-- Three facts, each one line, rather than a paragraph to read:
+                 where the files live, who is in between, and who can open them. -->
+            <ul class="welcome-points">
+                <li>
+                    <span class="welcome-icon" aria-hidden="true"><SendIcon size={18} strokeWidth={1.8} /></span>
+                    <span><strong>Kept in your Telegram</strong>Files live in a private channel on your account.</span>
+                </li>
+                <li>
+                    <span class="welcome-icon" aria-hidden="true"><ServerOffIcon size={18} strokeWidth={1.8} /></span>
+                    <span><strong>No TDrive server</strong>The app talks to Telegram directly.</span>
+                </li>
+                <li>
+                    <span class="welcome-icon" aria-hidden="true"><LockKeyholeIcon size={18} strokeWidth={1.8} /></span>
+                    <span><strong>Locked if you want</strong>Encrypt uploads with a password only you know.</span>
+                </li>
+            </ul>
         </div>
         <div class="auth-actions">
-            <button class="primary-btn auth-submit" type="button" onclick={() => { welcomed = true; }}>
+            <button class="primary-btn auth-submit" type="button" onclick={() => welcomeSeen.set(true)}>
                 Continue
             </button>
+            <p class="welcome-next">Next, connect your own Telegram API keys.</p>
         </div>
     </section>
 {:else if step === 'setup'}
@@ -178,26 +203,17 @@
         onsubmit={(event) => submit(event, 'setup', () => onSetup(apiId, apiHash))}
     >
         <div class="auth-page-body">
-            <div class="auth-icon-box">
-                <SettingsIcon size={32} strokeWidth={1.5} aria-hidden="true" />
-            </div>
+            <img class="auth-step-mark" src={tdriveLogo} alt="" width="66" height="42" />
             <h2 id="auth-setup-title">Connect to Telegram</h2>
-            {#if mobile}
-                <p id="telegram-credentials-help" class="auth-intro">
-                    Create an app at
-                    <button
-                        class="auth-inline-link"
-                        type="button"
-                        onclick={() => openExternalUrl(TELEGRAM_APPS_URL)}
-                    >my.telegram.org/apps</button>
-                    and copy its API ID and API hash here.
-                </p>
-            {:else}
-                <p class="auth-intro">Use API credentials created for your own Telegram account.</p>
-                <p id="telegram-credentials-help" class="auth-guidance">
-                    Open <strong>my.telegram.org/apps</strong>, create an app, then copy its API ID and API hash.
-                </p>
-            {/if}
+            <p id="telegram-credentials-help" class="auth-intro">
+                Create an app at
+                <button
+                    class="auth-inline-link"
+                    type="button"
+                    onclick={() => openExternalUrl(TELEGRAM_APPS_URL)}
+                >my.telegram.org/apps</button>
+                and copy its API ID and API hash here.
+            </p>
             <div class="auth-fields">
                 <div class="auth-field">
                     <label for="telegram-api-id">API ID</label>
@@ -277,18 +293,15 @@
         onsubmit={(event) => submit(event, 'phone', sendPhone)}
     >
         <div class="auth-page-body">
-            <div class="auth-icon-box">
-                <LockKeyholeIcon size={32} strokeWidth={1.5} aria-hidden="true" />
-            </div>
-            <h2 id="auth-phone-title">Sign in to Telegram</h2>
-            <p class="auth-intro">Telegram will send a login code to your account.</p>
-            <div class="phone-entry">
-                <div class="auth-field country-field">
-                    <label for="telegram-country">Country / code</label>
+            <img class="auth-step-mark" src={tdriveLogo} alt="" width="66" height="42" />
+            <h2 id="auth-phone-title">Sign in with Telegram</h2>
+            <p class="auth-intro">Enter the phone number on your Telegram account. Telegram will send a login code to your app.</p>
+            <div class="auth-field">
+                <label for="telegram-phone">Phone number</label>
+                <!-- One field, as people read a phone number: the country code
+                     leads it and the number follows, inside a single frame. -->
+                <div class="phone-entry" class:is-invalid={Boolean($authSubmission.phone.error)}>
                     <CountryCodePicker {country} disabled={$authSubmission.phone.busy} onSelect={selectCountry} />
-                </div>
-                <div class="auth-field phone-field">
-                    <label for="telegram-phone">Phone number</label>
                     <input
                         bind:this={phoneEl}
                         value={phone}
@@ -301,7 +314,7 @@
                         autocomplete="tel"
                         autocapitalize="none"
                         spellcheck="false"
-                        placeholder={country ? "Your phone number" : "+1 202 555 0123"}
+                        placeholder={country ? "Phone number" : "+1 202 555 0123"}
                         required
                         disabled={$authSubmission.phone.busy}
                         aria-invalid={$authSubmission.phone.error ? 'true' : undefined}
@@ -309,9 +322,8 @@
                     />
                 </div>
             </div>
-            <p class="auth-intro phone-hint">Use the number linked to your Telegram account.</p>
             <p id="phone-session-note" class="auth-privacy">
-                Your signed-in session is kept locally on this device and is not synced by TDrive.
+                Your session stays on this device. There is no TDrive server.
             </p>
             <p id="phone-error" class="auth-error" aria-live="polite" aria-atomic="true">
                 {$authSubmission.phone.error}
@@ -332,11 +344,9 @@
         onsubmit={(event) => submit(event, 'code', () => onCode(code))}
     >
         <div class="auth-page-body">
-            <div class="auth-icon-box">
-                <MailIcon size={32} strokeWidth={1.5} aria-hidden="true" />
-            </div>
-            <h2 id="auth-code-title">Verify your account</h2>
-            <p class="auth-intro">Enter the login code Telegram sent you.</p>
+            <img class="auth-step-mark" src={tdriveLogo} alt="" width="66" height="42" />
+            <h2 id="auth-code-title">Enter the login code</h2>
+            <p class="auth-intro">Telegram sends it to your Telegram app. Check there first.</p>
             {#if $authPhone}
                 <div class="auth-helper-row">
                     <span class="auth-helper-label">Sent to</span>
@@ -387,9 +397,7 @@
         onsubmit={(event) => submit(event, 'password', () => onPassword(password))}
     >
         <div class="auth-page-body">
-            <div class="auth-icon-box">
-                <KeyRoundIcon size={32} strokeWidth={1.5} aria-hidden="true" />
-            </div>
+            <img class="auth-step-mark" src={tdriveLogo} alt="" width="66" height="42" />
             <h2 id="auth-password-title">Two-step verification</h2>
             <p class="auth-intro">Enter your Telegram password to finish signing in.</p>
             {#if $authHint}
@@ -454,20 +462,44 @@
 {/if}
 
 <style>
+    /* The frame is the field: the code button and the number sit inside one
+       border and share one focus ring, so they read as a single phone number. */
     .phone-entry {
-        display: grid;
-        grid-template-columns: minmax(115px, 0.8fr) minmax(0, 1.4fr);
-        gap: 12px;
+        display: flex;
+        align-items: stretch;
+        min-height: 40px;
         margin-bottom: 0.75rem;
+        background: var(--color-surface-1);
+        border: 1px solid var(--color-border-soft);
+        border-radius: var(--radius-md);
+        transition: border-color var(--motion-fast) var(--ease-standard), box-shadow var(--motion-fast) var(--ease-standard);
     }
-
-    .phone-field {
+    .phone-entry:focus-within { border-color: var(--color-accent); box-shadow: var(--focus-ring); }
+    .phone-entry.is-invalid { border-color: var(--danger); }
+    .phone-entry :global(.country-code-trigger) {
+        flex: 0 0 auto;
+        width: auto;
+        min-height: 0;
+        padding: 0 10px 0 12px;
+        border: 0;
+        border-right: 1px solid var(--color-border-soft);
+        border-radius: var(--radius-md) 0 0 var(--radius-md);
+        background: transparent;
+        font-variant-numeric: tabular-nums;
+    }
+    .phone-entry :global(.country-code-trigger:focus-visible) { box-shadow: none; }
+    .phone-entry input,
+    .phone-entry input:focus {
+        flex: 1 1 auto;
         min-width: 0;
+        min-height: 0;
+        margin: 0;
+        background: transparent;
+        border: 0;
+        box-shadow: none;
+        font-variant-numeric: tabular-nums;
     }
-
-    .phone-hint {
-        margin-top: 0;
-    }
+    :global(html.mobile) .phone-entry { min-height: 48px; }
 
     .auth-form {
         display: flex;
@@ -478,24 +510,12 @@
         margin: 0 0 1rem;
     }
 
-    .auth-guidance,
     .auth-privacy {
         margin: 0 0 1rem;
         color: var(--color-text-muted);
-        font-size: 0.8rem;
+        font-size: var(--type-sm);
         line-height: 1.5;
         text-align: left;
-    }
-
-    .auth-guidance {
-        padding: 0.75rem 0;
-        border-top: 1px solid var(--border);
-        border-bottom: 1px solid var(--border);
-    }
-
-    .auth-guidance strong {
-        color: var(--color-text-soft);
-        font-weight: 600;
     }
 
     .auth-fields {
@@ -512,8 +532,8 @@
         display: block;
         margin-bottom: 0.4rem;
         color: var(--color-text-soft);
-        font-size: 0.82rem;
-        font-weight: 600;
+        font-size: var(--type-sm);
+        font-weight: var(--weight-semibold);
     }
 
     .auth-field input {
@@ -527,7 +547,7 @@
     .auth-error {
         margin: 0 0 0.8rem;
         color: var(--danger);
-        font-size: 0.82rem;
+        font-size: var(--type-sm);
         line-height: 1.4;
         text-align: left;
     }
@@ -551,7 +571,7 @@
     }
 
     .auth-form .primary-btn:disabled:hover {
-        background: var(--accent);
+        background: var(--color-action);
         transform: none;
     }
 
@@ -560,13 +580,56 @@
        spacing to the mobile scale (15 body, 13 fine print, 16 inputs). */
     :global(html.mobile) .auth-intro {
         margin: 0 0 1.5rem;
-        font-size: 0.9375rem;
+        font-size: var(--mobile-type-body);
         line-height: 1.5;
     }
 
     :global(html.mobile) .auth-welcome .auth-intro {
-        margin-bottom: 0;
+        margin: 0 auto 2rem;
+        max-width: 300px;
+        text-align: center;
     }
+
+    .welcome-points {
+        display: grid;
+        gap: 18px;
+        width: 100%;
+        max-width: 320px;
+        margin: 0 auto 32px;
+        padding: 0;
+        list-style: none;
+        text-align: left;
+    }
+    .welcome-points li {
+        display: grid;
+        grid-template-columns: 36px minmax(0, 1fr);
+        align-items: start;
+        gap: 14px;
+        color: var(--color-text-muted);
+        font-size: var(--type-sm);
+        line-height: 1.45;
+    }
+    .welcome-points strong {
+        display: block;
+        margin-bottom: 2px;
+        color: var(--color-text);
+        font-weight: var(--weight-semibold);
+    }
+    /* As tall as the bold first line, so each icon sits beside its title. */
+    .welcome-icon {
+        display: grid;
+        place-items: center;
+        width: 36px;
+        height: 1.45em;
+        color: var(--color-accent);
+    }
+    .welcome-next {
+        margin: 12px 0 0;
+        text-align: center;
+        color: var(--color-text-subtle);
+        font-size: var(--type-xs);
+    }
+    :global(html.mobile) .welcome-points li { font-size: var(--mobile-type-body); }
 
     /* Optically centred, not mathematically. A block placed at exact centre on
        a tall phone screen reads as having sunk, because the eye gives the upper
@@ -581,27 +644,29 @@
        the logo is the thing that says whose app this is. */
     :global(html.mobile) .auth-mark {
         display: block;
-        width: 112px;
+        width: 96px;
         height: auto;
-        margin: 0 auto 1.75rem;
+        margin: 0 auto 1.5rem;
     }
 
     :global(html.mobile) .auth-welcome h2 {
-        font-size: 1.75rem;
+        font-size: var(--type-3xl);
+        text-align: center;
+        text-wrap: balance;
     }
 
-    :global(html.mobile) .auth-inline-link {
+    .auth-inline-link {
         padding: 0;
         color: var(--accent);
         font: inherit;
-        font-weight: 600;
+        font-weight: var(--weight-semibold);
         background: none;
         border: 0;
         border-radius: var(--radius-xs);
         cursor: pointer;
     }
 
-    :global(html.mobile) .auth-inline-link:focus-visible {
+    .auth-inline-link:focus-visible {
         outline: none;
         box-shadow: var(--focus-ring);
     }
@@ -611,7 +676,7 @@
     :global(html.mobile) .auth-privacy {
         order: 1;
         margin: 0 0 1rem;
-        font-size: 0.8125rem;
+        font-size: var(--type-sm);
         color: var(--color-text-muted);
     }
 
@@ -622,20 +687,17 @@
 
     :global(html.mobile) .auth-field > label {
         margin-bottom: 0.375rem;
-        font-size: 0.8125rem;
+        font-size: var(--type-sm);
     }
 
     :global(html.mobile) .auth-field:not(.auth-fields .auth-field) {
         margin-bottom: 1.25rem;
     }
 
-    :global(html.mobile) .phone-entry .auth-field {
-        margin-bottom: 0;
-    }
 
     :global(html.mobile) .auth-error {
         margin: -0.25rem 0 1rem;
-        font-size: 0.875rem;
+        font-size: var(--type-base);
         line-height: 1.45;
     }
 

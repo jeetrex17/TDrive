@@ -33,11 +33,11 @@
     .queued-upload-name { max-width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
     .notif-row-sub.paused { color: var(--color-warning); }
     .queued-upload-actions { display: flex; align-items: center; gap: var(--space-1); }
-    .queued-upload-open { min-height: 26px; padding: 3px 9px; border: 1px solid var(--overlay-accent-2); border-radius: var(--radius-sm); background: var(--overlay-accent-1); color: var(--color-accent-text); font: inherit; font-size: 0.76rem; font-weight: var(--weight-semibold); white-space: nowrap; cursor: pointer; }
+    .queued-upload-open { min-height: 26px; padding: 3px 9px; border: 1px solid var(--overlay-accent-2); border-radius: var(--radius-sm); background: var(--overlay-accent-1); color: var(--color-accent-text); font: inherit; font-size: var(--type-xs); font-weight: var(--weight-semibold); white-space: nowrap; cursor: pointer; }
     .queued-upload-actions .notif-row-cancel { display: inline-flex; align-items: center; justify-content: center; cursor: pointer; }
     .queued-upload-name:focus-visible, .queued-upload-open:focus-visible, .queued-upload-actions .notif-row-cancel:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
     @media (hover: hover) { .queued-upload-open:hover { background: var(--overlay-accent-2); } }
     .mobile { padding: var(--space-3) var(--space-4); background: transparent; border-radius: 0; }
-    .mobile .queued-upload-open { min-height: 36px; padding: 0 14px; font-size: 0.8125rem; }
+    .mobile .queued-upload-open { min-height: 36px; padding: 0 14px; font-size: var(--type-sm); }
     .mobile .queued-upload-actions .notif-row-cancel { width: 40px; height: 40px; }
 </style>

@@ -1,11 +1,11 @@
-// Delete modal for TDrive frontend.
+// Move to Trash for TDrive frontend.
 //
 // Delete does not destroy anything: the backend moves the file or folder into
 // the Trash (backend/services/file/mutations.go), where it stays restorable
-// until the Trash is emptied or the retention sweep purges it. The dialog says
-// exactly that, and a successful delete offers a one-tap Undo that restores the
-// same object by its trash id (`f:<msgId>` for a file, the folder's own `d:…`
-// id for a folder).
+// until the Trash is emptied or the retention sweep purges it. Because of that
+// it runs without a confirmation, and a successful move offers a one-tap Undo
+// that restores the same object by its trash id (`f:<msgId>` for a file, the
+// folder's own `d:…` id for a folder).
 
 import { deleteFile, deleteFolder, type OperationResult } from '../../api';
 import { restoreFromTrash } from '../../api/trash';
@@ -16,16 +16,12 @@ import { dismissNotification, notify } from '../notifications';
 import { humanizeBackendError } from '../errors';
 import { appActions } from '../app-actions';
 import { callWithPasswordRetry } from './encryption-password';
-import { closeDeleteModalView, openDeleteModalView } from '../../ui/modals/delete-modal-store';
 import { markRowsBusy } from '../../ui/file-list/busy-rows';
 import type {
     FileCommandItem,
     FileCommandTarget,
     FolderCommandItem,
 } from '../../ui/file-list/types';
-let pendingTarget: FileCommandTarget | null = null;
-let pendingChannelId: number | null = null;
-
 /**
  * One line for a whole batch. A selection of twelve used to answer with twelve
  * toasts into a stack that holds two on a phone, so eleven of them evicted each
@@ -71,7 +67,8 @@ function deleteInChannel(channelId: number, operation: () => Promise<OperationRe
     return operation();
 }
 
-export function openDeleteModal(target: FileCommandTarget): void {
+/** Moves items to the Trash straight away; the result toast carries Undo. */
+export function moveToTrash(target: FileCommandTarget): Promise<void> {
     const activeId = activeChannelId();
     const channels = target.type === 'bulk'
         ? target.items.map((item) => item.channelId ?? activeId)
@@ -79,51 +76,16 @@ export function openDeleteModal(target: FileCommandTarget): void {
     const channelId = channels[0] ?? activeId;
     if (channelId !== activeId || channels.some((id) => id !== channelId)) {
         notify({ level: 'info', title: 'Switch back to that drive to delete this item' });
-        return;
+        return Promise.resolve();
     }
-    pendingTarget = target;
-    pendingChannelId = channelId;
+    if (target.type !== 'bulk') return runMoveToTrash(target, channelId, 0);
 
-    let title: string;
-    let itemName = '';
-    let subtitle: string;
-    let confirmLabel: string;
-
-    if (target.type === 'bulk') {
-        const allowed = target.items.filter((item) => item.canDelete !== false);
-        const skipped = target.items.length - allowed.length;
-        pendingTarget = { ...target, items: allowed };
-
-        const total = allowed.length;
-        const folders = allowed.filter(isFolder).length;
-        const files = total - folders;
-        title = total === 1 ? 'Move 1 item to Trash?' : `Move ${total} items to Trash?`;
-        const skippedNote = skipped > 0
-            ? ` ${skipped} item(s) you don't own will be skipped.`
-            : '';
-        if (total === 0) {
-            subtitle = `Nothing in your selection can be deleted. ${skipped} item(s) you don't own were skipped.`;
-        } else if (folders > 0 && files > 0) {
-            subtitle = `${folders} folder(s) with everything inside them and ${files} file(s) move to the Trash. You can restore them from the Trash until they are purged.${skippedNote}`;
-        } else if (folders > 0) {
-            subtitle = `${folders} folder(s) and everything inside them move to the Trash. You can restore them from the Trash until they are purged.${skippedNote}`;
-        } else {
-            subtitle = `${files} file(s) move to the Trash. You can restore them from the Trash until they are purged.${skippedNote}`;
-        }
-        confirmLabel = total === 0 ? 'Close' : 'Move to Trash';
-    } else if (target.type === 'folder') {
-        title = 'Move folder to Trash?';
-        itemName = target.name.trim();
-        subtitle = 'The folder and everything inside it moves to the Trash. You can restore it from the Trash until it is purged.';
-        confirmLabel = 'Move to Trash';
-    } else {
-        title = 'Move file to Trash?';
-        itemName = target.name.trim();
-        subtitle = 'It moves to the Trash. You can restore it from the Trash until it is purged.';
-        confirmLabel = 'Move to Trash';
+    const allowed = target.items.filter((item) => item.canDelete !== false);
+    if (allowed.length === 0) {
+        notify({ level: 'info', title: 'You can only delete items you uploaded' });
+        return Promise.resolve();
     }
-
-    openDeleteModalView({ title, itemName, subtitle, confirmLabel });
+    return runMoveToTrash({ ...target, items: allowed }, channelId, target.items.length - allowed.length);
 }
 
 /**
@@ -166,13 +128,14 @@ async function undoDelete(objectIds: string[], channelId: number): Promise<void>
 }
 
 /** Confirms the move to Trash, with a one-tap Undo on the items that made it. */
-function notifyMovedToTrash(items: FileCommandItem[], channelId: number): void {
+function notifyMovedToTrash(items: FileCommandItem[], channelId: number, skipped = 0): void {
     if (items.length === 0) return;
     const objectIds = items.map(trashObjectId);
     const title = items.length === 1 ? 'Moved to Trash' : `Moved ${items.length} items to Trash`;
     const toastId = notify({
         level: 'success',
         title,
+        body: skipped > 0 ? `Skipped ${skipped} you didn't upload.` : '',
         action: {
             label: 'Undo',
             run: () => {
@@ -183,20 +146,7 @@ function notifyMovedToTrash(items: FileCommandItem[], channelId: number): void {
     });
 }
 
-export async function confirmDelete(): Promise<void> {
-    const target = pendingTarget;
-    const channelId = pendingChannelId;
-    pendingTarget = null;
-    pendingChannelId = null;
-    closeDeleteModalView();
-    if (!target || channelId === null) return;
-    // The backend delete API uses the active drive. Never let an open dialog
-    // redirect an item's ID after the user switches drives.
-    if (activeChannelId() !== channelId) {
-        notify({ level: 'info', title: 'Switch back to that drive to delete this item' });
-        return;
-    }
-
+async function runMoveToTrash(target: FileCommandTarget, channelId: number, skipped: number): Promise<void> {
     // The rows being deleted go quiet for the duration and then disappear.
     // That is the report; a notice about rows the user is already looking at,
     // parked over the list, was telling them something the list should say.
@@ -266,7 +216,7 @@ export async function confirmDelete(): Promise<void> {
             }
             if (succeeded.length > 0) {
                 invalidateFolderIndex();
-                notifyMovedToTrash(succeeded, channelId);
+                notifyMovedToTrash(succeeded, channelId, skipped);
             }
             appActions().refreshFiles();
             return;

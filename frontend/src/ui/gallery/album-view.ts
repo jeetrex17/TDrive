@@ -4,6 +4,7 @@
 // wording, the counts and the column arithmetic are testable without a DOM.
 import type { MediaFolder } from '../../api/gallery';
 import { fileThumbnailIdentity } from '../../modules/file-list';
+import { isVideoFile } from '../../modules/media-types';
 import type { FileThumbnailIdentity } from '../file-list/types';
 import type { RowMetrics } from '../file-list/row-window';
 
@@ -46,6 +47,8 @@ export interface AlbumTile {
      * nothing to address, never a broken image.
      */
     cover?: FileThumbnailIdentity;
+    /** The cover is a video, so a tile without its picture says so. */
+    coverIsVideo: boolean;
 }
 
 /** Grouped, and singular when there is one. Never "1.1k": people count photos. */
@@ -71,6 +74,7 @@ export function albumTile(folder: MediaFolder, channelId: number): AlbumTile {
         count: folder.itemCount,
         countLabel,
         label: `${name}, ${countLabel}`,
+        coverIsVideo: isVideoFile(folder.coverName),
         cover: fileThumbnailIdentity(
             { msgId: folder.coverMsgId, name: folder.coverName, revision: folder.coverRevision },
             channelId,

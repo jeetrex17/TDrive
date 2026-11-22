@@ -112,9 +112,8 @@ function expectReadablePair(
 }
 
 describe('theme palettes', () => {
-    it('uses Quiet Relay as the deterministic pre-controller fallback', () => {
-        expect(paletteSource).toContain(':root:not([data-theme]),');
-        expect(paletteSource).toContain(':root[data-theme="quiet-relay"] {');
+    it('uses Tokyo Night as the deterministic pre-controller fallback', () => {
+        expect(paletteSource).toContain(':root:not([data-theme]),\n:root[data-theme="tokyo-night"] {');
         expect(paletteSource).not.toContain('prefers-color-scheme');
     });
 

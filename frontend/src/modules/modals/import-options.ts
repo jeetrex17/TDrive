@@ -75,6 +75,7 @@ export function openImportOptionsModal(opts: {
     queued?: boolean;
     destination?: string;
     names?: readonly string[];
+    encrypt?: boolean;
 }): Promise<ImportChoice | null> {
     return new Promise((resolve) => {
         // A re-open while one is pending would strand the previous caller;
@@ -95,6 +96,7 @@ export function openImportOptionsModal(opts: {
             queued: opts.queued,
             destination: opts.destination,
             names: opts.names,
+            encrypt: opts.encrypt,
         };
         importOptionsModal.open(currentPayload);
     });

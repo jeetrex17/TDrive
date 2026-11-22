@@ -14,8 +14,6 @@ function setup(callbacks = {
 }) {
     host = document.createElement('div');
     host.id = 'selection-bar';
-    host.setAttribute('role', 'status');
-    host.setAttribute('aria-live', 'polite');
     document.body.appendChild(host);
     app = mount(SelectionBar, { target: host, props: callbacks });
     flushSync();
@@ -44,11 +42,31 @@ describe('SelectionBar', () => {
 
         setSelectionCount(1);
         flushSync();
-        expect(host?.querySelector('#selection-count')?.textContent).toBe('1 selected');
+        expect(host?.querySelector('#selection-count')?.textContent?.trim()).toBe('1 selected');
 
         setSelectionCount(3);
         flushSync();
-        expect(host?.querySelector('#selection-count')?.textContent).toBe('3 selected');
+        expect(host?.querySelector('#selection-count')?.textContent?.trim()).toBe('3 selected');
+    });
+
+    it('adds the total size when every selected item is a file', () => {
+        setup();
+
+        setSelectionCount(3, 19_500_000);
+        flushSync();
+        expect(host?.querySelector('#selection-count')?.textContent?.trim()).toBe('3 selected · 18.6 MB');
+        expect(host?.querySelector('#selection-count')?.getAttribute('role')).toBe('status');
+
+        setSelectionCount(2, null);
+        flushSync();
+        expect(host?.querySelector('#selection-count')?.textContent?.trim()).toBe('2 selected');
+    });
+
+    it('names its icon-only actions', () => {
+        setup();
+        for (const name of ['Download', 'Move', 'Delete', 'Clear selection']) {
+            expect(host?.querySelector(`button[aria-label="${name}"]`)).not.toBeNull();
+        }
     });
 
     it('normalizes invalid counts before rendering', () => {
@@ -56,11 +74,11 @@ describe('SelectionBar', () => {
 
         setSelectionCount(-2);
         flushSync();
-        expect(host?.querySelector('#selection-count')?.textContent).toBe('0 selected');
+        expect(host?.querySelector('#selection-count')?.textContent?.trim()).toBe('0 selected');
 
         setSelectionCount(2.9);
         flushSync();
-        expect(host?.querySelector('#selection-count')?.textContent).toBe('2 selected');
+        expect(host?.querySelector('#selection-count')?.textContent?.trim()).toBe('2 selected');
     });
 
     it('routes actions through the controller callbacks', () => {

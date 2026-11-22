@@ -9,8 +9,6 @@ const runtime = vi.hoisted(() => ({
 }));
 
 vi.mock('../../api', () => ({
-    getPreviewFile: vi.fn(),
-    getPreviewThumbnail: vi.fn(),
     hasOperationErrorCode: vi.fn(),
     isMobilePlatform: vi.fn(() => false),
     onRuntimeEvent: runtime.onRuntimeEvent,

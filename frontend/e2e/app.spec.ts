@@ -42,12 +42,12 @@ test('auth advances through the public login surface and handles runtime errors'
     });
 
     const phone = page.getByRole('textbox', { name: 'Phone number' });
-    await expect(page.getByRole('heading', { name: 'Sign in to Telegram' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Sign in with Telegram' })).toBeVisible();
     await expect(phone).toBeFocused();
 
     await phone.fill('+1 555 0100');
     await page.getByRole('button', { name: 'Send code' }).click();
-    await expect(page.getByRole('heading', { name: 'Verify your account' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Enter the login code' })).toBeVisible();
     await expect(page.getByText('+15550100')).toBeVisible();
     expect(await mock.calls('LoginPhoneNumber')).toMatchObject([
         { args: ['+15550100'], state: 'fulfilled' },
@@ -75,9 +75,9 @@ test('dashboard renders normalized first-party drive and file data', async ({ pa
     });
 
     await expect(page.locator('#success-screen')).toBeVisible();
-    await expect(page.getByRole('button', { name: 'Personal', exact: true })).toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('navigation', { name: 'Drives' }).getByRole('button', { name: 'Personal', exact: true })).toHaveAttribute('aria-current', 'page');
     await expect(page.getByRole('row', { name: 'File: contract.txt' })).toBeVisible();
-    await expect(page.locator('#storage-used')).toContainText('0 B / Unlimited');
+    await expect(page.locator('#storage-used')).toHaveText('0 B');
     expect(await mock.calls('GetFolderContents')).toMatchObject([{ args: [''] }]);
 });
 
@@ -247,7 +247,7 @@ test('returning from Media keeps the current file list while it refreshes', asyn
     await mock.setPlan('GetFolderContents', deferred('return-files', refreshedContents));
     await mock.setPlan('GetFolderStats', deferred('return-stats', refreshedStats));
     const returnRequest = (await mock.calls('GetFolderContents')).length;
-    await page.getByRole('button', { name: 'Personal', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Drives' }).getByRole('button', { name: 'Personal', exact: true }).click();
     await expect.poll(async () => (await mock.calls('GetFolderContents'))[returnRequest]?.state).toBe('pending');
     await expect(file).toBeVisible();
     await expect(folders.nth(0).locator('.folder-size')).toHaveText('2 KB');

@@ -2,7 +2,6 @@
     import { tick } from 'svelte';
     import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
     import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
-    import FilesIcon from '@lucide/svelte/icons/files';
     import FolderIcon from '@lucide/svelte/icons/folder';
     import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
     import ShieldOffIcon from '@lucide/svelte/icons/shield-off';
@@ -110,62 +109,14 @@
                     </ul>
                 {/if}
             {:else}
-                <div class="copy-destination">
-                    <div class="move-modal-nav">
-                        <button type="button" class="move-back-btn" aria-label="Parent folder" disabled={!$dialog.path.length || stage !== 'ready'} onclick={() => browseSourceCopyCrumb(($dialog?.path.length ?? 0) - 2)}>
-                            <ChevronLeftIcon size={16} aria-hidden="true" />
-                        </button>
-                        <div class="move-breadcrumb" aria-label="Destination folder">
-                            <button type="button" class="move-crumb" disabled={!$dialog.path.length || stage !== 'ready'} onclick={() => browseSourceCopyCrumb(-1)}>My Drive</button>
-                            {#each $dialog.path as folder, index (folder.id)}
-                                <span class="move-crumb-sep" aria-hidden="true">/</span>
-                                <button type="button" class="move-crumb" disabled={index === $dialog.path.length - 1 || stage !== 'ready'} onclick={() => browseSourceCopyCrumb(index)}>{folder.name}</button>
-                            {/each}
-                        </div>
-                    </div>
-                    <div class="move-list" aria-label="Folders in My Drive" aria-busy={stage === 'loading'}>
-                        {#if stage === 'loading'}
-                            <div class="move-list-empty" role="status">Loading folders…</div>
-                        {:else if $dialog.browseFailed}
-                            <div class="move-list-empty"><button class="link-button" type="button" onclick={reloadSourceCopyFolder}>Try again</button></div>
-                        {:else if !$dialog.folders.length}
-                            <div class="move-list-empty">No folders here.</div>
-                        {:else}
-                            {#each $dialog.folders as folder (folder.id)}
-                                <button type="button" class="move-item" disabled={!editing} onclick={() => openSourceCopyFolder(folder)}>
-                                    <span class="move-item-icon" aria-hidden="true"><FolderIcon size={16} /></span>
-                                    <span class="move-item-name">{folder.name}</span>
-                                    <ChevronRightIcon size={16} aria-hidden="true" />
-                                </button>
-                            {/each}
-                        {/if}
-                    </div>
-                </div>
-                {#if makingFolder}
-                    <div class="copy-folder-editor">
-                        <label class="field-label" for="source-copy-folder-name">Folder name</label>
-                        <input id="source-copy-folder-name" type="text" autocomplete="off" bind:this={folderNameInput} bind:value={folderName} disabled={!editing} onkeydown={(event) => {
-                            if (event.key === 'Enter' && editing && folderName.trim()) void makeFolder();
-                        }} />
-                        <div class="copy-folder-buttons">
-                            <button type="button" class="secondary-btn" disabled={!editing} onclick={() => void cancelFolder()}>Cancel</button>
-                            <button type="button" class="secondary-btn" disabled={!editing || !folderName.trim()} onclick={() => void makeFolder()}>Create folder</button>
-                        </div>
-                    </div>
-                {:else}
-                    <button type="button" class="secondary-btn copy-new-folder" bind:this={newFolderButton} disabled={!editing} onclick={() => void startFolder()}>
-                        <FolderPlusIcon size={16} aria-hidden="true" /> New folder
-                    </button>
-                {/if}
                 {#if $dialog.items.length === 1}
-                    <label class="field-label" for="source-copy-file-name">File name</label>
+                    <label class="copy-section-label" for="source-copy-file-name">File name</label>
                     <input id="source-copy-file-name" type="text" value={$dialog.items[0].name} disabled={!editing} oninput={(event) => editSourceCopyName(event.currentTarget.value)} autocomplete="off" />
                 {:else}
                     <details class="copy-files">
                         <summary>
-                            <FilesIcon size={16} aria-hidden="true" />
+                            <ChevronRightIcon class="copy-disclosure-chevron" size={14} strokeWidth={2.25} aria-hidden="true" />
                             <span>{$dialog.items.length} files selected</span>
-                            <ChevronRightIcon class="copy-disclosure-chevron" size={16} aria-hidden="true" />
                         </summary>
                         <!-- svelte-ignore a11y_no_noninteractive_tabindex (The capped list needs keyboard scrolling.) -->
                         <ul aria-label="Selected files" role="list" tabindex="0">
@@ -187,6 +138,54 @@
                         </ul>
                     </details>
                 {/if}
+                <div class="copy-section-label" id="source-copy-destination-label">{sharedCopy ? 'Copy to' : 'Save to'}</div>
+                <div class="copy-destination" aria-labelledby="source-copy-destination-label" role="group">
+                    <div class="move-modal-nav">
+                        <button type="button" class="move-back-btn" aria-label="Parent folder" disabled={!$dialog.path.length || stage !== 'ready'} onclick={() => browseSourceCopyCrumb(($dialog?.path.length ?? 0) - 2)}>
+                            <ChevronLeftIcon size={16} aria-hidden="true" />
+                        </button>
+                        <div class="move-breadcrumb" aria-label="Destination folder">
+                            <button type="button" class="move-crumb" disabled={!$dialog.path.length || stage !== 'ready'} onclick={() => browseSourceCopyCrumb(-1)}>My Drive</button>
+                            {#each $dialog.path as folder, index (folder.id)}
+                                <span class="move-crumb-sep" aria-hidden="true">/</span>
+                                <button type="button" class="move-crumb" disabled={index === $dialog.path.length - 1 || stage !== 'ready'} onclick={() => browseSourceCopyCrumb(index)}>{folder.name}</button>
+                            {/each}
+                        </div>
+                        {#if !makingFolder}
+                            <button type="button" class="copy-new-folder" bind:this={newFolderButton} disabled={!editing} onclick={() => void startFolder()}>
+                                <FolderPlusIcon size={15} aria-hidden="true" /> New folder
+                            </button>
+                        {/if}
+                    </div>
+                    {#if makingFolder}
+                        <div class="copy-folder-editor">
+                            <FolderIcon size={16} aria-hidden="true" />
+                            <input id="source-copy-folder-name" type="text" aria-label="Folder name" placeholder="Folder name" autocomplete="off" bind:this={folderNameInput} bind:value={folderName} disabled={!editing} onkeydown={(event) => {
+                                if (event.key === 'Enter' && editing && folderName.trim()) void makeFolder();
+                                if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); void cancelFolder(); }
+                            }} />
+                            <button type="button" class="secondary-btn" disabled={!editing} onclick={() => void cancelFolder()}>Cancel</button>
+                            <button type="button" class="secondary-btn" disabled={!editing || !folderName.trim()} onclick={() => void makeFolder()}>Create folder</button>
+                        </div>
+                    {/if}
+                    <div class="move-list" aria-label="Folders in My Drive" aria-busy={stage === 'loading'}>
+                        {#if stage === 'loading'}
+                            <div class="move-list-empty" role="status">Loading folders…</div>
+                        {:else if $dialog.browseFailed}
+                            <div class="move-list-empty"><button class="link-button" type="button" onclick={reloadSourceCopyFolder}>Try again</button></div>
+                        {:else if !$dialog.folders.length}
+                            <div class="move-list-empty">No folders here. Save here, or make a new one.</div>
+                        {:else}
+                            {#each $dialog.folders as folder (folder.id)}
+                                <button type="button" class="move-item" disabled={!editing} onclick={() => openSourceCopyFolder(folder)}>
+                                    <span class="move-item-icon" aria-hidden="true"><FolderIcon size={16} /></span>
+                                    <span class="move-item-name">{folder.name}</span>
+                                    <ChevronRightIcon size={16} aria-hidden="true" />
+                                </button>
+                            {/each}
+                        {/if}
+                    </div>
+                </div>
                 {#if editing}
                     <p id="source-copy-name-hint" class="copy-muted copy-name-hint">TDrive adds a number to names that are already in use in this folder.</p>
                 {/if}
@@ -243,53 +242,111 @@
     }
     .copy-action-buttons { display: flex; justify-content: flex-end; gap: var(--space-2); }
     :global(html.mobile) .copy-action-buttons { flex-direction: column-reverse; }
+    .copy-body { padding-top: var(--space-2); }
+
+    /* Sections are headed by a small label and parted by space, not framed:
+       what is being saved, then where it goes. */
+    .copy-section-label {
+        display: block;
+        margin: 0 0 var(--space-1-5);
+        color: var(--color-text-muted);
+        font-size: var(--type-xs);
+        font-weight: var(--weight-medium);
+    }
+    #source-copy-file-name { margin-bottom: var(--space-4); }
+
+    /* The folder browser is a plain list between two hairlines; the path and
+       New folder share its top row. */
     .copy-destination {
-        overflow: hidden;
-        border: 1px solid var(--color-border-soft);
-        border-radius: var(--radius-lg);
+        border-block: 1px solid var(--color-border-soft);
     }
-    .move-list { max-height: min(220px, 30dvh); min-height: 54px; }
-    .copy-new-folder { display: flex; align-items: center; gap: var(--space-2); margin-block: var(--space-3); }
-    .copy-folder-editor { margin-block: var(--space-3); }
-    .copy-folder-buttons { display: flex; justify-content: flex-end; gap: var(--space-2); margin-block-start: var(--space-2); }
-    .copy-muted { color: var(--color-text-muted); font-size: var(--type-xs); line-height: var(--leading-normal); }
-    .copy-name-hint { margin-block: var(--space-2) 0; }
-    .copy-files {
-        margin-block: var(--space-3);
-        border: 1px solid var(--color-border-soft);
-        border-radius: var(--radius-lg);
-        background: var(--overlay-white-1);
+    .copy-destination .move-modal-nav {
+        gap: var(--space-1);
+        padding: var(--space-1-5) 0;
+        background: transparent;
     }
-    .copy-files summary {
-        display: grid;
-        grid-template-columns: auto minmax(0, 1fr) auto;
+    .copy-destination :global(.move-back-btn) {
+        width: 28px;
+        height: 28px;
+        border: 0;
+        background: transparent;
+        color: var(--color-text-muted);
+    }
+    .copy-destination .move-list { max-height: min(220px, 30dvh); min-height: 40px; padding: var(--space-1) 0; }
+    .copy-destination .move-item { padding: 7px var(--space-2); border: 0; border-radius: var(--radius-sm); }
+    .copy-destination .move-item-name { font-size: var(--type-sm); font-weight: var(--weight-medium); }
+    .copy-destination .move-item :global(svg:last-child) { color: var(--color-text-subtle); }
+    @media (hover: hover) {
+        .copy-destination .move-item:hover:not(:disabled) { background: var(--overlay-neutral-1); }
+    }
+    .copy-destination .move-list-empty { padding: var(--space-4) var(--space-2); color: var(--color-text-muted); font-size: var(--type-sm); font-weight: var(--weight-regular); text-align: left; }
+    .copy-new-folder {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        height: 28px;
+        padding: 0 var(--space-2);
+        border: 0;
+        border-radius: var(--radius-sm);
+        background: transparent;
+        color: var(--color-text-muted);
+        font: inherit;
+        font-size: var(--type-sm);
+        cursor: pointer;
+    }
+    @media (hover: hover) {
+        .copy-new-folder:hover:not(:disabled) { background: var(--overlay-neutral-1); color: var(--color-text); }
+    }
+    .copy-new-folder:focus-visible { outline: none; box-shadow: var(--focus-ring); }
+    .copy-new-folder:disabled { opacity: 0.5; cursor: default; }
+    .copy-folder-editor {
+        display: flex;
         align-items: center;
         gap: var(--space-2);
-        min-height: var(--control-lg);
-        padding: var(--space-2) var(--space-3);
-        border-radius: inherit;
+        padding: var(--space-1) var(--space-2) var(--space-2);
+    }
+    .copy-folder-editor :global(svg) { flex: 0 0 auto; color: var(--color-accent); }
+    .copy-folder-editor input { flex: 1 1 auto; min-width: 0; min-height: var(--control-md); margin: 0; }
+    .copy-folder-editor .secondary-btn { flex: 0 0 auto; min-height: var(--control-md); padding: 0 var(--space-3); }
+    :global(html.mobile) .copy-folder-editor { flex-wrap: wrap; }
+    :global(html.mobile) .copy-folder-editor input { flex-basis: calc(100% - 28px); }
+    :global(html.mobile) .copy-folder-editor .secondary-btn { flex: 1 1 0; min-height: var(--touch-target); }
+    :global(html.mobile) .copy-new-folder { height: var(--touch-target); }
+    .copy-muted { color: var(--color-text-muted); font-size: var(--type-xs); line-height: var(--leading-normal); }
+    .copy-name-hint { margin-block: var(--space-2) 0; }
+
+    /* Several files: one line that opens onto the list, no frame around it. */
+    .copy-files { margin-block: 0 var(--space-4); }
+    .copy-files summary {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        min-height: 28px;
+        margin-left: -4px;
+        padding: 0 6px 0 4px;
+        border-radius: var(--radius-sm);
         color: var(--color-text);
         font-size: var(--type-sm);
-        font-weight: var(--weight-semibold);
+        font-weight: var(--weight-medium);
         cursor: pointer;
         list-style: none;
     }
     .copy-files summary::-webkit-details-marker { display: none; }
-    .copy-files summary :global(svg) { color: var(--color-text-muted); }
+    .copy-files summary :global(svg) { color: var(--color-text-muted); transition: transform var(--motion-fast) var(--ease-standard); }
     .copy-files[open] :global(.copy-disclosure-chevron) { transform: rotate(90deg); }
     .copy-files summary:focus-visible,
-    .copy-files ul:focus-visible { outline: 2px solid var(--color-accent); outline-offset: -2px; }
+    .copy-files ul:focus-visible { outline: none; box-shadow: var(--focus-ring); }
     @media (hover: hover) {
-        .copy-files summary:hover { background: var(--overlay-white-1); }
+        .copy-files summary:hover { background: var(--overlay-neutral-1); }
     }
     :global(html.mobile) .copy-files summary { min-height: var(--touch-target); }
     .copy-files ul {
         max-height: min(11rem, 27dvh);
-        margin: 0;
+        margin: var(--space-1) 0 0 5px;
         padding: 0;
         overflow-y: auto;
-        border-top: 1px solid var(--color-border-soft);
-        border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+        border-left: 1px solid var(--color-border-soft);
         list-style: none;
     }
     .copy-files li {
@@ -297,16 +354,11 @@
         grid-template-columns: auto minmax(0, 1fr);
         align-items: center;
         gap: var(--space-2);
-        padding: var(--space-2) var(--space-3);
+        padding: 5px var(--space-3);
     }
-    .copy-files li + li { border-top: 1px solid var(--color-border-soft); }
     .copy-file-icon {
         display: grid;
         place-items: center;
-        inline-size: var(--control-sm);
-        block-size: var(--control-sm);
-        border-radius: var(--radius-sm);
-        background: var(--color-surface-2);
         color: var(--color-text-muted);
     }
     .copy-file-name {

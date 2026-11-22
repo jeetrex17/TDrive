@@ -393,7 +393,6 @@
 
     .file-pagination { display: flex; align-items: center; justify-content: space-between; gap: var(--space-2); margin-top: var(--space-3); font-size: var(--type-xs); color: var(--color-text-muted); }
     .file-pagination button { height: 28px; padding: 0 var(--space-3); border: 1px solid var(--color-border-soft); border-radius: var(--radius-pill); background: transparent; color: var(--color-text-soft); font: inherit; font-size: var(--type-xs); cursor: pointer; }
-    .sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0; }
     button:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
     button:disabled { opacity: .45; cursor: default; }
     @media (prefers-reduced-motion: reduce) {

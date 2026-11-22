@@ -2,10 +2,10 @@
 .primary-btn {
     width: 100%;
     padding: var(--space-3);
-    background: var(--accent);
-    color: var(--color-on-accent);
+    background: var(--color-action);
+    color: var(--color-on-action);
     font-size: var(--type-sm);
-    font-weight: var(--weight-strong);
+    font-weight: var(--weight-semibold);
     border: none;
     border-radius: var(--radius-md);
     cursor: pointer;
@@ -20,32 +20,32 @@
 /* Hover effects only where a pointer can hover: on touch the lift sticks after
    a tap until the next interaction clears it. */
 @media (hover: hover) {
-    .primary-btn:hover:not(:disabled) { background: var(--accent-hover); transform: translateY(-1px); }
+    .primary-btn:hover:not(:disabled) { background: var(--color-action-hover); }
 }
-.primary-btn:active { transform: translateY(0); }
+.primary-btn:active:not(:disabled) { transform: scale(var(--press-scale)); }
 
 .secondary-btn {
     padding: var(--space-3) var(--space-4);
-    background: transparent;
-    border: 1px solid var(--border);
+    background: var(--color-surface-1);
+    border: 1px solid var(--color-border-soft);
     border-radius: var(--radius-md);
-    color: var(--text-main);
+    color: var(--color-text);
     cursor: pointer;
     transition:
         background-color var(--motion-med) var(--ease-standard),
         border-color var(--motion-med) var(--ease-standard),
         transform var(--motion-fast) var(--ease-standard);
     font-size: var(--type-sm);
-    font-weight: var(--weight-strong);
+    font-weight: var(--weight-medium);
     display: flex;
     align-items: center;
     justify-content: center;
     gap: var(--space-2);
 }
 @media (hover: hover) {
-    .secondary-btn:hover:not(:disabled) { background: var(--bg-panel); }
+    .secondary-btn:hover:not(:disabled) { background: var(--color-surface-2); }
 }
-.secondary-btn:active { transform: translateY(0.5px); }
+.secondary-btn:active:not(:disabled) { transform: scale(var(--press-scale)); }
 .primary-btn:disabled,
 .secondary-btn:disabled { opacity: 0.45; cursor: not-allowed; transform: none; }
 
@@ -64,8 +64,10 @@
         color var(--motion-med) var(--ease-standard),
         transform var(--motion-fast) var(--ease-standard);
 }
-.icon-btn:hover { border-color: var(--text-main); color: var(--text-main); }
-.icon-btn:active { transform: translateY(0.5px) scale(0.98); }
+@media (hover: hover) {
+    .icon-btn:hover { border-color: var(--text-main); color: var(--text-main); }
+}
+.icon-btn:active { transform: scale(var(--press-scale)); }
 .icon-btn svg { width: 18px; height: 18px; }
 
 /* === SEGMENTED CONTROL ===
@@ -91,7 +93,9 @@
     cursor: pointer;
     transition: color var(--motion-fast) var(--ease-standard), background var(--motion-fast) var(--ease-standard);
 }
-.segmented button:hover { color: var(--text-main); }
+@media (hover: hover) {
+    .segmented button:hover { color: var(--text-main); }
+}
 .segmented button[aria-pressed="true"] { background: var(--surface-control); color: var(--text-main); }
 .segmented button:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 @media (prefers-reduced-motion: reduce) {

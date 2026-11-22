@@ -146,10 +146,18 @@ export function bindPullToRefresh(host: HTMLElement, refresh: () => unknown): ()
         indicator.classList.toggle('is-pulling', pull > 0);
         indicator.classList.toggle('is-armed', armed);
     };
+    // The pull has to cancel the native scroll, which needs a non-passive
+    // touchmove; that listener makes every scroll wait on this thread, so it
+    // is only attached for a touch that starts at the top of the list.
+    const watchMoves = (on: boolean) => {
+        if (on) host.addEventListener('touchmove', onTouchMove, { passive: false });
+        else host.removeEventListener('touchmove', onTouchMove);
+    };
     const settle = () => {
         startY = -1;
         pull = 0;
         armed = false;
+        watchMoves(false);
         paint();
     };
     const onTouchStart = (event: TouchEvent) => {
@@ -158,6 +166,7 @@ export function bindPullToRefresh(host: HTMLElement, refresh: () => unknown): ()
         startX = event.touches[0].clientX;
         claim = 'undecided';
         buzzed = false;
+        watchMoves(true);
     };
     const onTouchMove = (event: TouchEvent) => {
         if (startY < 0 || busy) return;
@@ -185,6 +194,7 @@ export function bindPullToRefresh(host: HTMLElement, refresh: () => unknown): ()
         paint();
     };
     const onTouchEnd = () => {
+        watchMoves(false);
         if (startY < 0) return;
         if (!armed) {
             settle();
@@ -205,12 +215,11 @@ export function bindPullToRefresh(host: HTMLElement, refresh: () => unknown): ()
     };
 
     host.addEventListener('touchstart', onTouchStart, { passive: true });
-    host.addEventListener('touchmove', onTouchMove, { passive: false });
     host.addEventListener('touchend', onTouchEnd);
     host.addEventListener('touchcancel', onTouchEnd);
     return () => {
         host.removeEventListener('touchstart', onTouchStart);
-        host.removeEventListener('touchmove', onTouchMove);
+        watchMoves(false);
         host.removeEventListener('touchend', onTouchEnd);
         host.removeEventListener('touchcancel', onTouchEnd);
         void unmount(ring);

@@ -25,10 +25,11 @@
     let src = $state('');
     let detail = $state('');
 
-    // The phone gallery shares the file list's selection store, so a
-    // long-pressed cell shows the same check the rows do.
+    // The gallery shares the file list's selection store, so a selected cell
+    // shows the same check the rows do. The phone also has an empty selection
+    // mode, entered by a long press, in which every cell offers its check.
     const mobile = isMobilePlatform();
-    const selecting = $derived(mobile && Boolean($selectionBarState.active || $selectedFileRowKeys.size > 0));
+    const selecting = $derived((mobile && Boolean($selectionBarState.active)) || $selectedFileRowKeys.size > 0);
     const selected = $derived(selecting && $selectedFileRowKeys.has(`file:${item.msgId}`));
     const video = $derived(isVideoFile(item.name));
     const resumeKey = $derived(playbackResumeKey(accountId, { channelId, fileId: item.msgId, revision: item.revision }));

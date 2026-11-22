@@ -16,6 +16,8 @@ export const THEME_IDS = [
     'everforest-dark',
     'ayu-dark',
     'rose-pine',
+    'chalk',
+    'graphite',
 ] as const;
 
 export type ThemeId = (typeof THEME_IDS)[number];
@@ -151,12 +153,24 @@ export const THEME_DEFINITIONS: readonly ThemeDefinition[] = Object.freeze([
         appearance: 'dark',
         preview: ['#191724', '#26233a', '#c4a7e7', '#e0def4'],
     }),
+    defineTheme({
+        id: 'chalk',
+        name: 'Chalk',
+        appearance: 'light',
+        preview: ['#f4f5f6', '#eeeff1', '#1a6dc2', '#0b0c0e'],
+    }),
+    defineTheme({
+        id: 'graphite',
+        name: 'Graphite',
+        appearance: 'dark',
+        preview: ['#08090a', '#1a1b1d', '#4ea7f0', '#f7f8f8'],
+    }),
 ]);
 
 export const DEFAULT_THEME_PREFERENCE: ThemePreference = Object.freeze({
     mode: 'dark',
     lightThemeId: 'daybreak',
-    darkThemeId: 'quiet-relay',
+    darkThemeId: 'tokyo-night',
 });
 
 const THEME_ID_SET: ReadonlySet<string> = new Set(THEME_IDS);

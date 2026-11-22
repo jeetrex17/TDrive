@@ -1,56 +1,52 @@
 <script lang="ts">
-    import CloudAlertIcon from '@lucide/svelte/icons/cloud-alert';
-    import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
-    import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
     import { onMount } from 'svelte';
+    import tdriveLogo from '../../assets/images/tdrive-logo.png';
     import { formatAppErrorDiagnostic, type AppError } from '../../modules/errors';
     import Button from '../Button.svelte';
 
     interface Props {
         error: AppError;
-        onRecover: () => void;
+        /** Absent when there is nothing to restore, as after a failed startup. */
+        onRecover?: () => void;
         onReload: () => void;
+        assurance?: string;
     }
 
-    let { error, onRecover, onReload }: Props = $props();
+    let {
+        error,
+        onRecover,
+        onReload,
+        assurance = 'Restore the screen first. If the problem returns, reload TDrive; an in-progress action may need to be started again.',
+    }: Props = $props();
     let heading: HTMLHeadingElement;
     const diagnostic = $derived(formatAppErrorDiagnostic(error));
 
     onMount(() => heading.focus());
 </script>
 
+<!-- The same calm column as signing in: the app's mark, what went wrong in a
+     sentence, what is safe, and the one or two moves left. The diagnostic is
+     there for a bug report, folded away until someone asks for it. -->
 <main class="error-recovery" role="alert" aria-labelledby="error-recovery-title">
-    <section class="recovery-panel">
-        <div class="recovery-signal" aria-hidden="true"></div>
+    <section class="recovery-column">
+        <img class="recovery-mark" src={tdriveLogo} alt="" width="66" height="42" />
+        <h1 id="error-recovery-title" tabindex="-1" bind:this={heading}>{error.title}</h1>
+        <p class="recovery-message">{error.message}</p>
+        <p class="recovery-assurance">{assurance}</p>
 
-        <div class="recovery-icon" aria-hidden="true">
-            <CloudAlertIcon size={28} strokeWidth={1.8} />
+        <div class="recovery-actions">
+            {#if onRecover}
+                <Button onclick={onRecover}>Restore screen</Button>
+                <Button variant="secondary" onclick={onReload}>Reload TDrive</Button>
+            {:else}
+                <Button onclick={onReload}>Reload TDrive</Button>
+            {/if}
         </div>
 
-        <div class="recovery-content">
-            <h1 id="error-recovery-title" tabindex="-1" bind:this={heading}>{error.title}</h1>
-            <p class="recovery-message">{error.message}</p>
-            <p class="recovery-assurance">
-                Restore the screen first. If the problem returns, reload TDrive; an in-progress action may
-                need to be started again.
-            </p>
-
-            <div class="recovery-actions">
-                <Button onclick={onRecover}>
-                    <RotateCcwIcon size={16} strokeWidth={2.2} aria-hidden="true" />
-                    Restore screen
-                </Button>
-                <Button variant="secondary" onclick={onReload}>
-                    <RefreshCwIcon size={16} strokeWidth={2.2} aria-hidden="true" />
-                    Reload TDrive
-                </Button>
-            </div>
-
-            <details class="recovery-details">
-                <summary>Technical details</summary>
-                <pre>{diagnostic}</pre>
-            </details>
-        </div>
+        <details class="recovery-details">
+            <summary>Technical details</summary>
+            <pre>{diagnostic}</pre>
+        </details>
     </section>
 </main>
 
@@ -60,99 +56,78 @@
         min-height: 100dvh;
         display: grid;
         place-items: center;
-        padding: clamp(var(--space-5), 6vw, 64px);
-        color: var(--text-main);
+        padding: var(--space-6) var(--space-4) calc(var(--space-6) + 8vh);
+        color: var(--color-text);
         background: var(--color-canvas);
     }
 
-    .recovery-panel {
-        width: min(680px, 100%);
+    .recovery-column {
+        width: min(400px, 100%);
         display: grid;
-        grid-template-columns: 6px 64px minmax(0, 1fr);
-        align-items: start;
-        gap: var(--space-5);
-        padding: clamp(var(--space-5), 5vw, 44px);
-        border: 1px solid var(--border);
-        border-radius: var(--radius-lg);
-        background: var(--color-surface-0);
-        box-shadow: var(--shadow-md);
+        justify-items: center;
+        text-align: center;
     }
 
-    .recovery-signal {
-        align-self: stretch;
-        min-height: 168px;
-        border-radius: var(--radius-pill);
-        background: var(--danger);
-    }
-
-    .recovery-icon {
-        width: 56px;
-        height: 56px;
-        display: grid;
-        place-items: center;
-        border: 1px solid var(--overlay-danger-strong);
-        border-radius: var(--radius-lg);
-        color: var(--danger);
-        background: var(--overlay-danger-soft);
-    }
-
-    .recovery-content {
-        min-width: 0;
+    .recovery-mark {
+        width: 66px;
+        height: auto;
+        margin-bottom: var(--space-6);
     }
 
     h1 {
         color: var(--color-text);
-        font-size: clamp(1.45rem, 4vw, 1.9rem);
-        font-weight: var(--weight-strong);
-        line-height: 1.15;
-        letter-spacing: -0.025em;
+        font-size: var(--type-2xl);
+        font-weight: var(--weight-semibold);
+        line-height: 1.2;
+        letter-spacing: -0.02em;
+        text-wrap: balance;
         outline: none;
     }
 
-    h1:focus-visible {
-        border-radius: var(--radius-xs);
-        box-shadow: var(--focus-ring);
-    }
-
+    /* Focused on arrival so a screen reader starts here; it is not a control,
+       so it draws no ring. */
     .recovery-message {
-        max-width: 56ch;
-        margin-top: var(--space-3);
-        color: var(--text-main);
-        font-size: var(--type-md);
-        line-height: 1.55;
+        margin-top: var(--space-2);
+        color: var(--color-text-soft);
+        font-size: var(--type-base);
+        line-height: 1.5;
+        text-wrap: pretty;
     }
 
     .recovery-assurance {
-        max-width: 62ch;
-        margin-top: var(--space-3);
-        color: var(--text-muted);
+        margin-top: var(--space-2);
+        color: var(--color-text-muted);
         font-size: var(--type-sm);
-        line-height: 1.55;
+        line-height: 1.5;
+        text-wrap: pretty;
     }
 
     .recovery-actions {
-        display: flex;
-        flex-wrap: wrap;
-        gap: var(--space-3);
+        display: grid;
+        grid-auto-flow: column;
+        grid-auto-columns: 1fr;
+        gap: var(--space-2);
+        width: 100%;
         margin-top: var(--space-6);
     }
 
     .recovery-details {
-        margin-top: var(--space-5);
-        color: var(--text-muted);
+        width: 100%;
+        margin-top: var(--space-4);
+        color: var(--color-text-subtle);
         font-size: var(--type-xs);
     }
 
     .recovery-details summary {
         width: fit-content;
-        padding: var(--space-1) 0;
-        color: var(--text-muted);
+        margin: 0 auto;
+        padding: var(--space-1) var(--space-2);
+        border-radius: var(--radius-xs);
         cursor: pointer;
     }
 
     .recovery-details summary:focus-visible {
         outline: none;
-        border-radius: var(--radius-xs);
         box-shadow: var(--focus-ring);
     }
 
@@ -161,30 +136,18 @@
         overflow: auto;
         margin-top: var(--space-2);
         padding: var(--space-3);
-        border: 1px solid var(--border);
-        border-radius: var(--radius-sm);
-        color: var(--text-muted);
+        border: 1px solid var(--color-border-soft);
+        border-radius: var(--radius-md);
+        color: var(--color-text-muted);
         background: var(--color-surface-1);
         font: 0.72rem/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        text-align: left;
         overflow-wrap: anywhere;
         white-space: pre-wrap;
         user-select: text;
     }
 
-    @media (max-width: 560px) {
-        .recovery-panel {
-            grid-template-columns: 5px minmax(0, 1fr);
-            gap: var(--space-4);
-        }
-
-        .recovery-icon {
-            display: none;
-        }
-
-        .recovery-actions {
-            align-items: stretch;
-            flex-direction: column;
-        }
+    @media (max-width: 420px) {
+        .recovery-actions { grid-auto-flow: row; }
     }
-
 </style>

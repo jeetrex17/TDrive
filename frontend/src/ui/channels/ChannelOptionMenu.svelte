@@ -1,22 +1,27 @@
-<script lang="ts">
-    import { tick } from 'svelte';
-    import ArrowDownUpIcon from '@lucide/svelte/icons/arrow-down-up';
+<script lang="ts" generics="T extends string">
+    import { tick, type Component } from 'svelte';
     import CheckIcon from '@lucide/svelte/icons/check';
+    import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
     import { pushSheet } from '../modals/sheet-stack';
-    import { CHANNEL_SORTS, type ChannelSort } from './channel-model';
 
+    // One of the channel's view menus (file type, sort): a toolbar control
+    // that names its current choice and opens a short radio list.
     interface Props {
-        value: ChannelSort;
-        onChange: (sort: ChannelSort) => void;
+        /** What the menu chooses, as a screen reader hears it: "Sort by". */
+        name: string;
+        options: ReadonlyArray<{ value: T; label: string }>;
+        value: T;
+        onChange: (value: T) => void;
+        icon: Component<{ size?: number; strokeWidth?: number; 'aria-hidden'?: 'true' }>;
         /** The phone's top bar has room for the icon alone. */
         iconOnly?: boolean;
     }
 
-    let { value, onChange, iconOnly = false }: Props = $props();
+    let { name, options: choices, value, onChange, icon: Icon, iconOnly = false }: Props = $props();
     let open = $state(false);
     let trigger = $state<HTMLButtonElement | null>(null);
     let menu = $state<HTMLElement | null>(null);
-    const label = $derived(CHANNEL_SORTS.find((option) => option.value === value)?.label ?? 'Newest');
+    const label = $derived(choices.find((option) => option.value === value)?.label ?? choices[0]?.label ?? '');
 
     function options(): HTMLButtonElement[] {
         return Array.from(menu?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]') ?? []);
@@ -38,9 +43,9 @@
         if (restoreFocus) trigger?.focus();
     }
 
-    function choose(sort: ChannelSort): void {
+    function choose(next: T): void {
         close(true);
-        if (sort !== value) onChange(sort);
+        if (next !== value) onChange(next);
     }
 
     function onMenuKeydown(event: KeyboardEvent): void {
@@ -82,18 +87,18 @@
         bind:this={trigger}
         class={iconOnly ? 'topbar-icon-btn' : 'channel-sort-trigger'}
         type="button"
-        title="Sort"
+        title={name}
         aria-haspopup="menu"
         aria-expanded={open}
-        aria-label={`Sort by ${label}`}
+        aria-label={`${name} ${label}`}
         onclick={toggle}
     >
-        <ArrowDownUpIcon size={iconOnly ? 22 : 14} strokeWidth={2} aria-hidden="true" />
-        {#if !iconOnly}<span>{label}</span>{/if}
+        <Icon size={iconOnly ? 22 : 14} strokeWidth={2} aria-hidden="true" />
+        {#if !iconOnly}<span>{label}</span><ChevronDownIcon size={12} strokeWidth={2.25} aria-hidden="true" />{/if}
     </button>
     {#if open}
-        <div bind:this={menu} class="channel-sort-menu" role="menu" aria-label="Sort by" tabindex="-1" onkeydown={onMenuKeydown}>
-            {#each CHANNEL_SORTS as option (option.value)}
+        <div bind:this={menu} class="channel-sort-menu" role="menu" aria-label={name} tabindex="-1" onkeydown={onMenuKeydown}>
+            {#each choices as option (option.value)}
                 <button
                     class="channel-sort-option"
                     type="button"
@@ -115,27 +120,33 @@
         flex: 0 0 auto;
     }
 
-    /* Sits beside the segmented filter and borrows its shape, so the two read
-       as one row of view controls. */
+    /* Drawn like the search field beside it, so the bar reads as one row of
+       toolbar controls of one height. */
     .channel-sort-trigger {
         display: inline-flex;
         align-items: center;
         gap: 6px;
-        height: 32px;
-        padding: 0 12px;
-        border: 0;
-        border-radius: var(--radius-pill);
-        background: var(--bg-panel);
-        color: var(--text-muted);
+        height: var(--toolbar-control);
+        padding: 0 10px;
+        border: 1px solid var(--color-border-soft);
+        border-radius: var(--radius-md);
+        background: var(--color-surface-1);
+        color: var(--color-text-muted);
         font: inherit;
-        font-size: var(--type-xs);
-        font-weight: var(--weight-semibold);
+        font-size: var(--type-sm);
+        font-weight: var(--weight-medium);
+        white-space: nowrap;
         cursor: pointer;
-        transition: color var(--motion-fast) var(--ease-standard);
+        transition: color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
     }
 
-    .channel-sort-trigger:hover,
-    .channel-sort-trigger[aria-expanded='true'] { color: var(--text-main); }
+    .channel-sort-trigger > span { color: var(--color-text); }
+
+    @media (hover: hover) {
+        .channel-sort-trigger:hover { border-color: var(--color-border); color: var(--color-text); }
+    }
+
+    .channel-sort-trigger[aria-expanded='true'] { border-color: var(--color-border); color: var(--color-text); }
     .channel-sort-trigger:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
     .channel-sort-menu {
@@ -145,8 +156,8 @@
         z-index: var(--z-popover);
         min-width: 168px;
         padding: var(--space-1);
-        border: 1px solid var(--border);
-        border-radius: var(--radius-lg);
+        border: 1px solid var(--color-border-soft);
+        border-radius: var(--radius-md);
         background: var(--color-surface-1);
         box-shadow: var(--shadow-md);
         outline: none;
@@ -164,7 +175,7 @@
         border: 0;
         border-radius: var(--radius-sm);
         background: transparent;
-        color: var(--text-main);
+        color: var(--color-text);
         font: inherit;
         font-size: var(--type-sm);
         text-align: left;
@@ -173,10 +184,10 @@
 
     .channel-sort-option:hover,
     .channel-sort-option:focus-visible { outline: none; background: var(--overlay-neutral-2); }
-    .channel-sort-option[aria-checked='true'] { color: var(--accent); }
+    .channel-sort-option[aria-checked='true'] { color: var(--color-current-text); }
 
     :global(html.mobile) .channel-sort-menu { right: 4px; min-width: 188px; }
-    :global(html.mobile) .channel-sort-option { min-height: 44px; padding: 0 12px; font-size: 0.9375rem; }
+    :global(html.mobile) .channel-sort-option { min-height: 44px; padding: 0 12px; font-size: var(--mobile-type-body); }
 
     @keyframes channel-sort-in {
         from { opacity: 0; transform: translateY(-4px); }

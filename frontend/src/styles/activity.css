@@ -1,8 +1,8 @@
 /* === NOTIFICATION BELL === */
 .notif-bell {
     position: relative;
-    width: 36px;
-    height: 36px;
+    width: var(--toolbar-control);
+    height: var(--toolbar-control);
     background: transparent;
     border: 1px solid transparent;
     color: var(--text-muted);
@@ -11,12 +11,14 @@
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    transition: background 140ms ease, color 140ms ease, border-color 140ms ease;
+    transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
     padding: 0;
 }
-.notif-bell:hover { background: var(--bg-panel); color: var(--text-main); border-color: var(--border); }
+@media (hover: hover) {
+    .notif-bell:hover { background: var(--bg-panel); color: var(--text-main); border-color: var(--border); }
+}
 .notif-bell:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
-.notif-bell:active { transform: translateY(1px); }
+.notif-bell:active { transform: scale(var(--press-scale)); }
 .notif-bell-icon { width: 18px; height: 18px; display: inline-flex; }
 .notif-bell-icon svg { width: 100%; height: 100%; }
 
@@ -85,8 +87,8 @@
     border-bottom: 1px solid var(--glass-border);
 }
 .notif-panel-title {
-    font-size: 0.92rem;
-    font-weight: 600;
+    font-size: var(--type-base);
+    font-weight: var(--weight-semibold);
     color: var(--text-main);
 }
 .notif-panel-actions {
@@ -99,8 +101,8 @@
     background: transparent;
     border: 1px solid var(--color-border-soft);
     color: var(--color-text-soft);
-    font-size: 0.8rem;
-    font-weight: 600;
+    font-size: var(--type-sm);
+    font-weight: var(--weight-semibold);
     letter-spacing: 0.01em;
     padding: 4px 10px;
     border-radius: var(--radius-sm);
@@ -110,10 +112,12 @@
         color var(--motion-fast) var(--ease-standard),
         border-color var(--motion-fast) var(--ease-standard);
 }
-.notif-panel-clear:hover:not(:disabled) {
-    background: var(--overlay-white-2);
-    color: var(--text-main);
-    border-color: var(--color-border);
+@media (hover: hover) {
+    .notif-panel-clear:hover:not(:disabled) {
+        background: var(--overlay-white-2);
+        color: var(--text-main);
+        border-color: var(--color-border);
+    }
 }
 .notif-panel-clear:disabled { opacity: 0.4; cursor: default; }
 .notif-panel-clear:focus-visible,
@@ -126,8 +130,8 @@
     padding: 10px 14px 14px;
 }
 .notif-section-label {
-    font-size: 0.68rem;
-    font-weight: 700;
+    font-size: var(--type-2xs);
+    font-weight: var(--weight-strong);
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--text-muted);
@@ -153,10 +157,12 @@
     background: var(--overlay-white-1);
     border: 1px solid var(--glass-border);
     border-radius: var(--radius-lg);
-    font-size: 0.85rem;
-    transition: background 140ms ease, transform 140ms ease;
+    font-size: var(--type-base);
+    transition: background var(--motion-fast) var(--ease-standard), transform var(--motion-fast) var(--ease-standard);
 }
-.notif-row:hover { background: var(--overlay-white-2); }
+@media (hover: hover) {
+    .notif-row:hover { background: var(--overlay-white-2); }
+}
 .notif-row.notif-copied { background: var(--overlay-success-1); border-color: var(--overlay-success-2); }
 
 .notif-row-event { grid-template-columns: 22px minmax(0, 1fr) auto; row-gap: 6px; }
@@ -183,7 +189,7 @@
 
 .notif-row-body { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .notif-row-title {
-    font-weight: 500;
+    font-weight: var(--weight-medium);
     color: var(--text-main);
     white-space: nowrap;
     overflow: hidden;
@@ -192,7 +198,7 @@
 }
 .notif-row-sub {
     color: var(--text-muted);
-    font-size: 0.76rem;
+    font-size: var(--type-xs);
     line-height: 1.3;
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -201,7 +207,7 @@
 }
 .notif-row-meta {
     color: var(--text-muted);
-    font-size: 0.74rem;
+    font-size: var(--type-xs);
     flex-shrink: 0;
     margin-left: 8px;
     display: flex;
@@ -211,7 +217,7 @@
     white-space: nowrap;
 }
 .notif-row-size { color: var(--color-text-soft); }
-.notif-row-speed { font-size: 0.68rem; color: var(--text-muted); }
+.notif-row-speed { font-size: var(--type-2xs); color: var(--text-muted); }
 .notif-row-cancel {
     flex-shrink: 0;
     width: 22px;
@@ -221,12 +227,14 @@
     border-radius: var(--radius-sm);
     background: transparent;
     color: var(--text-muted);
-    font-size: 1.15rem;
+    font-size: var(--type-lg);
     line-height: 1;
     cursor: pointer;
-    transition: background 0.15s ease, color 0.15s ease;
+    transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
 }
-.notif-row-cancel:hover { background: var(--overlay-danger-1); color: var(--danger); }
+@media (hover: hover) {
+    .notif-row-cancel:hover { background: var(--overlay-danger-1); color: var(--danger); }
+}
 .notif-row-copy {
     justify-self: end;
     min-height: 26px;
@@ -236,16 +244,18 @@
     background: transparent;
     color: var(--color-text-soft);
     font: inherit;
-    font-size: 0.74rem;
-    font-weight: 600;
+    font-size: var(--type-xs);
+    font-weight: var(--weight-semibold);
     line-height: 1.1;
     white-space: nowrap;
     cursor: pointer;
 }
-.notif-row-copy:hover {
-    background: var(--overlay-white-2);
-    border-color: var(--color-border);
-    color: var(--text-main);
+@media (hover: hover) {
+    .notif-row-copy:hover {
+        background: var(--overlay-white-2);
+        border-color: var(--color-border);
+        color: var(--text-main);
+    }
 }
 .notif-row-progress {
     width: 100%;
@@ -258,7 +268,7 @@
     height: 100%;
     background: var(--accent);
     border-radius: var(--radius-pill);
-    transition: width 200ms ease;
+    transition: width var(--motion-med) var(--ease-standard);
 }
 /* The files in flight, under the row that aggregates them. They span from the
    title's column to the edge so a filename has the whole width to be clipped
@@ -309,8 +319,8 @@
     opacity: 0.7;
 }
 .notif-empty-glyph svg { width: 22px; height: 22px; }
-.notif-empty-title { font-weight: 600; color: var(--text-main); font-size: 0.92rem; }
-.notif-empty-body { font-size: 0.8rem; line-height: 1.4; max-width: 240px; }
+.notif-empty-title { font-weight: var(--weight-semibold); color: var(--text-main); font-size: var(--type-base); }
+.notif-empty-body { font-size: var(--type-sm); line-height: 1.4; max-width: 240px; }
 
 
 
@@ -409,8 +419,8 @@
     background: none;
     border: none;
     font: inherit;
-    font-size: 0.82rem;
-    font-weight: 600;
+    font-size: var(--type-sm);
+    font-weight: var(--weight-semibold);
     color: var(--accent);
     cursor: pointer;
     white-space: nowrap;
@@ -422,7 +432,9 @@
     min-height: 48px;
     margin-block: -13px;
 }
-.toast-action:hover { text-decoration: underline; }
+@media (hover: hover) {
+    .toast-action:hover { text-decoration: underline; }
+}
 .toast-action:focus-visible {
     outline: 2px solid var(--accent);
     outline-offset: 2px;
@@ -439,10 +451,12 @@
     cursor: pointer;
     border-radius: var(--radius-sm);
     padding: 0;
-    transition: background 120ms ease, color 120ms ease;
+    transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
 }
 .toast-close svg { width: 14px; height: 14px; }
-.toast-close:hover { background: var(--overlay-white-2); color: var(--text-main); }
+@media (hover: hover) {
+    .toast-close:hover { background: var(--overlay-white-2); color: var(--text-main); }
+}
 .toast-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .toast-spinner {
@@ -484,7 +498,7 @@
     border-radius: var(--radius-pill);
     background: var(--overlay-white-2);
     color: var(--color-text-muted);
-    font-size: 0.72rem;
+    font-size: var(--type-xs);
     font-weight: var(--weight-semibold);
     font-variant-numeric: tabular-nums;
 }

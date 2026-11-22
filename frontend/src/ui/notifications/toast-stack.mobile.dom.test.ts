@@ -19,7 +19,6 @@ function toast(overrides: Partial<ToastItem> = {}): ToastItem {
         level: 'error',
         title: 'Upload failed',
         body: 'The connection was interrupted. Try again when you are online.',
-        sticky: false,
         spinner: false,
         durationMs: 8000,
         expiresAt: Date.now() + 8000,
@@ -94,7 +93,7 @@ describe('mobile toasts', () => {
         expect(dismiss).not.toHaveBeenCalled();
     });
 
-    it('dismisses on a tap and on a swipe up, and holds on a short drag', () => {
+    it('dismisses on a tap and on a swipe down, and holds on a short drag', () => {
         toasts.set([toast()]);
         const dismiss = render();
         const card = host.querySelector<HTMLElement>('.toast')!;
@@ -106,15 +105,19 @@ describe('mobile toasts', () => {
         // Past the tap slop but short of the threshold: a drag that was not
         // going anywhere, so the toast springs back rather than leaving.
         dismiss.mockClear();
-        swipe(card, -20);
+        swipe(card, 20);
         expect(dismiss).not.toHaveBeenCalled();
 
-        // Far enough up is a dismissal, and the surface carries on off the
-        // top edge before handing over rather than blinking out under the
-        // finger that threw it.
+        // Up is toward the content, away from the edge the toast lives on.
+        swipe(card, -400);
+        expect(dismiss).not.toHaveBeenCalled();
+
+        // Far enough down, toward the tab bar it is docked above, is a
+        // dismissal, and the surface carries on off that edge before handing
+        // over rather than blinking out under the finger that threw it.
         vi.useFakeTimers();
         try {
-            swipe(card, -400);
+            swipe(card, 400);
             expect(dismiss).not.toHaveBeenCalled();
             vi.advanceTimersByTime(DISMISS_EXIT_MS);
             expect(dismiss).toHaveBeenCalledOnce();

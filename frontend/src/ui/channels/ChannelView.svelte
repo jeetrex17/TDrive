@@ -15,14 +15,19 @@
     import { bindLongPress } from '../file-list/touch';
     import ChannelTopicPicker from './ChannelTopicPicker.svelte';
     import { mergeTopicMetadata, type ChannelTopic, type ChannelTopicFetcher } from './channel-topics';
-    import ChannelSortMenu from './ChannelSortMenu.svelte';
+    import ArrowDownUpIcon from '@lucide/svelte/icons/arrow-down-up';
+    import ListFilterIcon from '@lucide/svelte/icons/list-filter';
+    import ChannelAvatar from './ChannelAvatar.svelte';
+    import ChannelOptionMenu from './ChannelOptionMenu.svelte';
     import { fileTypeFamily, fileTypeIcon, type FileTypeFamily } from '../file-list/file-type';
     import { activeTab, driveSwitcherOpen } from '../mobile/mobile-shell-store';
     import { pushSheet } from '../modals/sheet-stack';
     import { toAppError } from '../../modules/errors';
-    import { splitNameAndExt } from '../../utils';
+    import { formatBytes, formatDuration, splitNameAndExt } from '../../utils';
+    import { relativeTimeLabel } from '../file-list/row-meta';
     import {
         canSaveSourceMedia,
+        CHANNEL_SORTS,
         createChannelMediaPager,
         isOpenable,
         MAX_CHANNEL_ITEMS,
@@ -59,10 +64,14 @@
         onBack?: () => void;
         /** The first page from an earlier visit, shown while the fresh one loads. */
         recentPages?: ChannelPageMemory;
+        /** Desktop: the app's top bar, where the channel's title and view
+            controls take the folder path's and search box's place. */
+        headerHost?: HTMLElement | null;
+        loadPhoto?: (source: ChannelSource) => Promise<string>;
         mobile?: boolean;
     }
 
-    let { source, fetchMedia, fetchTopics, onOpenPost, onOpenTelegram, onActions, onPostActions, onSavePosts, onBack, recentPages, mobile = false }: Props = $props();
+    let { source, fetchMedia, fetchTopics, onOpenPost, onOpenTelegram, onActions, onPostActions, onSavePosts, onBack, recentPages, headerHost, loadPhoto, mobile = false }: Props = $props();
 
     const KINDS: ReadonlyArray<{ value: ChannelMediaKind; label: string }> = [
         { value: 'all', label: 'All' },
@@ -71,6 +80,9 @@
         { value: 'image', label: 'Images' },
         { value: 'document', label: 'Documents' },
     ];
+    // The desktop menu names its choice on the trigger, where a bare "All"
+    // would not say all of what.
+    const KIND_MENU = KINDS.map((option) => option.value === 'all' ? { ...option, label: 'All files' } : option);
     const SEARCH_DELAY_MS = 300;
     const SKELETON_WIDTHS = [62, 44, 71, 38, 56, 49];
 
@@ -234,6 +246,13 @@
         event.stopPropagation();
         const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
         onActions?.(rect.left, rect.bottom + 4, source);
+    }
+
+    // Moves the desktop header into the app's top bar, and takes it out again
+    // with the view, wherever it was put.
+    function moveInto(node: HTMLElement, target: HTMLElement | null | undefined) {
+        target?.append(node);
+        return { destroy: () => node.remove() };
     }
 
     function bindProtectedPost(row: HTMLElement, protectedContent: boolean) {
@@ -493,6 +512,29 @@
     </div>
 {/snippet}
 
+<!-- Desktop: the same floating pill Files shows over its list, so a
+     selection reads the same wherever it is made. -->
+{#snippet selectionBar()}
+    <div class="selection-bar channel-selection-bar" role="group" aria-label="Save source files">
+        <span class="selection-count">{selectedItems.length === 1 ? '1 file selected' : `${selectedItems.length} files selected`}</span>
+        <button type="button" class="primary-btn channel-selection-save" onclick={saveSelection} onkeydown={onCopyActionKeydown}>
+            {selectedItems.length === 1 ? 'Save 1 file to My Drive' : `Save ${selectedItems.length} files to My Drive`}
+        </button>
+        <button type="button" class="selection-btn ghost" title="Cancel selection" aria-label="Cancel selection" onclick={cancelSelection} onkeydown={onCopyActionKeydown}>
+            <XIcon size={16} strokeWidth={2} aria-hidden="true" />
+        </button>
+    </div>
+{/snippet}
+
+{#snippet chip(item: ChannelMediaItem, TypeIcon: ReturnType<typeof fileTypeIcon>, openable: boolean)}
+    <span class="file-type-icon channel-chip" aria-hidden="true">
+        <span class="chip-layer chip-type"><TypeIcon size={20} strokeWidth={1.5} /></span>
+        <span class="chip-layer chip-action">
+            {#if openable && mediaActionLabel(item) === 'Play'}<PlayIcon size={16} strokeWidth={2} fill="currentColor" />{:else if openable}<EyeIcon size={16} strokeWidth={2} />{:else}<ExternalLinkIcon size={16} strokeWidth={2} />{/if}
+        </span>
+    </span>
+{/snippet}
+
 {#snippet row(item: ChannelMediaItem)}
     {@const openable = isOpenable(item)}
     {@const copyable = canSaveSourceMedia(source, item)}
@@ -511,17 +553,31 @@
             oncontextmenu={mobile ? undefined : (event) => openPostActions(event, item)}
             onkeydown={(event) => handleRowKeydown(event, item)}
         >
-            <span class="file-type-icon channel-chip" aria-hidden="true">
-                <span class="chip-layer chip-type"><TypeIcon size={20} strokeWidth={1.5} /></span>
-                <span class="chip-layer chip-action">
-                    {#if openable && mediaActionLabel(item) === 'Play'}<PlayIcon size={16} strokeWidth={2} fill="currentColor" />{:else if openable}<EyeIcon size={16} strokeWidth={2} />{:else}<ExternalLinkIcon size={16} strokeWidth={2} />{/if}
+            {#if mobile}
+                {@render chip(item, TypeIcon, openable)}
+                <span class="channel-row-text">
+                    <span class="channel-row-title">{mediaTitle(item)}</span>
+                    <span class="channel-row-meta">{mediaMeta(item)}{#if topicLabel(item)}<span class="channel-row-topic"> · {topicLabel(item)}</span>{/if}</span>
                 </span>
-            </span>
-            <span class="channel-row-text">
-                <span class="channel-row-title">{mediaTitle(item)}</span>
-                <span class="channel-row-meta">{mediaMeta(item)}{#if topicLabel(item)}<span class="channel-row-topic"> · {topicLabel(item)}</span>{/if}</span>
-            </span>
-            {#if label}<span class="channel-row-badge" title={label === 'Protected' ? 'View only. Saving and forwarding are disabled.' : undefined}>{label}</span>{/if}
+                {#if label}<span class="channel-row-badge" title={label === 'Protected' ? 'View only. Saving and forwarding are disabled.' : undefined}>{label}</span>{/if}
+            {:else}
+                <!-- Name, date and size in the file table's columns. The
+                     kind is the icon's to say; a length is the one figure
+                     a list of videos is scanned for, so it trails the name. -->
+                <span class="channel-row-name">
+                    {@render chip(item, TypeIcon, openable)}
+                    <span class="channel-row-title">{mediaTitle(item)}</span>
+                    {#if item.duration > 0}<span class="channel-row-length">{formatDuration(item.duration)}</span>{/if}
+                    {#if topicLabel(item)}<span class="channel-row-topic">{topicLabel(item)}</span>{/if}
+                    {#if label === 'Protected'}
+                        <span class="channel-row-lock" title="View only. Saving and forwarding are disabled."><LockIcon size={13} strokeWidth={2.25} aria-hidden="true" /></span>
+                    {:else if label}
+                        <span class="channel-row-badge">{label}</span>
+                    {/if}
+                </span>
+                <span class="channel-row-date">{relativeTimeLabel(item.date)}</span>
+                <span class="channel-row-size">{item.size > 0 ? formatBytes(item.size) : '—'}</span>
+            {/if}
         </button>
         {#if openable && item.telegramUrl && !mobile}
             <button
@@ -569,7 +625,7 @@
                     >
                         <SearchIcon size={22} strokeWidth={2} aria-hidden="true" />
                     </button>
-                    <ChannelSortMenu iconOnly value={sort} onChange={chooseSort} />
+                    <ChannelOptionMenu iconOnly name="Sort by" options={CHANNEL_SORTS} value={sort} onChange={chooseSort} icon={ArrowDownUpIcon} />
                     <button type="button" class="topbar-icon-btn" aria-haspopup="menu" aria-label="Source actions" onclick={openActions}>
                         <EllipsisIcon size={22} strokeWidth={2} aria-hidden="true" />
                     </button>
@@ -596,45 +652,49 @@
             <div class="channel-topbar-kinds">{@render kindPicker()}</div>
         </header>
     {:else}
-        <header class="channel-bar">
-            <div class="channel-bar-heading">
-                <h1 id="channel-view-title" class="channel-bar-title" title={source.title}>{source.title}</h1>
-                <span class="channel-bar-handle">{handle}</span>
+        <div class="channel-header" use:moveInto={headerHost}>
+            <div class="channel-heading">
+                {#if loadPhoto}<span class="channel-heading-avatar"><ChannelAvatar {source} {loadPhoto} /></span>{/if}
+                <h1 id="channel-view-title" class="channel-heading-title" title={source.title}>{source.title}</h1>
                 {#if source.protected}
-                    <span class="channel-bar-protected" title="View only. Saving and forwarding are disabled.">
+                    <span class="channel-heading-protected" title="View only. Saving and forwarding are disabled.">
                         <LockIcon size={12} strokeWidth={2.25} aria-hidden="true" />
                         Protected
                     </span>
                 {/if}
+                <span class="channel-heading-handle">{handle}</span>
             </div>
-            <div class="channel-bar-tools">
-                <div class="channel-browse-tools" inert={selectedItems.length > 0}>
-                    {#if forum && fetchTopics}<ChannelTopicPicker {source} fetchTopics={fetchTopics} selected={selectedTopic} onChoose={chooseTopic} onTopics={rememberTopics} />{/if}
-                    {@render kindPicker()}
-                    <ChannelSortMenu value={sort} onChange={chooseSort} />
-                    <label class="search-field channel-search">
-                        <SearchIcon size={15} strokeWidth={2} aria-hidden="true" />
-                        <input
-                            bind:value={query}
-                            oninput={onQueryInput}
-                            onkeydown={onSearchKeydown}
-                            type="text"
-                            maxlength="120"
-                            placeholder={searchLabel}
-                            autocomplete="off"
-                            spellcheck="false"
-                            aria-label={selectedTopic ? searchLabel : `Search files in ${source.title}`}
-                        />
-                        {#if query}
-                            <button class="channel-search-clear" type="button" aria-label="Clear search" onclick={clearQuery}>
-                                <XIcon size={13} strokeWidth={2.5} aria-hidden="true" />
-                            </button>
-                        {/if}
-                    </label>
-                </div>
-                {#if selectedItems.length}{@render copyActions()}{/if}
+            <div class="channel-tools">
+                {#if forum && fetchTopics}<ChannelTopicPicker {source} fetchTopics={fetchTopics} selected={selectedTopic} onChoose={chooseTopic} onTopics={rememberTopics} />{/if}
+                <ChannelOptionMenu name="File type" options={KIND_MENU} value={kind} onChange={chooseKind} icon={ListFilterIcon} />
+                <ChannelOptionMenu name="Sort by" options={CHANNEL_SORTS} value={sort} onChange={chooseSort} icon={ArrowDownUpIcon} />
+                <label class="search-field channel-search">
+                    <SearchIcon size={14} strokeWidth={2} aria-hidden="true" />
+                    <input
+                        bind:value={query}
+                        oninput={onQueryInput}
+                        onkeydown={onSearchKeydown}
+                        type="text"
+                        maxlength="120"
+                        placeholder={selectedTopic ? searchLabel : `Search ${source.title}`}
+                        autocomplete="off"
+                        spellcheck="false"
+                        aria-label={selectedTopic ? searchLabel : `Search files in ${source.title}`}
+                    />
+                    {#if query}
+                        <button class="channel-search-clear" type="button" aria-label="Clear search" onclick={clearQuery}>
+                            <XIcon size={12} strokeWidth={2.5} aria-hidden="true" />
+                        </button>
+                    {/if}
+                </label>
             </div>
-        </header>
+        </div>
+        <div class="channel-columns" aria-hidden="true">
+            <span>Name</span>
+            <span>Date</span>
+            <span class="channel-columns-size">Size</span>
+            <span></span>
+        </div>
     {/if}
 
     <div bind:this={scroller} class="channel-scroll" onscroll={() => { scrolled = (scroller?.scrollTop ?? 0) > 2; }}>
@@ -707,6 +767,7 @@
     </div>
 
     {#if touchSelecting}{@render copyActions()}{/if}
+    {#if !mobile && selectedItems.length}{@render selectionBar()}{/if}
 </section>
 
 <style>
@@ -725,108 +786,102 @@
     }
     .is-mobile .channel-copy-actions button { min-height: var(--touch-target); }
     .channel-view {
+        position: relative;
         flex: 1 1 auto;
         min-width: 0;
         min-height: 0;
         display: flex;
         flex-direction: column;
-        background: var(--bg-dark);
     }
 
-    /* The bar takes the breadcrumb row's place and its measurements, so the
-       channel reads as a sibling of a folder, Photos and the trash. */
-    .channel-bar {
-        min-height: 52px;
-        flex-shrink: 0;
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        gap: var(--space-4);
-        padding: var(--space-2) var(--space-6);
-        border-bottom: 1px solid var(--border);
-        background: color-mix(in srgb, var(--color-surface-0) 58%, transparent);
-    }
-
-    .channel-bar-heading {
+    /* Desktop: the header sits in the app's top bar, in the folder path's
+       place, with the view controls where the search box was. */
+    .channel-header {
         flex: 1 1 auto;
         min-width: 0;
         display: flex;
-        align-items: baseline;
+        align-items: center;
+        justify-content: space-between;
+        gap: var(--space-3);
+    }
+
+    /* Only seen when no top bar was handed over. */
+    .channel-view > .channel-header {
+        flex: 0 0 auto;
+        min-height: 48px;
+        padding: 0 var(--gutter);
+        border-bottom: 1px solid var(--color-border-soft);
+    }
+
+    .channel-heading {
+        flex: 1 1 auto;
+        min-width: 0;
+        display: flex;
+        align-items: center;
         gap: var(--space-2);
     }
 
-    .channel-bar-title {
+    .channel-heading-avatar {
+        --avatar-size: 22px;
+        flex: 0 0 auto;
+        display: inline-flex;
+    }
+
+    .channel-heading-title {
         flex: 0 1 auto;
         min-width: 0;
+        margin: 0;
         overflow: hidden;
-        color: var(--text-main);
-        font-size: var(--type-lg);
-        font-weight: var(--weight-strong);
-        letter-spacing: 0.01em;
+        color: var(--color-text);
+        font-size: var(--type-base);
+        font-weight: var(--weight-semibold);
         text-overflow: ellipsis;
         white-space: nowrap;
     }
 
+    .channel-heading-protected {
+        flex: 0 0 auto;
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--color-text-muted);
+        font-size: var(--type-xs);
+        font-weight: var(--weight-medium);
+        cursor: default;
+    }
+
     /* Gives way long before the name does, and goes entirely on a narrow
        window rather than dwindling to a stray letter. */
-    .channel-bar-handle {
+    .channel-heading-handle {
         flex: 0 1000 auto;
         min-width: 0;
         overflow: hidden;
-        color: var(--text-muted);
+        color: var(--color-text-subtle);
         font-size: var(--type-sm);
         text-overflow: ellipsis;
         white-space: nowrap;
     }
 
     @media (max-width: 1100px) {
-        .channel-bar-handle { display: none; }
+        .channel-heading-handle { display: none; }
     }
 
-    .channel-bar-protected {
-        flex: 0 0 auto;
-        display: inline-flex;
-        align-self: center;
-        align-items: center;
-        gap: 4px;
-        height: 20px;
-        padding: 0 8px;
-        border-radius: var(--radius-pill);
-        background: var(--overlay-neutral-2);
-        color: var(--text-muted);
-        font-size: var(--type-xs);
-        font-weight: var(--weight-semibold);
-        cursor: default;
-    }
-
-    .channel-bar-tools {
+    .channel-tools {
         flex: 0 1 auto;
         min-width: 0;
-        position: relative;
-    }
-
-    .channel-browse-tools {
         display: flex;
-        flex-wrap: wrap;
-        justify-content: flex-end;
         align-items: center;
         gap: var(--space-2);
     }
 
-    /* Keep the same header and list geometry throughout a double-click. */
-    .channel-browse-tools[inert] { visibility: hidden; }
-    .channel-bar-tools .channel-copy-actions {
-        position: absolute;
-        inset: 0 0 0 auto;
-        white-space: nowrap;
+    .channel-search {
+        width: clamp(160px, 18vw, 240px);
+        height: var(--toolbar-control);
+        background: var(--color-surface-1);
+        border-color: var(--color-border-soft);
     }
 
-    .channel-kinds { flex: 0 0 auto; }
-
-    /* More file types fit without squeezing labels or shrinking touch targets. */
-    .channel-topbar-kinds { overflow-x: auto; }
-
-    .channel-search { width: clamp(150px, 18vw, 220px); }
+    .channel-search :global(svg) { flex: 0 0 auto; color: var(--color-text-subtle); }
 
     .channel-search-clear {
         flex: 0 0 auto;
@@ -837,24 +892,53 @@
         border: 0;
         border-radius: var(--radius-pill);
         background: var(--overlay-neutral-3);
-        color: var(--text-main);
+        color: var(--color-text);
         cursor: pointer;
     }
 
     .channel-search-clear:hover { background: var(--color-surface-3); }
     .channel-search-clear:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
+    /* The file table's column labels, at its measurements, so a channel reads
+       as a sibling of a folder. The rows below line up under them. */
+    .channel-columns {
+        flex: 0 0 auto;
+        display: grid;
+        grid-template-columns: var(--file-columns);
+        align-items: center;
+        min-height: 32px;
+        padding: 0 var(--gutter);
+        column-gap: var(--space-3);
+        border-bottom: 1px solid var(--color-border-soft);
+        color: var(--color-text-subtle);
+        font-size: var(--type-xs);
+        font-weight: var(--weight-medium);
+    }
+
+    .channel-columns-size { text-align: right; }
+
+    /* The shared .selection-bar draws the pill. */
+    .channel-selection-bar { gap: var(--space-2); }
+    .channel-selection-bar .selection-count { margin-right: var(--space-1); }
+    .channel-selection-save {
+        width: auto;
+        min-height: 30px;
+        padding: 0 var(--space-3);
+        border-radius: var(--radius-pill);
+        font-size: var(--type-sm);
+    }
+
     .channel-scroll {
         flex: 1 1 auto;
         min-height: 0;
         overflow-y: auto;
-        padding: var(--space-2) 10px var(--space-8);
+        /* The bottom clears the floating selection pill. */
+        padding: 4px 4px 72px;
     }
 
     .channel-rows {
         display: flex;
         flex-direction: column;
-        gap: 2px;
         list-style: none;
     }
 
@@ -862,7 +946,7 @@
         position: relative;
         display: flex;
         align-items: center;
-        border-radius: var(--radius-md);
+        border-radius: var(--radius-sm);
         transition: background-color var(--motion-fast) var(--ease-standard);
     }
 
@@ -872,19 +956,28 @@
         -webkit-touch-callout: none;
     }
 
-    .channel-row:hover,
-    .channel-row:focus-within { background: var(--bg-panel); }
+    @media (hover: hover) {
+        .channel-row:hover { background: var(--overlay-neutral-1); }
+    }
 
     .channel-row.is-selected { background: var(--overlay-accent-1); }
-    .channel-row.is-selected:hover { background: var(--overlay-accent-2); }
 
+    @media (hover: hover) {
+        .channel-row.is-selected:hover { background: var(--overlay-accent-2); }
+    }
+
+    /* One row of the file table: the name cell holds the icon, the title and
+       whatever qualifies it, then the date and size columns. The last column
+       is left for the Telegram button laid over it. */
     .channel-row-main {
         flex: 1 1 auto;
         min-width: 0;
-        display: flex;
+        display: grid;
+        grid-template-columns: var(--file-columns);
         align-items: center;
-        gap: 12px;
-        padding: 10px 14px;
+        min-height: 40px;
+        padding: 0 12px;
+        column-gap: var(--space-3);
         border: 0;
         border-radius: inherit;
         background: transparent;
@@ -898,18 +991,19 @@
 
     .channel-row-main:focus-visible {
         outline: none;
-        box-shadow: inset 0 0 0 1px var(--color-accent), var(--focus-ring);
+        box-shadow: inset var(--focus-ring);
     }
 
-    /* The leading chip still opens the file with a single click. */
-    .channel-chip {
-        position: relative;
-        margin-right: 0; /* the row's gap spaces it */
-        transition:
-            background-color var(--motion-fast) var(--ease-standard),
-            border-color var(--motion-fast) var(--ease-standard),
-            color var(--motion-fast) var(--ease-standard);
+    /* The leading icon still opens the file with a single click; on hover it
+       turns into the action that click takes. */
+    .channel-row-name {
+        min-width: 0;
+        display: flex;
+        align-items: center;
+        gap: var(--space-2);
     }
+
+    .channel-chip { position: relative; margin-right: 2px; }
 
     .chip-layer {
         position: absolute;
@@ -924,95 +1018,90 @@
     .chip-action {
         opacity: 0;
         transform: scale(0.8);
+        color: var(--color-text);
     }
 
-    .chip-action :global(svg) {
-        width: 16px;
-        height: 16px;
-    }
+    .chip-type :global(svg) { width: 18px; height: 18px; }
+    .chip-action :global(svg) { width: 14px; height: 14px; }
 
     @media (hover: hover) {
-        .channel-row:hover .channel-chip,
-        .channel-row-main:focus-visible .channel-chip {
-            border-color: var(--accent);
-            background: var(--accent);
-            color: var(--color-on-accent);
-        }
-
-        .channel-row.is-locked:hover .channel-chip,
-        .channel-row.is-locked .channel-row-main:focus-visible .channel-chip {
-            border-color: var(--border);
-            background: var(--color-surface-3);
-            color: var(--color-text);
-        }
-
-        .channel-row:hover .chip-type,
-        .channel-row-main:focus-visible .chip-type {
+        .channel-view:not(.is-mobile) .channel-row:not(.is-locked):hover .chip-type,
+        .channel-row:not(.is-locked) .channel-row-main:focus-visible .chip-type {
             opacity: 0;
             transform: scale(0.8);
         }
 
-        .channel-row:hover .chip-action,
-        .channel-row-main:focus-visible .chip-action {
+        .channel-view:not(.is-mobile) .channel-row:not(.is-locked):hover .chip-action,
+        .channel-row:not(.is-locked) .channel-row-main:focus-visible .chip-action {
             opacity: 1;
             transform: none;
         }
     }
 
-    .channel-row-text {
-        flex: 1 1 auto;
+    .channel-row-title {
+        flex: 0 1 auto;
         min-width: 0;
-        display: flex;
-        flex-direction: column;
-        gap: 2px;
-    }
-
-    .channel-row-title,
-    .channel-row-meta {
         overflow: hidden;
+        color: var(--color-text);
+        font-size: var(--type-base);
+        font-weight: var(--weight-medium);
         text-overflow: ellipsis;
         white-space: nowrap;
     }
 
-    .channel-row-title {
-        color: var(--color-text);
-        font-size: 0.9rem;
-        font-weight: var(--weight-semibold);
-        line-height: 1.35;
+    .channel-row-length,
+    .channel-row-topic {
+        flex: 0 0 auto;
+        color: var(--color-text-muted);
+        font-size: var(--type-sm);
+        font-variant-numeric: tabular-nums;
+        white-space: nowrap;
     }
 
-    .channel-row-meta {
-        color: var(--text-muted);
-        font-size: 0.8rem;
-        font-weight: var(--weight-medium);
-        font-variant-numeric: tabular-nums;
-        line-height: 1.35;
+    .channel-row-lock,
+    .channel-row-badge { flex: 0 0 auto; }
+
+    .channel-row-lock {
+        display: inline-flex;
+        color: var(--color-text-muted);
     }
 
     .channel-row-badge {
-        flex: 0 0 auto;
-        height: 20px;
+        height: 18px;
         display: inline-grid;
         place-items: center;
-        padding: 0 8px;
-        border-radius: var(--radius-pill);
+        padding: 0 6px;
+        border-radius: var(--radius-xs);
         background: var(--overlay-neutral-2);
-        color: var(--text-muted);
+        color: var(--color-text-muted);
         font-size: var(--type-xs);
-        font-weight: var(--weight-semibold);
+        font-weight: var(--weight-medium);
     }
 
+    .channel-row-date,
+    .channel-row-size {
+        min-width: 0;
+        overflow: hidden;
+        color: var(--color-text-muted);
+        font-size: var(--type-sm);
+        font-variant-numeric: tabular-nums;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .channel-row-size { text-align: right; }
+
     .channel-row-telegram {
-        flex: 0 0 auto;
+        position: absolute;
+        right: 12px;
         display: grid;
         width: 28px;
         height: 28px;
-        margin-right: 14px;
         place-items: center;
         border: 0;
         border-radius: var(--radius-sm);
         background: transparent;
-        color: var(--text-muted);
+        color: var(--color-text-muted);
         cursor: pointer;
         transition:
             opacity var(--motion-fast) var(--ease-standard),
@@ -1020,9 +1109,8 @@
             color var(--motion-fast) var(--ease-standard);
     }
 
-    .channel-row-telegram:hover {
-        background: var(--color-surface-3);
-        color: var(--color-text);
+    @media (hover: hover) {
+        .channel-row-telegram:hover { background: var(--overlay-neutral-2); color: var(--color-text); }
     }
 
     .channel-row-telegram:focus-visible { outline: none; box-shadow: var(--focus-ring); }
@@ -1034,25 +1122,25 @@
         .channel-row:focus-within .channel-row-telegram { opacity: 1; }
     }
 
+    /* Placeholder rows hold the table's row height and icon column. */
     .channel-skeleton {
         display: flex;
         flex-direction: column;
-        gap: 2px;
     }
 
     .channel-skeleton-row {
         display: flex;
         align-items: center;
-        gap: 12px;
-        min-height: 60px;
-        padding: 10px 14px;
+        gap: 10px;
+        min-height: 40px;
+        padding: 0 12px;
     }
 
     .channel-skeleton-row .file-state-skeleton-icon {
         flex: 0 0 auto;
-        width: 40px;
-        height: 40px;
-        border-radius: var(--radius-sm);
+        width: 20px;
+        height: 20px;
+        border-radius: var(--radius-xs);
     }
 
     .channel-skeleton-text {
@@ -1060,8 +1148,9 @@
         min-width: 0;
         display: flex;
         flex-direction: column;
-        gap: 9px;
     }
+
+    .channel-skeleton-text .file-state-skeleton-bar + .file-state-skeleton-bar { display: none; }
 
     .channel-list-note {
         display: flex;
@@ -1103,7 +1192,8 @@
     .channel-topbar.is-scrolled { border-bottom-color: var(--color-border-soft); }
     .channel-topbar .topbar-folder-meta { display: block; }
 
-    .channel-topbar-kinds { padding: 0 var(--space-4) var(--space-3); }
+    /* More file types fit without squeezing labels or shrinking touch targets. */
+    .channel-topbar-kinds { overflow-x: auto; padding: 0 var(--space-4) var(--space-3); }
     .channel-topbar-kinds .channel-kinds { display: flex; }
     .channel-topbar-kinds .channel-kinds button {
         flex: 1 0 auto;
@@ -1120,29 +1210,33 @@
         -webkit-overflow-scrolling: touch;
     }
 
-    /* Landscape puts the notch or the navigation bar on a side, so the rows
-       stand off it like the rest of the shell rather than running under it. */
+    /* A full-bleed list on the canvas, like the phone's file list: rows are
+       parted by hairlines from the text column, not gathered into a card.
+       Landscape still keeps them off the notch or the navigation bar. */
     .is-mobile .channel-rows {
         gap: 0;
-        margin: 0 calc(var(--space-3) + var(--inset-right)) 0 calc(var(--space-3) + var(--inset-left));
+        margin: 0;
+        padding: 0 var(--inset-right) 0 var(--inset-left);
     }
 
     .is-mobile .channel-row {
         border-radius: 0;
-        background: var(--color-surface-0);
-        transition: background-color 80ms var(--ease-standard);
+        background: var(--color-canvas);
+        transition: background-color var(--motion-fast) var(--ease-standard);
     }
 
-    .is-mobile .channel-row:first-child { border-radius: var(--radius-xl) var(--radius-xl) 0 0; }
-    .is-mobile .channel-row:last-child { border-bottom-left-radius: var(--radius-xl); border-bottom-right-radius: var(--radius-xl); }
-    .is-mobile .channel-row:only-child { border-radius: var(--radius-xl); }
-    .is-mobile .channel-row:active { background: var(--color-surface-2); }
-    .is-mobile .channel-row.is-selected { background: color-mix(in srgb, var(--color-accent) 14%, var(--color-surface-0)); }
+    .is-mobile .channel-row:active { background: var(--color-surface-1); }
+    .is-mobile .channel-row.is-selected { background: color-mix(in srgb, var(--color-accent) 14%, var(--color-canvas)); }
+
+    @media (hover: hover) {
+        .is-mobile .channel-row:hover:not(.is-selected) { background: var(--color-surface-0); }
+    }
 
     .is-mobile .channel-row + .channel-row::before {
         position: absolute;
         top: 0;
-        left: 68px;
+        /* Starts at the text column: 16px padding + 28px icon + 12px gap. */
+        left: calc(56px + var(--inset-left));
         right: 0;
         height: 1px;
         background: var(--color-border-soft);
@@ -1150,22 +1244,45 @@
     }
 
     .is-mobile .channel-row-main {
-        min-height: 68px;
-        padding: 10px 14px 10px 12px;
+        display: flex;
+        gap: 12px;
+        min-height: 60px;
+        padding: 8px 2px 8px 16px;
         -webkit-tap-highlight-color: transparent;
         -webkit-touch-callout: none;
         touch-action: manipulation;
         user-select: none;
     }
 
+    .is-mobile .channel-row-main:focus-visible { box-shadow: inset var(--focus-ring); }
+
     .is-mobile .channel-chip {
-        width: 44px;
-        height: 44px;
-        border-color: transparent;
-        border-radius: var(--radius-lg);
-        background: var(--color-surface-2);
+        width: 28px;
+        height: 28px;
+        margin: 0;
+        border-radius: var(--radius-sm);
         color: var(--color-text-muted);
     }
+
+    .is-mobile .chip-type :global(svg) { width: 22px; height: 22px; }
+
+    .is-mobile .channel-row-text {
+        flex: 1 1 auto;
+        min-width: 0;
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
+
+    .is-mobile .channel-row-meta {
+        overflow: hidden;
+        color: var(--color-text-muted);
+        font-variant-numeric: tabular-nums;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
+
+    .is-mobile .channel-row-badge { margin-right: var(--space-1); }
 
     .is-mobile .channel-row-title { font-size: var(--mobile-type-body); }
     .is-mobile .channel-row-meta { font-size: var(--mobile-type-meta); }
@@ -1191,9 +1308,11 @@
     .is-mobile .channel-row-actions:active { background: var(--color-surface-2); color: var(--color-text); }
     .is-mobile .channel-row-actions:focus-visible { outline: none; box-shadow: var(--focus-ring); }
 
-    .is-mobile .channel-skeleton {
-        margin: 0 calc(var(--space-3) + var(--inset-right)) 0 calc(var(--space-3) + var(--inset-left));
-    }
+    .is-mobile .channel-skeleton { padding: 0 var(--inset-right) 0 var(--inset-left); }
+    .is-mobile .channel-skeleton-row { gap: 12px; min-height: 60px; padding: 8px 16px; }
+    .is-mobile .channel-skeleton-row .file-state-skeleton-icon { width: 28px; height: 28px; border-radius: var(--radius-sm); }
+    .is-mobile .channel-skeleton-text { gap: 8px; }
+    .is-mobile .channel-skeleton-text .file-state-skeleton-bar + .file-state-skeleton-bar { display: block; }
     .is-mobile .channel-list-note { font-size: var(--mobile-type-meta); flex-wrap: wrap; }
     /* Retry / Try again / Load older posts are the one way on from a stuck list,
        so on a phone each is a 44px target instead of a zero-padding text link. */

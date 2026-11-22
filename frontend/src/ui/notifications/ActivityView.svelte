@@ -1,6 +1,7 @@
 <script lang="ts">
-    import { onDestroy } from 'svelte';
+    import { onDestroy, tick } from 'svelte';
     import { readable } from 'svelte/store';
+    import { MediaQuery } from 'svelte/reactivity';
     import { isMobilePlatform } from '../../api';
     import XIcon from '@lucide/svelte/icons/x';
     import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
@@ -27,6 +28,15 @@
     import { activityView, closeActivity, type ActivityTab } from './activity-store';
     import { ACTIVITY_FILTERS, activityEntries, activityTimestamp, isBatchPaused, matchesActivity, type ActivityEntry, type ActivityFilter } from './activity-model';
     import { formatAge, transferPercent } from './transfer-view';
+
+    // Desktop docks Activity beside the content as a panel you can work next
+    // to; a phone gives it the whole screen as a sheet.
+    const docked = !isMobilePlatform();
+    const narrow = new MediaQuery('max-width: 700px');
+    // List and details share one column in the panel and on a phone; a
+    // tablet's full-screen sheet still has room for both side by side.
+    const stacked = $derived(docked || narrow.current);
+    let panel = $state<HTMLElement | null>(null);
 
     let tab = $state<ActivityTab>('transfers');
     let filter = $state<ActivityFilter>('All');
@@ -64,6 +74,10 @@
     const uploadRunning = $derived($uploadActivities.some((entry) => entry.status === 'active'));
     // Reports from a batch still listed belong to its detail page, not a second card.
     const orphanReports = $derived($failedUploadReports.filter((report) => !report.activityId || !$uploadActivities.some((entry) => entry.id === report.activityId)));
+    // Search and filters only appear once the tab has something to narrow.
+    const tabHasItems = $derived(tab === 'transfers'
+        ? entries.length > 0 || orphanReports.length > 0
+        : $historyEvents.some((entry) => entry.kind === 'event'));
     const headline = $derived.by(() => {
         const active = entries.filter((entry) => entry.status === 'Active').length;
         const waiting = entries.filter((entry) => entry.status === 'Queued').length;
@@ -94,13 +108,56 @@
 
     onDestroy(closeActivity);
     function dismiss(): void {
-        if (isMobilePlatform() && showingDetails) { showingDetails = false; return; }
+        if (!docked && showingDetails) { showingDetails = false; return; }
+        closeActivity();
+    }
+
+    // The panel sits inside the content panel, under its top bar, and the
+    // content beside it narrows to make room (see .main-content in files.css).
+    // Without that host (a test), it stays where it was mounted.
+    // Opening is a deliberate act, so focus goes in once the panel is in
+    // place (moving a focused node would drop its focus).
+    function dock(node: HTMLElement) {
+        document.querySelector('.main-content')?.append(node);
+        (node.querySelector<HTMLElement>('#activity-search') ?? node.querySelector<HTMLElement>('.close-activity'))?.focus({ preventScroll: true });
+        return { destroy: () => node.remove() };
+    }
+
+    // Closing hands focus back to whatever opened the panel, or the bell.
+    $effect(() => {
+        if (!docked || !$activityView.open) return;
+        const restore = $activityView.restoreFocus;
+        return () => {
+            if (panel?.contains(document.activeElement) || document.activeElement === document.body) {
+                document.querySelector<HTMLElement>(restore)?.focus({ preventScroll: true });
+            }
+        };
+    });
+
+    function onPanelKeydown(event: KeyboardEvent): void {
+        if (event.key !== 'Escape') return;
+        event.preventDefault();
+        event.stopPropagation();
+        if (showingDetails && count > 0) {
+            backToList();
+            return;
+        }
         closeActivity();
     }
     function selectTab(next: ActivityTab): void {
         tab = next; selectedId = null; showingDetails = false; listPage = 0;
     }
-    function select(id: string): void { selectedId = id; showingDetails = true; }
+    // In one column the details replace the list, and with it the row that
+    // held focus; focus follows to the way back, and back to the row.
+    function select(id: string): void {
+        selectedId = id;
+        showingDetails = true;
+        if (stacked) void tick().then(() => document.querySelector<HTMLElement>('.activity-back')?.focus({ preventScroll: true }));
+    }
+    function backToList(): void {
+        showingDetails = false;
+        void tick().then(() => document.querySelector<HTMLElement>('.activity-item.selected')?.focus({ preventScroll: true }));
+    }
     function selectFilter(next: ActivityFilter): void { filter = next; showingDetails = false; listPage = 0; }
     function clear(): void {
         clearHistory();
@@ -125,9 +182,7 @@
     }
 </script>
 
-<ModalShell hostId="activity-modal" open={$activityView.open} titleId="activity-title" cardClass="activity-card"
-    presentation="dialog" initialFocus={isMobilePlatform() ? '.close-activity' : '#activity-search'} restoreFocus={$activityView.restoreFocus} onClose={dismiss}>
-    {#snippet header()}
+{#snippet heading()}
         <div class="activity-header">
             <div class="activity-heading"><h2 id="activity-title">Activity</h2><p>{headline}</p></div>
             <div class="header-actions">
@@ -141,18 +196,20 @@
                 <button type="button" class="close-activity" aria-label="Close activity" onclick={closeActivity}><XIcon size={18} aria-hidden="true" /></button>
             </div>
         </div>
-    {/snippet}
-    <div class="activity-body" class:showing-details={showingDetails && count > 0}>
+{/snippet}
+
+{#snippet content()}
+    <div class="activity-body" class:stacked class:showing-details={showingDetails && count > 0}>
         <div class="activity-toolbar">
             <div class="activity-tabs" role="tablist" tabindex="-1" aria-label="Activity type" onkeydown={tabKeydown}>
                 <button type="button" id="activity-tab-transfers" role="tab" aria-selected={tab === 'transfers'} aria-controls="activity-content" tabindex={tab === 'transfers' ? 0 : -1} onclick={() => selectTab('transfers')}>Transfers</button>
                 <button type="button" id="activity-tab-notifications" role="tab" aria-selected={tab === 'notifications'} aria-controls="activity-content" tabindex={tab === 'notifications' ? 0 : -1} onclick={() => selectTab('notifications')}>Notifications</button>
             </div>
-            <label class="activity-search"><SearchIcon size={15} aria-hidden="true" /><input id="activity-search" type="search" aria-label="Search activity" placeholder={tab === 'transfers' ? 'Search files or destination' : 'Search notifications'} bind:value={query} oninput={() => { listPage = 0; showingDetails = false; }} /></label>
+            {#if tabHasItems || query}<label class="activity-search"><SearchIcon size={15} aria-hidden="true" /><input id="activity-search" type="search" aria-label="Search activity" placeholder={tab === 'transfers' ? 'Search files or destination' : 'Search notifications'} bind:value={query} oninput={() => { listPage = 0; showingDetails = false; }} /></label>{/if}
         </div>
         <div id="activity-content" role="tabpanel" aria-labelledby={`activity-tab-${tab}`} class="activity-content" class:empty={count === 0}>
             <div class="activity-list-pane">
-                {#if tab === 'transfers'}
+                {#if tab === 'transfers' && (tabHasItems || filter !== 'All')}
                     <div class="activity-filters" role="group" aria-label="Filter transfers">
                         {#each ACTIVITY_FILTERS as option (option)}<button type="button" aria-pressed={filter === option} onclick={() => selectFilter(option)}>{option}</button>{/each}
                     </div>
@@ -161,7 +218,7 @@
                     {/if}
                 {/if}
                 {#if count === 0}
-                    <div class="activity-empty"><BellIcon size={28} aria-hidden="true" /><h3>{query || filter !== 'All' ? 'No matching activity' : tab === 'transfers' ? 'No transfers yet' : 'All caught up'}</h3><p>{query || filter !== 'All' ? 'Try another search or filter.' : tab === 'transfers' ? 'Uploads and downloads will appear here.' : 'Your notifications will appear here.'}</p></div>
+                    <div class="activity-empty"><h3>{query || filter !== 'All' ? 'No matching activity' : tab === 'transfers' ? 'No transfers yet' : 'All caught up'}</h3><p>{query || filter !== 'All' ? 'Try another search or filter.' : tab === 'transfers' ? 'Uploads and downloads will appear here.' : 'Your notifications will appear here.'}</p></div>
                 {:else}
                     <ul class="activity-list" aria-label={tab === 'transfers' ? 'Transfers' : 'Notifications'}>
                         {#if tab === 'transfers'}
@@ -193,7 +250,7 @@
             </div>
             {#if count > 0}
                 <div class="activity-detail-pane">
-                    <button type="button" class="activity-back" onclick={() => showingDetails = false}><ArrowLeftIcon size={16} aria-hidden="true" /> Activity</button>
+                    <button type="button" class="activity-back" onclick={backToList}><ArrowLeftIcon size={16} aria-hidden="true" /> Activity</button>
                     {#if tab === 'transfers' && selectedTransfer}
                         {#key selectedTransfer.id}<ActivityDetails entry={selectedTransfer} {activeDriveId} {queuedAhead} {uploadRunning} />{/key}
                     {:else if tab === 'notifications' && selectedNotice}
@@ -203,10 +260,28 @@
             {/if}
         </div>
     </div>
-</ModalShell>
+{/snippet}
+
+{#if docked}
+    {#if $activityView.open}
+        <div bind:this={panel} class="activity-panel" role="dialog" aria-modal="false" aria-labelledby="activity-title" tabindex="-1" use:dock onkeydown={onPanelKeydown}>
+            {@render heading()}
+            {@render content()}
+        </div>
+    {/if}
+{:else}
+    <ModalShell hostId="activity-modal" open={$activityView.open} titleId="activity-title" cardClass="activity-card"
+        presentation="dialog" initialFocus=".close-activity" restoreFocus={$activityView.restoreFocus} onClose={dismiss} header={heading}>
+        {@render content()}
+    </ModalShell>
+{/if}
 
 <style>
     :global(.activity-card) { max-width: 1060px; height: min(82dvh, 800px); display: flex; flex-direction: column; padding: 0; overflow: hidden; color: var(--color-text-soft); }
+    /* With nothing to show, the window is only as big as what it says. */
+    @media (min-width: 701px) {
+        :global(.activity-card:has(.activity-content.empty)) { max-width: 520px; height: auto; }
+    }
     .activity-header { display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); padding: var(--space-5) var(--space-6) var(--space-4); }
     .activity-heading { min-width: 0; }
     h2 { margin: 0; font-size: var(--type-xl); font-weight: var(--weight-strong); }
@@ -253,9 +328,9 @@
     .item-summary[data-tone='danger'] { color: var(--color-danger); }
     .item-summary.clamp { display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
     .item-bar { display: block; height: 3px; margin-top: var(--space-1); border-radius: var(--radius-pill); background: var(--overlay-neutral-2); overflow: hidden; }
-    .item-bar span { display: block; height: 100%; border-radius: inherit; background: var(--color-accent); transition: width 200ms ease-out; }
-    .activity-empty { display: grid; justify-items: center; gap: var(--space-2); padding: var(--space-8) var(--space-6); text-align: center; color: var(--color-text-muted); font-size: var(--type-sm); }
-    .activity-empty h3 { margin: var(--space-2) 0 0; color: var(--color-text-soft); font-size: var(--type-base); font-weight: var(--weight-semibold); }
+    .item-bar span { display: block; height: 100%; border-radius: inherit; background: var(--color-accent); transition: width var(--motion-med) var(--ease-standard); }
+    .activity-empty { display: grid; gap: var(--space-1); padding: var(--space-5) var(--space-6) var(--space-6); color: var(--color-text-muted); font-size: var(--type-sm); }
+    .activity-empty h3 { margin: 0; color: var(--color-text); font-size: var(--type-sm); font-weight: var(--weight-medium); }
     .activity-empty p { margin: 0; font-size: var(--type-xs); line-height: var(--leading-normal); }
     .failure-reports { padding: var(--space-2) var(--space-3) 0; }
     .notice-details { padding: var(--space-6); }
@@ -272,6 +347,7 @@
         .activity-item:not(.selected):hover, .close-activity:hover, .header-text-btn:not(:disabled):hover { background: var(--overlay-neutral-1); }
         .activity-filters button:not([aria-pressed='true']):hover { color: var(--color-text-soft); }
     }
+    /* A phone's sheet takes the whole screen. */
     @media (max-width: 700px) {
         :global(#activity-modal) { padding: 0; }
         :global(.activity-card) { height: calc(100dvh - var(--inset-top) - var(--inset-keyboard)); max-height: none; margin-top: var(--inset-top); border-radius: 0; border: 0; padding-bottom: calc(var(--inset-bottom) - var(--inset-keyboard)); }
@@ -280,20 +356,63 @@
         .clear-question { display: none; }
         .close-activity { width: var(--touch-target); height: var(--touch-target); }
         .header-text-btn { min-height: var(--touch-target); padding-inline: var(--space-3); }
-        .activity-toolbar { flex-direction: column; align-items: stretch; gap: var(--space-3); padding: 0 var(--space-4) var(--space-3); }
         .activity-tabs button { min-height: var(--touch-target); }
-        .activity-search { width: 100%; height: var(--touch-target); margin: 0; }
-        .activity-search input { font-size: 16px; }
-        .activity-filters { padding: var(--space-3) var(--space-4) var(--space-1); }
+        .activity-search { height: var(--touch-target); }
+        .activity-search input { font-size: var(--type-md); }
         .activity-filters button { min-height: 36px; padding-inline: var(--space-3); font-size: var(--type-sm); }
-        .activity-content { display: block; }
-        .activity-list-pane, .activity-detail-pane { height: 100%; }
-        .activity-list-pane { border: 0; }
-        .activity-detail-pane { display: none; }
-        .showing-details .activity-toolbar, .showing-details .activity-list-pane { display: none; }
-        .showing-details .activity-detail-pane { display: block; }
-        .activity-back { display: flex; align-items: center; gap: var(--space-2); min-height: var(--touch-target); margin: var(--space-1) var(--space-2) 0; padding: 0 var(--space-2); border: 0; background: transparent; color: var(--color-accent-text); font-size: var(--type-sm); }
-        .notice-details { padding: var(--space-4); }
         .activity-item { padding-block: var(--space-4); }
+    }
+
+    /* One column: the list, and a chosen item's details in its place with a
+       way back. The desktop panel and a phone both read this way. */
+    .stacked .activity-toolbar { flex-direction: column; align-items: stretch; gap: var(--space-3); padding: 0 var(--space-4) var(--space-3); }
+    .stacked .activity-search { width: 100%; margin: 0; }
+    .stacked .activity-filters { padding: var(--space-3) var(--space-3) var(--space-1); }
+    .stacked .activity-content { display: block; }
+    .stacked .activity-list-pane, .stacked .activity-detail-pane { height: 100%; }
+    .stacked .activity-list-pane { border: 0; }
+    .stacked .activity-detail-pane { display: none; background: var(--color-surface-0); }
+    .stacked.showing-details .activity-toolbar, .stacked.showing-details .activity-list-pane { display: none; }
+    .stacked.showing-details .activity-detail-pane { display: block; }
+    .stacked .activity-back { display: flex; align-items: center; gap: var(--space-2); min-height: var(--control-md); margin: var(--space-2) var(--space-3) 0; padding: 0 var(--space-2); border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--color-text-muted); font-size: var(--type-sm); }
+    .stacked .notice-details { padding: var(--space-4); }
+
+    /* Desktop: docked to the right of the content panel, under its top bar,
+       full height. It is a column of the window rather than a window over it,
+       so it has an edge and no shadow or scrim. */
+    .activity-panel {
+        position: absolute;
+        /* The top bar's 48px and its hairline. */
+        top: 49px;
+        right: 0;
+        bottom: 0;
+        z-index: calc(var(--z-selection) + 1);
+        width: var(--activity-panel-width, 400px);
+        display: flex;
+        flex-direction: column;
+        border-left: 1px solid var(--color-border-soft);
+        background: var(--color-surface-0);
+        color: var(--color-text-soft);
+        animation: activity-panel-in var(--motion-med) var(--ease-enter);
+    }
+
+    .activity-panel .activity-header { padding: var(--space-3) var(--space-2) var(--space-2) var(--space-4); }
+    .activity-panel h2 { font-size: var(--type-base); font-weight: var(--weight-semibold); }
+    .activity-panel .clear-question { display: none; }
+    .activity-panel .activity-toolbar { border-bottom: 0; padding-bottom: 0; gap: var(--space-2); }
+    .activity-panel .activity-tabs { gap: var(--space-4); border-bottom: 1px solid var(--color-border-soft); }
+    .activity-panel .activity-tabs button { padding: var(--space-2) 0; font-size: var(--type-sm); }
+    .activity-panel .activity-search { height: var(--toolbar-control); }
+    .activity-panel .activity-list { padding: var(--space-1) var(--space-2) var(--space-4); }
+    .activity-panel .activity-item { padding: var(--space-2-5) var(--space-2); border-radius: var(--radius-sm); }
+    .activity-panel .activity-item.selected { background: transparent; border-color: transparent; }
+    .activity-panel .activity-empty { padding: var(--space-4); }
+
+    @keyframes activity-panel-in {
+        from { opacity: 0; transform: translateX(12px); }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        .activity-panel { animation: none; }
     }
 </style>

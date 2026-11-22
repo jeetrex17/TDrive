@@ -2,22 +2,17 @@
     import type { Snippet } from 'svelte';
     import type { HTMLButtonAttributes } from 'svelte/elements';
 
-    type IconButtonTone = 'neutral' | 'accent' | 'danger';
-    type IconButtonSize = 'sm' | 'md' | 'lg';
+    type IconButtonSize = 'sm' | 'md';
 
     type IconButtonProps = Omit<HTMLButtonAttributes, 'children'> & {
         label: string;
-        tone?: IconButtonTone;
         size?: IconButtonSize;
-        pressed?: boolean;
         children?: Snippet;
     };
 
     let {
         label,
-        tone = 'neutral',
         size = 'md',
-        pressed,
         disabled = false,
         type = 'button',
         title = label,
@@ -30,15 +25,11 @@
 <button
     {...rest}
     class={`ui-icon-button ${className}`.trim()}
-    class:is-accent={tone === 'accent'}
-    class:is-danger={tone === 'danger'}
     class:is-small={size === 'sm'}
-    class:is-large={size === 'lg'}
     {type}
     {title}
     {disabled}
     aria-label={label}
-    aria-pressed={pressed === undefined ? undefined : pressed ? 'true' : 'false'}
 >
     <span class="ui-icon-button-content" aria-hidden="true">
         {@render children?.()}
@@ -85,28 +76,6 @@
         background: var(--surface-control);
     }
 
-    .is-accent {
-        color: var(--accent);
-        border-color: color-mix(in srgb, var(--accent) 34%, transparent);
-    }
-
-    .is-accent:hover:not(:disabled),
-    .is-accent[aria-pressed="true"] {
-        color: var(--accent-hover);
-        border-color: color-mix(in srgb, var(--accent) 52%, transparent);
-        background: var(--overlay-accent-1);
-    }
-
-    .is-danger {
-        color: var(--danger);
-        border-color: var(--overlay-danger-2);
-    }
-
-    .is-danger:hover:not(:disabled) {
-        background: var(--overlay-danger-1);
-        border-color: color-mix(in srgb, var(--danger) 46%, transparent);
-    }
-
     .is-small {
         width: 32px;
         height: 32px;
@@ -118,19 +87,8 @@
         height: 16px;
     }
 
-    .is-large {
-        width: 44px;
-        height: 44px;
-        border-radius: var(--radius-lg);
-    }
-
-    .is-large .ui-icon-button-content {
-        width: 20px;
-        height: 20px;
-    }
-
     .ui-icon-button:active:not(:disabled) {
-        transform: translateY(0.5px) scale(0.98);
+        transform: scale(var(--press-scale));
     }
 
     .ui-icon-button:focus-visible {
@@ -158,10 +116,6 @@
 
     :global(html.mobile) .is-small::after {
         inset: -6px;
-    }
-
-    :global(html.mobile) .is-large::after {
-        inset: 0;
     }
 
     @media (prefers-reduced-motion: reduce) {

@@ -28,7 +28,6 @@
     import { activateResumableUploads } from '../../modules/resumable-uploads';
     import { activateResumableDownloads } from '../../modules/resumable-downloads';
     import { activateUpdates } from '../../modules/updates';
-    import { confirmDelete } from '../../modules/modals/delete';
     import { confirmTrashAction } from '../../modules/trash/controller';
     import {
         cancelEncryptionPassword,
@@ -69,7 +68,6 @@
     } from '../../modules/modals/upload-options';
     import FileList from '../file-list/FileList.svelte';
     import ContextMenu from '../menus/ContextMenu.svelte';
-    import DeleteModal from '../modals/DeleteModal.svelte';
     import EncryptionPasswordModal from '../modals/EncryptionPasswordModal.svelte';
     import EncryptionSettingsModal from '../modals/EncryptionSettingsModal.svelte';
     import EncryptionSetupModal from '../modals/EncryptionSetupModal.svelte';
@@ -181,9 +179,6 @@
         <MountSelectionModal />
     </div>
 
-    <div id="delete-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
-        <DeleteModal onConfirm={confirmDelete} />
-    </div>
     <div id="rename-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
         <RenameModal onSubmit={submitRename} />
     </div>
@@ -261,7 +256,7 @@
     </div>
 
     <!-- Viewer controllers stay lazy because they load media/runtime dependencies only when used. -->
-    <div id="viewer-modal" class="modal-overlay" style="display: none;" aria-hidden="true">
+    <div id="viewer-modal" class="modal-overlay file-viewer-overlay" style="display: none;" aria-hidden="true">
         <FileViewerModal
             onClose={() => {
                 void import('../../modules/modals/file-viewer').then(({ closeFileViewer }) => closeFileViewer());

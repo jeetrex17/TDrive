@@ -1,8 +1,19 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, test, type Locator } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { RED_BASE64 } from './gallery-fixtures';
 import { bootTDrive, deferred, rejects, resolves, test as mockTest } from './wails-mock';
+
+// Desktop picks a file type from the top bar's File type menu; a phone keeps
+// the row of type buttons under its top bar.
+async function chooseFileType(page: Page, desktop: boolean, label: string): Promise<void> {
+    if (!desktop) {
+        await page.locator('.channel-view').getByRole('group', { name: 'Show', exact: true }).getByRole('button', { name: label, exact: true }).click();
+        return;
+    }
+    await page.getByRole('button', { name: /^File type / }).click();
+    await page.getByRole('menuitemradio', { name: label === 'All' ? 'All files' : label, exact: true }).click();
+}
 
 const source = { peer_kind: 'channel', peer_id: 50, channel_id: 50, title: 'Field Recordings', username: 'fieldrec', connected: true, protected: false, available: true, account_id: 7, generation: 'source-a' };
 const candidate = { ...source, peer_id: 60, channel_id: 60, title: 'Tech Talks', username: 'techtalks', connected: false, generation: '' };
@@ -155,10 +166,14 @@ test('Activity restores and checks a pending copy with the source disconnected',
     await row.click();
     await expect(activity.getByText('Waiting for Telegram receipt')).toBeVisible();
     await activity.getByRole('button', { name: 'Check copy' }).click();
-    await expect(row).toContainText('Checking copy…');
-    await expect(row).toHaveAttribute('aria-pressed', 'true');
     const checking = activity.getByRole('button', { name: 'Checking…' });
     await expect(checking).toBeDisabled();
+    // The panel shows one item's details in the list's place; back to the
+    // list, the row says the check is running and is still the chosen one.
+    await activity.getByRole('button', { name: 'Activity', exact: true }).click();
+    await expect(row).toContainText('Checking copy…');
+    await expect(row).toHaveAttribute('aria-pressed', 'true');
+    await row.click();
 
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(checking).toBeVisible();
@@ -237,7 +252,7 @@ test('desktop channels sit beside the drives and keep the app header', async ({ 
     await channel.click();
     await expect(page.getByRole('heading', { name: 'Field Recordings' })).toBeVisible();
     await expect(channel).toHaveAttribute('aria-current', 'page');
-    await expect(page.getByRole('button', { name: 'Personal', exact: true })).not.toHaveAttribute('aria-current', 'page');
+    await expect(page.getByRole('navigation', { name: 'Drives' }).getByRole('button', { name: 'Personal', exact: true })).not.toHaveAttribute('aria-current', 'page');
     // The notification bell and account menu stay; nothing can be uploaded into a channel.
     await expect(page.locator('.notif-bell')).toBeVisible();
     await expect(page.locator('.upload-menu-wrap')).toBeHidden();
@@ -257,7 +272,7 @@ test('desktop channels sit beside the drives and keep the app header', async ({ 
     await expect(dialog).toBeHidden();
     expect((await mock.calls('ConnectChannelSource')).map((call) => call.args)).toEqual([['channel', 60, '', 7]]);
 
-    await page.getByRole('button', { name: 'Personal', exact: true }).click();
+    await page.getByRole('navigation', { name: 'Drives' }).getByRole('button', { name: 'Personal', exact: true }).click();
     await expect(page.locator('#file-list')).toBeVisible();
     await expect(page.locator('.channel-view')).toHaveCount(0);
 
@@ -350,8 +365,9 @@ test('the picker distinguishes joined chat types and verifies a public link befo
     const dialog = page.getByRole('dialog', { name: 'Add a source' });
     await expect(dialog.getByRole('button', { name: 'Connect Mina' })).toBeVisible();
     await expect(dialog.getByText('Direct message', { exact: true })).toBeVisible();
-    await dialog.getByLabel('Public channel link').fill('https://t.me/publicradio');
-    await dialog.getByRole('button', { name: 'Check link' }).click();
+    await dialog.getByLabel('Search chats or paste a t.me link').fill('https://t.me/publicradio');
+    await expect(dialog.getByText("Looking up a link won't join the channel or send messages.")).toBeVisible();
+    await dialog.getByRole('button', { name: /Look up @publicradio/ }).click();
     await expect(dialog.getByRole('button', { name: /Public Radio/ })).toBeVisible();
     await dialog.getByRole('button', { name: /Public Radio/ }).click();
     expect((await mock.calls('ConnectChannelSource')).map((call) => call.args)).toEqual([['channel', 89, 'publicradio', 7]]);
@@ -375,13 +391,15 @@ test('390x844 mobile source picker has no sheet bleed', async ({ page }) => {
     await page.getByRole('button', { name: /Switch drive/ }).click();
     await page.locator('.channel-nav-title').getByRole('button', { name: 'Add a source', exact: true }).click();
     const dialog = page.getByRole('dialog', { name: 'Add a source' });
-    const link = dialog.getByLabel('Public channel link');
+    const link = dialog.getByLabel('Search chats or paste a t.me link');
     expect(await link.evaluate((input) => parseFloat(getComputedStyle(input).fontSize))).toBeGreaterThanOrEqual(16);
     await link.fill('@techtalks');
-    await dialog.getByRole('button', { name: 'Check link' }).click();
+    await link.press('Enter');
     const result = dialog.getByRole('button', { name: 'Connect Tech Talks' });
     await expect(result).toBeVisible();
-    expect((await result.boundingBox())!.height).toBeGreaterThanOrEqual(60);
+    // A 60px touch target; Linux layout can land the row a hair under on a
+    // fractional offset (59.99997), so the measurement is rounded.
+    expect(Math.round((await result.boundingBox())!.height)).toBeGreaterThanOrEqual(60);
     await page.screenshot({ path: 'test-results/source-picker-mobile-390x844.png', fullPage: true, animations: 'disabled' });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
@@ -619,12 +637,11 @@ for (const { platform, protectedContent } of ['desktop', 'ios', 'android'].flatM
             await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
         }
         const channel = page.locator('.channel-view');
-        const kinds = channel.getByRole('group', { name: 'Show', exact: true });
-        await kinds.getByRole('button', { name: 'Documents', exact: true }).click();
+        await chooseFileType(page, platform === 'desktop', 'Documents');
         expect((await mock.calls('ListChannelMedia')).slice(-1)[0]?.args[5]).toBe('document');
-        await kinds.getByRole('button', { name: 'Images', exact: true }).click();
+        await chooseFileType(page, platform === 'desktop', 'Images');
         expect((await mock.calls('ListChannelMedia')).slice(-1)[0]?.args[5]).toBe('image');
-        await kinds.getByRole('button', { name: 'All', exact: true }).click();
+        await chooseFileType(page, platform === 'desktop', 'All');
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
         const imagePost = channel.getByRole('button', { name: /^Open forest\.svg,/ });
@@ -777,7 +794,7 @@ for (const mobile of [false, true]) {
             await page.getByRole('button', { name: /Switch drive/ }).click();
             await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Supergroup Field Recordings', exact: true }).click();
         } else {
-            await page.getByRole('button', { name: 'Personal', exact: true }).click();
+            await page.getByRole('navigation', { name: 'Drives' }).getByRole('button', { name: 'Personal', exact: true }).click();
             await page.locator('.sidebar').getByRole('button', { name: 'Supergroup Field Recordings', exact: true }).click();
         }
         await expect(page.getByRole('button', { name: 'Choose topic: Movies' })).toBeVisible();
@@ -797,7 +814,7 @@ for (const mobile of [false, true]) {
         await expect.poll(async () => (await mock.calls('ListChannelMediaByTopic')).slice(-1)[0]?.args[5]).toBe('');
         if (mobile) await page.getByRole('button', { name: 'Hide search' }).click();
         await mock.setPlan('ListChannelMediaByTopic', deferred('old-movies', { ...all, topic_id: 42, items: [{ ...media, topic_id: 42, name: 'late-movie.mp4' }] }));
-        await page.getByRole('button', { name: 'Videos', exact: true }).click();
+        await chooseFileType(page, !mobile, 'Videos');
         await expect.poll(async () => (await mock.calls('ListChannelMediaByTopic')).slice(-1)[0]?.state).toBe('pending');
         await page.getByRole('button', { name: 'Choose topic: Movies' }).click();
         await picker.getByRole('button', { name: 'All topics', exact: true }).click();

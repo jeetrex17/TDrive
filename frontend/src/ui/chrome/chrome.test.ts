@@ -5,6 +5,7 @@ import Breadcrumb from './Breadcrumb.svelte';
 import ProfileMenu from './ProfileMenu.svelte';
 import UploadMenu from './UploadMenu.svelte';
 import { breadcrumbPath, type BreadcrumbDrag } from './breadcrumb-store';
+import { sidebarState } from '../sidebar/sidebar-store';
 import { encryptionEntryVisible, profileLoaded, profileUser } from './profile-store';
 
 const noop = () => {};
@@ -19,11 +20,12 @@ const drag: BreadcrumbDrag = {
 };
 
 const breadcrumbProps = { onNavigate: noop, onBack: noop, drag };
-const profileProps = { onOpen: noop, onEncryptionSettings: noop, onLogout: noop };
+const profileProps = { onOpen: noop, onLogout: noop };
 const uploadProps = { onFiles: noop, onFolder: noop };
 
 afterEach(() => {
     breadcrumbPath.set([]);
+    sidebarState.set({ personal: [], shared: [], pending: [], activeChannelId: null, virtualView: null });
     profileUser.set(null);
     profileLoaded.set(false);
     encryptionEntryVisible.set(false);
@@ -35,7 +37,23 @@ describe('Breadcrumb', () => {
 
         expect(body).toContain('My Drive');
         expect(body).not.toContain('breadcrumb-sep');
-        expect(body).toContain('opacity: 0.35'); // back button dimmed
+        expect(body).toContain('is-hidden'); // back button held in place, invisible
+        expect(body).toContain('aria-current="location"');
+    });
+
+    it('names the root after the active shared drive', () => {
+        sidebarState.set({
+            personal: [{ id: 1, title: 'My Drive', kind: 'personal' }],
+            shared: [{ id: 2, title: 'Team assets', kind: 'shared' }],
+            pending: [],
+            activeChannelId: 2,
+            virtualView: null,
+        } as never);
+
+        const { body } = render(Breadcrumb, { props: breadcrumbProps });
+
+        expect(body).toContain('Team assets');
+        expect(body).not.toContain('My Drive');
     });
 
     it('renders crumbs with separators and an enabled back button', () => {
@@ -49,7 +67,9 @@ describe('Breadcrumb', () => {
         expect(body).toContain('Docs');
         expect(body).toContain('Taxes &amp; &lt;stuff>');
         expect((body.match(/breadcrumb-sep/g) || [])).toHaveLength(2);
-        expect(body).toContain('opacity: 1');
+        expect(body).not.toContain('is-hidden');
+        expect(body).toContain('aria-label="Folder path"');
+        expect((body.match(/aria-current="location"/g) || [])).toHaveLength(1);
         expect(body).toContain('data-index="1"');
     });
 });
@@ -78,27 +98,29 @@ describe('ProfileMenu', () => {
         expect(body).toContain('Log out');
     });
 
-    it('renders name, handle, and the encryption entry when enabled', () => {
+    it('renders the name and handle above the Settings entry', () => {
         profileUser.set({ displayName: 'Ada L.', username: 'ada', userId: 7 });
         profileLoaded.set(true);
-        encryptionEntryVisible.set(true);
 
         const { body } = render(ProfileMenu, { props: profileProps });
 
         expect(body).toContain('Ada L.');
         expect(body).toContain('@ada');
-        expect(body).toContain('Encryption settings');
+        expect(body).toContain('id="profile-menu-settings"');
     });
 
-    it('does not render mount controls below encryption settings', () => {
+    it('keeps only Settings, updates and log out, in that order', () => {
         encryptionEntryVisible.set(true);
 
         const { body } = render(ProfileMenu, { props: profileProps });
-        const encryptionIndex = body.indexOf('id="profile-menu-encryption-settings"');
-        const logoutIndex = body.indexOf('id="profile-menu-logout"');
+        const order = ['profile-menu-settings', 'profile-menu-updates', 'profile-menu-logout']
+            .map((id) => body.indexOf(`id="${id}"`));
 
-        expect(encryptionIndex).toBeGreaterThanOrEqual(0);
-        expect(logoutIndex).toBeGreaterThan(encryptionIndex);
+        expect(order.every((index) => index >= 0)).toBe(true);
+        expect([...order].sort((a, b) => a - b)).toEqual(order);
+        for (const moved of ['appearance', 'photo-backup', 'encrypt-uploads', 'encryption-settings']) {
+            expect(body).not.toContain(`id="profile-menu-${moved}"`);
+        }
         expect(body).not.toContain('id="mount-drive-button"');
     });
 
@@ -106,7 +128,7 @@ describe('ProfileMenu', () => {
         const { body } = render(ProfileMenu, { props: { ...profileProps, updaterAvailable: false } });
 
         expect(body).not.toContain('id="profile-menu-updates"');
-        expect(body).toContain('id="profile-menu-appearance"');
+        expect(body).toContain('id="profile-menu-settings"');
         expect(body).toContain('id="profile-menu-logout"');
     });
 });

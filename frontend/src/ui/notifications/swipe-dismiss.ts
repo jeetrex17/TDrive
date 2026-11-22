@@ -1,8 +1,8 @@
 /**
- * Putting a top-edge surface away with a thumb.
+ * Putting an edge surface away with a thumb.
  *
- * A toast arrives from the top of the screen, so an upward gesture pushes it
- * back toward that edge. The maths lives in ui/modals/sheet-gesture and
+ * A toast is pushed back toward the edge it arrived from: up for a toast at
+ * the top of the window, down for one docked above a phone's tab bar. The maths lives in ui/modals/sheet-gesture and
  * is imported rather than restated: a second set of constants would drift from
  * the first the moment either was tuned, and then two surfaces would answer the
  * same thumb differently.
@@ -38,6 +38,8 @@ export interface SwipeDismissOptions {
     revision?: number;
     /** Called once the surface has left, by tap or by flick. */
     onDismiss: () => void;
+    /** The edge the surface lives on and leaves toward. Defaults to the top. */
+    edge?: 'top' | 'bottom';
 }
 
 /**
@@ -63,10 +65,13 @@ export function swipeDismiss(node: HTMLElement, options: SwipeDismissOptions) {
     }
 
     /** Follows the finger, fading as it goes so the travel reads as departure. */
+    /** -1 moves toward the top edge, +1 toward the bottom one. */
+    const direction = (): number => (current.edge === 'bottom' ? 1 : -1);
+
     function paint(): void {
         const height = node.offsetHeight || 1;
         const progress = Math.min(1, Math.max(0, offset / height));
-        node.style.transform = `translateY(${-offset}px)`;
+        node.style.transform = `translateY(${direction() * offset}px)`;
         node.style.opacity = String(1 - progress * FADE_DEPTH);
     }
 
@@ -88,7 +93,7 @@ export function swipeDismiss(node: HTMLElement, options: SwipeDismissOptions) {
     }
 
     /**
-     * Carries the surface off the top edge and hands over once it is gone.
+     * Carries the surface off its edge and hands over once it is gone.
      * Under Reduce Motion it simply goes, which is what "reduce" asks for.
      */
     function leave(): void {
@@ -100,7 +105,7 @@ export function swipeDismiss(node: HTMLElement, options: SwipeDismissOptions) {
         }
         const remaining = (node.offsetHeight || 0) + 24 - offset;
         node.style.transition = `transform ${DISMISS_EXIT_MS}ms var(--ease-standard), opacity ${DISMISS_EXIT_MS}ms linear`;
-        node.style.transform = `translateY(${-offset - Math.max(0, remaining)}px)`;
+        node.style.transform = `translateY(${direction() * (offset + Math.max(0, remaining))}px)`;
         node.style.opacity = '0';
         motionTimer = window.setTimeout(() => {
             motionTimer = null;
@@ -126,8 +131,9 @@ export function swipeDismiss(node: HTMLElement, options: SwipeDismissOptions) {
 
     function onPointerMove(event: PointerEvent): void {
         if (!dragging) return;
-        // Follows the finger up; resists downward, toward the content.
-        offset = sheetOffset(startY - event.clientY, node.offsetHeight || 0);
+        // Follows the finger toward the edge; resists the other way, toward
+        // the content.
+        offset = sheetOffset(direction() * (event.clientY - startY), node.offsetHeight || 0);
         drag.track(event);
         paint();
     }
@@ -136,7 +142,7 @@ export function swipeDismiss(node: HTMLElement, options: SwipeDismissOptions) {
         if (!dragging) return;
         dragging = false;
         const travelled = Math.abs(event.clientY - startY);
-        const velocity = -drag.velocity();
+        const velocity = direction() * drag.velocity();
         drag.reset();
 
         // A press that never moved is a tap, and a notice that has been read is

@@ -13,7 +13,7 @@ vi.mock('./selection', () => ({
     ensureRowSelectedForContextMenu: vi.fn(),
     getSelectionPayload: vi.fn(() => []),
 }));
-vi.mock('./modals/delete', () => ({ openDeleteModal: vi.fn() }));
+vi.mock('./modals/delete', () => ({ moveToTrash: vi.fn() }));
 vi.mock('./modals/rename', () => ({ openRenameModal: vi.fn() }));
 vi.mock('./modals/move', () => ({ openMoveModal: vi.fn() }));
 vi.mock('./navigation', () => ({ navigateToFolder: vi.fn() }));
@@ -60,13 +60,13 @@ describe('folder context menu download', () => {
 
     it('keeps the folder drive on a delayed Delete menu action', async () => {
         const { buildFolderContextMenuItems } = await import('./context-menu');
-        const { openDeleteModal } = await import('./modals/delete');
+        const { moveToTrash } = await import('./modals/delete');
         const deletion = buildFolderContextMenuItems('d:screenshots', 'Screenshots', {}, 5)
             .find((item): item is Extract<ContextMenuItem, { label: string }> =>
                 item.type !== 'divider' && item.label === 'Delete');
 
         deletion?.action();
-        expect(openDeleteModal).toHaveBeenCalledWith(expect.objectContaining({
+        expect(moveToTrash).toHaveBeenCalledWith(expect.objectContaining({
             type: 'folder', id: 'd:screenshots', channelId: 5,
         }));
     });

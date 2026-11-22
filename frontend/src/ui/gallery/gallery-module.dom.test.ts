@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { get } from 'svelte/store';
 import type { MediaTimeline } from '../../api/gallery';
 
-const mocks = vi.hoisted(() => ({ timeline: vi.fn(), folderTimeline: vi.fn(), page: vi.fn(), folderPage: vi.fn(), folders: vi.fn(), locate: vi.fn(), preview: vi.fn(), mobile: false }));
+const mocks = vi.hoisted(() => ({ timeline: vi.fn(), folderTimeline: vi.fn(), page: vi.fn(), folderPage: vi.fn(), folders: vi.fn(), locate: vi.fn(), preview: vi.fn(), closePreview: vi.fn(), video: vi.fn(), menu: vi.fn(), mobile: false }));
 vi.mock('../../api', () => ({ isMobilePlatform: () => mocks.mobile }));
 vi.mock('../../api/gallery', () => ({ getMediaTimelineSummary: mocks.timeline, getMediaTimelineAnchors: mocks.timeline, getMediaFolderTimeline: mocks.folderTimeline, listMediaPage: mocks.page, listMediaFolderPage: mocks.folderPage, listMediaFolders: mocks.folders, locateMedia: mocks.locate }));
 vi.mock('../../modules/search', () => ({ clearSearch: vi.fn() }));
@@ -11,10 +11,16 @@ vi.mock('../../modules/file-list', () => ({ canOwnerActOnFile: () => true }));
 vi.mock('../../modules/selection', () => ({
   startSelectionMode: vi.fn(),
   updateSelectionBar: vi.fn(),
+  clearSelection: () => { state.selectedItems.clear(); },
+  openSelectedItemsDownload: vi.fn(),
+  openSelectedItemsMove: vi.fn(),
+  trashSelectedItems: vi.fn(),
 }));
+vi.mock('../menus/context-menu-store', () => ({ showContextMenu: mocks.menu }));
 vi.mock('../file-list/touch', () => ({ bindLongPress: () => () => {}, bindPullToRefresh: () => () => {} }));
 vi.mock('./gallery-controller', () => ({ beginRender: vi.fn(), cachedThumb: () => '', rearmLocked: vi.fn(), setActive: vi.fn(), setRoot: vi.fn(), teardown: vi.fn() }));
-vi.mock('../../modules/modals/preview', () => ({ activatePreviewModal: vi.fn(), openPreviewSource: mocks.preview }));
+vi.mock('../../modules/modals/preview', () => ({ activatePreviewModal: vi.fn(), closePreviewModal: mocks.closePreview, openPreviewSource: mocks.preview }));
+vi.mock('../../modules/modals/video', () => ({ openVideoModal: mocks.video }));
 import { state } from '../../state';
 import { activateGallery, enterPhotos, exitPhotos, renderGallery, setPhotosMode, teardownGallery, toggleGallerySelection } from '../../modules/gallery';
 import { albumsView, galleryView, photosMode } from './gallery-store';
@@ -34,7 +40,7 @@ beforeEach(() => {
     state.selectedItems = new Map();
     mocks.timeline.mockReset().mockImplementation(async () => timeline());
     mocks.page.mockReset().mockImplementation(async (cursor: string) => ({ generation, startIndex: Number(cursor), nextCursor: '', items: Array.from({ length: Math.min(128, 1000 - Number(cursor)) }, (_, offset) => ({ msgId: Number(cursor) + offset + 1, name: 'photo.jpg', size: 12, parentId: '', uploadTime: 1, uploaderId: 1, encrypted: false, plaintextSize: 0, revision: 1, contentMsgId: 1, contentHash: '' })) }));
-    mocks.preview.mockReset(); mocks.locate.mockReset();
+    mocks.preview.mockReset(); mocks.locate.mockReset(); mocks.closePreview.mockReset(); mocks.video.mockReset(); mocks.menu.mockReset();
     mocks.folders.mockReset().mockResolvedValue([]);
     mocks.folderTimeline.mockReset(); mocks.folderPage.mockReset();
     photosMode.set({ kind: 'timeline' });
@@ -225,5 +231,87 @@ describe('gallery orchestration', () => {
         teardownGallery();
         expect(await source.getNeighbor(first, 1)).toBeNull();
         expect(source.getPosition(first)).toBeNull();
+    });
+
+    it('hands a video neighbor to the player instead of skipping past it', async () => {
+        const photos = mocks.page.getMockImplementation()!;
+        mocks.page.mockImplementation(async (...args: unknown[]) => {
+            const page = await photos(...args);
+            return { ...page, items: page.items.map((item: { msgId: number }) => item.msgId === 2 ? { ...item, name: 'clip.mp4' } : item) };
+        });
+        await renderGallery();
+        const button = document.createElement('button'); button.className = 'gallery-cell'; button.dataset.id = '1'; button.dataset.index = '0'; host.append(button);
+        button.click();
+        await vi.waitFor(() => expect(mocks.preview).toHaveBeenCalledOnce());
+        const [source, first] = mocks.preview.mock.calls[0];
+
+        expect(await source.getNeighbor(first, 1)).toBeNull();
+        expect(mocks.closePreview).toHaveBeenCalledOnce();
+        await vi.waitFor(() => expect(mocks.video).toHaveBeenCalledWith(
+            expect.objectContaining({ id: 2, name: 'clip.mp4' }), undefined, expect.objectContaining({ channelId: 1 }),
+        ));
+    });
+
+    it('offers loaded photo neighbours for warming, never a video', async () => {
+        const photos = mocks.page.getMockImplementation()!;
+        mocks.page.mockImplementation(async (...args: unknown[]) => {
+            const page = await photos(...args);
+            return { ...page, items: page.items.map((item: { msgId: number }) => item.msgId === 3 ? { ...item, name: 'clip.mp4' } : item) };
+        });
+        await renderGallery();
+        const button = document.createElement('button'); button.className = 'gallery-cell'; button.dataset.id = '2'; button.dataset.index = '1'; host.append(button);
+        button.click();
+        await vi.waitFor(() => expect(mocks.preview).toHaveBeenCalledOnce());
+        const [source, second] = mocks.preview.mock.calls[0];
+
+        expect(source.peekNeighbor(second, -1)?.id).toBe(1);
+        expect(source.peekNeighbor(second, 1)).toBeNull();
+        expect(mocks.closePreview).not.toHaveBeenCalled();
+    });
+
+    describe('desktop selection', () => {
+        function cell(index: number): HTMLButtonElement {
+            const button = document.createElement('button');
+            button.className = 'gallery-cell'; button.dataset.id = String(index + 1); button.dataset.index = String(index);
+            host.append(button);
+            return button;
+        }
+
+        it('selects with Cmd-click and extends with Shift-click instead of opening', async () => {
+            await renderGallery();
+            state.selectedItems.clear();
+            cell(1).dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true }));
+            cell(4).dispatchEvent(new MouseEvent('click', { bubbles: true, shiftKey: true }));
+
+            expect([...state.selectedItems.keys()]).toEqual(['file:2', 'file:3', 'file:4', 'file:5']);
+            expect(mocks.preview).not.toHaveBeenCalled();
+            state.selectedItems.clear();
+        });
+
+        it('offers bulk actions on a right-click inside the selection', async () => {
+            await renderGallery();
+            state.selectedItems.clear();
+            cell(0).dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+            cell(1).dispatchEvent(new MouseEvent('click', { bubbles: true, ctrlKey: true }));
+            const event = new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 40, clientY: 50 });
+            cell(1).dispatchEvent(event);
+
+            expect(event.defaultPrevented).toBe(true);
+            const [, , items] = mocks.menu.mock.calls[0];
+            expect(items.filter((item: { label?: string }) => item.label).map((item: { label: string }) => item.label))
+                .toEqual(['Download 2 items', 'Move 2 items…', 'Delete 2 items']);
+            state.selectedItems.clear();
+        });
+
+        it('takes an unselected photo in alone before showing its menu', async () => {
+            await renderGallery();
+            state.selectedItems.clear();
+            cell(0).dispatchEvent(new MouseEvent('click', { bubbles: true, metaKey: true }));
+            cell(3).dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+
+            expect([...state.selectedItems.keys()]).toEqual(['file:4']);
+            expect(mocks.menu.mock.calls[0][2][0].label).toBe('Open');
+            state.selectedItems.clear();
+        });
     });
 });

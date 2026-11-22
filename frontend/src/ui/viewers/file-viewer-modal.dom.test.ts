@@ -119,7 +119,7 @@ describe('FileViewerModal text behavior', () => {
 
         const buttons = host.querySelectorAll<HTMLButtonElement>('.text-viewer-toggle button');
         expect(buttons).toHaveLength(2);
-        expect(host.querySelector('.file-viewer-actions .text-viewer-toggle')).not.toBeNull();
+        expect(host.querySelector('.file-viewer-topbar .viewer-actions .text-viewer-toggle')).not.toBeNull();
         expect(host.querySelector('.text-viewer-footer .text-viewer-toggle')).toBeNull();
         expect(host.querySelector('.text-viewer-footer')?.textContent ?? '').not.toContain('100%');
         expect(host.querySelector('.text-viewer-footer')?.textContent ?? '').not.toContain('Preview ready');

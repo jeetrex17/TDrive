@@ -128,12 +128,12 @@
         {@const expanded = isExpanded(group.id)}
         <section class="channel-nav-group">
             <button class="channel-nav-group-toggle" type="button" data-channel-group-id={group.id} aria-expanded={expanded} onclick={() => toggleGroup(group.id)}>
-                {#if expanded}
-                    <ChevronDownIcon size={13} aria-hidden="true" />
-                {:else}
-                    <ChevronRightIcon size={13} aria-hidden="true" />
-                {/if}
                 <span class="drive-item-title">{group.name}</span>
+                {#if expanded}
+                    <ChevronDownIcon size={12} strokeWidth={2.25} aria-hidden="true" />
+                {:else}
+                    <ChevronRightIcon size={12} strokeWidth={2.25} aria-hidden="true" />
+                {/if}
             </button>
             {#if expanded}
                 <div class="channel-nav-group-members">
@@ -173,10 +173,10 @@
         align-items: center;
         justify-content: space-between;
         gap: var(--space-2);
-        padding: 0 6px 6px 12px;
-        color: var(--text-muted);
+        padding: 0 4px 4px 8px;
+        color: var(--color-text-subtle);
         font-size: var(--type-xs);
-        font-weight: var(--weight-semibold);
+        font-weight: var(--weight-medium);
     }
 
     .channel-nav-tools { display: flex; align-items: center; }
@@ -243,36 +243,53 @@
 
     .channel-nav-group { min-width: 0; }
 
+    /* A group is a plain heading in the sidebar's own label style that folds
+       its sources away; its rows line up with every other row. */
     .channel-nav-group-toggle {
         display: flex;
         align-items: center;
-        gap: var(--space-2);
+        gap: 4px;
         width: 100%;
         min-width: 0;
-        padding: 6px 10px;
+        min-height: 28px;
+        margin-top: var(--space-1);
+        padding: 0 8px;
         border: 0;
         border-radius: var(--radius-sm);
         background: transparent;
-        color: var(--text-muted);
+        color: var(--color-text-subtle);
+        font: inherit;
         font-size: var(--type-xs);
-        font-weight: var(--weight-semibold);
+        font-weight: var(--weight-medium);
         text-align: left;
         cursor: pointer;
+        transition: color var(--motion-fast) var(--ease-standard);
     }
 
-    .channel-nav-group-toggle:hover { color: var(--text-main); background: var(--bg-panel); }
+    .channel-nav-group-toggle .drive-item-title { flex: 0 1 auto; }
+    .channel-nav-group-toggle :global(svg) { flex: 0 0 auto; opacity: 0.7; }
+
+    @media (hover: hover) {
+        .channel-nav-group-toggle:hover { color: var(--color-text); }
+    }
+
     .channel-nav-group-toggle:focus-visible { outline: none; box-shadow: var(--focus-ring); }
-    .channel-nav-group-members { padding-inline-start: var(--space-2); }
+
+    .channel-nav-group-members {
+        display: flex;
+        flex-direction: column;
+        gap: 2px;
+    }
 
     .channel-nav-group-empty,
     .channel-nav-ungrouped {
         margin: 0;
-        padding: 6px 12px;
-        color: var(--text-muted);
+        padding: 6px 8px;
+        color: var(--color-text-subtle);
         font-size: var(--type-xs);
     }
 
-    .channel-nav-ungrouped { font-weight: var(--weight-semibold); }
+    .channel-nav-ungrouped { margin-top: var(--space-1); font-weight: var(--weight-medium); }
 
     .channel-nav-error {
         display: flex;

@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { render } from 'svelte/server';
+import { welcomeSeen } from './welcome-store';
 import AuthScreens from './AuthScreens.svelte';
 import { showAuthView, showStartupView } from '../app/app-store';
 import {
@@ -25,6 +26,7 @@ afterEach(() => {
     authPhone.set('');
     authHint.set('');
     resetAuthSubmissions();
+    welcomeSeen.set(false);
 });
 
 // The platform helpers read the browser-preview override off the URL; a
@@ -40,6 +42,7 @@ describe('AuthScreens', () => {
     });
 
     it('renders setup as a labelled credential form with local-storage guidance', () => {
+        welcomeSeen.set(true);
         showAuthView('setup');
         const { body } = render(AuthScreens, { props });
 
@@ -105,13 +108,22 @@ describe('AuthScreens', () => {
         expect(body).toContain('That code was incorrect.');
     });
 
-    it('keeps the desktop card free of phone-only markup', () => {
+    it('opens a desktop first run on the welcome page', () => {
+        showAuthView('setup');
+        const { body } = render(AuthScreens, { props });
+        expect(body).toContain('auth-welcome');
+        expect(body).toContain('Your Telegram, as a drive.');
+        expect(body).not.toContain('<form');
+    });
+
+    it('keeps phone-only markup off the desktop card but links my.telegram.org', () => {
+        welcomeSeen.set(true);
         showAuthView('setup');
         const { body } = render(AuthScreens, { props });
         expect(body).not.toContain('auth-welcome');
         expect(body).not.toContain('enterkeyhint');
         expect(body).not.toContain('input-with-action');
-        expect(body).not.toContain('auth-inline-link');
+        expect(body).toContain('auth-inline-link');
         expect(body).toContain('auth-page-body');
         expect(body).toContain('auth-actions');
     });

@@ -1,24 +1,33 @@
 /* === DASHBOARD LAYOUT === */
-.dashboard-container { display: flex; height: 100vh; }
+.dashboard-container { display: flex; height: 100vh; background: var(--color-canvas); }
 .dashboard-container[hidden] { display: none; }
 
 /* A Telegram channel takes the drive's place below the header, the way Photos
    and the trash do. The drive's views stay mounted underneath because their
    controllers hold them by id. Nothing can be uploaded into a channel. */
-.main-content.channel-mode > :is(.drive-breadcrumb, .file-table-header, .file-list-box, .gallery-view),
-.main-content.channel-mode .upload-menu-wrap { display: none; }
+.main-content.channel-mode :is(.drive-breadcrumb, .file-table-header, .file-list-box, .gallery-view),
+.main-content.channel-mode :is(.upload-menu-wrap, .search-bar) { display: none; }
+.channel-header-host { display: contents; }
 
 .sidebar {
-    width: 240px; flex-shrink: 0; background: var(--bg-sidebar); border-right: 1px solid var(--color-surface-1);
-    padding: 20px; display: flex; flex-direction: column; min-height: 0;
+    /* The sidebar sits on the window canvas; the content beside it is the one
+       raised panel, so the eye lands there first. */
+    /* Inset by the same --window-inset as the panel beside it, so the gap from
+       a highlighted row to the panel equals the panel's gap to the window. The
+       top is set so the logo's centre meets the top bar's centre (8px inset +
+       1px edge + half of 48px, less half the logo's 28px). */
+    width: 232px; flex-shrink: 0; background: transparent;
+    padding: 19px var(--window-inset) var(--window-inset); display: flex; flex-direction: column; min-height: 0;
 }
 .logo {
     display: flex;
     align-items: center;
     gap: 9px;
-    margin-bottom: 40px;
-    font-size: 1.2rem;
-    font-weight: 800;
+    /* Starts on the icon column of the rows below it. */
+    padding: 0 8px;
+    margin-bottom: 24px;
+    font-size: var(--type-xl);
+    font-weight: var(--weight-strong);
     color: var(--color-text);
     letter-spacing: -0.5px;
 }
@@ -33,8 +42,8 @@
     object-fit: contain;
 }
 
-.storage-info { padding-top: 20px; border-top: 1px solid var(--border); }
-.storage-info p { font-size: var(--type-xs); color: var(--text-muted); display: flex; justify-content: space-between; gap: var(--space-2); }
+.storage-info { display: flex; align-items: center; min-height: var(--toolbar-control); padding: 0 8px; border-top: 1px solid var(--color-border-soft); }
+.storage-info p { width: 100%; font-size: var(--type-xs); color: var(--color-text-subtle); font-variant-numeric: tabular-nums; display: flex; justify-content: space-between; gap: var(--space-2); }
 #storage-used { text-align: right; min-width: 0; }
 
 .drives-nav {
@@ -48,25 +57,27 @@
     flex: 1;
     min-height: 0;
     flex-direction: column;
-    gap: 18px;
+    gap: 16px;
     overflow-y: auto;
-    padding-bottom: 18px;
+    padding-bottom: 16px;
 }
 .drives-section { display: flex; flex-direction: column; }
 .drives-section-title {
-    font-size: var(--type-xs); font-weight: var(--weight-semibold); letter-spacing: 0;
-    color: var(--text-muted); padding: 0 12px 6px;
+    font-size: var(--type-xs); font-weight: var(--weight-medium); letter-spacing: 0;
+    color: var(--color-text-subtle); padding: 0 8px 6px;
 }
 .drives-list { display: flex; flex-direction: column; gap: 2px; }
 .drive-item {
-    display: flex; align-items: center; gap: 12px; color: var(--text-muted);
-    background: transparent; border: none; cursor: pointer;
-    padding: 9px 12px; border-radius: var(--radius-md); font-size: var(--type-base); font-weight: var(--weight-medium);
+    display: flex; align-items: center; gap: 10px; color: var(--color-text-muted);
+    background: transparent; border: none; cursor: pointer; min-height: 32px;
+    padding: 6px 8px; border-radius: var(--radius-sm); font-size: var(--type-sm); font-weight: var(--weight-medium);
     transition: background-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard); text-align: left; width: 100%;
 }
-.drive-item:hover { background: var(--bg-panel); color: var(--text-main); }
-.drive-item.active { background: var(--overlay-accent-1); color: var(--accent); }
-.drive-item .icon { width: 18px; height: 18px; flex-shrink: 0; }
+@media (hover: hover) {
+    .drive-item:hover { background: var(--overlay-neutral-1); color: var(--color-text); }
+}
+.drive-item.active { background: var(--color-current-bg); color: var(--color-current-text); }
+.drive-item .icon { width: 16px; height: 16px; flex-shrink: 0; }
 .drive-item-title {
     flex: 1;
     min-width: 0;
@@ -75,15 +86,15 @@
     white-space: nowrap;
 }
 .drive-empty {
-    padding: 6px 12px; font-size: 0.8rem; color: var(--text-muted); opacity: 0.6;
+    padding: 6px 8px; font-size: var(--type-sm); color: var(--color-text-subtle);
 }
 .pending-drive-item {
     opacity: 0.82;
 }
 .pending-drive-tag {
     flex-shrink: 0;
-    font-size: 0.62rem;
-    font-weight: 800;
+    font-size: 0.625rem;
+    font-weight: var(--weight-strong);
     letter-spacing: 0.05em;
     text-transform: uppercase;
     color: var(--accent);
@@ -94,19 +105,28 @@
 .drives-actions {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
     margin-top: auto;
-    padding: 14px 0 18px;
+    padding: 8px 0;
 }
 .drive-action-btn {
-    display: flex; align-items: center; gap: 10px; background: transparent; border: 1px solid var(--border);
-    color: var(--text-muted); padding: 8px 12px; border-radius: var(--radius-md); cursor: pointer;
+    /* Secondary destinations read as quiet sidebar rows, not a stack of
+       outlined buttons competing with the navigation above them. */
+    display: flex; align-items: center; gap: 10px; background: transparent; border: 0; min-height: 32px;
+    color: var(--color-text-muted); padding: 6px 8px; border-radius: var(--radius-sm); cursor: pointer;
     font-size: var(--type-sm); text-align: left; transition: color var(--motion-fast) var(--ease-standard), background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
 }
-.drive-action-btn:hover,
 .drive-action-btn:focus-visible {
-    color: var(--text-main);
-    background: var(--bg-panel);
+    color: var(--color-text);
+    background: var(--overlay-neutral-1);
+    outline: none;
+    box-shadow: var(--focus-ring);
+}
+@media (hover: hover) {
+    .drive-action-btn:hover {
+        color: var(--color-text);
+        background: var(--overlay-neutral-1);
+    }
 }
 .drive-action-btn .icon { width: 16px; height: 16px; }
 
@@ -120,7 +140,7 @@
     border-radius: var(--radius-pill);
     background: var(--overlay-accent-1);
     color: var(--text-muted);
-    font-size: 0.72rem;
+    font-size: var(--type-xs);
     font-weight: var(--weight-medium);
     line-height: 1.4;
     text-overflow: ellipsis;

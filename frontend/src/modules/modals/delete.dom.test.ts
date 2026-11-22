@@ -5,9 +5,6 @@
 // this covers the single-item path, which used to return early on failure.
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { flushSync, mount, unmount } from 'svelte';
-import DeleteModal from '../../ui/modals/DeleteModal.svelte';
-import { closeDeleteModalView, deleteModalState } from '../../ui/modals/delete-modal-store';
 
 const deleteFileMock = vi.fn();
 const restoreMock = vi.fn();
@@ -21,37 +18,17 @@ vi.mock('../drive-data', () => ({
 }));
 vi.mock('../app-actions', () => ({ appActions: () => appActionMocks }));
 
-import { confirmDelete, openDeleteModal } from './delete';
+import { moveToTrash } from './delete';
 import { busyRowIds } from '../../ui/file-list/busy-rows';
 import { toasts } from '../../ui/notifications/toast-store';
 import { get } from 'svelte/store';
 import { state } from '../../state';
 
-let host: HTMLElement;
-let app: Record<string, unknown> | null = null;
-
-function click(selector: string): void {
-    const el = host.querySelector(selector) as HTMLElement | null;
-    if (!el) throw new Error(`missing ${selector}`);
-    el.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-    flushSync();
-}
-
 beforeEach(() => {
     state.activeChannel = { id: 11, title: 'First drive', kind: 'personal' };
-    host = document.createElement('div');
-    host.id = 'delete-modal';
-    document.body.appendChild(host);
-    app = mount(DeleteModal, { target: host, props: { onConfirm: confirmDelete } });
-    flushSync();
 });
 
-afterEach(async () => {
-    closeDeleteModalView();
-    flushSync();
-    if (app) await unmount(app);
-    app = null;
-    host.remove();
+afterEach(() => {
     deleteFileMock.mockReset();
     restoreMock.mockReset();
     appActionMocks.refreshFiles.mockReset();
@@ -59,64 +36,31 @@ afterEach(async () => {
     state.activeChannel = null;
 });
 
-describe('openDeleteModal copy', () => {
-    it('describes moving a file to the Trash, not deleting from Telegram', () => {
-        openDeleteModal({ type: 'file', id: 1, name: 'a.png' });
-        const view = get(deleteModalState);
-        expect(view.title).toBe('Move file to Trash?');
-        expect(view.confirmLabel).toBe('Move to Trash');
-        expect(view.subtitle).toContain('Trash');
-        expect(view.subtitle).not.toContain('Telegram');
-        expect(view.subtitle.toLowerCase()).not.toContain("can't be undone");
-    });
-
-    it('describes moving a folder and its contents to the Trash', () => {
-        openDeleteModal({ type: 'folder', id: 'd:1', name: 'Docs' });
-        const view = get(deleteModalState);
-        expect(view.title).toBe('Move folder to Trash?');
-        expect(view.subtitle).toContain('everything inside it');
-        expect(view.subtitle).toContain('Trash');
-    });
-});
-
-describe('confirmDelete (single file)', () => {
-    it('does not delete in a different drive after the confirmation opens', async () => {
-        openDeleteModal({ type: 'file', id: 42, name: 'first.png', channelId: 11 });
-        flushSync();
-        state.activeChannel = { id: 22, title: 'Second drive', kind: 'personal' };
-        click('#delete-confirm');
+describe('moveToTrash', () => {
+    it('does not delete a row from another drive', () => {
+        void moveToTrash({ type: 'file', id: 42, name: 'first.png', channelId: 22 });
 
         expect(deleteFileMock).not.toHaveBeenCalled();
-        expect(appActionMocks.refreshFiles).not.toHaveBeenCalled();
         expect(get(toasts).some((toast) => toast.title.includes('Switch back'))).toBe(true);
     });
 
-    it('does not open a confirmation for a row from another drive', () => {
-        openDeleteModal({ type: 'file', id: 42, name: 'first.png', channelId: 22 });
-
-        expect(get(deleteModalState).open).toBe(false);
-        expect(get(toasts).some((toast) => toast.title.includes('Switch back'))).toBe(true);
-    });
-
-    it('does not open a bulk confirmation with mixed or stale drive identities', () => {
-        openDeleteModal({ type: 'bulk', parentId: '', items: [
+    it('does not delete a bulk selection with mixed or stale drive identities', () => {
+        void moveToTrash({ type: 'bulk', parentId: '', items: [
             { type: 'file', id: 42, name: 'first.png', channelId: 11 },
             { type: 'file', id: 43, name: 'second.png', channelId: 22 },
         ] });
 
-        expect(get(deleteModalState).open).toBe(false);
+        expect(deleteFileMock).not.toHaveBeenCalled();
         expect(get(toasts).some((toast) => toast.title.includes('Switch back'))).toBe(true);
     });
 
     it('stops a bulk delete if the active drive switches between items', async () => {
         let finishFirst: (result: unknown) => void = () => {};
         deleteFileMock.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }));
-        openDeleteModal({ type: 'bulk', parentId: '', items: [
+        void moveToTrash({ type: 'bulk', parentId: '', items: [
             { type: 'file', id: 42, name: 'first.png', channelId: 11 },
             { type: 'file', id: 43, name: 'second.png', channelId: 11 },
         ] });
-        flushSync();
-        click('#delete-confirm');
         expect(deleteFileMock).toHaveBeenCalledTimes(1);
 
         state.activeChannel = { id: 22, title: 'Second drive', kind: 'personal' };
@@ -130,30 +74,23 @@ describe('confirmDelete (single file)', () => {
     it('refreshes the file list when the delete fails', async () => {
         deleteFileMock.mockResolvedValue('Error: File not found');
 
-        openDeleteModal({ type: 'file', id: 42, name: 'ghost.png' });
-        flushSync();
-        click('#delete-confirm');
+        void moveToTrash({ type: 'file', id: 42, name: 'ghost.png' });
 
-        // confirmDelete's error branch is async (await deleteFileWithPasswordRetry).
         await vi.waitFor(() => expect(appActionMocks.refreshFiles).toHaveBeenCalledTimes(1));
     });
 
     it('still refreshes the file list when the delete succeeds', async () => {
         deleteFileMock.mockResolvedValue({ ok: true });
 
-        openDeleteModal({ type: 'file', id: 43, name: 'real.png' });
-        flushSync();
-        click('#delete-confirm');
+        void moveToTrash({ type: 'file', id: 43, name: 'real.png' });
 
         await vi.waitFor(() => expect(appActionMocks.refreshFiles).toHaveBeenCalledTimes(1));
     });
 
-    it('confirms the move to Trash on success', async () => {
+    it('moves straight to the Trash and offers Undo', async () => {
         deleteFileMock.mockResolvedValue({ ok: true });
 
-        openDeleteModal({ type: 'file', id: 43, name: 'real.png' });
-        flushSync();
-        click('#delete-confirm');
+        void moveToTrash({ type: 'file', id: 43, name: 'real.png' });
 
         await vi.waitFor(() => expect(get(toasts)).toHaveLength(1));
         const [toast] = get(toasts);
@@ -166,9 +103,7 @@ describe('confirmDelete (single file)', () => {
         deleteFileMock.mockResolvedValue({ ok: true });
         restoreMock.mockResolvedValue({ ok: true });
 
-        openDeleteModal({ type: 'file', id: 43, name: 'real.png' });
-        flushSync();
-        click('#delete-confirm');
+        void moveToTrash({ type: 'file', id: 43, name: 'real.png' });
 
         await vi.waitFor(() => expect(get(toasts)).toHaveLength(1));
         get(toasts)[0].action?.run();
@@ -183,12 +118,10 @@ describe('confirmDelete (single file)', () => {
         let finishFirst: (result: unknown) => void = () => {};
         restoreMock.mockImplementationOnce(() => new Promise((resolve) => { finishFirst = resolve; }));
 
-        openDeleteModal({ type: 'bulk', parentId: '', items: [
+        void moveToTrash({ type: 'bulk', parentId: '', items: [
             { type: 'file', id: 43, name: 'one.png' },
             { type: 'file', id: 44, name: 'two.png' },
         ] });
-        flushSync();
-        click('#delete-confirm');
         await vi.waitFor(() => expect(deleteFileMock).toHaveBeenCalledTimes(2));
         await vi.waitFor(() => expect(get(toasts)[0]?.action?.label).toBe('Undo'));
 
@@ -205,9 +138,7 @@ describe('confirmDelete (single file)', () => {
     it('still says so when it fails, because nothing else on screen will', async () => {
         deleteFileMock.mockResolvedValue('Error: File not found');
 
-        openDeleteModal({ type: 'file', id: 44, name: 'ghost.png' });
-        flushSync();
-        click('#delete-confirm');
+        void moveToTrash({ type: 'file', id: 44, name: 'ghost.png' });
 
         await vi.waitFor(() => expect(get(toasts)).toHaveLength(1));
         expect(get(toasts)[0].level).toBe('error');
@@ -217,14 +148,34 @@ describe('confirmDelete (single file)', () => {
         let settle: (value: unknown) => void = () => {};
         deleteFileMock.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
 
-        openDeleteModal({ type: 'file', id: 45, name: 'slow.png' });
-        flushSync();
-        click('#delete-confirm');
+        void moveToTrash({ type: 'file', id: 45, name: 'slow.png' });
 
         // The list only refreshes at the end, so without this the row would sit
         // there looking untouched for the whole round-trip.
         await vi.waitFor(() => expect(get(busyRowIds).has('45')).toBe(true));
         settle({ ok: true });
         await vi.waitFor(() => expect(get(busyRowIds).has('45')).toBe(false));
+    });
+
+    it('skips items the user did not upload and says so', async () => {
+        deleteFileMock.mockResolvedValue({ ok: true });
+
+        void moveToTrash({ type: 'bulk', parentId: '', items: [
+            { type: 'file', id: 46, name: 'mine.png' },
+            { type: 'file', id: 47, name: 'theirs.png', canDelete: false },
+        ] });
+
+        await vi.waitFor(() => expect(get(toasts)[0]?.title).toBe('Moved to Trash'));
+        expect(deleteFileMock).toHaveBeenCalledOnce();
+        expect(get(toasts)[0].body).toBe("Skipped 1 you didn't upload.");
+    });
+
+    it('does nothing but explain when none of the selection can be deleted', () => {
+        void moveToTrash({ type: 'bulk', parentId: '', items: [
+            { type: 'file', id: 47, name: 'theirs.png', canDelete: false },
+        ] });
+
+        expect(deleteFileMock).not.toHaveBeenCalled();
+        expect(get(toasts)[0]?.title).toBe('You can only delete items you uploaded');
     });
 });

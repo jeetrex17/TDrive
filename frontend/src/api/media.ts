@@ -4,7 +4,6 @@ import {
     CloseNativeMedia as rawCloseNativeMedia,
     GetMediaStats as rawGetMediaStats,
     HideNativeSeekThumbnail as rawHideNativeSeekThumbnail,
-    ListMedia as rawListMedia,
     MoveNativeSeekThumbnail as rawMoveNativeSeekThumbnail,
     NativeMediaCommand as rawNativeMediaCommand,
     OpenMedia as rawOpenMedia,
@@ -13,13 +12,10 @@ import {
     OpenStream as rawOpenStream,
     ResizeNativeMedia as rawResizeNativeMedia,
     ShowNativeSeekThumbnail as rawShowNativeSeekThumbnail,
-    Thumbnail as rawThumbnail,
     UpdateMediaPlayback as rawUpdateMediaPlayback,
 } from "../../bindings/TDrive/internal/app/mediaservice";
 import type { LogicalFile, OpenResult, ThroughputStats as MediaThroughputStats } from "../../bindings/TDrive/backend/media/models";
 import type { NativeMediaResult } from "../../bindings/TDrive/internal/app/models";
-import type { FileItem } from "../types";
-import { toFileItem } from "./files";
 import { invokeBackend } from "./gateway";
 
 export interface MediaOpenInfo {
@@ -103,25 +99,6 @@ export interface ThroughputStats {
 export interface MediaStats {
     playback: ThroughputStats;
     thumbnails: ThroughputStats;
-}
-
-/** Every image in the active drive, newest first, for the Photos gallery. */
-export async function getMedia(): Promise<FileItem[]> {
-    const files = await invokeBackend(rawListMedia);
-    return (files ?? []).map(toFileItem);
-}
-
-/**
- * A downscaled JPEG thumbnail for one image, as a ready-to-use data URL.
- * Rejects when the backend can't produce one (unsupported, too large, or a
- * locked encrypted drive) so the caller can render the right placeholder.
- */
-export async function getThumbnail(msgId: number): Promise<string> {
-    const payload = await invokeBackend(rawThumbnail, msgId);
-    const dataBase64 = String(payload?.data_base64 ?? "");
-    const mimeType = String(payload?.mime_type ?? "");
-    if (!dataBase64 || !mimeType) throw new Error("thumbnail unavailable");
-    return `data:${mimeType};base64,${dataBase64}`;
 }
 
 /** Open a short-lived loopback media URL for a projected file. */

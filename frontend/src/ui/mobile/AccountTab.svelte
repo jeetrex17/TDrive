@@ -1,5 +1,5 @@
 <script lang="ts">
-    import { tick } from 'svelte';
+    import { onMount, tick } from 'svelte';
     import { get } from 'svelte/store';
     import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
     import FolderIcon from '@lucide/svelte/icons/folder';
@@ -12,7 +12,9 @@
     import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
     import Trash2Icon from '@lucide/svelte/icons/trash-2';
     import Avatar from '../chrome/Avatar.svelte';
-    import { getStorageUsed } from '../../api';
+    import SwitchRow from '../SwitchRow.svelte';
+    import { encryptUploads, setEncryptUploads } from '../../modules/upload-preferences';
+    import { getAppVersion, getStorageUsed } from '../../api';
     import { formatBytes } from '../../utils';
     import { encryptionEntryVisible, profileLoaded, profileUser } from '../chrome/profile-store';
     import { sidebarState } from '../sidebar/sidebar-store';
@@ -50,6 +52,13 @@
     // because a switch with a page behind it unfolded at the bottom of a list of
     // unrelated rows left the thing being configured off screen. The open detail
     // lives in the shell store so the top bar and this tab agree on it.
+    // Phones update through their stores, so the desktop updater that would
+    // otherwise load this never runs; support still needs the number.
+    let version = $state('');
+    onMount(() => {
+        void getAppVersion().then((info) => { version = info.version; }).catch(() => undefined);
+    });
+
     let appearanceOpener = $state<HTMLButtonElement | null>(null);
     let backupOpener = $state<HTMLButtonElement | null>(null);
     let scrollerEl = $state<HTMLElement | null>(null);
@@ -183,7 +192,7 @@
     {#if $accountDetail}
         <section class="account-detail" aria-label={ACCOUNT_DETAIL_TITLES[$accountDetail]}>
             {#if $accountDetail === 'appearance'}
-                <AppearancePanel autofocus />
+                <AppearancePanel autofocus layout="settings" />
             {:else}
                 <PhotoBackupPanel page />
             {/if}
@@ -256,18 +265,24 @@
         </div>
     </section>
 
-    {#if $encryptionEntryVisible}
-        <section class="account-group" aria-label="Vault">
-            <h2 class="mobile-section-label">Vault</h2>
-            <div class="account-card">
+    <section class="account-group" aria-label="Vault">
+        <h2 class="mobile-section-label">Vault</h2>
+        <div class="account-card">
+            <SwitchRow
+                title="Encrypt uploads"
+                description="For My Drive. Names and folders stay visible."
+                checked={$encryptUploads === true}
+                onchange={setEncryptUploads}
+            />
+            {#if $encryptionEntryVisible}
                 <button type="button" class="account-row" onclick={openEncryptionSettingsModal}>
                     <LockKeyholeIcon class="account-row-icon" size={20} strokeWidth={1.9} aria-hidden="true" />
                     <span class="account-row-label">Encryption settings</span>
                     <ChevronRightIcon class="account-row-chevron" size={18} strokeWidth={2} aria-hidden="true" />
                 </button>
-            </div>
-        </section>
-    {/if}
+            {/if}
+        </div>
+    </section>
 
     <section class="account-group" aria-label="Appearance">
         <h2 class="mobile-section-label">Appearance</h2>
@@ -291,6 +306,9 @@
         <div class="account-card account-about">
             <div class="account-about-name">TDrive</div>
             <div class="account-about-tagline">Your Telegram, as a drive.</div>
+            {#if version}
+                <div class="account-about-version">Version {version}</div>
+            {/if}
         </div>
     </section>
 

@@ -195,6 +195,12 @@ not establish browser layout, image decoding or video playback.
   Shared startup plans and an explicit native-housekeeping allowlist keep boot
   behavior repeatable; configure scenario-specific results rather than adding
   permissive fallbacks.
+- [Layout tests](frontend/e2e/layout.spec.ts) state the desktop inset, gutter
+  and control heights as numbers; change them with the tokens they check.
+  [Screenshot baselines](frontend/e2e/visual.spec.ts) are recorded in WebKit on
+  macOS. After an intended visual change, refresh them with
+  `npx playwright test e2e/visual.spec.ts --project=webkit-media --update-snapshots`
+  and review the new images in the diff.
 - Keep wire/version tests in their owning backend package and UI translation
   tests at the adapter or app boundary. Regenerate changed Wails bindings and
   verify callers; do not hand-edit generated code or repeat mock echoes per method.

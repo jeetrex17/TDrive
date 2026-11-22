@@ -1,6 +1,6 @@
 /* Surface, anchoring and motion come from .video-popover. */
 .video-settings-panel { height: min(480px, var(--video-popover-available)); }
-.video-settings-section[hidden], .video-track-list button[hidden], .video-track-empty[hidden] { display: none; }
+.video-settings-section[hidden], .video-track-list button[hidden] { display: none; }
 /* One segmented control, inset concentrically inside the popover corner. */
 .video-settings-tabs {
     flex: 0 0 auto;
@@ -27,7 +27,7 @@
     background: var(--video-accent-bg, rgba(122, 162, 247, 0.2));
     box-shadow: 0 0 0 1px var(--video-accent-ring, rgba(122, 162, 247, 0.28));
     translate: calc(var(--video-settings-tab, 0) * 100%) 0;
-    transition: translate 260ms var(--ease-standard);
+    transition: translate var(--motion-slow) var(--ease-standard);
 }
 .video-settings-tabs:has(button:nth-child(1)[aria-pressed=true]) { --video-settings-tab: 0; }
 .video-settings-tabs:has(button:nth-child(2)[aria-pressed=true]) { --video-settings-tab: 1; }
@@ -41,12 +41,14 @@
     border-radius: calc(var(--video-popover-item-radius) - 2px);
     background: transparent;
     color: #9aa6bd;
-    font-size: 11.5px;
-    font-weight: 650;
+    font-size: var(--type-2xs);
+    font-weight: var(--weight-semibold);
     cursor: pointer;
-    transition: color 160ms var(--ease-standard);
+    transition: color var(--motion-fast) var(--ease-standard);
 }
-.video-settings-tabs button:hover { color: #dbe4f7; }
+@media (hover: hover) {
+    .video-settings-tabs button:hover { color: #dbe4f7; }
+}
 .video-settings-tabs button[aria-pressed=true] { color: #f2f5ff; }
 .video-settings-body { padding: 0 14px 14px; }
 .video-settings-section h3 {
@@ -60,7 +62,7 @@
     white-space: nowrap;
 }
 .video-settings-note { margin-top: 14px; }
-.video-settings-note { color: #a8b2c5; font-size: 12px; line-height: 1.5; margin: 8px 0 14px; }
+.video-settings-note { color: #a8b2c5; font-size: var(--type-xs); line-height: 1.5; margin: 8px 0 14px; }
 .video-settings-panel .video-menu { position: static; width: 100%; min-width: 0; max-width: none; max-height: none; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; transform: none; }
 .video-settings-panel .video-menu button { height: auto; min-height: 34px; border-radius: var(--video-popover-item-radius); padding: 7px 10px; }
 .video-overlay.is-video-native-fallback .video-settings-panel .video-menu.is-open { display: block; }
@@ -68,7 +70,6 @@
 .video-settings-panel .video-menu:not(.is-open) { display: none; }
 .video-track-list { max-height: 240px; overflow: auto; }
 .video-track-list button { width: 100%; white-space: normal; text-align: left; overflow-wrap: anywhere; }
-.video-track-empty { font-size: 13px; color: #a8b2c5; padding: 8px; }
 .video-picture-options { display: grid; gap: 7px; }
 .video-picture-options button {
     display: flex;
@@ -81,22 +82,24 @@
     background: rgba(255, 255, 255, 0.05);
     color: inherit;
     cursor: pointer;
-    transition: background-color 120ms var(--ease-standard), border-color 120ms var(--ease-standard);
+    transition: background-color var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard);
 }
-.video-picture-options button:hover { background: rgba(255, 255, 255, 0.08); }
-.video-picture-options button small { color: #a8b2c5; font-size: 11px; }
+@media (hover: hover) {
+    .video-picture-options button:hover { background: rgba(255, 255, 255, 0.08); }
+}
+.video-picture-options button small { color: #a8b2c5; font-size: var(--type-2xs); }
 .video-picture-options button.is-selected { border-color: var(--video-accent-border, rgba(122, 162, 247, 0.58)); background: var(--video-accent-bg, rgba(122, 162, 247, 0.2)); }
 .video-subtitle-preview { display: grid; place-items: center; min-height: 84px; background: transparent; border-radius: var(--radius-md); padding: 10px; text-align: center; margin-bottom: 14px; }
 .video-subtitle-preview span { padding: 3px 6px; border-radius: var(--radius-xs); }
-.video-settings-field { display: grid; gap: 9px; margin: 15px 0; font-size: 13px; }
+.video-settings-field { display: grid; gap: 9px; margin: 15px 0; font-size: var(--type-sm); }
 .video-settings-field > span { display: flex; justify-content: space-between; }
 .video-settings-field output { color: #a8b2c5; }
 
 .video-settings-inline { display: flex; justify-content: space-between; align-items: center; }
 .video-settings-field input[type=color] { border: 1px solid #ffffff30; background: none; width: 42px; height: 30px; border-radius: var(--radius-sm); }
-.video-settings-check { display: flex; align-items: center; gap: 9px; font-size: 12px; margin: 13px 0; }
+.video-settings-check { display: flex; align-items: center; gap: 9px; font-size: var(--type-xs); margin: 13px 0; }
 .video-settings-check input { accent-color: var(--video-accent, #7aa2f7); }
-.video-settings-reset { color: #bfceeb; border: 1px solid #ffffff25; background: transparent; border-radius: var(--radius-md); padding: 9px 12px; font-size: 12px; cursor: pointer; }
+.video-settings-reset { color: #bfceeb; border: 1px solid #ffffff25; background: transparent; border-radius: var(--radius-md); padding: 9px 12px; font-size: var(--type-xs); cursor: pointer; }
 .video-subtitle-actions {
     display: flex;
     flex-wrap: nowrap;
@@ -112,13 +115,15 @@
     padding: 9px 14px;
     background: var(--video-accent, #7aa2f7);
     color: #080b12;
-    font-size: 12px;
-    font-weight: 750;
+    font-size: var(--type-xs);
+    font-weight: var(--weight-strong);
     cursor: pointer;
-    transition: background-color 120ms var(--ease-standard), scale 120ms var(--ease-standard);
+    transition: background-color var(--motion-fast) var(--ease-standard), scale var(--motion-fast) var(--ease-standard);
 }
 .video-settings-save:active { scale: 0.96; }
-.video-settings-save:hover { filter: brightness(1.12); }
+@media (hover: hover) {
+    .video-settings-save:hover { filter: brightness(1.12); }
+}
 /* The native player on Windows and Linux still needs the picture inset, since
    its window paints above the webview and would otherwise cover the dock. */
 .video-overlay.is-video-native-fallback .video-native-viewport { right: var(--video-native-right-inset, var(--video-native-side-inset, 0)); }
@@ -187,11 +192,17 @@
     background: #f4f7ff;
     box-shadow: 0 1px 4px #0006;
 }
-.video-settings-range:hover::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--video-accent-bg); }
-.video-settings-range:hover::-moz-range-thumb { box-shadow: 0 0 0 4px var(--video-accent-bg); }
+@media (hover: hover) {
+    .video-settings-range:hover::-webkit-slider-thumb { box-shadow: 0 0 0 4px var(--video-accent-bg); }
+}
+@media (hover: hover) {
+    .video-settings-range:hover::-moz-range-thumb { box-shadow: 0 0 0 4px var(--video-accent-bg); }
+}
 .video-settings-panel .video-settings-range:focus-visible { outline: 2px solid var(--video-accent); outline-offset: 3px; box-shadow: none; }
 .video-settings-check { min-height: 40px; cursor: pointer; border-radius: var(--radius-md); padding: 4px 6px; margin: 6px -6px; }
-.video-settings-check:hover { background: #ffffff08; }
+@media (hover: hover) {
+    .video-settings-check:hover { background: #ffffff08; }
+}
 .video-settings-panel .video-settings-check input[type=checkbox] {
     appearance: none;
     -webkit-appearance: none;
@@ -219,7 +230,7 @@
 .video-settings-panel .video-settings-check input[type=checkbox]:checked { border-color: var(--video-accent); background: var(--video-accent); }
 .video-settings-check input[type=checkbox]:checked::before { transform: rotate(45deg) scale(1); }
 .video-settings-field output { color: #dce8ff; font-variant-numeric: tabular-nums; }
-.video-range-endpoints { display: flex; justify-content: space-between; color: #a8b2c5; font-size: 11px; margin-top: -10px; }
+.video-range-endpoints { display: flex; justify-content: space-between; color: #a8b2c5; font-size: var(--type-2xs); margin-top: -10px; }
 .video-speed-presets { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 18px; }
 .video-settings-panel .video-speed-presets button { display: flex; justify-content: center; min-height: 36px; height: auto; padding: 8px 4px; border: 1px solid #ffffff20; border-radius: var(--radius-md); }
 .video-speed-presets .video-menu-check { display: none; }

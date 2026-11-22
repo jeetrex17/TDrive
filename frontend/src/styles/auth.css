@@ -2,25 +2,76 @@
 #auth-wrapper { display: flex; justify-content: center; align-items: safe center; height: 100vh; height: 100dvh; padding: 24px 16px; overflow-y: auto; background: var(--bg-dark); }
 
 .auth-box {
-    background: var(--bg-sidebar); border: 1px solid var(--border);
-    padding: clamp(1.25rem, 5vw, 2.5rem); border-radius: var(--radius-xl); width: 380px; max-width: 100%; flex-shrink: 0; text-align: center;
-    box-shadow: var(--shadow-md);
+    /* A plain column on the canvas: the form is the only thing on screen, so it
+       needs no card around it to be found. */
+    padding: 0; width: 340px; max-width: 100%; flex-shrink: 0; text-align: left;
     --motion-enter-y: 4px;
     animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
 }
 
-.auth-icon-box {
-    width: 60px; height: 60px; margin: 0 auto 1.5rem auto;
-    background: var(--overlay-accent-1); border-radius: var(--radius-lg);
-    display: flex; align-items: center; justify-content: center;
-    color: var(--accent);
+.auth-welcome { text-align: center; }
+/* The form's fields and its button share one 40px height. */
+.auth-box input { min-height: 40px; }
+
+/* Desktop sign-in: one calm centred column. The mark, heading and one line of
+   explanation are centred; fields keep a left edge for their labels; the
+   privacy line closes the column under the button. */
+html:not(.mobile) .auth-box { width: 360px; }
+/* Lifted a little above true centre, where a lone column looks centred. */
+html:not(.mobile) #auth-wrapper { padding-bottom: 8vh; }
+.auth-step-mark { display: block; width: 66px; height: auto; margin: 0 auto 24px; }
+html.mobile .auth-step-mark { display: none; }
+html:not(.mobile) .auth-mark { display: block; width: 112px; height: auto; margin: 0 auto 28px; }
+html:not(.mobile) .auth-box h2 {
+    margin-bottom: 8px;
+    text-align: center;
+    font-size: var(--type-2xl);
+    letter-spacing: -0.02em;
+    text-wrap: balance;
 }
-.auth-icon-box svg { width: 32px; height: 32px; }
+html:not(.mobile) .auth-welcome h2 { font-size: var(--type-3xl); }
+html:not(.mobile) .auth-box .auth-intro {
+    max-width: 320px;
+    margin: 0 auto 28px;
+    text-align: center;
+    color: var(--color-text-muted);
+    font-size: var(--type-sm);
+    line-height: 1.55;
+    text-wrap: pretty;
+}
+html:not(.mobile) .auth-form .auth-privacy {
+    order: 1;
+    margin: 16px 0 0;
+    text-align: center;
+    color: var(--color-text-subtle);
+    font-size: var(--type-xs);
+    line-height: 1.5;
+}
+html:not(.mobile) .auth-box .primary-btn { min-height: 40px; }
+html:not(.mobile) .auth-form .auth-field { margin-bottom: 16px; }
+html:not(.mobile) .auth-form .auth-fields .auth-field { margin-bottom: 0; }
+html:not(.mobile) .auth-form .phone-entry { margin-bottom: 0; }
+html:not(.mobile) .auth-box .code-input {
+    min-height: 48px;
+    text-align: center;
+    font-size: var(--type-2xl);
+    letter-spacing: 0.35em;
+    /* Tracking trails after the last digit; indent by the same so the code
+       sits on the true centre. */
+    text-indent: 0.35em;
+    font-variant-numeric: tabular-nums;
+}
+html:not(.mobile) .auth-helper-pill {
+    padding: 0;
+    background: none;
+    border: 0;
+    color: var(--color-text);
+    font-variant-numeric: tabular-nums;
+}
 
-.auth-box h2 { color: var(--color-text); margin-bottom: 0.5rem; font-weight: 600; }
-.auth-box p { color: var(--text-muted); margin-bottom: 1.5rem; font-size: 0.9rem; }
+.auth-box h2 { color: var(--color-text); margin-bottom: 0.5rem; font-size: var(--type-xl); font-weight: var(--weight-semibold); letter-spacing: -0.01em; }
+.auth-box p { color: var(--text-muted); margin-bottom: 1.5rem; font-size: var(--type-base); }
 
-.auth-subtitle { margin-bottom: 1rem; }
 
 .auth-helper-row {
     display: flex;
@@ -30,11 +81,11 @@
     gap: 8px;
     margin-bottom: 14px;
     color: var(--text-muted);
-    font-size: 0.85rem;
+    font-size: var(--type-base);
 }
 
 .auth-helper-label {
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     color: var(--color-text-muted);
 }
 
@@ -47,7 +98,7 @@
     background: var(--overlay-white-1);
     border: 1px solid var(--border);
     color: var(--text-main);
-    font-weight: 600;
+    font-weight: var(--weight-semibold);
     letter-spacing: 0.01em;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -58,32 +109,34 @@
     border: none;
     background: transparent;
     color: var(--accent);
-    font-weight: 600;
-    font-size: 0.85rem;
+    font-weight: var(--weight-semibold);
+    font-size: var(--type-base);
     cursor: pointer;
     padding: 4px 8px;
     border-radius: var(--radius-md);
-    transition: background 0.15s ease, color 0.15s ease;
+    transition: background var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
 }
 
-.auth-link:hover { background: var(--overlay-accent-1); }
-.auth-link:active { transform: translateY(1px); }
+@media (hover: hover) {
+    .auth-link:hover { background: var(--overlay-accent-1); }
+}
+.auth-link:active { transform: scale(var(--press-scale)); }
 
 .auth-caption {
     text-align: left;
     margin: -2px 0 12px 0;
-    font-size: 0.78rem;
+    font-size: var(--type-xs);
     color: var(--color-text-muted);
     line-height: 1.35;
 }
 .auth-caption span {
     color: var(--color-text-soft);
-    font-weight: 500;
+    font-weight: var(--weight-medium);
 }
 
 input {
-    width: 100%; padding: 12px 15px; background: var(--bg-dark); border: 1px solid var(--border);
-    border-radius: var(--radius-md); color: var(--color-text); margin-bottom: 15px; font-size: 0.95rem; outline: none;
+    width: 100%; min-height: 36px; padding: 8px 12px; background: var(--color-surface-1); border: 1px solid var(--color-border-soft);
+    border-radius: var(--radius-md); color: var(--color-text); margin-bottom: 16px; font-size: var(--type-base); outline: none;
     transition:
         background-color var(--motion-med) var(--ease-standard),
         border-color var(--motion-med) var(--ease-standard),
@@ -94,7 +147,7 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
 
 .input-with-action {
     position: relative;
-    margin-bottom: 15px;
+    margin-bottom: 16px;
 }
 .input-with-action input {
     padding-right: 44px;
@@ -115,12 +168,14 @@ input:focus { border-color: var(--accent); box-shadow: var(--focus-ring); }
     display: flex;
     align-items: center;
     justify-content: center;
-    transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+    transition: background var(--motion-fast) var(--ease-standard), border-color var(--motion-fast) var(--ease-standard), color var(--motion-fast) var(--ease-standard);
 }
-.input-with-action .input-action-btn:hover {
-    background: var(--overlay-white-1);
-    border-color: var(--border);
-    color: var(--color-text-soft);
+@media (hover: hover) {
+    .input-with-action .input-action-btn:hover {
+        background: var(--overlay-white-1);
+        border-color: var(--border);
+        color: var(--color-text-soft);
+    }
 }
 .input-with-action .input-action-btn:active {
     transform: translateY(-50%) scale(0.98);
@@ -204,18 +259,17 @@ html.mobile .auth-actions {
     padding: 12px 16px calc(var(--inset-bottom) - var(--inset-keyboard) + 12px);
 }
 
-html.mobile .auth-icon-box { display: none; }
 
 html.mobile .auth-box h2 {
     margin-bottom: 8px;
-    font-size: 1.375rem;
-    font-weight: 700;
+    font-size: var(--type-2xl);
+    font-weight: var(--weight-strong);
     line-height: 1.2;
     text-wrap: balance;
 }
 
 html.mobile .auth-box p {
-    font-size: 0.9375rem;
+    font-size: var(--mobile-type-body);
     line-height: 1.5;
 }
 
@@ -223,8 +277,9 @@ html.mobile .auth-box input {
     min-height: 48px;
     padding: 12px 14px;
     margin-bottom: 0;
-    /* 16px is the floor: iOS zooms the page into anything smaller. */
-    font-size: 1rem;
+    /* 16px is the floor: iOS zooms the page into anything smaller, and a
+       smaller Dynamic Type setting shrinks 1rem below it. */
+    font-size: max(16px, var(--type-md));
     background: var(--color-surface-1);
     border-radius: var(--radius-lg);
 }
@@ -240,48 +295,50 @@ html.mobile .auth-field input {
 }
 
 html.mobile .auth-box .code-input {
-    font-size: 1.375rem;
-    font-weight: 600;
+    font-size: var(--type-2xl);
+    font-weight: var(--weight-semibold);
     font-variant-numeric: tabular-nums;
     letter-spacing: 0.2em;
 }
 
 html.mobile .auth-box .code-input::placeholder {
-    font-weight: 500;
+    font-weight: var(--weight-medium);
     letter-spacing: 0.2em;
 }
 
 html.mobile .auth-actions .primary-btn {
     min-height: 50px;
     padding: 0 16px;
-    font-size: 1rem;
+    font-size: var(--type-md);
     border-radius: var(--radius-lg);
 }
 
-html.mobile .auth-actions .primary-btn:hover { transform: none; }
-html.mobile .auth-actions .primary-btn:active:not(:disabled) { transform: scale(0.98); }
+@media (hover: hover) {
+    html.mobile .auth-actions .primary-btn:hover { transform: none; }
+}
+html.mobile .auth-actions .primary-btn:active:not(:disabled) { transform: scale(var(--press-scale)); }
 
 html.mobile .auth-helper-row {
     justify-content: flex-start;
     margin: -8px 0 20px;
-    font-size: 0.9375rem;
+    font-size: var(--mobile-type-body);
 }
 
 html.mobile .auth-helper-pill {
     padding: 4px 10px;
-    font-size: 0.9375rem;
+    font-size: var(--mobile-type-body);
     background: var(--color-surface-1);
 }
 
 html.mobile .auth-link {
     min-height: 44px;
     padding: 0 10px;
-    font-size: 0.9375rem;
+    font-size: var(--mobile-type-body);
 }
 
 html.mobile .auth-caption {
     margin-top: -12px;
-    font-size: 0.875rem;
+    font-size: var(--type-base);
     line-height: 1.5;
 }
 
@@ -292,28 +349,27 @@ html.mobile .auth-box .input-with-action .input-action-btn {
     width: 44px;
     height: 44px;
 }
-html.mobile .auth-box .input-with-action .input-action-btn:hover {
-    background: transparent;
-    border-color: transparent;
+@media (hover: hover) {
+    html.mobile .auth-box .input-with-action .input-action-btn:hover {
+        background: transparent;
+        border-color: transparent;
+    }
 }
 html.mobile .auth-box .input-with-action .input-action-btn:active {
     transform: translateY(-50%);
     background: var(--overlay-neutral-2);
 }
 
-/* The Paste control is a word, not a glyph, so it keeps its own width. */
-html.mobile .auth-box .input-with-action .input-action-text {
-    width: auto;
-    padding: 0 12px;
-    color: var(--accent);
-    font: inherit;
-    font-size: 0.9375rem;
-    font-weight: 600;
-}
-html.mobile .auth-box .input-with-action:has(.input-action-text) input { padding-right: 76px; }
-
 html.mobile .auth-box button:focus-visible,
 html.mobile .auth-box input:focus-visible {
     outline: none;
     box-shadow: var(--focus-ring);
+}
+/* Inside the combined phone field the frame draws the border and the ring. */
+html.mobile .auth-box .phone-entry input,
+html.mobile .auth-box .phone-entry input:focus-visible {
+    background: transparent;
+    border: 0;
+    border-radius: 0;
+    box-shadow: none;
 }

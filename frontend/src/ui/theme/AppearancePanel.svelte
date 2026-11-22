@@ -14,11 +14,13 @@
         setPreferredTheme,
         setThemeMode,
         themeState,
-        type ThemeChangeOrigin,
     } from './theme-controller';
 
     interface Props {
         autofocus?: boolean;
+        /** 'settings' fills a Settings page and shows both theme lists:
+         *  the light mode's and the dark mode's, since each mode keeps its own. */
+        layout?: 'popover' | 'settings';
     }
 
     interface ModeOption {
@@ -27,7 +29,7 @@
         icon: typeof SunIcon;
     }
 
-    let { autofocus = false }: Props = $props();
+    let { autofocus = false, layout = 'popover' }: Props = $props();
     let panel = $state<HTMLElement | null>(null);
 
     const modeOptions: readonly ModeOption[] = [
@@ -36,12 +38,20 @@
     ];
 
     const activeAppearance = $derived<ThemeAppearance>($themeState.resolvedAppearance);
-    const visibleThemes = $derived(themesForAppearance(activeAppearance));
-    const selectedThemeId = $derived(
-        activeAppearance === 'light'
-            ? $themeState.preference.lightThemeId
-            : $themeState.preference.darkThemeId,
+    const paletteAppearances = $derived<readonly ThemeAppearance[]>(
+        layout === 'settings' ? ['light', 'dark'] : [activeAppearance],
     );
+
+    function selectedFor(appearance: ThemeAppearance): string {
+        return appearance === 'light'
+            ? $themeState.preference.lightThemeId
+            : $themeState.preference.darkThemeId;
+    }
+
+    function paletteHeading(appearance: ThemeAppearance): string {
+        if (layout !== 'settings') return appearance === 'light' ? 'Light palettes' : 'Dark palettes';
+        return appearance === 'light' ? 'Light theme' : 'Dark theme';
+    }
     const resolvedThemeName = $derived(getThemeDefinition($themeState.resolvedThemeId).name);
 
     onMount(() => {
@@ -51,16 +61,12 @@
         });
     });
 
-    function originFrom(event: MouseEvent): ThemeChangeOrigin {
-        return { x: event.clientX, y: event.clientY };
+    function selectMode(mode: ThemeMode): void {
+        setThemeMode(mode);
     }
 
-    function selectMode(event: MouseEvent, mode: ThemeMode): void {
-        setThemeMode(mode, originFrom(event));
-    }
-
-    function selectTheme(event: MouseEvent, theme: ThemeDefinition): void {
-        setPreferredTheme(theme.appearance, theme.id, originFrom(event));
+    function selectTheme(theme: ThemeDefinition): void {
+        setPreferredTheme(theme.appearance, theme.id);
     }
 
     async function moveModeFocus(event: KeyboardEvent, index: number): Promise<void> {
@@ -74,12 +80,12 @@
         document.getElementById(`appearance-mode-${nextMode}`)?.focus();
     }
 
-    async function moveThemeFocus(event: KeyboardEvent, index: number): Promise<void> {
-        const nextIndex = nextRadioIndex(event, index, visibleThemes.length);
+    async function moveThemeFocus(event: KeyboardEvent, index: number, themes: readonly ThemeDefinition[]): Promise<void> {
+        const nextIndex = nextRadioIndex(event, index, themes.length);
         if (nextIndex === null) return;
 
         event.preventDefault();
-        const nextTheme = visibleThemes[nextIndex];
+        const nextTheme = themes[nextIndex];
         setPreferredTheme(nextTheme.appearance, nextTheme.id);
         await tick();
         document.getElementById(`appearance-theme-${nextTheme.id}`)?.focus();
@@ -104,10 +110,12 @@
     }
 </script>
 
-<section bind:this={panel} class="appearance-panel" aria-labelledby="appearance-title">
-    <header class="appearance-header">
-        <h2 id="appearance-title">Appearance</h2>
-    </header>
+<section bind:this={panel} class="appearance-panel" class:is-settings={layout === 'settings'} aria-labelledby={layout === 'settings' ? undefined : 'appearance-title'} aria-label={layout === 'settings' ? 'Appearance' : undefined}>
+    {#if layout !== 'settings'}
+        <header class="appearance-header">
+            <h2 id="appearance-title">Appearance</h2>
+        </header>
+    {/if}
 
     <div class="appearance-section mode-section">
         <div class="mode-grid" role="radiogroup" aria-label="Appearance mode">
@@ -125,7 +133,7 @@
                     aria-checked={selected}
                     aria-label={option.label}
                     tabindex={selected ? 0 : -1}
-                    onclick={(event) => selectMode(event, option.id)}
+                    onclick={() => selectMode(option.id)}
                     onkeydown={(event) => void moveModeFocus(event, index)}
                 >
                     <span class="mode-icon"><Icon size={17} strokeWidth={2} aria-hidden="true" /></span>
@@ -135,13 +143,18 @@
         </div>
     </div>
 
-    <div id="appearance-palette-panel" class="appearance-section palette-section">
+    {#each paletteAppearances as appearance (appearance)}
+    {@const themes = themesForAppearance(appearance)}
+    <div id={layout === 'settings' ? `appearance-palette-panel-${appearance}` : 'appearance-palette-panel'} class="appearance-section palette-section">
         <div class="section-heading">
-            <span>{activeAppearance === 'light' ? 'Light palettes' : 'Dark palettes'}</span>
+            <span>{paletteHeading(appearance)}</span>
+            {#if layout === 'settings'}
+                <span class="section-note">{activeAppearance === appearance ? 'In use now' : `Used in ${appearance === 'light' ? 'Light' : 'Dark'} mode`}</span>
+            {/if}
         </div>
-        <div class="theme-grid" role="radiogroup" aria-label="Theme palette">
-            {#each visibleThemes as theme, index (theme.id)}
-                {@const selected = selectedThemeId === theme.id}
+        <div class="theme-grid" role="radiogroup" aria-label={layout === 'settings' ? paletteHeading(appearance) : 'Theme palette'}>
+            {#each themes as theme, index (theme.id)}
+                {@const selected = selectedFor(appearance) === theme.id}
                 <button
                     id={`appearance-theme-${theme.id}`}
                     data-theme-hit-target
@@ -153,8 +166,8 @@
                     aria-label={theme.name}
                     tabindex={selected ? 0 : -1}
                     style={previewStyle(theme)}
-                    onclick={(event) => selectTheme(event, theme)}
-                    onkeydown={(event) => void moveThemeFocus(event, index)}
+                    onclick={() => selectTheme(theme)}
+                    onkeydown={(event) => void moveThemeFocus(event, index, themes)}
                 >
                     <span class="theme-preview" aria-hidden="true">
                         <span class="preview-sidebar">
@@ -176,6 +189,7 @@
             {/each}
         </div>
     </div>
+    {/each}
 
     <p class="appearance-status" aria-live="polite">
         {resolvedThemeName} is active.
@@ -192,6 +206,21 @@
         animation: tdrive-surface-enter var(--motion-med) var(--ease-enter) both;
     }
 
+    /* On a Settings page the page owns the width, the scroll and the title. */
+    .appearance-panel.is-settings {
+        width: 100%;
+        max-height: none;
+        overflow: visible;
+        animation: none;
+    }
+    .appearance-panel.is-settings .appearance-section { padding-left: 0; padding-right: 0; }
+    .appearance-panel.is-settings .mode-section { padding-top: 0; }
+    .section-note {
+        color: var(--color-text-subtle);
+        font-size: var(--type-xs);
+        font-weight: var(--weight-regular);
+    }
+
     .appearance-header {
         display: flex;
         align-items: center;
@@ -205,8 +234,8 @@
     .appearance-header h2 {
         margin: 0;
         color: var(--color-text);
-        font-size: 1.05rem;
-        font-weight: 800;
+        font-size: var(--type-lg);
+        font-weight: var(--weight-strong);
         letter-spacing: 0;
     }
 
@@ -220,8 +249,8 @@
         min-height: 20px;
         margin-bottom: 8px;
         color: var(--color-text-muted);
-        font-size: 0.69rem;
-        font-weight: 800;
+        font-size: var(--type-2xs);
+        font-weight: var(--weight-strong);
         letter-spacing: 0.07em;
         text-transform: uppercase;
     }
@@ -244,8 +273,8 @@
         background: var(--overlay-white-1);
         border: 1px solid var(--color-border-soft);
         border-radius: var(--radius-lg);
-        font-size: 0.75rem;
-        font-weight: 750;
+        font-size: var(--type-xs);
+        font-weight: var(--weight-strong);
         cursor: pointer;
         transition: transform var(--motion-med) var(--ease-standard),
             background var(--motion-med) var(--ease-standard),
@@ -255,7 +284,7 @@
     }
 
     .mode-card:hover { transform: translateY(-1px); color: var(--color-text); }
-    .mode-card:active { transform: translateY(0) scale(0.98); }
+    .mode-card:active { transform: scale(var(--press-scale)); }
     .mode-card:focus-visible { outline: none; box-shadow: var(--focus-ring); }
     .mode-card.selected {
         color: var(--color-accent);
@@ -278,6 +307,10 @@
 
     .palette-section { padding-bottom: 9px; }
     .theme-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+    /* A Settings page is wide enough for three across, so both lists fit
+       without a long scroll; the phone keeps two. */
+    :global(html:not(.mobile)) .is-settings .theme-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    :global(html:not(.mobile)) .is-settings .theme-preview { flex-basis: 48px; height: 48px; }
 
     .theme-card {
         position: relative;
@@ -300,7 +333,7 @@
     }
 
     .theme-card:hover { transform: translateY(-2px); border-color: var(--color-border); }
-    .theme-card:active { transform: translateY(0) scale(0.985); }
+    .theme-card:active { transform: scale(var(--press-scale)); }
     .theme-card:focus-visible { outline: none; box-shadow: var(--focus-ring); }
     .theme-card.selected {
         background: var(--overlay-accent-1);
@@ -351,8 +384,8 @@
     .theme-name {
         display: block;
         overflow: hidden;
-        font-size: 0.75rem;
-        font-weight: 800;
+        font-size: var(--type-xs);
+        font-weight: var(--weight-strong);
         line-height: 1.25;
         text-overflow: ellipsis;
         white-space: nowrap;
@@ -522,7 +555,7 @@
         border-radius: var(--radius-pill);
     }
 
-    :global(html.mobile) .theme-name { font-size: 0.8125rem; }
+    :global(html.mobile) .theme-name { font-size: var(--type-sm); }
     :global(html.mobile) .theme-check { top: 14px; right: 14px; }
 
     @media (prefers-reduced-motion: reduce) {

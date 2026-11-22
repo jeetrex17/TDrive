@@ -3,7 +3,6 @@
     import { failedUploadReports, dismissFailedUploadReport } from '../modals/failed-uploads-store';
     import { reviewFailedUploads } from '../../modules/transfers';
     import ArrowDownUpIcon from '@lucide/svelte/icons/arrow-down-up';
-    import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
     import { type TransferEvent } from '../notifications/notif-store';
     import { visibleActiveTransfers, visibleRecentEvents, standaloneResumableUploads as resumableUploads } from '../notifications/visible-history';
     import { openActivity } from '../notifications/activity-store';
@@ -160,20 +159,22 @@
             </div>
         {/if}
     {/if}
-    <button id="mobile-view-activity" type="button" class="transfers-activity-link" onclick={() => openActivity({ restoreFocus: '#mobile-view-activity' })}>
-        <span>View all activity</span><ChevronRightIcon size={18} strokeWidth={2} aria-hidden="true" />
-    </button>
 </div>
 
 <style>
-    .transfers-activity-link { display: flex; align-items: center; justify-content: space-between; width: 100%; min-height: var(--touch-target); margin-top: var(--space-5); padding: var(--space-3) var(--space-4); border: 0; border-radius: var(--radius-lg); background: var(--color-surface-1); color: var(--color-text-soft); font: inherit; font-size: var(--type-sm); text-align: left; cursor: pointer; }
-    .transfers-activity-link :global(svg) { color: var(--color-text-muted); }
-    .transfers-activity-link:focus-visible { outline: 2px solid var(--color-accent); outline-offset: 2px; }
-    /* The card separates its own rows. A row cannot see its siblings -- each one
-       is its own component -- and the separation is a property of the stack
-       rather than of anything in it. */
-    .transfers-group > :global(* + *) {
-        border-top: 1px solid var(--color-border-soft);
+    /* The list separates its own rows, from the text column (16px gutter, 28px
+       glyph, 12px gap) to the edge, as the Files list does. A row cannot see
+       its siblings -- each one is its own component -- so the stack draws it. */
+    .transfers-group > :global(* + *) { position: relative; }
+    .transfers-group > :global(* + *)::before {
+        content: '';
+        position: absolute;
+        top: 0;
+        left: 56px;
+        right: 0;
+        height: 1px;
+        background: var(--color-border-soft);
+        pointer-events: none;
     }
 
     /* Keep the quiet text treatment while giving the section actions an iOS

@@ -1,3 +1,4 @@
+import { openSettingsSection } from './settings-helpers';
 import { bootTDrive, expect, test } from './wails-mock';
 import type { Page } from '@playwright/test';
 
@@ -11,8 +12,7 @@ async function usePlatform(page: Page, platform: Platform): Promise<void> {
 
 async function openAppearance(page: Page, platform: Platform): Promise<void> {
     if (platform === 'desktop') {
-        await page.locator('#profile-trigger').click();
-        await page.getByRole('menuitem', { name: 'Appearance' }).click();
+        await openSettingsSection(page, 'Appearance');
         return;
     }
 

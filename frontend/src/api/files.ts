@@ -10,20 +10,15 @@ import {
     DeleteFolder as rawDeleteFolder,
     DownloadFile as rawDownloadFile,
     DownloadFolder as rawDownloadFolder,
-    GetAllFsMsgIDs as rawGetAllFsMsgIds,
     GetFileList as rawGetFileList,
     GetFolderContents as rawGetFolderContents,
-    GetFolderSize as rawGetFolderSize,
     GetFolderStats as rawGetFolderStats,
     GetStorageUsed as rawGetStorageUsed,
-    ImportPaths as rawImportPaths,
     ImportPathsForDrive as rawImportPathsForDrive,
     MoveFile as rawMoveFile,
     MoveFolder as rawMoveFolder,
     MsgToTdriveSystem as rawMsgToTdriveSystem,
     PlanImport as rawPlanImport,
-    PreviewFile as rawPreviewFile,
-    PreviewThumbnail as rawPreviewThumbnail,
     RenameFile as rawRenameFile,
     RenameFolder as rawRenameFolder,
     ReleaseUploadSources as rawReleaseUploadSources,
@@ -59,7 +54,7 @@ import type {
     SearchHitType,
     UploadResult,
 } from "../types";
-import { normalizeOperationResult, requireOperationSuccess } from "./operation";
+import { normalizeOperationResult } from "./operation";
 import { asRecord, nonNegativeNumber } from "./shared";
 import { invokeBackend } from "./gateway";
 
@@ -141,18 +136,9 @@ export async function deleteFolder(folderId: string): Promise<OperationResult> {
     return normalizeOperationResult(await invokeBackend(rawDeleteFolder, folderId), "Could not delete folder");
 }
 
-export async function getFolderSize(folderId: string): Promise<number> {
-    return nonNegativeNumber(await invokeBackend(rawGetFolderSize, folderId));
-}
-
 export async function getFolderStats(parentId: string): Promise<FolderStat[]> {
     const stats = await invokeBackend(rawGetFolderStats, parentId);
     return (stats ?? []).map(normalizeFolderStat).filter((entry) => entry.id !== "");
-}
-
-export async function getAllFsMsgIds(): Promise<number[]> {
-    const ids = await invokeBackend(rawGetAllFsMsgIds);
-    return (ids ?? []).filter((id) => Number.isSafeInteger(id) && id > 0);
 }
 
 export async function getStorageUsed(): Promise<number> {
@@ -231,13 +217,6 @@ export async function planImport(paths: string[], encrypt: boolean, extract: boo
     return normalizeImportPlan(await invokeBackend(rawPlanImport, paths, encrypt, extract));
 }
 
-export async function importPaths(paths: string[], parentId: string, encrypt: boolean, extract: boolean): Promise<OperationResult> {
-    return normalizeOperationResult(
-        await invokeBackend(rawImportPaths, paths, parentId, encrypt, extract),
-        "Could not import selected paths",
-    );
-}
-
 export async function importPathsForDrive(paths: string[], parentId: string, encrypt: boolean, extract: boolean, expectedChannelId: number): Promise<OperationResult> {
     return normalizeOperationResult(
         await invokeBackend(rawImportPathsForDrive, paths, parentId, encrypt, extract, expectedChannelId),
@@ -308,18 +287,6 @@ export async function pauseUploads(): Promise<void> {
 
 export async function resumeUploads(): Promise<void> {
     await invokeBackend(rawResumeUploads);
-}
-
-export async function getPreviewFile(messageId: number): Promise<PreviewPayload> {
-    const preview = normalizePreviewResult(await invokeBackend(rawPreviewFile, messageId), "Could not preview file");
-    requireOperationSuccess(preview.result);
-    return preview.payload;
-}
-
-export async function getPreviewThumbnail(messageId: number): Promise<PreviewPayload> {
-    const preview = normalizePreviewResult(await invokeBackend(rawPreviewThumbnail, messageId), "Could not preview thumbnail");
-    requireOperationSuccess(preview.result);
-    return preview.payload;
 }
 
 export function toFileItem(f: FileMetaData): FileItem {

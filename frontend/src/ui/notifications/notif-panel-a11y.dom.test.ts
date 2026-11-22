@@ -84,7 +84,7 @@ describe('notification panel keyboard reachability', () => {
         expect(bell().getAttribute('aria-controls')).toBe('activity-modal');
     });
 
-    it('promotes a hover-open preview on click, including when already expanded', async () => {
+    it('promotes a hover-open preview on click, and a second click closes Activity', async () => {
         notifPanelOpen.set(true);
         await settle();
         expect(panel()).not.toBeNull();
@@ -93,9 +93,11 @@ describe('notification panel keyboard reachability', () => {
         expect(panel()).toBeNull();
         expect(get(activityView).open).toBe(true);
         expect(bell().getAttribute('aria-expanded')).toBe('true');
+        // Activity docks beside the content, so the bell stays in reach and
+        // a second click puts the panel away.
         bell().click();
         await settle();
-        expect(get(activityView).open).toBe(true);
+        expect(get(activityView).open).toBe(false);
     });
 
     it('keeps keyboard navigation inside a focused hover preview', async () => {

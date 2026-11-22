@@ -3,6 +3,7 @@
     import ListVideoIcon from '@lucide/svelte/icons/list-video';
     import VideoPlaylistPanel from "./VideoPlaylistPanel.svelte";
     import VideoSettingsPanel from "./VideoSettingsPanel.svelte";
+    import ViewerTopBar from "../viewers/ViewerTopBar.svelte";
     import type { PlaybackPreferences } from "../../modules/video/playback-preferences";
     import { videoPlaybackPreferences } from "./video-preferences-store";
 
@@ -38,16 +39,12 @@
 </script>
 
 <div id="video-shell" class="video-shell" role="dialog" aria-modal="true" aria-labelledby="video-filename" tabindex="-1">
-    <div class="video-topbar">
-        <div class="video-title-group">
-            <div id="video-filename" class="video-filename"></div>
-            <div id="video-meta" class="video-meta"></div>
+    <ViewerTopBar class="video-topbar" titleId="video-filename" closeId="video-close" closeLabel="Close video">
+        {#snippet meta()}
+            <span id="video-meta" class="video-meta"></span>
             <span id="video-protected" class="video-protected" title="View only. Saving and forwarding are disabled." hidden>Protected</span>
-        </div>
-        <button id="video-close" class="video-icon-btn video-close-btn" type="button" aria-label="Close video" title="Close">
-            <XIcon size={22} aria-hidden="true" />
-        </button>
-    </div>
+        {/snippet}
+    </ViewerTopBar>
 
     <div id="video-stage" class="video-stage">
         <div id="video-native-viewport" class="video-native-viewport" aria-hidden="true"></div>

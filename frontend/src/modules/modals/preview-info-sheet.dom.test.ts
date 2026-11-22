@@ -5,8 +5,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('../../api', () => ({
-    getPreviewFile: vi.fn(),
-    getPreviewThumbnail: vi.fn(),
     hasOperationErrorCode: vi.fn(),
     isMobilePlatform: vi.fn(() => true),
     onRuntimeEvent: vi.fn(() => vi.fn()),

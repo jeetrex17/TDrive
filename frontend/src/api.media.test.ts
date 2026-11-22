@@ -12,7 +12,6 @@ const bindings = vi.hoisted(() => ({
     GetFileList: vi.fn(),
     GetMediaStats: vi.fn(),
     HideNativeSeekThumbnail: vi.fn(),
-    ListMedia: vi.fn(),
     MountDrive: vi.fn(),
     MountDrives: vi.fn(),
     MountStatus: vi.fn(),
@@ -25,7 +24,6 @@ const bindings = vi.hoisted(() => ({
     ResizeNativeMedia: vi.fn(),
     Search: vi.fn(),
     ShowNativeSeekThumbnail: vi.fn(),
-    Thumbnail: vi.fn(),
     UnmountDrive: vi.fn(),
     UpdateMediaPlayback: vi.fn(),
 }));
@@ -36,9 +34,7 @@ import {
     attachNativeMedia,
     closeMedia,
     closeNativeMedia,
-    getMedia,
     getMediaStats,
-    getThumbnail,
     hideNativeSeekThumbnail,
     moveNativeSeekThumbnail,
     nativeMediaCommand,
@@ -56,7 +52,6 @@ import {
     CloseNativeMedia,
     GetMediaStats,
     HideNativeSeekThumbnail,
-    ListMedia,
     MoveNativeSeekThumbnail,
     NativeMediaCommand,
     OpenMedia,
@@ -65,7 +60,6 @@ import {
     OpenStream,
     ResizeNativeMedia,
     ShowNativeSeekThumbnail,
-    Thumbnail,
     UpdateMediaPlayback,
 } from "../bindings/TDrive/internal/app/mediaservice";
 
@@ -76,37 +70,6 @@ beforeEach(() => {
 function mockBackendResult<T>(mock: { mockResolvedValue(value: T): unknown }, value: unknown): void {
     mock.mockResolvedValue(value as T);
 }
-
-describe("getMedia", () => {
-    it("maps ListMedia results to camelCase FileItems", async () => {
-        mockBackendResult(vi.mocked(ListMedia), [
-            {
-                name: "p.jpg", size: 10, msg_id: 3, parent_id: "",
-                upload_time: 5, uploader_id: 0, encrypted: false, plaintext_size: 0,
-            },
-        ]);
-        expect(await getMedia()).toEqual([
-            { msgId: 3, name: "p.jpg", size: 10, parentId: "", uploadTime: 5, uploaderId: 0, encrypted: false, plaintextSize: 0, revision: 0 },
-        ]);
-    });
-
-    it("returns an empty list when ListMedia yields null", async () => {
-        mockBackendResult(vi.mocked(ListMedia), null);
-        expect(await getMedia()).toEqual([]);
-    });
-});
-
-describe("getThumbnail", () => {
-    it("builds a data URL from the payload", async () => {
-        mockBackendResult(vi.mocked(Thumbnail), { data_base64: "QUJD", mime_type: "image/jpeg" });
-        expect(await getThumbnail(7)).toBe("data:image/jpeg;base64,QUJD");
-    });
-
-    it("rejects when the payload is empty", async () => {
-        mockBackendResult(vi.mocked(Thumbnail), { data_base64: "", mime_type: "" });
-        await expect(getThumbnail(7)).rejects.toThrow();
-    });
-});
 
 describe("native media API boundary", () => {
     const nativeSessionToken = "native-session-id";

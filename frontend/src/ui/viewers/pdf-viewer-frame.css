@@ -46,7 +46,7 @@ body {
     background: rgba(11, 14, 24, 0.88);
     color: rgba(245, 247, 255, 0.82);
     font-size: 13px;
-    font-weight: 700;
+    font-weight: var(--weight-strong);
     letter-spacing: 0.01em;
     backdrop-filter: blur(10px);
 }

@@ -14,10 +14,8 @@
     let { dashboardVisible }: Props = $props();
 </script>
 
-<!-- The upload menu renders its own trigger, and mobile.css restyles that
-     trigger into the docked accent circle through .mobile-fab, so this wrapper
-     is the selector every one of those rules hangs off and stays exactly as it
-     was. Only the id a portal aimed at is gone.
+<!-- The upload menu renders its own trigger; mobile.css styles it as the
+     floating button through .mobile-fab.
 
      Unlike desktop, the phone menu also creates a folder: Files has no context
      menu to reach that from, so the one creation control has to offer both.

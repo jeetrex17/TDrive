@@ -1,9 +1,12 @@
-import { closeMedia, isMobilePlatform, openExternalUrl, openOriginalImage } from '../../api';
+import { closeMedia, isAndroidPlatform, isMobilePlatform, openExternalUrl, openOriginalImage } from '../../api';
+import { EDGE_GUARD_PX, trailingEdgeGuard } from '../../ui/file-list/swipe-actions';
 import { state } from '../../state';
 import { notify } from '../notifications';
 import { isEncryptionPasswordRequired } from '../errors';
 import { enqueueDownload } from '../transfers';
 import { renderImageInfoHTML } from './preview-info';
+import { isDismissSwipe, VIEWER_CHROME_HIDE_MS } from './viewer-chrome';
+import { readExif, type ImageExif } from '../exif';
 import { activateModalOwnership, deactivateModalOwnership, installModalA11y } from '../../ui/modals/modal-a11y';
 import { pushSheet, type SheetHandle } from '../../ui/modals/sheet-stack';
 import { bindTouchGestures, type TouchGestureHandlers } from '../../ui/preview/touch-gestures';
@@ -35,7 +38,6 @@ type PreviewSelection =
 // bytes the backend can validate before exposing a loopback capability.
 const SUPPORTED_EXTENSIONS = new Set(["jpg", "jpeg", "png", "gif", "webp", "bmp"]);
 
-const PREVIEW_CHROME_HIDE_DELAY_MS = 1600;
 
 // The whole element set, or nothing. Before this the controller held one
 // variable per element and every function opened by re-checking whichever three
@@ -47,6 +49,10 @@ const PREVIEW_CHROME_HIDE_DELAY_MS = 1600;
 let els: PreviewElements | null = null;
 let unlockCard: UnlockCard | null = null;
 let activeFullSrc = "";
+// EXIF of the original at activeFullSrc, read once the info panel asks for it.
+let exifSrc = '';
+let activeExif: ImageExif = {};
+let exifRequest: AbortController | null = null;
 let infoOpen = false;
 // On a phone the info card is a sheet, so Android's BACK has to dismiss it
 // before the preview under it.
@@ -58,6 +64,7 @@ const zoomPan = createZoomPanController(() => els?.image ?? null);
 // Touch double taps go through the phone recogniser; the dblclick the browser
 // synthesises for them must not zoom a second time.
 let lastPointerType = "mouse";
+let lastPointerStartX = 0;
 
 // The broker owns thumbnails only. An original image is a short-lived loopback
 // session that exists solely for the current explicit viewer action.
@@ -90,6 +97,8 @@ export type PreviewNavigationItem = PreviewCommandItem & {
 export interface PreviewNavigationSource {
     getNeighbor(item: PreviewNavigationItem, direction: -1 | 1): Promise<PreviewNavigationItem | null>;
     getPosition?(item: PreviewNavigationItem): { index: number; total: number } | null;
+    /** The photo next door, if it is already known, with no side effects; used to warm its thumbnail. */
+    peekNeighbor?(item: PreviewNavigationItem, direction: -1 | 1): PreviewNavigationItem | null;
 }
 
 // Gallery supplies a bounded data source. Existing small-list callers keep
@@ -238,7 +247,7 @@ function scheduleChromeHide() {
         if (!isPreviewOpen() || isErrorVisible()) return;
         if (isCloseButtonFocused()) return;
         setChromeVisible(false);
-    }, PREVIEW_CHROME_HIDE_DELAY_MS);
+    }, VIEWER_CHROME_HIDE_MS);
 }
 
 function revealChrome() {
@@ -274,7 +283,6 @@ function hidePreviewProgress() {
     dom.modal.classList.remove("is-preview-loading");
     dom.loading.style.display = "none";
     dom.loading.setAttribute("aria-hidden", "true");
-    dom.loadingFill.style.width = "0%";
 }
 
 function preparePreviewSurface(filename: string, { keepCurrentImage = false } = {}) {
@@ -293,6 +301,53 @@ function preparePreviewSurface(filename: string, { keepCurrentImage = false } = 
     if (!keepCurrentImage) dom.image.alt = "";
 }
 
+/** The failure in words, with a way to try the same photo again. */
+function renderPreviewError(message: string): void {
+    const dom = els;
+    if (!dom) return;
+    const text = document.createElement('p');
+    text.className = 'preview-error-text';
+    text.textContent = message;
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.className = 'preview-error-retry';
+    retry.textContent = 'Try again';
+    retry.addEventListener('click', () => {
+        const item = activePreviewItem;
+        if (!item || !isPreviewOpen()) return;
+        dom.error.style.display = 'none';
+        dom.error.replaceChildren();
+        dom.modal.classList.remove('is-preview-error');
+        showPreviewLoading();
+        void loadPreview(item, { keepThumbnail: Boolean(dom.thumbnail.getAttribute('src')) }).catch(() => undefined);
+    });
+    dom.error.replaceChildren(text, retry);
+    dom.error.style.display = 'block';
+}
+
+// Thumbnails for the photos either side, so a swipe lands on a picture at
+// once. Thumbnails only: originals are never fetched ahead of an explicit view.
+let neighborLeases: RenditionLease[] = [];
+
+function releaseNeighborLeases(): void {
+    for (const lease of neighborLeases) lease.release();
+    neighborLeases = [];
+}
+
+function warmNeighbors(target: PreviewNavigationItem): void {
+    const previous = neighborLeases;
+    neighborLeases = [];
+    const source = navSource;
+    for (const direction of [-1, 1] as const) {
+        const neighbor = source?.peekNeighbor?.(target, direction);
+        if (!neighbor || (neighbor.encrypted && !state.encryption.passwordRemembered)) continue;
+        const lease = acquireRendition(renditionRequest(neighbor), 'viewer');
+        void lease.promise.catch(() => undefined);
+        neighborLeases.push(lease);
+    }
+    for (const lease of previous) lease.release();
+}
+
 function showPreviewError(message: string, { keepCurrentImage = false } = {}) {
     const dom = els;
     if (!dom) return;
@@ -303,8 +358,7 @@ function showPreviewError(message: string, { keepCurrentImage = false } = {}) {
     dom.modal.classList.remove("is-preview-locked");
     hidePreviewProgress();
     if (!keepCurrentImage) resetImageSurface();
-    dom.error.textContent = message || "Download failed";
-    dom.error.style.display = "block";
+    renderPreviewError(message || "Download failed");
     dom.modal.classList.add("is-preview-error");
     setChromeVisible(true);
     clearChromeHideTimer();
@@ -351,6 +405,7 @@ function releaseOriginalSession(): void {
     const session = activeOriginalSession;
     activeOriginalSession = null;
     activeFullSrc = '';
+    clearExif();
     releaseOriginalBudget?.();
     releaseOriginalBudget = null;
     if (session?.token) void Promise.resolve(closeMedia(session.token)).catch(() => {});
@@ -405,13 +460,14 @@ function renditionRequest(target: PreviewNavigationItem): ImageRequest {
     };
 }
 
-function releasePreviewResources(): void {
+function releasePreviewResources({ keepNeighbors = false } = {}): void {
     activeThumbnailLease?.release();
     activeThumbnailLease = null;
+    if (!keepNeighbors) releaseNeighborLeases();
     releaseOriginalSession();
 }
 
-export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail = false } = {}) {
+export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail = false, holdCurrent = false } = {}) {
     const dom = readyElements();
     if (!dom) throw new Error('Preview unavailable');
     const token = ++previewRequestToken;
@@ -419,9 +475,19 @@ export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail
     const filename = target.name || 'Preview';
     activePreviewKey = getPreviewKey(target);
     activePreviewItem = target;
-    releasePreviewResources();
+    // The warmed neighbours stay until the new ones are taken, so the photo
+    // being moved to keeps the thumbnail that was fetched for it.
+    releasePreviewResources({ keepNeighbors: true });
     zoomPan.reset();
-    resetImageSurface({ keepThumbnail });
+    // Moving between photos keeps the one on screen until the next one has
+    // something to show, so the stage never flashes empty.
+    let holding = holdCurrent;
+    const replaceHeldImage = () => {
+        if (!holding) return;
+        holding = false;
+        resetImageSurface();
+    };
+    if (!holding) resetImageSurface({ keepThumbnail });
     updateNavChrome();
     refreshInfoPanel();
     // Ask for the password before the request, not after it fails: a known
@@ -433,10 +499,12 @@ export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail
     const request = renditionRequest(target);
     const thumbnailLease = acquireRendition(request, 'viewer');
     activeThumbnailLease = thumbnailLease;
+    warmNeighbors(target);
     // Do not trust an old DOM URL as identity. The shared broker either reuses
     // the same revision asset or reacquires it with the immutable request.
     void thumbnailLease.promise.then(asset => {
         if (token !== previewRequestToken || !isPreviewOpen() || activeThumbnailLease !== thumbnailLease) return;
+        replaceHeldImage();
         showPreviewThumbnail(asset.url, filename);
     }).catch(error => {
         if (token !== previewRequestToken || !isPreviewOpen()) return;
@@ -453,6 +521,7 @@ export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail
             return null;
         }
         activeOriginalSession = { token: opened.token, url: opened.url };
+        replaceHeldImage();
         // A derivative's dimensions and stripped EXIF do not describe the original.
         activeFullSrc = opened.imagePreview ? '' : opened.url;
         showPreviewImage(opened.url, filename, { keepLoading: true });
@@ -467,6 +536,7 @@ export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail
             releaseOriginalBudget = null;
         }
         if (token !== previewRequestToken || !isPreviewOpen()) return null;
+        replaceHeldImage();
         if (isEncryptionPasswordRequired(error)) {
             showLockedState();
             return null;
@@ -478,8 +548,7 @@ export async function loadPreview(target: PreviewNavigationItem, { keepThumbnail
         if (dom.thumbnail.getAttribute('src')) {
             hidePreviewProgress();
             dom.image.title = 'Original image unavailable';
-            dom.error.textContent = normalized.message;
-            dom.error.style.display = 'block';
+            renderPreviewError(normalized.message);
         } else showPreviewError(normalized.message);
         return null;
     }
@@ -500,6 +569,7 @@ export function closePreviewModal() {
     hideLockedState();
     zoomPan.reset();
     activeFullSrc = "";
+    clearExif();
     clearChromeHideTimer();
 
     if (dom) {
@@ -544,7 +614,7 @@ async function openPreviewItem(item: PreviewNavigationItem, transitionSource: Pr
     if (sharedTransition && transitionSource) showPreviewThumbnail(transitionSource.imageSrc, item.name || "Preview");
 
     try {
-        await loadPreview(item, { keepThumbnail: sharedTransition });
+        await loadPreview(item, { keepThumbnail: sharedTransition, holdCurrent: keepCurrentImage });
         return true;
     } catch {
         return false;
@@ -607,6 +677,10 @@ export async function openPreviewList(
                 else if (items[position - 1]?.id === item.id) position -= 1;
             }
             return { index: position, total: items.length };
+        },
+        peekNeighbor(item, direction) {
+            const index = items.findIndex((candidate) => candidate.id === item.id);
+            return index < 0 ? null : (items[index + direction] as PreviewNavigationItem | undefined) ?? null;
         },
     };
     return openPreviewSource(source, items[i] as PreviewNavigationItem, transitionSource);
@@ -733,12 +807,34 @@ function refreshInfoPanel() {
     const dom = els;
     if (!infoOpen || !dom?.infoBody || !activePreviewItem) return;
     const hasFull = Boolean(activeFullSrc);
+    if (hasFull && exifSrc !== activeFullSrc) loadExif(activeFullSrc);
     dom.infoBody.innerHTML = renderImageInfoHTML({
         item: activePreviewItem,
-        fullSrc: activeFullSrc,
+        exif: hasFull && exifSrc === activeFullSrc ? activeExif : {},
         naturalWidth: hasFull ? dom.image.naturalWidth || 0 : 0,
         naturalHeight: hasFull ? dom.image.naturalHeight || 0 : 0,
     });
+}
+
+function loadExif(src: string): void {
+    exifRequest?.abort();
+    const request = new AbortController();
+    exifRequest = request;
+    exifSrc = src;
+    activeExif = {};
+    void readExif(src, request.signal).then((exif) => {
+        if (exifRequest !== request || exifSrc !== src) return;
+        exifRequest = null;
+        activeExif = exif;
+        if (activeFullSrc === src) refreshInfoPanel();
+    });
+}
+
+function clearExif(): void {
+    exifRequest?.abort();
+    exifRequest = null;
+    exifSrc = '';
+    activeExif = {};
 }
 
 // --- encrypted "locked" state: an inline unlock card shown in place of the
@@ -843,8 +939,8 @@ function infoTouchHandlers(): TouchGestureHandlers {
             panel.style.transition = "none";
             panel.style.transform = `translate3d(0, ${Math.max(0, dy)}px, 0)`;
         },
-        dragEnd: (_dx, dy, _axis, velocity) => {
-            if (dy > INFO_DISMISS_PX || (dy > 24 && velocity > INFO_DISMISS_VELOCITY)) {
+        dragEnd: (_dx, dy, _axis, velocity, cancelled) => {
+            if (!cancelled && dy > INFO_DISMISS_PX || (dy > 24 && velocity > INFO_DISMISS_VELOCITY)) {
                 // Let the throw finish downwards while the card fades out.
                 settleInfoSheet("translateY(100%)");
                 closeInfoPanel();
@@ -853,6 +949,11 @@ function infoTouchHandlers(): TouchGestureHandlers {
             settleInfoSheet("");
         },
     };
+}
+
+function inSystemEdge(x: number): boolean {
+    const trailing = trailingEdgeGuard(window.innerWidth, isAndroidPlatform());
+    return x <= EDGE_GUARD_PX || (trailing > 0 && x >= trailing);
 }
 
 function previewTouchHandlers(): TouchGestureHandlers {
@@ -875,7 +976,10 @@ function previewTouchHandlers(): TouchGestureHandlers {
         pinchStart: () => zoomPan.endPan(),
         pinch: (factor, x, y) => zoomAt(x, y, factor),
         // A zoomed picture pans instead; the pan handlers above own that pointer.
-        dragStart: () => zoomPan.scale === 1 && isPreviewVisible() && !els?.modal.classList.contains("is-preview-locked"),
+        // A sideways drag born in a system edge zone is the OS back gesture:
+        // taking it too would change photo and close the viewer at once.
+        dragStart: (axis) => zoomPan.scale === 1 && isPreviewVisible() && !els?.modal.classList.contains("is-preview-locked")
+            && (axis !== "x" || !inSystemEdge(lastPointerStartX)),
         drag: (dx, dy, axis) => {
             const dom = els;
             if (!dom) return;
@@ -887,7 +991,12 @@ function previewTouchHandlers(): TouchGestureHandlers {
             dom.image.style.transform = `translate3d(0, ${drop}px, 0) scale(${Math.max(0.82, 1 - drop / 1400)})`;
             dom.modal.style.setProperty("--preview-dismiss", String(Math.min(1, drop / 240)));
         },
-        dragEnd: (dx, dy, axis, velocity) => {
+        dragEnd: (dx, dy, axis, velocity, cancelled) => {
+            // An interrupted gesture only tidies up; it never acts.
+            if (cancelled) {
+                settleDrag(true);
+                return;
+            }
             if (axis === "x") {
                 const step = dx < 0 ? 1 : -1;
                 if ((Math.abs(dx) > 56 || velocity > 0.5) && canNavigate(step)) {
@@ -903,7 +1012,7 @@ function previewTouchHandlers(): TouchGestureHandlers {
                 openInfoPanel();
                 return;
             }
-            if (dy > 96 || (dy > 24 && velocity > 0.6)) {
+            if (isDismissSwipe(dy, velocity)) {
                 settleDrag(false);
                 closePreviewModal();
                 return;
@@ -920,7 +1029,9 @@ async function handlePreviewKeydown(event: KeyboardEvent) {
     if (event.key === "Escape" && previewOpen) {
         event.preventDefault();
         event.stopPropagation();
-        closePreviewModal();
+        // The innermost layer goes first, as in the video player.
+        if (infoOpen) closeInfoPanel();
+        else closePreviewModal();
         return;
     }
 
@@ -1129,6 +1240,7 @@ export function activatePreviewModal(): () => void {
     if (isMobilePlatform()) {
         listenPreview(dom.stage, "pointerdown", ((event: PointerEvent) => {
             lastPointerType = event.pointerType;
+            lastPointerStartX = event.clientX;
         }) as EventListener, true);
         previewListenerCleanups.push(bindTouchGestures(dom.stage, previewTouchHandlers()));
         // The info sheet is optional markup, and binding gestures to nothing
@@ -1151,7 +1263,7 @@ export function activatePreviewModal(): () => void {
     listenPreview(dom.image, "error", (() => {
         if (isPreviewOpen() && dom.image.getAttribute("src")) {
             releaseOriginalSession();
-            showPreviewError("Not a supported image", { keepCurrentImage: true });
+            showPreviewError("This photo could not be shown.", { keepCurrentImage: true });
         }
     }) as EventListener);
     listenPreview(dom.image, "load", (() => {

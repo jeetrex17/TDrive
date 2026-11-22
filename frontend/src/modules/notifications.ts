@@ -96,17 +96,16 @@ export interface NotifyOptions {
     level?: ToastLevel;
     title?: string;
     body?: string;
-    /** Legacy option; all notices expire, including former sticky notices. */
-    sticky?: boolean;
     durationMs?: number;
     spinner?: boolean;
     action?: ToastAction;
     /** Runs when the toast expires, is dismissed, replaced, evicted or cleared. */
     onRemoved?: () => void;
     /**
-     * False for a toast that only repeats what a transfer row already says.
-     * The row carries the reason as its note, so mirroring the toast into the
-     * bell would list one failure twice and count it twice.
+     * Whether the notice is kept in the bell's history. Errors and warnings are
+     * kept unless a transfer row already carries the reason; anything else is
+     * kept only when it reports something that happened out of sight, such as
+     * an approval or an update, rather than confirming the user's own action.
      */
     history?: boolean;
 }
@@ -129,7 +128,6 @@ export function notify(opts: NotifyOptions = {}): string {
         level,
         title: String(opts.title || ''),
         body: opts.body ? String(opts.body) : '',
-        sticky: false,
         durationMs: duration,
         expiresAt: now + duration,
         paused,
@@ -141,7 +139,8 @@ export function notify(opts: NotifyOptions = {}): string {
 
     // A progress spinner is followed by a final result. Store only that result
     // in the bell so an operation does not appear twice in history.
-    if (!entry.spinner && entry.title && opts.history !== false) {
+    const keep = opts.history ?? (level === 'error' || level === 'warning');
+    if (!entry.spinner && entry.title && keep) {
         pushHistoryEvent({
             level: entry.level,
             title: entry.title,

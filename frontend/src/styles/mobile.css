@@ -11,13 +11,11 @@
 html.mobile {
     /* Everything that floats above the tab bar measures from these, so the
        bar's shape lives in one place. The slot adds the bottom inset on top. */
-    --tabbar-height: 64px;
-    /* How far the floating bar sits from the screen edges. */
-    --tabbar-inset: 12px;
-    /* The top of the tab bar: where anything floating over the content has to
-       stop. Every such surface measures from this one value, so the bar's shape
-       is stated once and they cannot drift apart. */
-    --mobile-overlay-bottom: calc(var(--tabbar-height) + var(--tabbar-inset) * 2 + var(--inset-bottom));
+    --tabbar-height: 56px;
+    /* Where anything floating over the content stops: the top of the tab bar,
+       plus a margin so a floating button never touches its edge. Every such
+       surface measures from this one value, so they cannot drift apart. */
+    --mobile-overlay-bottom: calc(var(--tabbar-height) + var(--inset-bottom) + var(--space-4));
     --selection-bar-reserve: calc(76px + var(--inset-bottom));
     --context-action-clearance: calc(52px + var(--space-4));
     /* The widest a column of file rows or settings should run before it stops
@@ -72,7 +70,8 @@ html.mobile [role="button"],
 html.mobile [role="menuitem"],
 html.mobile [role="menuitemradio"],
 html.mobile .gallery-cell,
-html.mobile .album-tile {
+html.mobile .album-tile,
+html.mobile .preview-overlay img {
     -webkit-tap-highlight-color: transparent;
     -webkit-touch-callout: none;
 }
@@ -210,7 +209,7 @@ html.mobile .topbar-done {
     border: 0;
     background: transparent;
     color: var(--color-accent);
-    font-size: 1rem;
+    font-size: var(--type-md);
     font-weight: var(--weight-semibold);
     border-radius: var(--radius-md);
     cursor: pointer;
@@ -220,6 +219,7 @@ html.mobile .topbar-done:active { background: var(--overlay-accent-1); }
 html.mobile .topbar-done.topbar-danger { color: var(--color-danger); }
 html.mobile .topbar-done.topbar-danger:active { background: var(--overlay-danger-1); }
 html.mobile .topbar-trash .topbar-plain-titles,
+html.mobile .topbar-transfers .topbar-plain-titles,
 html.mobile .topbar-photos .topbar-plain-titles { flex: 1 1 auto; min-width: 0; }
 /* An album name can be long, so it clips the way a folder's does rather than
    shoving Select off the trailing edge. */
@@ -263,7 +263,7 @@ html.mobile .drive-header-name {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 1.375rem;
+    font-size: var(--type-2xl);
     font-weight: var(--weight-strong);
     color: var(--color-text);
     letter-spacing: -0.01em;
@@ -292,7 +292,7 @@ html.mobile .topbar-folder-title {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 1.25rem;
+    font-size: var(--type-xl);
     font-weight: var(--weight-strong);
     color: var(--color-text);
     letter-spacing: -0.01em;
@@ -301,7 +301,7 @@ html.mobile .topbar-folder-meta {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: 0.8125rem;
+    font-size: var(--type-sm);
     font-weight: var(--weight-medium);
     color: var(--color-text-muted);
 }
@@ -353,7 +353,7 @@ html.mobile .topbar-menu {
 }
 html.mobile .topbar-menu-label {
     padding: 8px 12px 4px;
-    font-size: 0.75rem;
+    font-size: var(--type-xs);
     font-weight: var(--weight-semibold);
     color: var(--color-text-muted);
 }
@@ -368,7 +368,7 @@ html.mobile .topbar-menu-item {
     border: 0;
     background: transparent;
     color: var(--color-text-soft);
-    font-size: 0.9375rem;
+    font-size: var(--mobile-type-body);
     text-align: left;
     border-radius: var(--radius-sm);
     cursor: pointer;
@@ -393,7 +393,7 @@ html.mobile .topbar-selectall {
     border: 0;
     background: transparent;
     color: var(--color-text-soft);
-    font-size: 1rem;
+    font-size: var(--type-md);
     font-weight: var(--weight-medium);
     border-radius: var(--radius-md);
     cursor: pointer;
@@ -438,7 +438,7 @@ html.mobile .topbar-search input {
     height: 40px;
     margin: 0;
     padding: 0 14px 0 40px;
-    font-size: 1rem;
+    font-size: max(16px, var(--type-md));
     color: var(--color-text);
     background: var(--color-surface-2);
     border: 1px solid transparent;
@@ -461,38 +461,20 @@ html.mobile .topbar-search input:focus-visible {
 }
 
 /* ============================ TAB BAR ============================ */
-/* A floating bar rather than a full-bleed one: it reads as a control resting
-   on the content instead of a wall the content stops at, and the rounded ends
-   echo the file card above it. The upload action sits in the middle of the row
-   as a peer of the tabs, not on top of them. */
+/* Attached to the bottom edge, as both platforms draw their own: a hairline
+   above, the canvas behind, and the home indicator's inset inside it. */
 html.mobile .mobile-tabbar-slot {
     position: relative;
     flex: 0 0 auto;
-    padding:
-        0
-        calc(var(--tabbar-inset) + var(--inset-right))
-        calc(var(--tabbar-inset) + var(--inset-bottom))
-        calc(var(--tabbar-inset) + var(--inset-left));
+    padding: 0 var(--inset-right) var(--inset-bottom) var(--inset-left);
+    background: var(--color-surface-0);
+    border-top: 1px solid var(--color-border-soft);
 }
 html.mobile .tab-bar {
     position: relative;
     display: flex;
     align-items: stretch;
     height: var(--tabbar-height);
-    background: var(--color-surface-1);
-    border: 1px solid var(--color-border-soft);
-    border-radius: var(--radius-xl);
-    box-shadow: var(--shadow-lg);
-}
-/* The upload action is the middle cell and shares the tabs' sizing, so all
-   five centres land on the same rhythm. Given a width of its own it made the
-   two gaps beside it narrower than the two at the ends. */
-html.mobile .mobile-fab {
-    flex: 1 1 0;
-    position: relative;
-    display: grid;
-    place-items: center;
-    min-width: 0;
 }
 html.mobile .tab-item {
     flex: 1 1 0;
@@ -509,7 +491,7 @@ html.mobile .tab-item {
     cursor: pointer;
     transition: color var(--motion-med) var(--ease-standard);
 }
-html.mobile .tab-item.active { color: var(--color-accent); }
+html.mobile .tab-item.active { color: var(--color-current-text); }
 html.mobile .tab-icon {
     position: relative;
     display: inline-grid;
@@ -535,7 +517,7 @@ html.mobile .tab-icon .profile-avatar {
 html.mobile .tab-icon.is-avatar .tab-pill { opacity: 0; }
 html.mobile .tab-item.active .tab-icon.is-avatar .profile-avatar {
     box-shadow:
-        0 0 0 2px var(--color-accent),
+        0 0 0 2px var(--color-current-text),
         inset 0 0 0 1px rgba(255, 255, 255, 0.14);
 }
 
@@ -553,7 +535,7 @@ html.mobile .tab-pill {
     top: 50%;
     width: 48px;
     height: 32px;
-    background: var(--overlay-accent-1);
+    background: var(--color-current-bg);
     border-radius: var(--radius-pill);
     pointer-events: none;
     opacity: 0;
@@ -584,61 +566,11 @@ html.mobile .tab-badge {
 }
 
 /* ============================ UPLOAD BUTTON ============================ */
-/* Docked into the middle of the tab bar. The Fab renders the upload menu
-   inside .mobile-fab; the rules below restyle the menu's own trigger into the
-   accent circle. It rides above the bar so its shadow reads against it. */
-/* The upload action sits in the bar's middle slot, level with the tab icons.
-   It used to float half outside the bar, which cost it on every count: a
-   circle overlapping a rounded rectangle put three different corner radii in
-   one control, the cut-out needed a canvas-coloured ring to fake a hole in the
-   bar's outline, and at 56px with a drop shadow it was the brightest and
-   largest object on the screen -- louder than the files, which are the actual
-   point of the app.
-
-   Seated and shrunk, it is still unmistakably the primary action, because
-   accent on dark does that at any size. It just no longer shouts. */
-html.mobile .mobile-fab .upload-btn,
-html.mobile .mobile-fab .primary-btn.upload-btn {
-    /* Built like a tab item, because it is standing in a row of them: same
-       stack, same gap, same padding, same label. What sets it apart is that its
-       pill is filled rather than tinted, which is the difference between acting
-       and navigating. */
-    width: 100%;
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 3px;
-    padding: 6px 0;
-    border: 0;
-    border-radius: var(--radius-xl);
-    background: transparent;
-    color: var(--color-accent);
-    font-size: 0.6875rem;
-    font-weight: var(--weight-semibold);
-    letter-spacing: 0.01em;
-    box-shadow: none;
-}
-html.mobile .mobile-fab .upload-btn-pill {
-    /* The same 48x32 the active tab's pill grows into, so the two read as one
-       family rather than two unrelated shapes sharing a bar. */
-    width: 48px;
-    height: 32px;
-    display: grid;
-    place-items: center;
-    background: var(--color-accent);
-    color: var(--color-on-accent);
-    border-radius: var(--radius-pill);
-    transition: transform var(--motion-fast) var(--ease-standard);
-}
-html.mobile .mobile-fab .upload-btn:active .upload-btn-pill { transform: scale(0.9); }
-html.mobile .mobile-fab .upload-btn .btn-icon { width: 24px; height: 24px; }
-
 /* Contextual primary action. It is deliberately independent of the tab bar:
    navigation has four equally weighted destinations, while creating content
    only appears where it has somewhere to go. 52px gives Android's 48dp target
-   room and remains comfortably above iOS's 44pt floor. */
+   room and remains comfortably above iOS's 44pt floor. The Fab renders the
+   upload menu's own trigger, restyled here into the accent circle. */
 html.mobile .mobile-context-action {
     position: absolute;
     right: calc(var(--space-4) + var(--inset-right));
@@ -654,30 +586,32 @@ html.mobile .mobile-context-action .mobile-fab .upload-btn,
 html.mobile .mobile-context-action .mobile-fab .primary-btn.upload-btn {
     display: grid;
     place-items: center;
+    gap: 3px;
     width: 52px;
     height: 52px;
     padding: 0;
     overflow: hidden;
+    border: 0;
     border-radius: 50%;
-    background: var(--color-accent);
+    background: var(--color-action);
     color: transparent;
+    font-size: var(--type-2xs);
     box-shadow: var(--shadow-md);
 }
 html.mobile .mobile-context-action .mobile-fab .upload-btn-pill {
     width: 52px;
     height: 52px;
-    background: transparent;
-    color: var(--color-on-accent);
+    display: grid;
+    place-items: center;
+    color: var(--color-on-action);
+    border-radius: var(--radius-pill);
+    transition: transform var(--motion-fast) var(--ease-standard);
 }
-html.mobile .mobile-context-action .mobile-fab .upload-btn:active .upload-btn-pill {
-    transform: scale(0.94);
-}
+html.mobile .mobile-context-action .mobile-fab .upload-btn:active .upload-btn-pill { transform: scale(0.94); }
+html.mobile .mobile-context-action .mobile-fab .upload-btn .btn-icon { width: 24px; height: 24px; }
 
-/* The upload menu is a bottom sheet on a phone, not a popover. The trigger is
-   docked in the middle of the tab bar against the bottom safe area, so there is
-   no room to anchor a popover to it without covering the bar. A sheet is also
-   the surface the row actions and the drive switcher already use, so the phone
-   keeps one way of asking a question. */
+/* The upload menu is a bottom sheet on a phone, not a popover: the same
+   surface the row actions and the drive switcher use. */
 html.mobile .upload-scrim {
     position: fixed;
     inset: 0;
@@ -756,19 +690,23 @@ html.mobile .mobile-selection-bar {
 }
 
 /* ============================ TRANSFERS TAB ============================ */
-html.mobile .transfers-tab { padding-top: var(--space-2); }
+/* A full-bleed list like Files: the rows run to the screen edges, so the
+   scroller only keeps the safe-area insets at its sides. */
+html.mobile .transfers-tab {
+    padding: var(--space-2) var(--inset-right) calc(var(--space-6) + var(--inset-bottom)) var(--inset-left);
+}
 html.mobile .transfers-section-head {
     display: flex;
     align-items: baseline;
     justify-content: space-between;
-    padding: var(--space-4) var(--space-1) var(--space-2);
+    padding: var(--space-4) var(--space-4) var(--space-2);
 }
 html.mobile .transfers-section-head:first-child { padding-top: var(--space-1); }
 html.mobile .transfers-clear {
     border: 0;
     background: transparent;
     color: var(--color-accent);
-    font-size: 0.8125rem;
+    font-size: var(--type-sm);
     font-weight: var(--weight-semibold);
     padding: 6px 8px;
     cursor: pointer;
@@ -776,9 +714,6 @@ html.mobile .transfers-clear {
 html.mobile .transfers-group {
     display: flex;
     flex-direction: column;
-    background: var(--color-surface-1);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
 }
 /* Notices in Recent, which are still the bell's own row: transfers have the
    phone's row (ui/mobile/MobileTransferRow) and bring their own shape.
@@ -792,12 +727,14 @@ html.mobile .transfers-group .notif-row {
     grid-template-columns: 28px minmax(0, 1fr) auto;
     align-items: center;
     gap: 12px;
-    padding: 12px 14px;
+    padding: 12px 16px;
     background: transparent;
     border: 0;
     border-radius: 0;
 }
-html.mobile .transfers-group .notif-row:hover { background: transparent; }
+@media (hover: hover) {
+    html.mobile .transfers-group .notif-row:hover { background: transparent; }
+}
 /* One line each, so every row is the same height whatever it is reporting. */
 html.mobile .transfers-group .notif-row-title,
 html.mobile .transfers-group .notif-row-sub {
@@ -842,26 +779,23 @@ html.mobile .account-identity {
 }
 html.mobile .account-identity-meta { min-width: 0; }
 html.mobile .account-name {
-    font-size: 1.25rem;
+    font-size: var(--type-xl);
     font-weight: var(--weight-strong);
     color: var(--color-text);
     line-height: 1.2;
 }
-html.mobile .account-handle { font-size: 0.875rem; color: var(--color-text-muted); }
+html.mobile .account-handle { font-size: var(--type-base); color: var(--color-text-muted); }
 
 html.mobile .account-group { margin-bottom: var(--space-6); }
 html.mobile .mobile-section-label {
     padding: 0 var(--space-2) var(--space-2);
-    font-size: 0.8125rem;
+    font-size: var(--type-sm);
     font-weight: var(--weight-semibold);
     color: var(--color-text-muted);
 }
 html.mobile .account-card {
     display: flex;
     flex-direction: column;
-    background: var(--color-surface-1);
-    border-radius: var(--radius-lg);
-    overflow: hidden;
 }
 html.mobile .account-row {
     display: flex;
@@ -878,6 +812,16 @@ html.mobile .account-row {
     cursor: pointer;
 }
 html.mobile .account-row + .account-row { border-top: 1px solid var(--color-border-soft); }
+/* Scoped through the group so it outranks the switch row's own phone sizing. */
+html.mobile .account-group .account-card .ui-switch-row {
+    min-height: 52px;
+    padding: var(--space-2) 14px;
+}
+html.mobile .account-group .account-card .ui-switch-title {
+    font-size: var(--mobile-type-body);
+    font-weight: var(--weight-regular);
+}
+html.mobile .account-card .ui-switch-row + .account-row { border-top: 1px solid var(--color-border-soft); }
 html.mobile .account-row:active { background: var(--overlay-neutral-2); }
 html.mobile .account-row .account-row-icon { flex: 0 0 auto; color: var(--color-text-muted); }
 html.mobile .account-row-label { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -890,7 +834,7 @@ html.mobile .account-row-static .account-row-label {
 html.mobile .account-row-detail {
     overflow: hidden;
     color: var(--color-text-muted);
-    font-size: 0.75rem;
+    font-size: var(--type-xs);
     line-height: 1.2;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -909,8 +853,9 @@ html.mobile .account-row-value {
 html.mobile .account-row .account-row-chevron { flex: 0 0 auto; color: var(--color-text-subtle); }
 
 html.mobile .account-about { padding: 16px; gap: 4px; }
-html.mobile .account-about-name { font-size: 1rem; font-weight: var(--weight-strong); color: var(--color-text); }
-html.mobile .account-about-tagline { font-size: 0.875rem; color: var(--color-text-muted); }
+html.mobile .account-about-name { font-size: var(--type-md); font-weight: var(--weight-strong); color: var(--color-text); }
+html.mobile .account-about-tagline { font-size: var(--type-base); color: var(--color-text-muted); }
+html.mobile .account-about-version { font-size: var(--type-sm); color: var(--color-text-muted); font-variant-numeric: tabular-nums; }
 
 html.mobile .account-logout {
     display: flex;
@@ -922,7 +867,7 @@ html.mobile .account-logout {
     border: 0;
     background: var(--color-surface-1);
     color: var(--color-danger);
-    font-size: 0.9375rem;
+    font-size: var(--mobile-type-body);
     font-weight: var(--weight-semibold);
     border-radius: var(--radius-lg);
     cursor: pointer;
@@ -931,23 +876,6 @@ html.mobile .account-logout:active { background: var(--overlay-danger-1); }
 
 /* Appearance and backup are drill-ins, leaving Account a fast, scannable list. */
 html.mobile .account-detail { min-width: 0; }
-html.mobile .account-detail-back {
-    display: inline-flex;
-    align-items: center;
-    gap: 4px;
-    min-width: 44px;
-    min-height: 44px;
-    margin: -8px 0 var(--space-3) -8px;
-    padding: 0 8px;
-    border: 0;
-    border-radius: var(--radius-md);
-    background: transparent;
-    color: var(--color-accent);
-    font-size: 0.9375rem;
-    font-weight: var(--weight-semibold);
-    cursor: pointer;
-}
-html.mobile .account-detail-back:active { background: var(--overlay-accent-1); }
 html.mobile .account-detail .appearance-panel {
     width: auto;
     max-height: none;
@@ -961,7 +889,7 @@ html.mobile .account-detail .appearance-header {
     border: 0;
 }
 html.mobile .account-detail #appearance-title {
-    font-size: 0.8125rem;
+    font-size: var(--type-sm);
     font-weight: var(--weight-semibold);
     color: var(--color-text-muted);
     letter-spacing: 0;
@@ -1029,7 +957,7 @@ html.mobile .switcher-header {
     justify-content: space-between;
     padding: 4px 0 12px;
 }
-html.mobile .switcher-title { font-size: 1.0625rem; font-weight: var(--weight-strong); color: var(--color-text); }
+html.mobile .switcher-title { font-size: var(--type-lg); font-weight: var(--weight-strong); color: var(--color-text); }
 /* A 32px disc inside a 44px target: the margins give back what the box gained,
    so the header keeps its height and the disc stays exactly where it was. */
 html.mobile .switcher-close {
@@ -1073,7 +1001,7 @@ html.mobile .switcher-list .drive-item {
     min-height: 52px;
     padding: 10px 12px;
     border-radius: var(--radius-md);
-    font-size: 1rem;
+    font-size: var(--type-md);
     color: var(--color-text);
 }
 html.mobile .switcher-list .drive-item.active { background: var(--overlay-accent-1); color: var(--color-accent); }
@@ -1107,7 +1035,7 @@ html.mobile .switcher-action {
     border: 0;
     background: transparent;
     color: var(--color-text);
-    font-size: 0.9375rem;
+    font-size: var(--mobile-type-body);
     text-align: left;
     border-radius: var(--radius-md);
     cursor: pointer;
@@ -1127,17 +1055,18 @@ html.mobile .mobile-empty {
     padding: var(--space-6);
 }
 html.mobile .mobile-empty-glyph { color: var(--color-border); margin-bottom: 4px; }
-html.mobile .mobile-empty-title { font-size: 1.0625rem; font-weight: var(--weight-strong); color: var(--color-text); }
-html.mobile .mobile-empty-body { font-size: 0.875rem; color: var(--color-text-muted); max-width: 36ch; }
+html.mobile .mobile-empty-title { font-size: var(--type-lg); font-weight: var(--weight-strong); color: var(--color-text); }
+html.mobile .mobile-empty-body { font-size: var(--type-base); color: var(--color-text-muted); max-width: 36ch; }
 
 /* ============================ TOASTS ============================ */
-/* Keep notices below the top bar so they do not cover navigation controls.
-   They remain in the upper part of the screen and clear the system safe area. */
+/* Docked above the tab bar and the add button, as both platforms place their
+   own snackbars: the list's first rows and the top bar stay readable, and a
+   notice sits where the thumb already is. */
 html.mobile #toast-stack.toast-stack {
-    top: calc(var(--inset-top) + 76px);
+    top: auto;
     left: calc(var(--space-4) + var(--inset-left));
     right: calc(var(--space-4) + var(--inset-right));
-    bottom: auto;
+    bottom: calc(var(--mobile-overlay-bottom) + 52px + var(--space-3));
     transform: none;
     width: auto;
     max-width: none;
@@ -1175,9 +1104,12 @@ html.mobile .toast-with-action .toast-action {
 }
 html.mobile .toast-with-action .toast-close { grid-column: 3; grid-row: 1; }
 
-/* It arrives from the edge it lives on, and a swipe up returns it there. */
+/* Newest nearest the edge it arrives from. */
+html.mobile .toast-stack-inner { flex-direction: column; }
+
+/* It arrives from the edge it lives on, and a swipe down returns it there. */
 @keyframes tdrive-toast-enter {
-    from { opacity: 0; transform: translateY(-12px); }
+    from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
 }
 
@@ -1322,7 +1254,7 @@ html.mobile .row-swipe-btn.is-delete {
     color: var(--color-danger);
 }
 
-html.mobile .row-more { transition: opacity 100ms var(--ease-standard); }
+html.mobile .row-more { transition: opacity var(--motion-fast) var(--ease-standard); }
 html.mobile .file-row.is-revealing .row-more {
     opacity: 0;
     pointer-events: none;
@@ -1357,8 +1289,7 @@ html.mobile .file-row.is-revealing .row-more {
     html.mobile .mobile-sheet,
     html.mobile .sheet-scrim,
     html.mobile .topbar-search-shell,
-    html.mobile .topbar-search-shell .topbar-search,
-    html.mobile .mobile-fab .upload-btn { transition: none; }
+    html.mobile .topbar-search-shell .topbar-search { transition: none; }
     /* The pill still needs to mark the active tab, so only its movement goes;
        opacity carries the meaning and stays (design-taste: keep comprehension). */
     html.mobile .tab-item.active .tab-pill { transform: translate(-50%, -50%) scale(1); }
@@ -1369,3 +1300,11 @@ html.mobile .file-row.is-revealing .row-more {
        state it is, so nothing is lost by holding it still. */
     html.mobile .item-status[data-spins="true"] svg { animation: none; }
 }
+/* Downloads bring a desktop row; on the phone list it takes the same column. */
+html.mobile .transfers-group .download-row {
+    grid-template-columns: 28px minmax(0, 1fr);
+    column-gap: 12px;
+    padding: 12px 16px;
+}
+/* The section head already sits on the gutter; its label adds no indent. */
+html.mobile .transfers-section-head .mobile-section-label { padding: 0; }
