@@ -135,13 +135,20 @@ describe('acting on a row from the keyboard', () => {
         flushSync();
         expect(state.selectedItems.size).toBe(2);
 
-        press(row('file:41'), 'Backspace');
+        press(row('file:41'), 'Delete');
 
         expect(modals.moveToTrash).toHaveBeenCalledOnce();
         expect(modals.moveToTrash).toHaveBeenCalledWith(expect.objectContaining({
             type: 'bulk',
             items: [expect.objectContaining({ id: 'design' }), expect.objectContaining({ id: 41 })],
         }));
+    });
+
+    it('uses Backspace to navigate to the parent folder instead of deleting', () => {
+        press(row('file:41'), 'Backspace');
+
+        expect(actions.navigateBack).toHaveBeenCalledOnce();
+        expect(modals.moveToTrash).not.toHaveBeenCalled();
     });
 
     it('refuses to delete a row the published row says cannot be deleted, and says why', () => {
