@@ -160,7 +160,8 @@ TDrive stores your API credentials locally; it does not ship a shared project-wi
 <details>
 <summary><strong>Desktop keyboard navigation</strong></summary>
 
-- **Alt + Up** (or **Cmd + Up** on macOS) opens the parent folder, including from an empty folder or the toolbar.
+- **Alt + Up** (or **Cmd + Up** on macOS) opens the parent folder, including from an empty folder or the toolbar. On Windows and Linux, **Backspace** does the same.
+- **Alt + Left / Alt + Right** (or **Cmd + [ / Cmd + ]** on macOS) go back and forward through the folders you visited in the current drive.
 - **Ctrl/Cmd + F** focuses file search.
 - **F5** or **Ctrl/Cmd + R** refreshes the current view without reloading the app.
 - **Ctrl/Cmd + A** selects all rows in the current file list.
@@ -168,7 +169,7 @@ TDrive stores your API credentials locally; it does not ship a shared project-wi
 - **Space** selects or toggles a row; **Shift + Space** selects a range.
 - **Enter** opens a folder, previews a file, or downloads it when no preview is available.
 - **Right** enters row actions; **Left** or **Escape** returns to the row.
-- **F2** renames the focused item; **Delete/Backspace** opens its delete confirmation.
+- **F2** renames the focused item; **Delete** (the Delete key on a Mac keyboard) opens its delete confirmation.
 - **Menu** or **Shift + F10** opens the focused row's action menu.
 - Dialogs keep focus inside the active dialog and restore it when closed.
 

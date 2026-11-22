@@ -5,7 +5,7 @@ import { isApplePlatform } from '../utils';
 import { openChannelKey } from '../ui/channels/channel-store';
 import { contextMenuState } from '../ui/menus/context-menu-store';
 import { hasActiveModal } from '../ui/modals/modal-a11y';
-import { navigateBack } from './navigation';
+import { navigateBack, navigateHistory } from './navigation';
 
 function isVisible(element: HTMLElement): boolean {
     for (let current: HTMLElement | null = element; current; current = current.parentElement) {
@@ -23,7 +23,8 @@ function handleFolderShortcut(event: KeyboardEvent): void {
     const parent = !event.ctrlKey && !event.shiftKey && (parentArrow || parentBackspace);
     const search = event.key.toLowerCase() === 'f' && !event.altKey && !event.shiftKey
         && (event.ctrlKey !== event.metaKey);
-    if (!parent && !search) return;
+    const history = historyStep(event);
+    if (!parent && !search && history === 0) return;
     if (hasActiveModal() || get(contextMenuState).open || state.channelSwitchInProgress
         || state.virtualView !== null || get(openChannelKey) !== null) return;
     if ([...document.querySelectorAll<HTMLElement>('[role="menu"], [role="dialog"], [role="alertdialog"]')].some(isVisible)) return;
@@ -40,9 +41,26 @@ function handleFolderShortcut(event: KeyboardEvent): void {
         input.select();
         return;
     }
-    if (state.searchQuery.trim() || state.folderPath.length === 0) return;
+    if (state.searchQuery.trim()) return;
+    if (history !== 0) {
+        event.preventDefault();
+        void navigateHistory(history);
+        return;
+    }
+    if (state.folderPath.length === 0) return;
     event.preventDefault();
     navigateBack();
+}
+
+// File Explorer's Alt+Left / Alt+Right, and Finder's Cmd+[ / Cmd+] on Apple.
+function historyStep(event: KeyboardEvent): -1 | 0 | 1 {
+    if (event.ctrlKey || event.shiftKey) return 0;
+    if (isApplePlatform()) {
+        if (!event.metaKey || event.altKey) return 0;
+        return event.key === '[' ? -1 : event.key === ']' ? 1 : 0;
+    }
+    if (!event.altKey || event.metaKey) return 0;
+    return event.key === 'ArrowLeft' ? -1 : event.key === 'ArrowRight' ? 1 : 0;
 }
 
 /** Dashboard-owned shortcuts also work when a folder is empty or the toolbar has focus. */

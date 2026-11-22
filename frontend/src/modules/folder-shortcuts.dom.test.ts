@@ -5,8 +5,8 @@ import { hideContextMenu, showContextMenu } from '../ui/menus/context-menu-store
 import { activateModalOwnership, deactivateModalOwnership } from '../ui/modals/modal-a11y';
 import { activateFolderShortcuts } from './folder-shortcuts';
 
-const actions = vi.hoisted(() => ({ navigateBack: vi.fn(), mobile: false, apple: false }));
-vi.mock('./navigation', () => ({ navigateBack: actions.navigateBack }));
+const actions = vi.hoisted(() => ({ navigateBack: vi.fn(), navigateHistory: vi.fn(), mobile: false, apple: false }));
+vi.mock('./navigation', () => ({ navigateBack: actions.navigateBack, navigateHistory: actions.navigateHistory }));
 vi.mock('../api', () => ({ isMobilePlatform: () => actions.mobile }));
 vi.mock('../utils', () => ({ isApplePlatform: () => actions.apple }));
 let dispose: () => void;
@@ -145,5 +145,31 @@ describe('folder shortcuts', () => {
         dispose();
         press();
         expect(actions.navigateBack).not.toHaveBeenCalled();
+    });
+    it('steps back and forward with Alt+Left and Alt+Right, including at the drive root', () => {
+        state.folderPath = [];
+        expect(press(document.getElementById('file-list')!, { key: 'ArrowLeft' }).defaultPrevented).toBe(true);
+        expect(press(document.getElementById('toolbar')!, { key: 'ArrowRight' }).defaultPrevented).toBe(true);
+        expect(actions.navigateHistory.mock.calls).toEqual([[-1], [1]]);
+        expect(actions.navigateBack).not.toHaveBeenCalled();
+    });
+    it('uses Cmd+[ and Cmd+] on Apple platforms instead of Alt+arrows', () => {
+        actions.apple = true;
+        press(document.body, { key: 'ArrowLeft' });
+        press(document.body, { key: '[', altKey: false, metaKey: true });
+        press(document.body, { key: ']', altKey: false, metaKey: true });
+        expect(actions.navigateHistory.mock.calls).toEqual([[-1], [1]]);
+    });
+    it('leaves history keys to editors, search results, other modifiers and alternate views', () => {
+        press(document.getElementById('search-input')!, { key: 'ArrowLeft' });
+        for (const extra of [{ ctrlKey: true }, { shiftKey: true }, { metaKey: true }]) {
+            press(document.body, { key: 'ArrowLeft', ...extra });
+        }
+        state.searchQuery = 'query';
+        press(document.body, { key: 'ArrowLeft' });
+        state.searchQuery = '';
+        state.virtualView = 'trash';
+        press(document.body, { key: 'ArrowRight' });
+        expect(actions.navigateHistory).not.toHaveBeenCalled();
     });
 });
