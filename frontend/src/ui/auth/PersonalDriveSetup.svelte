@@ -1,6 +1,6 @@
 <script lang="ts">
     import CheckIcon from '@lucide/svelte/icons/check';
-    import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
+    import tdriveLogo from '../../assets/images/tdrive-logo.png';
     import PlusIcon from '@lucide/svelte/icons/plus';
     import RotateCwIcon from '@lucide/svelte/icons/rotate-cw';
     import { isMobilePlatform } from '../../api';
@@ -204,11 +204,9 @@
 
 <section class="auth-box drive-setup" aria-labelledby="drive-setup-title">
     <div class="auth-page-body">
-        <div class="auth-icon-box">
-            <HardDriveIcon size={32} strokeWidth={1.5} aria-hidden="true" />
-        </div>
+        <img class="auth-step-mark" src={tdriveLogo} alt="" width="66" height="42" />
         <h2 id="drive-setup-title">Choose your TDrive</h2>
-        <p>No saved drive was found on this device. Pick the Telegram channel that holds your files, or start a new empty drive.</p>
+        <p class="auth-intro">This device has no saved drive yet. Pick the Telegram channel that holds your files, or start a new one.</p>
 
         {#if phase === 'loading'}
             <div class="drive-panel" role="status" aria-live="polite">
@@ -322,20 +320,14 @@
 </section>
 
 <style>
-    /* Extends the shared .auth-box card: same surface, border, radius and
-       shadow as the login screens, just wide enough for a channel list. */
+    /* The sign-in column, a little wider for channel names. */
     .drive-setup {
-        width: min(460px, calc(100vw - 32px));
+        width: min(400px, calc(100vw - 32px));
         max-height: calc(100vh - 48px);
-        padding: 2.25rem 2rem;
+        padding: 0;
         overflow: auto;
     }
-    .auth-page-body > p {
-        max-width: 380px;
-        margin-right: auto;
-        margin-left: auto;
-        line-height: 1.5;
-    }
+    :global(html:not(.mobile)) .drive-setup .auth-intro { max-width: 380px; }
 
     .drive-list {
         display: grid;
@@ -344,7 +336,7 @@
         margin: 0 0 16px;
         overflow: auto;
         text-align: left;
-        border: 1px solid var(--border);
+        border: 1px solid var(--color-border-soft);
         border-radius: var(--radius-md);
     }
 
@@ -359,7 +351,7 @@
         background: var(--color-surface-1);
         transition: background var(--motion-fast) var(--ease-standard);
     }
-    .drive-choice + .drive-choice { border-top: 1px solid var(--border); }
+    .drive-choice + .drive-choice { border-top: 1px solid var(--color-border-soft); }
     .drive-choice:hover { background: var(--color-surface-2); }
     .drive-choice.selected { background: var(--overlay-accent-1); }
     .drive-choice:has(input:focus-visible) { box-shadow: var(--focus-ring) inset; }
@@ -507,6 +499,7 @@
     }
     .drive-ghost:not(:disabled):hover { color: var(--accent); background: var(--overlay-accent-1); }
     .drive-secondary { margin-top: 12px; }
+    button.drive-secondary { width: 100%; color: var(--color-text-muted); }
     .drive-secondary-stack { display: grid; gap: 2px; justify-items: center; }
     .drive-secondary-stack .drive-hint { margin-top: 0; }
 
