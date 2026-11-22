@@ -26,12 +26,17 @@ const modals = vi.hoisted(() => ({
 }));
 
 const actions = vi.hoisted(() => ({
+    apple: false,
     playVideo: vi.fn(), openFile: vi.fn(), triggerRefresh: vi.fn(), refreshFiles: vi.fn(),
     navigateToFolder: vi.fn(), navigateBack: vi.fn(), enqueueDownload: vi.fn(), enqueueFolderDownload: vi.fn(),
     preview: vi.fn(), notify: vi.fn(),
 }));
 
 vi.mock('../api', () => api);
+vi.mock('../utils', async (importOriginal) => ({
+    ...await importOriginal<typeof import('../utils')>(),
+    isApplePlatform: () => actions.apple,
+}));
 vi.mock('./drag-drop', () => dragDrop);
 vi.mock('./modals/delete', () => ({ moveToTrash: modals.moveToTrash }));
 vi.mock('./modals/rename', () => ({ openRenameModal: modals.openRenameModal }));
@@ -88,6 +93,7 @@ function publish(...overrides: Partial<FileListFileRow>[]): void {
 
 beforeEach(() => {
     vi.clearAllMocks();
+    actions.apple = false;
     dragDrop.canDropOnFolder.mockReturnValue(true);
     state.activeChannel = { id: 1, title: 'Drive', kind: 'personal' };
     state.currentFolderId = '';
@@ -144,11 +150,15 @@ describe('acting on a row from the keyboard', () => {
         }));
     });
 
-    it('uses Backspace to navigate to the parent folder instead of deleting', () => {
-        press(row('file:41'), 'Backspace');
+    it('deletes the focused file with the Mac Delete key', () => {
+        actions.apple = true;
+        const target = row('file:41');
+        target.focus();
+        press(target, 'Backspace');
 
-        expect(actions.navigateBack).toHaveBeenCalledOnce();
-        expect(modals.moveToTrash).not.toHaveBeenCalled();
+        expect(modals.moveToTrash).toHaveBeenCalledOnce();
+        expect(modals.moveToTrash).toHaveBeenCalledWith(expect.objectContaining({ type: 'file', id: 41 }));
+        expect(actions.navigateBack).not.toHaveBeenCalled();
     });
 
     it('refuses to delete a row the published row says cannot be deleted, and says why', () => {
@@ -447,21 +457,44 @@ describe('desktop keyboard shortcuts', () => {
         await vi.waitFor(() => expect(document.activeElement).toBe(row('file:41')));
     });
 
-    it('navigates once from a populated row through the dashboard shortcut', () => {
+    it.each([
+        ['Alt+Up', { key: 'ArrowUp', altKey: true }],
+        ['Backspace', { key: 'Backspace' }],
+    ])('navigates once from a focused row with %s', (_label, shortcut) => {
         const previousPath = state.folderPath;
         state.folderPath = [{ id: 'folder', name: 'Folder' }];
         const disposeShortcut = activateFolderShortcuts();
         try {
             const target = row('file:41');
             target.focus();
-            const event = new KeyboardEvent('keydown', { key: 'ArrowUp', altKey: true, bubbles: true, cancelable: true });
+            const event = new KeyboardEvent('keydown', { ...shortcut, bubbles: true, cancelable: true });
             target.dispatchEvent(event);
             expect(event.defaultPrevented).toBe(true);
             expect(actions.navigateBack).toHaveBeenCalledTimes(1);
+            expect(modals.moveToTrash).not.toHaveBeenCalled();
             expect(document.activeElement).toBe(target);
         } finally {
             disposeShortcut();
             state.folderPath = previousPath;
+        }
+    });
+
+    it('leaves a focused search result alone on Backspace', () => {
+        const previousPath = state.folderPath;
+        state.folderPath = [{ id: 'folder', name: 'Folder' }];
+        state.searchQuery = 'plan';
+        const disposeShortcut = activateFolderShortcuts();
+        try {
+            const target = row('file:41');
+            target.focus();
+            press(target, 'Backspace');
+
+            expect(actions.navigateBack).not.toHaveBeenCalled();
+            expect(modals.moveToTrash).not.toHaveBeenCalled();
+        } finally {
+            disposeShortcut();
+            state.folderPath = previousPath;
+            state.searchQuery = '';
         }
     });
 
@@ -528,7 +561,7 @@ it('does not apply late folder descendants after a drag has ended', async () => 
 });
 
 it('deletes a folder and renames a Telegram file with their original identifiers', () => {
-    press(row('folder:design'), 'Backspace');
+    press(row('folder:design'), 'Delete');
     expect(modals.moveToTrash).toHaveBeenCalledWith({ type: 'folder', id: 'design', name: 'Design', parentId: '', channelId: 1 });
     renderFileListRows(list, [buildFileRow({ id: 99, name: 'raw.zip', source: 'tg', size: 300 }, 'origin')]);
     flushSync();

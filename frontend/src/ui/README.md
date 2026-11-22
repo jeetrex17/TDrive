@@ -29,9 +29,11 @@ listeners or retain stale drive state.
 
 Dashboard keyboard shortcuts are owned by `folder-shortcuts.ts` and
 `refresh-shortcut.ts`, activated and disposed by `FeatureLayer`. Parent-folder
-and search shortcuts work outside the file rows, including empty folders; they
-leave editors, overlays and alternate views alone. Row selection and item actions
-remain in the file-list controller.
+and search shortcuts work outside the file rows, including empty folders, and
+leave editors, overlays and alternate views alone. On non-Apple desktops,
+Backspace goes to the parent folder. The Mac Delete key sends Backspace and
+deletes through the file-list controller, which also owns row selection and
+other item actions.
 
 Playback engines, native player geometry and transport lifetime remain in the
 TypeScript video controller. Svelte owns the rendered controls and shell. The

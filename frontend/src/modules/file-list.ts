@@ -1,7 +1,7 @@
 // File list rendering for TDrive frontend
 
 import { state, resetFolderCaches } from '../state';
-import { splitNameAndExt, formatDate, formatBytes } from '../utils';
+import { splitNameAndExt, formatDate, formatBytes, isApplePlatform } from '../utils';
 import { isOffline } from './connectivity';
 import { humanizeBackendError } from './errors';
 import { tick } from 'svelte';
@@ -13,7 +13,7 @@ import { openRenameModal } from './modals/rename';
 import { moveToTrash } from './modals/delete';
 import { openNewFolderModal } from './modals/folder';
 import { notify } from './notifications';
-import { navigateBack, navigateToFolder } from './navigation';
+import { navigateToFolder } from './navigation';
 import { beginRowDrag, endRowDrag, canDropOnFolder, setDropHighlight, performDropMove } from './drag-drop';
 import {
     getFileList,
@@ -1190,13 +1190,9 @@ function handleListKeyDown(e: KeyboardEvent) {
             if (currentRow) renameRow(currentRow);
             return;
         case 'Backspace':
-            // Match Windows File Explorer: Backspace navigates to the parent;
-            // Delete is the explicit destructive shortcut.
-            if (isTrashMode()) return;
-            e.preventDefault();
-            navigateBack();
-            return;
         case 'Delete':
+            // The Mac Delete key sends Backspace. Elsewhere it belongs to dashboard navigation.
+            if (e.key === 'Backspace' && !isApplePlatform()) return;
             e.preventDefault();
             // A focused row inside a multi-selection deletes the selection,
             // which is what the context menu offers under the same shortcut.
