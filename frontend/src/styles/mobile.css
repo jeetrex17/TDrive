@@ -1059,13 +1059,14 @@ html.mobile .mobile-empty-title { font-size: var(--type-lg); font-weight: var(--
 html.mobile .mobile-empty-body { font-size: var(--type-base); color: var(--color-text-muted); max-width: 36ch; }
 
 /* ============================ TOASTS ============================ */
-/* Keep notices below the top bar so they do not cover navigation controls.
-   They remain in the upper part of the screen and clear the system safe area. */
+/* Docked above the tab bar and the add button, as both platforms place their
+   own snackbars: the list's first rows and the top bar stay readable, and a
+   notice sits where the thumb already is. */
 html.mobile #toast-stack.toast-stack {
-    top: calc(var(--inset-top) + 76px);
+    top: auto;
     left: calc(var(--space-4) + var(--inset-left));
     right: calc(var(--space-4) + var(--inset-right));
-    bottom: auto;
+    bottom: calc(var(--mobile-overlay-bottom) + 52px + var(--space-3));
     transform: none;
     width: auto;
     max-width: none;
@@ -1103,9 +1104,12 @@ html.mobile .toast-with-action .toast-action {
 }
 html.mobile .toast-with-action .toast-close { grid-column: 3; grid-row: 1; }
 
-/* It arrives from the edge it lives on, and a swipe up returns it there. */
+/* Newest nearest the edge it arrives from. */
+html.mobile .toast-stack-inner { flex-direction: column; }
+
+/* It arrives from the edge it lives on, and a swipe down returns it there. */
 @keyframes tdrive-toast-enter {
-    from { opacity: 0; transform: translateY(-12px); }
+    from { opacity: 0; transform: translateY(12px); }
     to { opacity: 1; transform: translateY(0); }
 }
 

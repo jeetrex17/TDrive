@@ -11,6 +11,11 @@
     import { activityView } from './activity-store';
     import { swipeDismiss } from './swipe-dismiss';
     import { prefersReducedMotion } from '../mobile/motion';
+    import { isMobilePlatform } from '../../api';
+
+    // A phone docks notices above its tab bar, out of the way of the list and
+    // within reach of a thumb; the desktop keeps them at the top right.
+    const edge = isMobilePlatform() ? 'bottom' : 'top';
 
     interface Props {
         onDismiss: (id: string) => void;
@@ -53,11 +58,12 @@
 
     function toastOut(node: HTMLElement) {
         // Swipe already moves the card offscreen. Timer and close-button
-        // dismissals take the same short route upward instead of vanishing.
+        // dismissals take the same short route toward their edge instead of
+        // vanishing.
         node.style.pointerEvents = 'none';
         node.setAttribute('aria-hidden', 'true');
         return fly(node, {
-            y: -8,
+            y: edge === 'bottom' ? 8 : -8,
             duration: prefersReducedMotion() || node.dataset.toastSwiped === 'true' || typeof node.animate !== 'function' ? 0 : 160,
             easing: cubicOut,
         });
@@ -81,7 +87,7 @@
             aria-describedby={toast.body ? `toast-detail-${toast.id}` : undefined}
             onpointerenter={(event) => { if (hovering(event)) onPauseToast(toast.id); }}
             onpointerleave={(event) => { if (hovering(event)) onResumeToast(toast.id); }}
-            use:swipeDismiss={{ revision: toast.revision, onDismiss: () => onDismiss(toast.id) }}
+            use:swipeDismiss={{ revision: toast.revision, edge, onDismiss: () => onDismiss(toast.id) }}
             out:toastOut
         >
             <span class="toast-icon" aria-hidden="true">
