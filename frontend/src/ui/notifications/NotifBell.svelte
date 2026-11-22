@@ -11,7 +11,7 @@
     import { resumableDownloads } from '../../modules/resumable-downloads';
     import { hasActiveModal } from '../modals/modal-a11y';
     import { portal } from './portal';
-    import { activityView, openActivity } from './activity-store';
+    import { activityView, closeActivity, openActivity } from './activity-store';
     import { visibleActiveTransfers, visibleRecentEvents, standaloneResumableUploads as resumableUploads } from './visible-history';
     import { uploadActivities, clearUploadActivityHistory } from './upload-activity-store';
     import QueuedUploadRow from './QueuedUploadRow.svelte';
@@ -136,11 +136,21 @@
         }, HOVER_CLOSE_MS);
     }
 
+    // The bell opens and closes the docked Activity panel.
+    function toggleActivity(): void {
+        if ($activityView.open) {
+            clearHoverTimer();
+            closeActivity();
+            return;
+        }
+        openFullActivity();
+    }
+
     function onBellKeydown(event: KeyboardEvent): void {
         if (event.key !== 'Enter' && event.key !== ' ') return;
         // Swallowed here so the synthesised click cannot open it a second time.
         event.preventDefault();
-        openFullActivity();
+        toggleActivity();
     }
 
     function panelFocusables(): HTMLElement[] {
@@ -211,7 +221,7 @@
     aria-label={bellLabel}
     onclick={(event) => {
         event.stopPropagation();
-        openFullActivity();
+        toggleActivity();
     }}
     onkeydown={onBellKeydown}
     onmouseenter={scheduleOpenPanel}
