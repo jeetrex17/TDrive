@@ -2,6 +2,7 @@
     import CircleUserIcon from '@lucide/svelte/icons/circle-user';
     import CloudUploadIcon from '@lucide/svelte/icons/cloud-upload';
     import DownloadIcon from '@lucide/svelte/icons/download';
+    import HardDriveIcon from '@lucide/svelte/icons/hard-drive';
     import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
     import PaletteIcon from '@lucide/svelte/icons/palette';
     import XIcon from '@lucide/svelte/icons/x';
@@ -11,6 +12,8 @@
     import Avatar from '../chrome/Avatar.svelte';
     import { encryptionEntryVisible, profileLoaded, profileUser } from '../chrome/profile-store';
     import PhotoBackupPanel from '../gallery/PhotoBackupPanel.svelte';
+    import MountLetterSetting from '../mount/MountLetterSetting.svelte';
+    import { mountLetter } from '../mount/mount-letter-store';
     import AppearancePanel from '../theme/AppearancePanel.svelte';
     import { recoverThemeTransitionClick } from '../theme/theme-interaction';
     import UpdatesPanel from '../updates/UpdatesPanel.svelte';
@@ -33,10 +36,16 @@
         { id: 'appearance', label: 'Appearance', icon: PaletteIcon },
         { id: 'backup', label: 'Photo backup', icon: CloudUploadIcon },
         { id: 'encryption', label: 'Encryption', icon: LockKeyholeIcon },
+        { id: 'mount', label: 'Mount', icon: HardDriveIcon },
         { id: 'updates', label: 'Updates', icon: DownloadIcon },
     ];
 
-    const sections = $derived(SECTIONS.filter((entry) => entry.id !== 'updates' || updaterAvailable));
+    // Mount only has a setting where drives have letters: Windows.
+    const sections = $derived(SECTIONS.filter((entry) => {
+        if (entry.id === 'updates') return updaterAvailable;
+        if (entry.id === 'mount') return $mountLetter.available;
+        return true;
+    }));
     const current = $derived(sections.find((entry) => entry.id === $settingsView.section) ?? sections[0]);
     const displayName = $derived(!$profileLoaded ? 'Loading account…' : $profileUser?.displayName || 'Telegram account');
     const handle = $derived(($profileUser?.username || '').trim());
@@ -49,6 +58,10 @@
         if (section === lastSection) return;
         lastSection = section;
         if (section === 'updates') void checkForUpdates();
+    });
+
+    $effect(() => {
+        if ($settingsView.open) void mountLetter.load();
     });
 
     async function select(section: SettingsSection): Promise<void> {
@@ -182,6 +195,10 @@
                                 <button class="secondary-btn" type="button" onclick={() => handOff(onEncryptionSettings)}>Manage…</button>
                             {/if}
                         </div>
+                    </div>
+                {:else if current.id === 'mount'}
+                    <div class="settings-group">
+                        <MountLetterSetting />
                     </div>
                 {:else if current.id === 'updates'}
                     <UpdatesPanel embedded />

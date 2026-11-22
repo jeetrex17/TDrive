@@ -233,6 +233,10 @@ export function GetMediaTimelineSummary(): $CancellablePromise<projection$0.Gall
     return $Call.ByID(3648692089);
 }
 
+export function GetMountDriveLetter(): $CancellablePromise<$models.MountDriveLetterView> {
+    return $Call.ByID(2224456067);
+}
+
 export function GetPhotoBackupState(): $CancellablePromise<$models.PhotoBackupState> {
     return $Call.ByID(3024515271);
 }
@@ -591,6 +595,14 @@ export function SetFileDropEnabled(enabled: boolean): $CancellablePromise<void> 
 
 export function SetFileSortPreference(preference: $models.FileSortPreference): $CancellablePromise<void> {
     return $Call.ByID(2611395859, preference);
+}
+
+/**
+ * SetMountDriveLetter saves the letter for the next mount; a mounted drive
+ * keeps its current letter until it is ejected.
+ */
+export function SetMountDriveLetter(letter: string): $CancellablePromise<$models.MountDriveLetterView> {
+    return $Call.ByID(2237315687, letter);
 }
 
 /**

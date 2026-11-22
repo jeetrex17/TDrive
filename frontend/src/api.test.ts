@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+    normalizeMountDriveLetter,
     normalizeMountableDrives,
     normalizeMountResult,
     normalizeMountStatus,
@@ -65,6 +66,12 @@ describe("api normalizers", () => {
         expect(toSearchHit(searchHit({ type: "folder", id: "d" })).type).toBe("folder");
         expect(toSearchHit(searchHit({ type: "file", id: "5" })).type).toBe("file");
         expect(toSearchHit(searchHit({ type: "weird", id: "5" })).type).toBe("file");
+    });
+
+    it("normalizes the Windows drive letter and falls back to T:", () => {
+        expect(normalizeMountDriveLetter({ available: true, letter: "q:" })).toEqual({ available: true, letter: "Q:" });
+        expect(normalizeMountDriveLetter({ available: "yes", letter: "1:" })).toEqual({ available: false, letter: "T:" });
+        expect(normalizeMountDriveLetter(null)).toEqual({ available: false, letter: "T:" });
     });
 
     it("normalizes a capability-free mounted-drive view", () => {

@@ -1,7 +1,9 @@
 import {
+    GetMountDriveLetter as rawGetMountDriveLetter,
     MountDrive as rawMountDrive,
     MountDrives as rawMountDrives,
     MountStatus as rawMountStatus,
+    SetMountDriveLetter as rawSetMountDriveLetter,
     UnmountDrive as rawUnmountDrive,
 } from "../../bindings/TDrive/internal/app/app";
 import { ListChannels as rawListChannels } from "../../bindings/TDrive/internal/app/driveservice";
@@ -156,4 +158,29 @@ export async function getMountStatus(): Promise<MountStatusView> {
 
 export async function unmountDrive(): Promise<MountStatusView> {
     return normalizeMountStatus(await invokeBackend(rawUnmountDrive));
+}
+
+/** The Windows drive letter the next mount uses; unavailable elsewhere. */
+export interface MountDriveLetter {
+    available: boolean;
+    letter: string;
+}
+
+const WINDOWS_DRIVE_LETTER = /^[A-Z]:$/;
+
+export function normalizeMountDriveLetter(value: unknown): MountDriveLetter {
+    const raw = asRecord(value);
+    const letter = boundedText(raw.letter, 2).toUpperCase();
+    return {
+        available: raw.available === true,
+        letter: WINDOWS_DRIVE_LETTER.test(letter) ? letter : 'T:',
+    };
+}
+
+export async function getMountDriveLetter(): Promise<MountDriveLetter> {
+    return normalizeMountDriveLetter(await invokeBackend(rawGetMountDriveLetter));
+}
+
+export async function setMountDriveLetter(letter: string): Promise<MountDriveLetter> {
+    return normalizeMountDriveLetter(await invokeBackend(rawSetMountDriveLetter, letter));
 }

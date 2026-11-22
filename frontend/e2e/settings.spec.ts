@@ -4,7 +4,7 @@
  * It is a modal, so the keyboard contract matters as much as what it shows.
  */
 
-import { bootTDrive, expect, test } from './wails-mock';
+import { bootTDrive, expect, resolves, test } from './wails-mock';
 import { openSettingsSection } from './settings-helpers';
 
 test('the shortcut opens Settings, arrows move between sections, Escape returns focus', async ({ page }) => {
@@ -58,4 +58,25 @@ test('choosing a theme for the other mode keeps the current one on screen', asyn
 
     await settings.getByRole('radio', { name: 'Light', exact: true }).click();
     await expect(page.locator('html')).toHaveAttribute('data-theme', 'chalk');
+});
+
+test('Mount is hidden where drives have no letters', async ({ page }) => {
+    await bootTDrive(page);
+    const settings = await openSettingsSection(page, 'Account');
+    await expect(settings.getByRole('button', { name: 'Mount', exact: true })).toHaveCount(0);
+});
+
+test('Mount saves the Windows drive letter for the next mount', async ({ page }) => {
+    const mock = await bootTDrive(page, {
+        GetMountDriveLetter: resolves({ available: true, letter: 'T:' }),
+        SetMountDriveLetter: resolves({ available: true, letter: 'Q:' }),
+    });
+    const settings = await openSettingsSection(page, 'Mount');
+    const letter = settings.getByLabel('Drive letter', { exact: true });
+    await expect(letter).toHaveValue('T:');
+    await page.screenshot({ path: test.info().outputPath('mount-settings.png') });
+
+    await letter.selectOption('Q:');
+    await expect(letter).toHaveValue('Q:');
+    await expect.poll(async () => (await mock.calls('SetMountDriveLetter')).map((call) => call.args)).toEqual([['Q:']]);
 });

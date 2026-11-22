@@ -28,6 +28,7 @@ export type {
     GalleryStorage,
     JoinDriveResult,
     JoinRequestInfo,
+    MountDriveLetterView,
     MountDriveView,
     MountResult,
     MountView,

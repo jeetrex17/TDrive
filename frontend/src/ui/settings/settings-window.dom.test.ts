@@ -4,6 +4,15 @@ import { get } from 'svelte/store';
 
 vi.mock('../../modules/updates', () => ({ checkForUpdates: vi.fn(async () => undefined) }));
 
+const letterApi = vi.hoisted(() => ({
+    load: vi.fn(async () => ({ available: true, letter: 'T:' })),
+    save: vi.fn(async (letter: string) => ({ available: true, letter })),
+}));
+vi.mock('../mount/mount-letter-store', async (importOriginal) => {
+    const actual = await importOriginal<typeof import('../mount/mount-letter-store')>();
+    return { ...actual, mountLetter: actual.createMountLetterStore(letterApi) };
+});
+
 import { checkForUpdates } from '../../modules/updates';
 import SettingsWindow from './SettingsWindow.svelte';
 import { openSettings, settingsView } from './settings-store';
@@ -121,5 +130,24 @@ describe('SettingsWindow', () => {
         expect(onLogout).toHaveBeenCalledOnce();
         expect(get(settingsView).open).toBe(false);
         expect(onEncryptionSettings).not.toHaveBeenCalled();
+    });
+
+    it('saves the Windows drive letter from the Mount section', async () => {
+        setup();
+        openSettings('mount');
+        await settle();
+
+        const select = host?.querySelector<HTMLSelectElement>('#mount-drive-letter');
+        if (!select) throw new Error('drive letter control did not render');
+        expect(host?.querySelector('#settings-section-title')?.textContent).toBe('Mount');
+        expect(select.value).toBe('T:');
+        expect([...select.options].map((option) => option.value)).not.toContain('C:');
+
+        select.value = 'Q:';
+        select.dispatchEvent(new Event('change', { bubbles: true }));
+        await settle();
+
+        expect(letterApi.save).toHaveBeenCalledWith('Q:');
+        expect(host?.querySelector<HTMLSelectElement>('#mount-drive-letter')?.value).toBe('Q:');
     });
 });
