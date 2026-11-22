@@ -60,6 +60,7 @@
     }
 
     let { dashboardVisible }: Props = $props();
+    let channelHeaderHost = $state<HTMLElement | null>(null);
 
     // OS mounts are desktop-only; the phone builds ship no WebDAV connector.
     const mountAvailable = !isMobilePlatform();
@@ -221,6 +222,10 @@
                 {/if}
             </div>
 
+            <!-- An open channel puts its title and view controls here, in
+                 place of the folder path and the file search. -->
+            <div class="channel-header-host" bind:this={channelHeaderHost}></div>
+
             <div class="search-bar">
                 <SearchIcon class="search-icon" size={16} strokeWidth={2} aria-hidden="true" />
                 <input id="search-input" type="text" placeholder="Search files..." autocomplete="off" spellcheck="false" aria-label="Search files">
@@ -336,6 +341,8 @@
                     onPostActions={showPostActions}
                     onSavePosts={openSourceCopy}
                     recentPages={recentChannelPages}
+                    headerHost={channelHeaderHost}
+                    loadPhoto={channelPhoto}
                 />
             {/key}
         {/if}

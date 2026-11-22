@@ -1,8 +1,19 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { expect, test, type Locator } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { RED_BASE64 } from './gallery-fixtures';
 import { bootTDrive, deferred, rejects, resolves, test as mockTest } from './wails-mock';
+
+// Desktop picks a file type from the top bar's File type menu; a phone keeps
+// the row of type buttons under its top bar.
+async function chooseFileType(page: Page, desktop: boolean, label: string): Promise<void> {
+    if (!desktop) {
+        await page.locator('.channel-view').getByRole('group', { name: 'Show', exact: true }).getByRole('button', { name: label, exact: true }).click();
+        return;
+    }
+    await page.getByRole('button', { name: /^File type / }).click();
+    await page.getByRole('menuitemradio', { name: label === 'All' ? 'All files' : label, exact: true }).click();
+}
 
 const source = { peer_kind: 'channel', peer_id: 50, channel_id: 50, title: 'Field Recordings', username: 'fieldrec', connected: true, protected: false, available: true, account_id: 7, generation: 'source-a' };
 const candidate = { ...source, peer_id: 60, channel_id: 60, title: 'Tech Talks', username: 'techtalks', connected: false, generation: '' };
@@ -620,12 +631,11 @@ for (const { platform, protectedContent } of ['desktop', 'ios', 'android'].flatM
             await page.locator('.drive-switcher-sheet').getByRole('button', { name: 'Channel Field Recordings', exact: true }).click();
         }
         const channel = page.locator('.channel-view');
-        const kinds = channel.getByRole('group', { name: 'Show', exact: true });
-        await kinds.getByRole('button', { name: 'Documents', exact: true }).click();
+        await chooseFileType(page, platform === 'desktop', 'Documents');
         expect((await mock.calls('ListChannelMedia')).slice(-1)[0]?.args[5]).toBe('document');
-        await kinds.getByRole('button', { name: 'Images', exact: true }).click();
+        await chooseFileType(page, platform === 'desktop', 'Images');
         expect((await mock.calls('ListChannelMedia')).slice(-1)[0]?.args[5]).toBe('image');
-        await kinds.getByRole('button', { name: 'All', exact: true }).click();
+        await chooseFileType(page, platform === 'desktop', 'All');
         expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
         const imagePost = channel.getByRole('button', { name: /^Open forest\.svg,/ });
@@ -798,7 +808,7 @@ for (const mobile of [false, true]) {
         await expect.poll(async () => (await mock.calls('ListChannelMediaByTopic')).slice(-1)[0]?.args[5]).toBe('');
         if (mobile) await page.getByRole('button', { name: 'Hide search' }).click();
         await mock.setPlan('ListChannelMediaByTopic', deferred('old-movies', { ...all, topic_id: 42, items: [{ ...media, topic_id: 42, name: 'late-movie.mp4' }] }));
-        await page.getByRole('button', { name: 'Videos', exact: true }).click();
+        await chooseFileType(page, !mobile, 'Videos');
         await expect.poll(async () => (await mock.calls('ListChannelMediaByTopic')).slice(-1)[0]?.state).toBe('pending');
         await page.getByRole('button', { name: 'Choose topic: Movies' }).click();
         await picker.getByRole('button', { name: 'All topics', exact: true }).click();

@@ -6,7 +6,8 @@
    and the trash do. The drive's views stay mounted underneath because their
    controllers hold them by id. Nothing can be uploaded into a channel. */
 .main-content.channel-mode :is(.drive-breadcrumb, .file-table-header, .file-list-box, .gallery-view),
-.main-content.channel-mode .upload-menu-wrap { display: none; }
+.main-content.channel-mode :is(.upload-menu-wrap, .search-bar) { display: none; }
+.channel-header-host { display: contents; }
 
 .sidebar {
     /* The sidebar sits on the window canvas; the content beside it is the one

@@ -36,8 +36,15 @@ function answering(...items: ChannelMediaItem[]): ChannelMediaFetcher {
     return vi.fn(async (request) => ({ peerKind: request.peerKind, peerId: request.peerId, accountId: '7', generation: 'g', items, nextOffsetId: 0, hasMore: false }));
 }
 
-function kindButton(label: string): HTMLButtonElement | undefined {
-    return Array.from(host?.querySelectorAll<HTMLButtonElement>('.channel-kinds button') ?? []).find((button) => button.textContent === label);
+function kindTrigger(): HTMLButtonElement | null | undefined {
+    return host?.querySelector<HTMLButtonElement>('[aria-label^="File type"]');
+}
+
+// Desktop chooses a file type from the File type menu.
+function chooseKind(label: string): void {
+    kindTrigger()?.click();
+    flushSync();
+    Array.from(host?.querySelectorAll<HTMLButtonElement>('[role="menuitemradio"]') ?? []).find((option) => option.textContent?.trim() === label)?.click();
 }
 
 function rowNamed(name: RegExp): HTMLButtonElement | undefined {
@@ -151,10 +158,9 @@ describe('ChannelView', () => {
         const fetchMedia = answering(VIDEO);
         render(SOURCE, fetchMedia);
         await settle();
-        const videos = kindButton('Videos');
-        videos?.click();
+        chooseKind('Videos');
         await settle();
-        expect(videos?.getAttribute('aria-pressed')).toBe('true');
+        expect(kindTrigger()?.getAttribute('aria-label')).toBe('File type Videos');
         expect(fetchMedia).toHaveBeenLastCalledWith(expect.objectContaining({ peerKind: 'channel', peerId: 51, offsetId: 0, kind: 'video' }));
     });
 
@@ -168,7 +174,7 @@ describe('ChannelView', () => {
         expect(props.onOpenPost).toHaveBeenCalledWith(image, SOURCE, [image, pdf]);
         expect(rowNamed(/^Open guide\.pdf/)).toBeDefined();
         for (const [label, kind] of [['Images', 'image'], ['Documents', 'document']]) {
-            kindButton(label)?.click();
+            chooseKind(label);
             await settle();
             expect(fetchMedia).toHaveBeenLastCalledWith(expect.objectContaining({ offsetId: 0, kind }));
         }
@@ -213,7 +219,7 @@ describe('ChannelView', () => {
         expect(remembered.get(51)).toEqual([dusk, VIDEO]);
 
         // A filtered page is not what the next visit should open on.
-        kindButton('Videos')?.click();
+        chooseKind('Videos');
         await settle();
         answer({ peerKind: 'channel', peerId: 51, accountId: '7', generation: 'g', items: [dusk], nextOffsetId: 0, hasMore: false });
         await settle();
@@ -270,7 +276,7 @@ describe('ChannelView', () => {
         rowNamed(/^Play Dawn/)?.click();
         expect(props.onOpenPost).toHaveBeenCalledWith(movie, expect.objectContaining({ title: 'Field Recordings · Movies' }), [movie]);
         missing = true;
-        kindButton('Videos')?.click();
+        chooseKind('Videos');
         await settle();
         expect(host?.textContent).toContain('Topic unavailable');
         expect(host?.querySelector('[aria-label="Choose topic: Movies"]')).not.toBeNull();
