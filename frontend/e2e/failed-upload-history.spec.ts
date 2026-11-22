@@ -45,7 +45,8 @@ test('Activity keeps failed upload details through a restart until history is cl
     await expect(transferList.getByRole('listitem')).toHaveCount(1);
     await expect(batch).toBeVisible();
     await batch.click();
-    await expect(activity.getByRole('heading', { name: 'Upload to Archive needs attention' })).toBeVisible();
+    await expect(activity.getByRole('heading', { name: "Upload to Archive didn't finish" })).toBeVisible();
+    await expect(activity.getByText('To retry, upload these files again.')).toBeVisible();
     await expect(failedFile).toContainText(reason);
     await expect(failedFile).toContainText('2 KB');
     await expect(files.getByText('accepted.txt', { exact: true })).toHaveCount(0);

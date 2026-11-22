@@ -27,6 +27,8 @@ export interface UploadActivity {
     fileCount: number;
     /** Failed files in the original batch when saved details were capped. */
     failedFileCount?: number;
+    /** Loaded from a previous run: the files can no longer be retried from here. */
+    restored?: boolean;
     transferId?: string;
     error?: string;
     resumableJobIds?: readonly string[];

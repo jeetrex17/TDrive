@@ -62,7 +62,7 @@ describe('failed upload history', () => {
             id: entry.id, name: entry.name, driveId: entry.driveId, driveTitle: entry.driveTitle,
             destination: entry.destination, encrypt: entry.encrypt, addedAt: entry.addedAt,
             startedAt: entry.startedAt, finishedAt: entry.finishedAt, status: entry.status,
-            fileCount: 2, failedFileCount: 1, transferId: entry.transferId, files: [entry.files[1]],
+            fileCount: 2, failedFileCount: 1, restored: true, transferId: entry.transferId, files: [entry.files[1]],
         }]);
         expect(setItem).toHaveBeenCalledTimes(1);
     });

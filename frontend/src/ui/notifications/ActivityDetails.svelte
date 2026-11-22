@@ -94,7 +94,7 @@
         : batch.status === 'queued' ? `Waiting to upload to ${folderName}`
         : batch.status === 'active' ? ($uploadsPaused ? `Upload to ${folderName} paused` : `Uploading to ${folderName}`)
         : batch.status === 'done' ? `Uploaded to ${folderName}`
-        : batch.status === 'failed' ? `Upload to ${folderName} needs attention`
+        : batch.status === 'failed' ? `Upload to ${folderName} ${batch.restored ? "didn't finish" : 'needs attention'}`
         : `Upload to ${folderName} canceled`);
     // The full path only when the title's folder does not already say it.
     const fullPath = $derived(batch ? `${batch.driveTitle}${destinationPath ? ` / ${destinationPath}` : ''}` : '');
@@ -202,6 +202,7 @@
             {/if}
             {#if status}<p class="detail-status" data-tone={paused ? 'warning' : entry.status === 'Needs attention' ? 'danger' : undefined}>{status}</p>{/if}
             {#if batch.status === 'queued'}<p class="detail-note">Keep TDrive open. Queued uploads are lost if it closes.</p>{/if}
+            {#if batch.restored && !report}<p class="detail-note">To retry, upload these files again.</p>{/if}
         </header>
 
         <ActivityMessage title={entry.name} message={batch.error || ''} />

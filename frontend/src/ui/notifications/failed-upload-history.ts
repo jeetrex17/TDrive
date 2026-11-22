@@ -137,6 +137,7 @@ function savedActivity(value: unknown, limit: number): SavedActivity | null {
         addedAt: count(entry.addedAt) ?? 0, startedAt: count(entry.startedAt) ?? 0,
         finishedAt: count(entry.finishedAt) ?? 0, status,
         files, fileCount: Math.max(total, failedFileCount), failedFileCount,
+        restored: true,
         ...(transferId ? { transferId } : {}),
         ...(error ? { error } : {}),
     };
