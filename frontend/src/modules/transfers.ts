@@ -12,7 +12,7 @@ import { rememberDownloadSharePath } from '../ui/mobile/mobile-shell-store';
 import { get } from 'svelte/store';
 import { failedUploadsModal, failedUploadReports, rememberFailedUploadReport, type FailedUploadsPayload } from '../ui/modals/failed-uploads-store';
 import type { UploadFailure } from '../types';
-import type { ImportPlan, OperationError } from '../types';
+import type { ImportFileConflict, ImportPlan, OperationError } from '../types';
 import type { TransferEvent } from '../ui/notifications/notif-store';
 import { dismissNotification, notify } from './notifications';
 import {
@@ -724,8 +724,7 @@ function formatImportResultLabel(uploaded: number, failedUploads = 0) {
 }
 
 // refreshImportRow renders one constant-size aggregate supplied by the backend.
-// A failed file counts as settled: it is not going to move again, and a bar
-// that stops short because three files failed is the less useful answer.
+// Failed, canceled and skipped files count as settled for the progress bar.
 function refreshImportRow() {
     const batch = state.importBatch;
     if (!batch) return;
@@ -734,7 +733,7 @@ function refreshImportRow() {
         direction: 'up',
         progress: batch.progress,
         bytes: batch.bytes,
-        itemsDone: batch.done + batch.failed + batch.canceled,
+        itemsDone: batch.done + batch.failed + batch.canceled + batch.conflictsSkipped,
         itemsTotal: batch.total,
         items: batch.active,
         itemsActive: batch.activeCount,
@@ -1060,6 +1059,7 @@ function activateUploadProgressEvents(): void {
         const uploaded = Number(payload.uploaded) || 0;
         const oversize = Number(payload.oversize) || 0;
         const empty = Number(payload.empty) || 0;
+        const conflictsSkipped = Number(payload.conflictsSkipped) || 0;
         const backendStatus = String(payload.status ?? '').toLowerCase();
         const fatalError = String(payload.error ?? '').trim();
         const reportedErrors = Number(payload.errorCount);
@@ -1071,7 +1071,16 @@ function activateUploadProgressEvents(): void {
         const status = canceled
             ? 'canceled'
             : (fatal || failedUploads > 0 ? 'failed' : 'done');
-        if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, status, [], fatalError ? readableBackendText(fatalError) : (failedUploads ? `${failedUploads} files failed` : undefined));
+        const reasons = readableReasons(fatalError, importFailureReasons,
+            Array.isArray(payload.errors) ? payload.errors.map((raw) => String(raw ?? '')) : []);
+        if (activeUploadActivityId) {
+            const scheduled = Number(payload.scheduled);
+            if (Number.isSafeInteger(scheduled) && scheduled >= 0) {
+                updateUploadActivity(activeUploadActivityId, { fileCount: scheduled });
+            }
+            const activityError = errorCount || fatalError ? reasons[0] : undefined;
+            finishUploadActivity(activeUploadActivityId, status, [], activityError ?? (failedUploads ? `${failedUploads} files failed` : undefined));
+        }
         const resultLabel = formatImportResultLabel(uploaded, failedUploads);
         if (!state.importBatch) {
             pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import completed', total: uploaded + failedUploads });
@@ -1091,17 +1100,13 @@ function activateUploadProgressEvents(): void {
         invalidateTransferCaches();
         appActions().refreshFiles();
 
-        if (!canceled && (status === 'failed' || failedUploads > 0 || oversize > 0 || empty > 0 || errorCount > 0)) {
+        if (!canceled && (status === 'failed' || oversize > 0 || empty > 0 || conflictsSkipped > 0 || errorCount > 0)) {
             const bits: string[] = [];
             if (failedUploads > 0) bits.push(`${failedUploads} failed`);
             if (oversize > 0) bits.push(`${oversize} skipped (too large)`);
             if (empty > 0) bits.push(`${empty} empty ${empty === 1 ? 'file' : 'files'} skipped`);
+            if (conflictsSkipped > 0) bits.push(`${conflictsSkipped} ${conflictsSkipped === 1 ? 'file' : 'files'} skipped (same name)`);
             if (errorCount > 0) bits.push(`${errorCount} ${errorCount === 1 ? 'item' : 'items'} had errors`);
-            // Include the first few concrete reasons (per-file upload errors,
-            // then backend scan errors) so the summary is actionable, not just
-            // counts.
-            const reasons = readableReasons(fatalError, importFailureReasons,
-                Array.isArray(payload.errors) ? payload.errors.map((raw) => String(raw ?? '')) : []);
             notify({
                 level: status === 'failed' ? 'error' : 'info',
                 title: fatal
@@ -1455,12 +1460,14 @@ async function importSelection(parentID: string, paths: string[], destination: U
         const names = paths.map((path) => path.split(/[/\\]/).pop() || 'Untitled');
         let encrypt = false;
         let extract = false;
+        let folderMerge: ImportFileConflict | undefined;
         if (complex) {
             const choice = await openImportOptionsModal({ plan, personal: destination.personal, hasArchives: plan.archives > 0,
                 queued, destination: destination.destination, names, encrypt: destination.personal && remembered === true,
+                allowFolderMerge: !isMobilePlatform(),
                 replan: (encrypt, extract) => planImport(paths, encrypt, extract) });
             if (!choice || !isCurrentDestination(destination)) return;
-            ({ encrypt, extract } = choice);
+            ({ encrypt, extract, folderMerge } = choice);
             if (destination.personal) setEncryptUploads(encrypt);
         } else if (destination.personal && remembered === null) {
             // Asked once; the answer becomes the default for later uploads.
@@ -1479,7 +1486,7 @@ async function importSelection(parentID: string, paths: string[], destination: U
         // An import learns its files while it walks them; they join the batch as they settle.
         const activity = uploadActivity(destination, paths, encrypt, plan.files || paths.length, complex ? [] : undefined);
         enqueueUpload(activity, destination,
-            () => complex ? runDesktopImport(paths, parentID, encrypt, extract, destination) : uploadPathsBatch(paths, parentID, encrypt, destination.driveId, destination.driveTitle),
+            () => complex ? runDesktopImport(paths, parentID, encrypt, extract, destination, folderMerge) : uploadPathsBatch(paths, parentID, encrypt, destination.driveId, destination.driveTitle),
             (reason) => { if (reason !== 'completed') void releasePickedSources(paths); });
         enqueued = true;
     } catch (error) {
@@ -1489,13 +1496,13 @@ async function importSelection(parentID: string, paths: string[], destination: U
     }
 }
 
-async function runDesktopImport(paths: string[], parentID: string, encrypt: boolean, extract: boolean, destination: UploadDestination): Promise<void> {
+async function runDesktopImport(paths: string[], parentID: string, encrypt: boolean, extract: boolean, destination: UploadDestination, folderMerge?: ImportFileConflict): Promise<void> {
     const generation = transferSurfaceGeneration;
     setTransferDirectionActive('upload', true);
     importCompleteReceived = false;
     let importThrew = false;
     try {
-        const result = await withEventsDelivered(importPathsForDrive(paths, parentID, encrypt, extract, destination.driveId));
+        const result = await withEventsDelivered(importPathsForDrive(paths, parentID, encrypt, extract, destination.driveId, folderMerge));
         if (!isCurrentDestination(destination)) return;
         if (!result.ok) {
             if (result.error.code === 'canceled') state.cancelingUpload = true;

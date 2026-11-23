@@ -1,10 +1,11 @@
 // Import dialog: shown when a selection contains folders or archives. It
 // confirms the summary, lets the user choose Extract vs keep-as-file for
-// archives, and (on My Drive) Encrypt vs plain. Toggling either option re-plans
-// so the counts stay accurate. Resolves to { encrypt, extract } or null.
+// archives, optional folder merge, and (on My Drive) encryption. Toggling
+// encryption or archive extraction re-plans the selection.
 
 import {
     importOptionsModal,
+    type ImportChoice,
     type ImportOptionsPayload,
     type ImportOptionsPlan,
 } from '../../ui/modals/import-options-modal-store';
@@ -12,7 +13,6 @@ import {
 export type ImportPlan = ImportOptionsPlan;
 
 type ReplanFn = (encrypt: boolean, extract: boolean) => Promise<ImportPlan>;
-type ImportChoice = { encrypt: boolean; extract: boolean };
 
 let pending: ((result: ImportChoice | null) => void) | null = null;
 let currentPayload: ImportOptionsPayload | null = null;
@@ -71,6 +71,7 @@ export function openImportOptionsModal(opts: {
     plan: ImportPlan;
     personal: boolean;
     hasArchives: boolean;
+    allowFolderMerge?: boolean;
     replan: ReplanFn;
     queued?: boolean;
     destination?: string;
@@ -92,6 +93,7 @@ export function openImportOptionsModal(opts: {
             plan: opts.plan,
             personal: opts.personal,
             hasArchives: opts.hasArchives,
+            allowFolderMerge: opts.allowFolderMerge,
             replanning: false,
             queued: opts.queued,
             destination: opts.destination,

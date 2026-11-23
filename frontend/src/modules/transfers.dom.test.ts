@@ -28,6 +28,7 @@ const eventsOn = vi.hoisted(() => vi.fn((eventName: string, callback: (event: { 
 const app = vi.hoisted(() => ({
     DownloadFile: vi.fn(),
     ImportPathsForDrive: vi.fn(),
+    MergeImportPathsForDrive: vi.fn(),
     ReleaseUploadSources: vi.fn(),
     PlanImport: vi.fn(),
     SelectFiles: vi.fn(),
@@ -128,9 +129,23 @@ afterEach(() => {
 });
 
 describe('aggregate import completion', () => {
+    it('queues an opted-in merge with the chosen conflict action and the original destination', async () => {
+        mocks.openImportOptionsModal.mockResolvedValueOnce({ encrypt: false, extract: true, folderMerge: 'keep-both' });
+        app.PlanImport.mockResolvedValueOnce({ files: 0, folders: 1, archives: 1 });
+        app.MergeImportPathsForDrive.mockResolvedValueOnce({ ok: true });
+
+        await importFolderWithParentID('d:parent');
+
+        expect(mocks.openImportOptionsModal).toHaveBeenCalledWith(expect.objectContaining({ allowFolderMerge: true }));
+        expect(app.MergeImportPathsForDrive).toHaveBeenCalledWith(['/tmp/empty-folder'], 'd:parent', false, true, 1, 'keep-both');
+        expect(app.ImportPathsForDrive).not.toHaveBeenCalled();
+    });
+
     it('reports a fatal completion once even when ImportPaths subsequently rejects', async () => {
         await importFolderWithParentID('');
 
+        expect(app.ImportPathsForDrive).toHaveBeenCalledOnce();
+        expect(app.MergeImportPathsForDrive).not.toHaveBeenCalled();
         expect(mocks.markTransferDone).toHaveBeenCalledWith({
             id: expect.stringMatching(/^(import|upload-)/),
             direction: 'up',
@@ -198,6 +213,56 @@ describe('aggregate import completion', () => {
             title: 'Imported 999 files · 1 failed',
             body: expect.stringContaining('1 failed'),
         }));
+    });
+
+    it('reports skipped merge conflicts as a successful import and updates the file count', async () => {
+        const { uploadActivities } = await import('../ui/notifications/upload-activity-store');
+        app.PlanImport.mockResolvedValueOnce({ files: 3, folders: 1, archives: 0 });
+        mocks.openImportOptionsModal.mockResolvedValueOnce({ encrypt: false, extract: false, folderMerge: 'skip' });
+        app.MergeImportPathsForDrive.mockImplementationOnce(async () => {
+            handlers.get('import_start')?.();
+            handlers.get('import_uploading')?.({ files: 3 });
+            handlers.get('import_upload_progress')?.({ total: 3, done: 1, failed: 0, conflictsSkipped: 2 });
+            handlers.get('import_complete')?.({ status: 'done', uploaded: 1, failed: 0, scheduled: 1, conflictsSkipped: 2 });
+            return { ok: true };
+        });
+
+        await importFolderWithParentID('');
+
+        expect(get(uploadActivities)[0]).toMatchObject({ status: 'done', fileCount: 1 });
+        expect(mocks.updateTransferProgress).toHaveBeenLastCalledWith(expect.objectContaining({
+            progress: 100,
+            itemsDone: 3,
+            itemsTotal: 3,
+        }));
+        expect(mocks.markTransferDone).toHaveBeenCalledWith(expect.objectContaining({ status: 'done' }));
+        expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({
+            level: 'info',
+            title: 'Imported 1 file',
+            body: '2 files skipped (same name)',
+        }));
+    });
+
+    it('keeps a blocked merge folder visible in the completed activity', async () => {
+        const { uploadActivities } = await import('../ui/notifications/upload-activity-store');
+        app.PlanImport.mockResolvedValueOnce({ files: 3, folders: 2, archives: 0 });
+        mocks.openImportOptionsModal.mockResolvedValueOnce({ encrypt: false, extract: false, folderMerge: 'skip' });
+        app.MergeImportPathsForDrive.mockImplementationOnce(async () => {
+            handlers.get('import_start')?.();
+            handlers.get('import_uploading')?.({ files: 3 });
+            handlers.get('import_complete')?.({
+                status: 'done', uploaded: 1, failed: 0, scheduled: 1, errorCount: 1,
+                errors: ['A file named Reports already exists here. Rename the folder.'],
+            });
+            return { ok: true };
+        });
+
+        await importFolderWithParentID('');
+
+        expect(get(uploadActivities)[0]).toMatchObject({
+            fileCount: 1,
+            error: expect.stringContaining('Reports'),
+        });
     });
 
     it('updates the aggregate row from import progress phases and payload counts', () => {

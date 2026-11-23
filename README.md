@@ -347,7 +347,7 @@ Linux mount behavior depends on the desktop's GIO/GVfs integration and should st
 - It is not a substitute for keeping an independent backup of important files.
 - Shared-drive mounts are read-only.
 - The Windows CLI is a portable beta without an installer or background system service.
-- Folder and archive import is copy-style import, not synchronization or merge; importing the same folder repeatedly may create numbered names.
+- Desktop folder imports create a separate copy by default. Choose **Merge matching folders** during import to add files to existing folders and decide how to handle matching filenames. A merge runs once.
 - `tdrive cat` may stage decrypted content in a temporary file before writing it to standard output.
 - Mobile backup stages originals locally, requires available device storage, and rejects resources larger than 4 GiB. It cannot keep running after the app process is terminated.
 - Backup does not deduplicate content across devices or mirror cloud albums. Album and whole-library backup sources are not available.

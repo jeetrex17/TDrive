@@ -187,6 +187,21 @@ the start. Older finished batches give up their
 detail first when a growing import needs the session's file budget. Clearing completed display history must preserve
 pending batches, active work and backend recovery journals.
 
+## Folder import collisions
+
+The desktop import dialog defaults to creating separate folders with numbered
+names. An import can opt into merging matching folders and choose **Skip** or
+**Keep Both** for files with matching names in those folders. The backend
+resolves matches in the captured destination drive and parent while walking the
+source tree. It reuses matching folders and creates missing subfolders. The
+skip policy compares names within each destination folder. Keep Both uses the
+normal upload naming rules to preserve both files.
+
+The choice applies to the current import, including folders from archives
+selected for extraction. Loose files keep their ordinary upload behavior.
+Android's folder picker uses its own import path. Both merge policies preserve
+existing remote contents.
+
 ## Downloads publish completed output
 
 Interactive single-file downloads keep a private checkpoint in the

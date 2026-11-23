@@ -74,12 +74,13 @@ type importUploadObserver struct {
 	total   int
 	now     func() time.Time
 
-	mu             sync.Mutex
-	active         map[int]*importUploadFile
-	activeProgress float64
-	doneBytes      int64
-	done           int
-	failed         int
+	mu               sync.Mutex
+	active           map[int]*importUploadFile
+	activeProgress   float64
+	doneBytes        int64
+	done             int
+	failed           int
+	conflictsSkipped int
 	// Files the user cancelled on their own: neither uploaded nor failed, but
 	// settled all the same.
 	canceled       int
@@ -212,6 +213,18 @@ func (o *importUploadObserver) EmitInitial() {
 	}
 }
 
+// MarkConflictsSkipped counts skipped files as settled without changing the
+// planned file total or treating skips as uploads.
+func (o *importUploadObserver) MarkConflictsSkipped(skipped int) {
+	o.mu.Lock()
+	o.conflictsSkipped = skipped
+	payload, emit := o.progressPayloadLocked(false, true)
+	o.mu.Unlock()
+	if emit {
+		o.service.emitEvent("import_upload_progress", payload)
+	}
+}
+
 // LabelWindow records where each file of the next window sits in the selection.
 func (o *importUploadObserver) LabelWindow(idOffset int, labels []string) {
 	o.mu.Lock()
@@ -304,7 +317,8 @@ func (o *importUploadObserver) activeFilesLocked() (files []map[string]any, part
 func (o *importUploadObserver) progressPayloadLocked(force, allowEmit bool) (map[string]any, bool) {
 	progress := 100.0
 	if o.total > 0 {
-		progress = (float64(o.done+o.failed+o.canceled+len(o.accepted)) + o.activeProgress) / float64(o.total) * 100
+		settled := o.done + o.failed + o.canceled + o.conflictsSkipped + len(o.accepted)
+		progress = (float64(settled) + o.activeProgress) / float64(o.total) * 100
 		progress = math.Max(0, math.Min(100, progress))
 	}
 	wholePercent := int(math.Floor(progress))
@@ -335,16 +349,17 @@ func (o *importUploadObserver) progressPayloadLocked(force, allowEmit bool) (map
 		}
 	}
 	return map[string]any{
-		"total":       o.total,
-		"done":        o.done,
-		"failed":      o.failed,
-		"canceled":    o.canceled,
-		"progress":    progress,
-		"bytes":       o.doneBytes + acceptedBytes + int64(partialBytes),
-		"active":      active,
-		"activeCount": len(o.active),
-		"settled":     settled,
-		"accepted":    acceptedNew,
-		"saving":      len(o.accepted),
+		"total":            o.total,
+		"done":             o.done,
+		"failed":           o.failed,
+		"canceled":         o.canceled,
+		"conflictsSkipped": o.conflictsSkipped,
+		"progress":         progress,
+		"bytes":            o.doneBytes + acceptedBytes + int64(partialBytes),
+		"active":           active,
+		"activeCount":      len(o.active),
+		"settled":          settled,
+		"accepted":         acceptedNew,
+		"saving":           len(o.accepted),
 	}, true
 }

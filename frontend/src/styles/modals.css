@@ -79,6 +79,17 @@
 .modal-choice-row + .modal-choice-row {
     margin-top: -8px;
 }
+/* Choices that refine the option above sit under its text. */
+.modal-choice-group {
+    margin: -8px 0 16px 26px;
+}
+.modal-choice-group .modal-choice-row {
+    font-size: var(--type-base);
+    margin-bottom: 8px;
+}
+.modal-choice-group .modal-choice-row:last-child {
+    margin-bottom: 0;
+}
 
 /* === MOBILE: dialogs become bottom sheets ============================== */
 /* Everything below is gated on html.mobile so desktop stays pixel-identical.

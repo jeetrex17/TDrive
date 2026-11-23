@@ -359,21 +359,26 @@ type importBatchUploader func(paths, parents []string, idOffset int) error
 // The synchronous uploader provides natural backpressure to the filesystem
 // walk; it never schedules the next window while this one is active.
 type importTasks struct {
-	batch        *importBatch
-	upload       importBatchUploader
-	nextUploadID int
-	files        int
-	remoteItems  int
-	folders      int
-	oversize     int
-	empty        int
-	ignored      int
-	errorCount   int
-	errors       []string
-	warnf        WarnFunc
-	// labelWindow hands a window's display paths to the progress observer
-	// before its uploads start, keyed by upload id.
-	labelWindow func(idOffset int, labels []string)
+	batch            *importBatch
+	upload           importBatchUploader
+	observer         *importUploadObserver
+	channelID        int64
+	encrypt          bool
+	fileConflict     string
+	nextUploadID     int
+	files            int
+	remoteItems      int
+	folders          int
+	oversize         int
+	empty            int
+	ignored          int
+	conflictsSkipped int
+	errorCount       int
+	errors           []string
+	warnf            WarnFunc
+	// Only populated for skip mode. A colliding queued source must settle
+	// before looking up the name, so a failed send doesn't cause a skip.
+	pendingNames map[importSiblingName]struct{}
 }
 
 func (t *importTasks) reserveRemoteItem() error {
@@ -389,6 +394,11 @@ func (t *importTasks) add(srcPath, parentID, label string) error {
 		return err
 	}
 	t.files++
+	if t.pendingNames != nil {
+		if key, err := projection.CanonicalNameKey(filepath.Base(srcPath)); err == nil {
+			t.pendingNames[importSiblingName{parentID: parentID, key: key}] = struct{}{}
+		}
+	}
 	if t.batch.add(srcPath, parentID, label) {
 		return t.flush()
 	}
@@ -400,12 +410,11 @@ func (t *importTasks) flush() error {
 		return nil
 	}
 	batchSize := t.batch.len()
-	if t.labelWindow != nil {
-		t.labelWindow(t.nextUploadID, t.batch.labels)
-	}
+	t.observer.LabelWindow(t.nextUploadID, t.batch.labels)
 	err := t.upload(t.batch.paths, t.batch.parents, t.nextUploadID)
 	t.nextUploadID += batchSize
 	t.batch.reset()
+	clear(t.pendingNames)
 	if err != nil && t.warnf != nil {
 		t.warnf("import: upload window failed: %v\n", err)
 	}
@@ -442,6 +451,10 @@ func (t *importTasks) addError(name string, err error) {
 // a temp dir and imported like folders. Progress flows through import_start, the
 // aggregate import events, and import_complete.
 func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string, parentID string, encrypt, extractArchives bool) error {
+	return s.runImport(ctx, channelID, paths, parentID, encrypt, extractArchives, "")
+}
+
+func (s *Service) runImport(ctx context.Context, channelID int64, paths []string, parentID string, encrypt, extractArchives bool, fileConflict string) error {
 	if ctx == nil {
 		return fmt.Errorf("import: context is required")
 	}
@@ -509,16 +522,23 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 	observer := newImportUploadObserver(s, plan.Files)
 	observer.EmitInitial()
 	tasks := &importTasks{
-		batch:       newImportBatch(),
-		warnf:       s.warnf,
-		labelWindow: observer.LabelWindow,
+		batch:        newImportBatch(),
+		observer:     observer,
+		channelID:    channelID,
+		encrypt:      encrypt,
+		fileConflict: fileConflict,
+		warnf:        s.warnf,
+	}
+	if fileConflict == importConflictSkip {
+		tasks.pendingNames = make(map[importSiblingName]struct{})
 	}
 	tasks.upload = func(batchPaths, batchParents []string, idOffset int) error {
 		_, err := s.upload(ctx, channelID, batchPaths, batchParents, encrypt, uploadOptions{
-			observer: observer,
-			peer:     &peer,
-			idOffset: idOffset,
-			pausable: true,
+			observer:                   observer,
+			peer:                       &peer,
+			idOffset:                   idOffset,
+			pausable:                   true,
+			prioritizeFatalImportError: fileConflict != "",
 		})
 		return err
 	}
@@ -536,7 +556,7 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 		switch {
 		case info.IsDir():
 			s.emitEvent("import_progress", map[string]any{"label": "Adding " + filepath.Base(p)})
-			if err := s.importTree(ctx, channelID, p, filepath.Base(p), parent, encrypt, tasks); err != nil {
+			if err := s.importTree(ctx, p, filepath.Base(p), parent, tasks); err != nil {
 				if isFatalImportError(err) {
 					fatalErr = err
 					break
@@ -560,12 +580,12 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 					break
 				}
 				tasks.addError(filepath.Base(p), fmt.Errorf("extract failed, uploading as a file: %w", err))
-				if err := s.addFileTask(p, filepath.Base(p), info.Size(), parent, encrypt, tasks); err != nil {
+				if err := s.addFileTask(p, filepath.Base(p), info.Size(), parent, false, tasks); err != nil {
 					fatalErr = err
 				}
 				break // reach the shared fatal guard before scheduling another selected path
 			}
-			if err := s.importTree(ctx, channelID, dir, archiveFolderName(p), parent, encrypt, tasks); err != nil {
+			if err := s.importTree(ctx, dir, archiveFolderName(p), parent, tasks); err != nil {
 				if isFatalImportError(err) {
 					fatalErr = err
 					break
@@ -573,7 +593,7 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 				tasks.addError(filepath.Base(p), err)
 			}
 		default:
-			if err := s.addFileTask(p, filepath.Base(p), info.Size(), parent, encrypt, tasks); err != nil {
+			if err := s.addFileTask(p, filepath.Base(p), info.Size(), parent, false, tasks); err != nil {
 				fatalErr = err
 			}
 		}
@@ -610,101 +630,23 @@ func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string
 		}
 	}
 	s.emitEvent("import_complete", map[string]any{
-		"uploaded":   uploaded,
-		"failed":     failed,
-		"scheduled":  tasks.files,
-		"folders":    tasks.folders,
-		"oversize":   tasks.oversize,
-		"empty":      tasks.empty,
-		"ignored":    tasks.ignored,
-		"errorCount": tasks.errorCount,
-		"errors":     errorsOut,
-		"status":     status,
-		"error":      fatalMessage,
+		"uploaded":         uploaded,
+		"failed":           failed,
+		"scheduled":        tasks.files,
+		"folders":          tasks.folders,
+		"oversize":         tasks.oversize,
+		"empty":            tasks.empty,
+		"ignored":          tasks.ignored,
+		"conflictsSkipped": tasks.conflictsSkipped,
+		"errorCount":       tasks.errorCount,
+		"errors":           errorsOut,
+		"status":           status,
+		"error":            fatalMessage,
 	})
 	if fatalErr != nil {
 		return fatalErr
 	}
 	return nil
-}
-
-// addFileTask queues a single file for upload, skipping (and counting) it if it
-// exceeds the per-file limit or has nothing Telegram can store.
-func (s *Service) addFileTask(srcPath, label string, size int64, parentID string, encrypt bool, tasks *importTasks) error {
-	stored := uploadByteSize(size, encrypt)
-	if stored == 0 {
-		tasks.empty++
-		return nil
-	}
-	if stored > s.largeFileMaxBytes() {
-		tasks.oversize++
-		return nil
-	}
-	return tasks.add(srcPath, parentID, label)
-}
-
-// importTree creates a top folder (collision-suffixed) under parentID, mirrors
-// the directory structure beneath root, and queues every file for upload. The
-// depth-first walk always creates a directory before visiting its children.
-func (s *Service) importTree(ctx context.Context, channelID int64, root, topName, parentID string, encrypt bool, tasks *importTasks) error {
-	freeName, err := projection.NextFreeFolderName(s.DB, channelID, parentID, topName)
-	if err != nil {
-		return err
-	}
-	if err := tasks.reserveRemoteItem(); err != nil {
-		return err
-	}
-	topID, err := s.CreateFolder(ctx, channelID, freeName, parentID)
-	if err != nil {
-		return err
-	}
-	tasks.folders++
-
-	// Maps a cleaned forward-slash relative directory to its created folder ID.
-	dirIDs := map[string]string{".": topID}
-
-	return walkImportDescendants(ctx, root, func(p, rel string, d os.DirEntry) (bool, error) {
-		if d.Type()&os.ModeSymlink != 0 {
-			return true, nil
-		}
-		if isIgnoredImportName(d.Name(), d.IsDir()) {
-			tasks.ignored++
-			return d.IsDir(), nil
-		}
-		parentID := dirIDs[path.Dir(rel)]
-		if parentID == "" {
-			// A parent we failed to create earlier; skip this dangling entry.
-			return d.IsDir(), nil
-		}
-
-		if d.IsDir() {
-			if err := tasks.reserveRemoteItem(); err != nil {
-				return false, err
-			}
-			id, err := s.CreateFolder(ctx, channelID, d.Name(), parentID)
-			if err != nil {
-				if isFatalImportError(err) {
-					return false, err
-				}
-				tasks.addError(rel, err)
-				return true, nil
-			}
-			dirIDs[rel] = id
-			tasks.folders++
-			return false, nil
-		}
-
-		info, err := d.Info()
-		if err != nil {
-			tasks.addError(rel, err)
-			return false, nil
-		}
-		// Labelled with the folder's name in the drive, which may carry a (2).
-		return false, s.addFileTask(p, path.Join(freeName, rel), info.Size(), parentID, encrypt, tasks)
-	}, func(p string, err error) error {
-		tasks.addError(filepath.Base(p), err)
-		return nil
-	})
 }
 
 // extractArchiveToTemp unpacks an archive's safe regular-file entries into a new

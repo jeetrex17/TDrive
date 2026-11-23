@@ -15,6 +15,7 @@ import {
     GetFolderStats as rawGetFolderStats,
     GetStorageUsed as rawGetStorageUsed,
     ImportPathsForDrive as rawImportPathsForDrive,
+    MergeImportPathsForDrive as rawMergeImportPathsForDrive,
     MoveFile as rawMoveFile,
     MoveFolder as rawMoveFolder,
     MsgToTdriveSystem as rawMsgToTdriveSystem,
@@ -42,6 +43,7 @@ import type {
     DownloadResult,
     EncryptionStatusView,
     FileItem,
+    ImportFileConflict,
     FolderContents,
     FolderItem,
     FolderStat,
@@ -217,9 +219,14 @@ export async function planImport(paths: string[], encrypt: boolean, extract: boo
     return normalizeImportPlan(await invokeBackend(rawPlanImport, paths, encrypt, extract));
 }
 
-export async function importPathsForDrive(paths: string[], parentId: string, encrypt: boolean, extract: boolean, expectedChannelId: number): Promise<OperationResult> {
+export async function importPathsForDrive(
+    paths: string[], parentId: string, encrypt: boolean, extract: boolean, expectedChannelId: number,
+    folderMerge?: ImportFileConflict,
+): Promise<OperationResult> {
     return normalizeOperationResult(
-        await invokeBackend(rawImportPathsForDrive, paths, parentId, encrypt, extract, expectedChannelId),
+        folderMerge
+            ? await invokeBackend(rawMergeImportPathsForDrive, paths, parentId, encrypt, extract, expectedChannelId, folderMerge)
+            : await invokeBackend(rawImportPathsForDrive, paths, parentId, encrypt, extract, expectedChannelId),
         "Could not start the queued import",
     );
 }

@@ -199,6 +199,8 @@ export interface DownloadResult {
     jobId: string;
 }
 
+export type ImportFileConflict = 'skip' | 'keep-both';
+
 export interface ImportPlan {
     files: number;
     folders: number;
