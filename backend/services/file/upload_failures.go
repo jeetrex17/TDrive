@@ -43,10 +43,19 @@ func notSentFailure(index int, name string, err error) UploadFailure {
 // reports every failed input. Its outcome tracking belongs to this call only;
 // it does not create a durable ordinary-upload retry journal.
 func (s *Service) UploadWithFailures(ctx context.Context, channelID int64, filePaths, parentIDs []string, encrypt bool) ([]Metadata, []UploadFailure, error) {
-	observer := &failureUploadObserver{uploadObserver: detailedUploadObserver{service: s}, failures: make(map[int]UploadFailure), started: make(map[int]bool), completed: make(map[int]bool), ctx: ctx}
-	files, err := s.upload(ctx, channelID, filePaths, parentIDs, encrypt, uploadOptions{observer: observer, resumable: true, pausable: true})
+	return s.uploadWithFailures(ctx, channelID, filePaths, parentIDs, encrypt, uploadOptions{resumable: true, pausable: true})
+}
+
+func (s *Service) uploadWithFailures(ctx context.Context, channelID int64, filePaths, parentIDs []string, encrypt bool, options uploadOptions) ([]Metadata, []UploadFailure, error) {
+	if options.observer == nil {
+		options.observer = detailedUploadObserver{service: s}
+	}
+	observer := newFailureUploadObserver(ctx, options.observer)
+	options.observer = observer
+	files, err := s.upload(ctx, channelID, filePaths, parentIDs, encrypt, options)
 	failures := make([]UploadFailure, 0, len(observer.failures))
-	for index, path := range filePaths {
+	for i, path := range filePaths {
+		index := options.idOffset + i
 		if failure, ok := observer.failures[index]; ok {
 			failures = append(failures, failure)
 		} else if err != nil && !observer.completed[index] {
@@ -70,6 +79,16 @@ type failureUploadObserver struct {
 	failures  map[int]UploadFailure
 	started   map[int]bool
 	completed map[int]bool
+}
+
+func newFailureUploadObserver(ctx context.Context, observer uploadObserver) *failureUploadObserver {
+	return &failureUploadObserver{
+		uploadObserver: observer,
+		failures:       make(map[int]UploadFailure),
+		started:        make(map[int]bool),
+		completed:      make(map[int]bool),
+		ctx:            ctx,
+	}
 }
 
 func (o *failureUploadObserver) Started(id int, name string, size int64, parentID string) {
@@ -103,6 +122,14 @@ func (o *failureUploadObserver) Failed(id int, name string, err error) {
 func classifyUploadFailure(ctx context.Context, index int, name string, err error) UploadFailure {
 	failure := UploadFailure{Index: index, Name: name, Message: err.Error(), Code: "upload_failed"}
 	switch {
+	case errors.Is(err, errImportRetrySourceChanged):
+		failure.Code = "source_changed"
+	case errors.Is(err, errImportRetrySourceMissing):
+		failure.Code = "source_missing"
+	case errors.Is(err, errImportRetryNameConflict):
+		failure.Code = "name_conflict"
+	case errors.Is(err, errImportRetryNameUnconfirmed):
+		failure.Code = "name_unconfirmed"
 	case errors.Is(err, ErrEmptyFile):
 		failure.Code = "empty_file"
 	case errors.Is(err, errUploadProjection):

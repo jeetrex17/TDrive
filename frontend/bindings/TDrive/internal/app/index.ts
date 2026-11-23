@@ -26,6 +26,7 @@ export type {
     GalleryItem,
     GalleryPage,
     GalleryStorage,
+    ImportRetryResult,
     JoinDriveResult,
     JoinRequestInfo,
     MountDriveLetterView,

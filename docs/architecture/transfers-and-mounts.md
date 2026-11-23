@@ -79,6 +79,16 @@ The retry report belongs to the current app session and retains the original
 destination and encryption choice. Consuming a retry invalidates that report
 so reviewing it cannot resend files that have since succeeded.
 
+Desktop folder imports also expose a bulk retry in Activity for eligible
+failed files from the current session. Each retry uses the original local
+file, resolved destination folder and encryption choice. It checks the
+source size and modification time before sending. Extracted archive entries
+are temporary, and sends with uncertain outcomes stay ineligible. Imports
+that skip matching filenames keep that policy on retry. A window that stops
+before sending still reports its eligible local files for retry. If the
+import ends early, Activity and the retry dialog show an estimate of the
+planned files the import did not reach.
+
 Uploads wait for every server-directed `FLOOD_WAIT` while their transfer context
 is live, including repeated cooldowns and waits longer than 30 seconds. The
 shared Telegram write coordinator applies the longest observed cooldown across

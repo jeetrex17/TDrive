@@ -322,7 +322,8 @@ type importBatch struct {
 	parents []string
 	// Where each file sits in what the user selected ("Album/2024/a.jpg"), for
 	// display only; never a local path.
-	labels []string
+	labels       []string
+	retrySources []ImportRetryFile
 }
 
 func newImportBatch() *importBatch {
@@ -351,9 +352,11 @@ func (b *importBatch) reset() {
 	b.paths = b.paths[:0]
 	b.parents = b.parents[:0]
 	b.labels = b.labels[:0]
+	clear(b.retrySources)
+	b.retrySources = b.retrySources[:0]
 }
 
-type importBatchUploader func(paths, parents []string, idOffset int) error
+type importBatchUploader func(batch *importBatch, idOffset int) error
 
 // importTasks retains only one bounded upload window plus bounded diagnostics.
 // The synchronous uploader provides natural backpressure to the filesystem
@@ -366,7 +369,6 @@ type importTasks struct {
 	encrypt          bool
 	fileConflict     string
 	nextUploadID     int
-	files            int
 	remoteItems      int
 	folders          int
 	oversize         int
@@ -389,15 +391,17 @@ func (t *importTasks) reserveRemoteItem() error {
 	return nil
 }
 
-func (t *importTasks) add(srcPath, parentID, label string) error {
+func (t *importTasks) add(srcPath, parentID, label string, retrySource ImportRetryFile) error {
 	if err := t.reserveRemoteItem(); err != nil {
 		return err
 	}
-	t.files++
 	if t.pendingNames != nil {
 		if key, err := projection.CanonicalNameKey(filepath.Base(srcPath)); err == nil {
 			t.pendingNames[importSiblingName{parentID: parentID, key: key}] = struct{}{}
 		}
+	}
+	if t.batch.retrySources != nil {
+		t.batch.retrySources = append(t.batch.retrySources, retrySource)
 	}
 	if t.batch.add(srcPath, parentID, label) {
 		return t.flush()
@@ -411,7 +415,7 @@ func (t *importTasks) flush() error {
 	}
 	batchSize := t.batch.len()
 	t.observer.LabelWindow(t.nextUploadID, t.batch.labels)
-	err := t.upload(t.batch.paths, t.batch.parents, t.nextUploadID)
+	err := t.upload(t.batch, t.nextUploadID)
 	t.nextUploadID += batchSize
 	t.batch.reset()
 	clear(t.pendingNames)
@@ -451,10 +455,10 @@ func (t *importTasks) addError(name string, err error) {
 // a temp dir and imported like folders. Progress flows through import_start, the
 // aggregate import events, and import_complete.
 func (s *Service) RunImport(ctx context.Context, channelID int64, paths []string, parentID string, encrypt, extractArchives bool) error {
-	return s.runImport(ctx, channelID, paths, parentID, encrypt, extractArchives, "")
+	return s.runImport(ctx, channelID, paths, parentID, encrypt, extractArchives, "", nil)
 }
 
-func (s *Service) runImport(ctx context.Context, channelID int64, paths []string, parentID string, encrypt, extractArchives bool, fileConflict string) error {
+func (s *Service) runImport(ctx context.Context, channelID int64, paths []string, parentID string, encrypt, extractArchives bool, fileConflict string, retryFiles *[]ImportRetryFile) error {
 	if ctx == nil {
 		return fmt.Errorf("import: context is required")
 	}
@@ -532,14 +536,21 @@ func (s *Service) runImport(ctx context.Context, channelID int64, paths []string
 	if fileConflict == importConflictSkip {
 		tasks.pendingNames = make(map[importSiblingName]struct{})
 	}
-	tasks.upload = func(batchPaths, batchParents []string, idOffset int) error {
-		_, err := s.upload(ctx, channelID, batchPaths, batchParents, encrypt, uploadOptions{
+	if retryFiles != nil {
+		tasks.batch.retrySources = make([]ImportRetryFile, 0, importUploadBatchSize)
+	}
+	tasks.upload = func(batch *importBatch, idOffset int) error {
+		options := uploadOptions{
 			observer:                   observer,
 			peer:                       &peer,
 			idOffset:                   idOffset,
 			pausable:                   true,
 			prioritizeFatalImportError: fileConflict != "",
-		})
+		}
+		if retryFiles != nil {
+			return s.uploadImportWindow(ctx, channelID, batch, encrypt, options, retryFiles)
+		}
+		_, err := s.upload(ctx, channelID, batch.paths, batch.parents, encrypt, options)
 		return err
 	}
 	var fatalErr error
@@ -556,7 +567,7 @@ func (s *Service) runImport(ctx context.Context, channelID int64, paths []string
 		switch {
 		case info.IsDir():
 			s.emitEvent("import_progress", map[string]any{"label": "Adding " + filepath.Base(p)})
-			if err := s.importTree(ctx, p, filepath.Base(p), parent, tasks); err != nil {
+			if err := s.importTree(ctx, p, filepath.Base(p), parent, false, tasks); err != nil {
 				if isFatalImportError(err) {
 					fatalErr = err
 					break
@@ -580,12 +591,12 @@ func (s *Service) runImport(ctx context.Context, channelID int64, paths []string
 					break
 				}
 				tasks.addError(filepath.Base(p), fmt.Errorf("extract failed, uploading as a file: %w", err))
-				if err := s.addFileTask(p, filepath.Base(p), info.Size(), parent, false, tasks); err != nil {
+				if err := s.addFileTask(p, filepath.Base(p), info, parent, false, false, tasks); err != nil {
 					fatalErr = err
 				}
 				break // reach the shared fatal guard before scheduling another selected path
 			}
-			if err := s.importTree(ctx, dir, archiveFolderName(p), parent, tasks); err != nil {
+			if err := s.importTree(ctx, dir, archiveFolderName(p), parent, true, tasks); err != nil {
 				if isFatalImportError(err) {
 					fatalErr = err
 					break
@@ -593,7 +604,7 @@ func (s *Service) runImport(ctx context.Context, channelID int64, paths []string
 				tasks.addError(filepath.Base(p), err)
 			}
 		default:
-			if err := s.addFileTask(p, filepath.Base(p), info.Size(), parent, false, tasks); err != nil {
+			if err := s.addFileTask(p, filepath.Base(p), info, parent, false, false, tasks); err != nil {
 				fatalErr = err
 			}
 		}
@@ -612,7 +623,14 @@ func (s *Service) runImport(ctx context.Context, channelID int64, paths []string
 	}
 	observer.Flush()
 	uploaded, observerFailed, canceled, uploadReasons := observer.Summary()
-	failed := max(0, tasks.files-uploaded-canceled, observerFailed)
+	scheduled := tasks.nextUploadID
+	failed := max(0, scheduled-uploaded-canceled, observerFailed)
+	var unattempted int
+	if fatalErr != nil {
+		// Preflight counted the original selection. Files discovered during
+		// traversal can change, so the unreached remainder is an estimate.
+		unattempted = max(0, plan.Files-scheduled-tasks.conflictsSkipped)
+	}
 	errorsOut := append([]string(nil), tasks.errors...)
 	for _, reason := range uploadReasons {
 		if len(errorsOut) >= maxImportErrorDetails {
@@ -632,7 +650,8 @@ func (s *Service) runImport(ctx context.Context, channelID int64, paths []string
 	s.emitEvent("import_complete", map[string]any{
 		"uploaded":         uploaded,
 		"failed":           failed,
-		"scheduled":        tasks.files,
+		"scheduled":        scheduled,
+		"unattempted":      unattempted,
 		"folders":          tasks.folders,
 		"oversize":         tasks.oversize,
 		"empty":            tasks.empty,

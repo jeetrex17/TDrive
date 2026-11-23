@@ -23,7 +23,9 @@
     const checkCount = $derived(failures.filter((failure) => statusFor(failure).tone === 'warning').length);
     const pages = $derived(Math.max(1, Math.ceil(failures.length / PAGE_SIZE)));
     const driveTitle = $derived($view.payload?.driveTitle ?? 'the original drive');
-    const subtitle = $derived(uploaded > 0
+    const subtitle = $derived($view.payload?.importFiles && uploaded === 0
+        ? `Review these failed files from your folder upload to ${driveTitle}.`
+        : uploaded > 0
         ? `${failures.length} of ${total} files didn't upload to ${driveTitle}. Files that uploaded won't be sent again.`
         : `${failures.length} ${failures.length === 1 ? "file didn't" : "files didn't"} upload to ${driveTitle}.`);
     $effect(() => {
@@ -61,6 +63,7 @@
 <ModalShell hostId="failed-uploads-modal" open={$view.open} title="Failed uploads" titleId="failed-uploads-title"
     {subtitle} initialFocus="#retry-failed-uploads" restoreFocus="#file-list" onClose={onClose}>
     <div class="failed-upload-body">
+    {#if $view.payload?.importInterruption}<p class="failed-upload-note">{$view.payload.importInterruption}</p>{/if}
     {#if retryCount > 0 || checkCount > 0}
         <div class="failed-upload-counts">
             {#if retryCount > 0}<span class="failure-count" data-tone="accent">{retryCount} ready to retry</span>{/if}
@@ -185,5 +188,6 @@
     }
     .page-buttons button:disabled { opacity: 0.4; cursor: default; }
     :global(html.mobile) .page-buttons button { min-height: 36px; padding: 0 14px; }
+    .failed-upload-note { margin: 0; color: var(--text-muted); font-size: var(--type-sm); }
     .failed-upload-error { margin: 0; color: var(--danger); font-size: var(--type-base); }
 </style>

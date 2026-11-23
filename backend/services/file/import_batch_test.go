@@ -312,6 +312,8 @@ func TestRunImportStopsSchedulingAfterProjectionFailure(t *testing.T) {
 func TestRunImportStopsSchedulingAfterFatalUploadWindow(t *testing.T) {
 	svc, db, fakeTG, _ := newTestService(t)
 	svc.CreateFolder = contextTestFolderCreator(db)
+	events := &importTestEventRecorder{}
+	svc.Events = events
 	svc.MaxConcurrentUploads = 1
 	svc.FloodWaitRetry = tgclient.FloodWaitRetryPolicy{
 		Sleep: func(context.Context, time.Duration) error { return nil },
@@ -328,6 +330,10 @@ func TestRunImportStopsSchedulingAfterFatalUploadWindow(t *testing.T) {
 	}
 	if sent := len(fakeTG.SentFiles()); sent != importUploadBatchSize-1 {
 		t.Fatalf("sent files after fatal upload window = %d, want first window minus failed send %d", sent, importUploadBatchSize-1)
+	}
+	payload, ok := events.lastPayload("import_complete")
+	if !ok || payload["failed"] != 1 || payload["unattempted"] != 1 || payload["scheduled"] != importUploadBatchSize {
+		t.Fatalf("import completion = %+v, want failed first-window send and unattempted last file counted separately", payload)
 	}
 }
 

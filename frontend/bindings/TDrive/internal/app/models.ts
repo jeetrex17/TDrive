@@ -129,6 +129,14 @@ export interface GalleryStorage {
 }
 
 /**
+ * ImportRetryResult adds reusable session sources to the operation envelope.
+ */
+export interface ImportRetryResult {
+    "result": OperationResult;
+    "retryFiles": file$0.ImportRetryFile[] | null;
+}
+
+/**
  * JoinDriveResult distinguishes instant joins from approval-required requests.
  */
 export interface JoinDriveResult {

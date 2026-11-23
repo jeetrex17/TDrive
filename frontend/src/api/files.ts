@@ -14,8 +14,8 @@ import {
     GetFolderContents as rawGetFolderContents,
     GetFolderStats as rawGetFolderStats,
     GetStorageUsed as rawGetStorageUsed,
-    ImportPathsForDrive as rawImportPathsForDrive,
-    MergeImportPathsForDrive as rawMergeImportPathsForDrive,
+    ImportPathsWithRetryForDrive as rawImportPathsWithRetryForDrive,
+    RetryImportedFilesForDrive as rawRetryImportedFilesForDrive,
     MoveFile as rawMoveFile,
     MoveFolder as rawMoveFolder,
     MsgToTdriveSystem as rawMsgToTdriveSystem,
@@ -44,6 +44,7 @@ import type {
     EncryptionStatusView,
     FileItem,
     ImportFileConflict,
+    ImportRetryFile,
     FolderContents,
     FolderItem,
     FolderStat,
@@ -222,13 +223,21 @@ export async function planImport(paths: string[], encrypt: boolean, extract: boo
 export async function importPathsForDrive(
     paths: string[], parentId: string, encrypt: boolean, extract: boolean, expectedChannelId: number,
     folderMerge?: ImportFileConflict,
-): Promise<OperationResult> {
-    return normalizeOperationResult(
-        folderMerge
-            ? await invokeBackend(rawMergeImportPathsForDrive, paths, parentId, encrypt, extract, expectedChannelId, folderMerge)
-            : await invokeBackend(rawImportPathsForDrive, paths, parentId, encrypt, extract, expectedChannelId),
-        "Could not start the queued import",
-    );
+): Promise<{ result: OperationResult; retryFiles: ImportRetryFile[] }> {
+    const raw = asRecord(await invokeBackend(rawImportPathsWithRetryForDrive, paths, parentId, encrypt, extract, expectedChannelId, folderMerge ?? ''));
+    const files = Array.isArray(raw.retryFiles) ? raw.retryFiles.map(asRecord) : [];
+    const retryFiles = files.filter((file): file is ImportRetryFile & Record<string, unknown> =>
+        typeof file.path === 'string' && file.path.length > 0 && typeof file.parentId === 'string'
+        && typeof file.relativePath === 'string' && file.relativePath.length > 0
+        && typeof file.size === 'number' && Number.isSafeInteger(file.size) && file.size >= 0
+        && typeof file.modifiedAt === 'string' && file.modifiedAt.length > 0
+        && typeof file.message === 'string' && typeof file.code === 'string'
+        && (file.skipExisting === undefined || typeof file.skipExisting === 'boolean'));
+    return {
+        result: normalizeOperationResult(raw.result, 'Could not start the queued import'),
+        // A malformed response cannot authorize a new send.
+        retryFiles: retryFiles.length === files.length ? retryFiles : [],
+    };
 }
 
 export async function releaseUploadSources(paths: string[]): Promise<OperationResult> {
@@ -271,6 +280,10 @@ export async function uploadToDriveFs(paths: string[], parentIds: string[], encr
 
 export async function retryUploadToDriveFs(paths: string[], parentIds: string[], encrypt: boolean, expectedChannelId: number): Promise<UploadResult> {
     return normalizeUploadResult(await invokeBackend(rawRetryUploadToDriveFs, paths, parentIds, encrypt, expectedChannelId), paths.length);
+}
+
+export async function retryImportedFilesForDrive(files: ImportRetryFile[], encrypt: boolean, expectedChannelId: number): Promise<UploadResult> {
+    return normalizeUploadResult(await invokeBackend(rawRetryImportedFilesForDrive, files, encrypt, expectedChannelId), files.length);
 }
 
 export async function cancelDownload(): Promise<void> {

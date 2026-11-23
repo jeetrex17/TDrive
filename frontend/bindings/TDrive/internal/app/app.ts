@@ -263,6 +263,14 @@ export function ImportPathsForDrive(paths: string[] | null, parentID: string, en
     return $Call.ByID(63775042, paths, parentID, encrypt, extractArchives, expectedChannelID);
 }
 
+/**
+ * ImportPathsWithRetryForDrive runs the queued import and returns the eligible
+ * local failures for Activity. Mobile imports retain their existing behavior.
+ */
+export function ImportPathsWithRetryForDrive(paths: string[] | null, parentID: string, encrypt: boolean, extractArchives: boolean, expectedChannelID: number, fileConflict: string): $CancellablePromise<$models.ImportRetryResult> {
+    return $Call.ByID(2668727394, paths, parentID, encrypt, extractArchives, expectedChannelID, fileConflict);
+}
+
 export function ListMediaFolderPage(folderID: string, cursor: string, limit: number): $CancellablePromise<$models.GalleryPage> {
     return $Call.ByID(636232343, folderID, cursor, limit);
 }
@@ -534,6 +542,14 @@ export function ResumeResumableUpload(jobID: string, sourcePath: string): $Cance
  */
 export function ResumeUploads(): $CancellablePromise<void> {
     return $Call.ByID(1051441747);
+}
+
+/**
+ * RetryImportedFilesForDrive runs a fresh batch of checked local sources in the
+ * original drive, using each entry's resolved destination folder.
+ */
+export function RetryImportedFilesForDrive(sources: file$0.ImportRetryFile[] | null, encrypt: boolean, expectedChannelID: number): $CancellablePromise<$models.UploadResult> {
+    return $Call.ByID(2896021568, sources, encrypt, expectedChannelID);
 }
 
 export function RetryPhotoBackup(): $CancellablePromise<$models.OperationResult> {

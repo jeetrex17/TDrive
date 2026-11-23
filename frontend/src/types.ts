@@ -187,6 +187,17 @@ export interface UploadFailure {
     retryable: boolean;
 }
 
+export interface ImportRetryFile {
+    path: string;
+    parentId: string;
+    relativePath: string;
+    size: number;
+    modifiedAt: string;
+    message: string;
+    code: string;
+    skipExisting?: boolean;
+}
+
 export interface UploadResult {
     result: OperationResult;
     files: FileItem[];

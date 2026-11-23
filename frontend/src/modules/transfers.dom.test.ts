@@ -27,8 +27,8 @@ const eventsOn = vi.hoisted(() => vi.fn((eventName: string, callback: (event: { 
 }));
 const app = vi.hoisted(() => ({
     DownloadFile: vi.fn(),
-    ImportPathsForDrive: vi.fn(),
-    MergeImportPathsForDrive: vi.fn(),
+    ImportPathsWithRetryForDrive: vi.fn(),
+    RetryImportedFilesForDrive: vi.fn(),
     ReleaseUploadSources: vi.fn(),
     PlanImport: vi.fn(),
     SelectFiles: vi.fn(),
@@ -101,7 +101,7 @@ beforeEach(() => {
         archives: 0,
         limitExceeded: false,
     });
-    app.ImportPathsForDrive.mockImplementation(async () => {
+    app.ImportPathsWithRetryForDrive.mockImplementation(async () => {
         handlers.get('import_start')?.();
         handlers.get('import_complete')?.({
             status: 'failed',
@@ -132,20 +132,99 @@ describe('aggregate import completion', () => {
     it('queues an opted-in merge with the chosen conflict action and the original destination', async () => {
         mocks.openImportOptionsModal.mockResolvedValueOnce({ encrypt: false, extract: true, folderMerge: 'keep-both' });
         app.PlanImport.mockResolvedValueOnce({ files: 0, folders: 1, archives: 1 });
-        app.MergeImportPathsForDrive.mockResolvedValueOnce({ ok: true });
+        app.ImportPathsWithRetryForDrive.mockResolvedValueOnce({ result: { ok: true }, retryFiles: [] });
 
         await importFolderWithParentID('d:parent');
 
         expect(mocks.openImportOptionsModal).toHaveBeenCalledWith(expect.objectContaining({ allowFolderMerge: true }));
-        expect(app.MergeImportPathsForDrive).toHaveBeenCalledWith(['/tmp/empty-folder'], 'd:parent', false, true, 1, 'keep-both');
-        expect(app.ImportPathsForDrive).not.toHaveBeenCalled();
+        expect(app.ImportPathsWithRetryForDrive).toHaveBeenCalledWith(['/tmp/empty-folder'], 'd:parent', false, true, 1, 'keep-both');
+        expect(app.ImportPathsWithRetryForDrive).toHaveBeenCalledOnce();
+    });
+
+    it('retries only reported import failures and preserves their individual folder destinations', async () => {
+        const { failedUploadReports, failedUploadsModal } = await import('../ui/modals/failed-uploads-store');
+        const { reviewFailedUploads, retryFailedUploads } = await import('./transfers');
+        const first = { path: '/tmp/tree/one/same.txt', relativePath: 'tree/one/same.txt', parentId: 'd:one', size: 1,
+            modifiedAt: '2026-11-23T00:00:00Z', code: 'temporary_failure', message: 'Connection lost' };
+        const second = { ...first, path: '/tmp/tree/two/same.txt', relativePath: 'tree/two/same.txt', parentId: 'd:two' };
+        app.PlanImport.mockResolvedValueOnce({ files: 4, folders: 3, archives: 0 });
+        app.ImportPathsWithRetryForDrive.mockImplementationOnce(async () => {
+            handlers.get('import_start')?.();
+            handlers.get('import_complete')?.({ status: 'done', uploaded: 2, failed: 2, scheduled: 4 });
+            return { result: { ok: true }, retryFiles: [first, second] };
+        });
+        app.RetryImportedFilesForDrive.mockResolvedValueOnce({
+            result: { ok: true }, files: [],
+            failures: [{ index: 1, name: 'same.txt', retryable: true, code: 'temporary_failure', message: 'Connection lost' }],
+        });
+        app.RetryImportedFilesForDrive.mockResolvedValueOnce({ result: { ok: true }, files: [], failures: [] });
+
+        await importFolderWithParentID('d:parent');
+        const report = get(failedUploadReports)[0];
+        expect(report?.failures.map(({ name }) => name)).toEqual([first.relativePath, second.relativePath]);
+        reviewFailedUploads(report);
+        state.activeChannel = { id: 2, title: 'Other drive', kind: 'shared' };
+        await retryFailedUploads();
+        expect(get(failedUploadsModal.state).error).toContain('Test drive');
+        expect(app.RetryImportedFilesForDrive).not.toHaveBeenCalled();
+        state.activeChannel = { id: 1, title: 'Test drive', kind: 'shared' };
+        const { removeQueuedUpload } = await import('./upload-queue');
+        const { uploadActivities } = await import('../ui/notifications/upload-activity-store');
+        let finishUpload = (_result: unknown) => {};
+        app.SelectFiles.mockResolvedValueOnce(['/tmp/active.txt']);
+        app.PlanImport.mockResolvedValueOnce({ files: 1, folders: 0, archives: 0 });
+        app.RetryUploadToDriveFS.mockImplementationOnce(() => new Promise((resolve) => { finishUpload = resolve; }));
+        const activeUpload = uploadWithParentID('');
+        await vi.waitFor(() => expect(app.RetryUploadToDriveFS).toHaveBeenCalled());
+        await retryFailedUploads();
+        const queuedRetry = get(uploadActivities).find((activity) => activity.status === 'queued');
+        expect(queuedRetry).toBeDefined();
+        removeQueuedUpload(queuedRetry!.id);
+        expect(app.RetryImportedFilesForDrive).not.toHaveBeenCalled();
+        finishUpload({ result: { ok: true }, files: [], failures: [] });
+        await activeUpload;
+        reviewFailedUploads(report);
+        await retryFailedUploads();
+        expect(app.RetryImportedFilesForDrive).toHaveBeenNthCalledWith(1, [first, second], false, 1);
+        reviewFailedUploads(report);
+        await retryFailedUploads();
+        expect(app.RetryImportedFilesForDrive).toHaveBeenCalledTimes(1);
+
+        const next = get(failedUploadReports)[0];
+        expect(next.failures[0].name).toBe(second.relativePath);
+        reviewFailedUploads(next);
+        await retryFailedUploads();
+        expect(app.RetryImportedFilesForDrive).toHaveBeenNthCalledWith(2, [second], false, 1);
+    });
+
+    it('keeps the interrupted-import recovery note in Activity and its retry report', async () => {
+        const { failedUploadReports } = await import('../ui/modals/failed-uploads-store');
+        const { uploadActivities } = await import('../ui/notifications/upload-activity-store');
+        app.PlanImport.mockResolvedValueOnce({ files: 100, folders: 2, archives: 0 });
+        app.ImportPathsWithRetryForDrive.mockImplementationOnce(async () => {
+            handlers.get('import_start')?.();
+            handlers.get('import_complete')?.({
+                status: 'failed', uploaded: 2, failed: 1, scheduled: 3, unattempted: 97, error: 'Connection lost',
+            });
+            return {
+                result: { ok: false, error: { code: 'unknown', message: 'Connection lost' } },
+                retryFiles: [{ path: '/tmp/tree/a.txt', relativePath: 'tree/a.txt', parentId: 'd:tree', size: 1,
+                    modifiedAt: '2026-11-23T00:00:00Z', code: 'temporary_failure', message: 'Connection lost' }],
+            };
+        });
+
+        await importFolderWithParentID('d:parent');
+
+        const note = 'About 97 files were never attempted.';
+        expect(get(uploadActivities)[0]).toMatchObject({ status: 'failed', error: expect.stringContaining(note) });
+        expect(get(failedUploadReports)[0]).toMatchObject({ importInterruption: expect.stringContaining(note) });
+        expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ body: expect.stringContaining(note) }));
     });
 
     it('reports a fatal completion once even when ImportPaths subsequently rejects', async () => {
         await importFolderWithParentID('');
 
-        expect(app.ImportPathsForDrive).toHaveBeenCalledOnce();
-        expect(app.MergeImportPathsForDrive).not.toHaveBeenCalled();
+        expect(app.ImportPathsWithRetryForDrive).toHaveBeenCalledWith(['/tmp/empty-folder'], '', false, false, 1, '');
         expect(mocks.markTransferDone).toHaveBeenCalledWith({
             id: expect.stringMatching(/^(import|upload-)/),
             direction: 'up',
@@ -219,12 +298,12 @@ describe('aggregate import completion', () => {
         const { uploadActivities } = await import('../ui/notifications/upload-activity-store');
         app.PlanImport.mockResolvedValueOnce({ files: 3, folders: 1, archives: 0 });
         mocks.openImportOptionsModal.mockResolvedValueOnce({ encrypt: false, extract: false, folderMerge: 'skip' });
-        app.MergeImportPathsForDrive.mockImplementationOnce(async () => {
+        app.ImportPathsWithRetryForDrive.mockImplementationOnce(async () => {
             handlers.get('import_start')?.();
             handlers.get('import_uploading')?.({ files: 3 });
             handlers.get('import_upload_progress')?.({ total: 3, done: 1, failed: 0, conflictsSkipped: 2 });
             handlers.get('import_complete')?.({ status: 'done', uploaded: 1, failed: 0, scheduled: 1, conflictsSkipped: 2 });
-            return { ok: true };
+            return { result: { ok: true }, retryFiles: [] };
         });
 
         await importFolderWithParentID('');
@@ -247,14 +326,14 @@ describe('aggregate import completion', () => {
         const { uploadActivities } = await import('../ui/notifications/upload-activity-store');
         app.PlanImport.mockResolvedValueOnce({ files: 3, folders: 2, archives: 0 });
         mocks.openImportOptionsModal.mockResolvedValueOnce({ encrypt: false, extract: false, folderMerge: 'skip' });
-        app.MergeImportPathsForDrive.mockImplementationOnce(async () => {
+        app.ImportPathsWithRetryForDrive.mockImplementationOnce(async () => {
             handlers.get('import_start')?.();
             handlers.get('import_uploading')?.({ files: 3 });
             handlers.get('import_complete')?.({
                 status: 'done', uploaded: 1, failed: 0, scheduled: 1, errorCount: 1,
                 errors: ['A file named Reports already exists here. Rename the folder.'],
             });
-            return { ok: true };
+            return { result: { ok: true }, retryFiles: [] };
         });
 
         await importFolderWithParentID('');
@@ -305,9 +384,9 @@ describe('aggregate import completion', () => {
         app.PlanImport.mockResolvedValue({ files: 3, folders: 1, archives: 0 });
         app.SelectFolder.mockResolvedValue('/tmp/Album');
         let finish = () => {};
-        app.ImportPathsForDrive.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ ok: true }); }));
+        app.ImportPathsWithRetryForDrive.mockImplementationOnce(() => new Promise((resolve) => { finish = () => resolve({ result: { ok: true }, retryFiles: [] }); }));
         const run = importFolderWithParentID('');
-        await vi.waitFor(() => expect(app.ImportPathsForDrive).toHaveBeenCalled());
+        await vi.waitFor(() => expect(app.ImportPathsWithRetryForDrive).toHaveBeenCalled());
         handlers.get('import_start')?.();
         handlers.get('import_upload_progress')?.({ total: 3, active: [{ id: 0, name: 'a.jpg', size: 10, percent: 50 }] });
         handlers.get('import_upload_progress')?.({ total: 3, active: [], settled: [
@@ -600,7 +679,7 @@ describe('the picker window', () => {
 
         await uploadWithParentID('folder-1');
 
-        expect(app.ImportPathsForDrive).not.toHaveBeenCalled();
+        expect(app.ImportPathsWithRetryForDrive).not.toHaveBeenCalled();
         expect(app.RetryUploadToDriveFS).not.toHaveBeenCalled();
         expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({
             level: 'info',
