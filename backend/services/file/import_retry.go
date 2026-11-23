@@ -46,14 +46,14 @@ func (s *Service) RunImportWithRetry(ctx context.Context, channelID int64, paths
 }
 
 func (s *Service) uploadImportWindow(ctx context.Context, channelID int64, batch *importBatch, encrypt bool, options uploadOptions, retryFiles *[]ImportRetryFile) error {
-	observer := newFailureUploadObserver(ctx, options.observer)
-	options.observer = observer
-	_, err := s.upload(ctx, channelID, batch.paths, batch.parents, encrypt, options)
+	_, failures, err := s.uploadWithFailures(ctx, channelID, batch.paths, batch.parents, encrypt, options)
 	unconfirmed := make(map[importSiblingName]struct{})
-	for i, source := range batch.retrySources {
-		failure, ok := observer.failures[options.idOffset+i]
-		if !ok {
-			continue
+	for _, failure := range failures {
+		i := failure.Index - options.idOffset
+		source := batch.retrySources[i]
+		if failure.Code == "not_sent" {
+			// A window-level preflight error did not emit per-file results.
+			options.observer.Failed(failure.Index, failure.Name, err)
 		}
 		if uploadOutcomeUnconfirmed(failure.Code) {
 			if sibling, ok := importRetrySibling(batch.paths[i], batch.parents[i]); ok {

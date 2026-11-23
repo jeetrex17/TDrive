@@ -649,7 +649,7 @@ const importFailureReasons: string[] = [];
 // The same for a multi-file upload, which reports one summary for the batch:
 // two hundred files failing the same way must not raise two hundred toasts.
 const uploadBatchFailureReasons: string[] = [];
-let importCompleteReceived = false;
+let importCompletion: { interruption?: string } | null = null;
 
 /**
  * Puts a raw Telegram RPC failure into words. Other backend text is already a
@@ -1013,7 +1013,7 @@ function activateUploadProgressEvents(): void {
     });
 
     subscribeTransferEvent("import_start", () => {
-        importCompleteReceived = false;
+        importCompletion = null;
         importFailureReasons.length = 0;
         state.importBatch = createImportProgress();
         pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Preparing import…', total: 0 });
@@ -1052,7 +1052,6 @@ function activateUploadProgressEvents(): void {
     });
 
     subscribeTransferEvent("import_complete", (info) => {
-        importCompleteReceived = true;
         const payload = asObjectRecord(info);
         const failedUploads = Math.max(Number(payload.failed) || 0, state.importBatch?.failed || 0);
         const uploaded = Number(payload.uploaded) || 0;
@@ -1067,6 +1066,11 @@ function activateUploadProgressEvents(): void {
             : (Array.isArray(payload.errors) ? payload.errors.length : 0);
         const canceled = state.cancelingUpload || backendStatus === 'canceled';
         const fatal = backendStatus === 'failed';
+        const unattempted = Number(payload.unattempted);
+        const interruption = Number.isSafeInteger(unattempted) && unattempted > 0
+            ? `About ${unattempted.toLocaleString()} ${unattempted === 1 ? 'file was' : 'files were'} never attempted. Let the original destination sync, then upload any files that are still missing.`
+            : undefined;
+        importCompletion = { interruption };
         const status = canceled
             ? 'canceled'
             : (fatal || failedUploads > 0 ? 'failed' : 'done');
@@ -1078,7 +1082,8 @@ function activateUploadProgressEvents(): void {
                 updateUploadActivity(activeUploadActivityId, { fileCount: scheduled });
             }
             const activityError = errorCount || fatalError ? reasons[0] : undefined;
-            finishUploadActivity(activeUploadActivityId, status, [], activityError ?? (failedUploads ? `${failedUploads} files failed` : undefined));
+            const detail = activityError ?? (failedUploads ? `${failedUploads} files failed` : undefined);
+            finishUploadActivity(activeUploadActivityId, status, [], [interruption, detail].filter(Boolean).join(' ') || undefined);
         }
         const resultLabel = formatImportResultLabel(uploaded, failedUploads);
         if (!state.importBatch) {
@@ -1111,7 +1116,7 @@ function activateUploadProgressEvents(): void {
                 title: fatal
                     ? 'Import failed'
                     : resultLabel,
-                body: [...bits, ...reasons].join('  ·  ') || 'The import stopped before it could finish.',
+                body: [...bits, ...reasons, ...(interruption ? [interruption] : [])].join('  ·  ') || 'The import stopped before it could finish.',
             });
         }
         importFailureReasons.length = 0;
@@ -1495,11 +1500,15 @@ async function importSelection(parentID: string, paths: string[], destination: U
     }
 }
 
+function currentImportInterruption(): string | undefined {
+    return importCompletion?.interruption;
+}
+
 async function runDesktopImport(paths: string[], parentID: string, encrypt: boolean, extract: boolean, destination: UploadDestination, folderMerge?: ImportFileConflict): Promise<void> {
     const generation = transferSurfaceGeneration;
     setTransferDirectionActive('upload', true);
-    importCompleteReceived = false;
-    let importThrew = false;
+    importCompletion = null;
+    let importError: string | undefined;
     try {
         const { result, retryFiles } = await withEventsDelivered(importPathsForDrive(paths, parentID, encrypt, extract, destination.driveId, folderMerge));
         if (!isCurrentDestination(destination)) return;
@@ -1507,6 +1516,7 @@ async function runDesktopImport(paths: string[], parentID: string, encrypt: bool
             rememberFailedUploadReport({
                 paths: retryFiles.map((file) => file.path),
                 importFiles: retryFiles,
+                importInterruption: currentImportInterruption(),
                 failures: retryFiles.map((file, index) => ({
                     index, name: file.relativePath, message: file.message, code: file.code, retryable: true,
                 })),
@@ -1520,20 +1530,19 @@ async function runDesktopImport(paths: string[], parentID: string, encrypt: bool
         }
     } catch (error) {
         if (generation !== transferSurfaceGeneration) return;
-        importThrew = true;
-        if (!state.cancelingUpload && !importCompleteReceived) notify({ level: 'error', title: 'Import failed', body: humanizeBackendError(error) });
-        if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, state.cancelingUpload ? 'canceled' : 'failed', [], humanizeBackendError(error));
-        if (!importCompleteReceived && !state.importBatch) pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import failed', total: 0 });
+        importError = humanizeBackendError(error);
+        if (!state.cancelingUpload && !importCompletion) notify({ level: 'error', title: 'Import failed', body: importError });
+        if (!importCompletion && !state.importBatch) pushTransferStart({ id: IMPORT_TRANSFER_ID, direction: 'up', name: 'Import failed', total: 0 });
     } finally {
         if (generation === transferSurfaceGeneration) {
             setTransferDirectionActive('upload', false);
             if (state.importBatch) {
-                markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: importThrew ? 'failed' : 'done' });
+                markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: importError !== undefined ? 'failed' : 'done' });
                 state.importBatch = null;
             }
-            if (!importCompleteReceived) {
-                markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: importThrew ? 'failed' : 'done' });
-                if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, state.cancelingUpload ? 'canceled' : importThrew ? 'failed' : 'done');
+            if (!importCompletion) {
+                markTransferDone({ id: IMPORT_TRANSFER_ID, direction: 'up', status: importError !== undefined ? 'failed' : 'done' });
+                if (activeUploadActivityId) finishUploadActivity(activeUploadActivityId, state.cancelingUpload ? 'canceled' : importError !== undefined ? 'failed' : 'done', [], importError);
                 invalidateTransferCaches();
             }
             state.cancelingUpload = false;

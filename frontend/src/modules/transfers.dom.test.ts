@@ -197,6 +197,30 @@ describe('aggregate import completion', () => {
         expect(app.RetryImportedFilesForDrive).toHaveBeenNthCalledWith(2, [second], false, 1);
     });
 
+    it('keeps the interrupted-import recovery note in Activity and its retry report', async () => {
+        const { failedUploadReports } = await import('../ui/modals/failed-uploads-store');
+        const { uploadActivities } = await import('../ui/notifications/upload-activity-store');
+        app.PlanImport.mockResolvedValueOnce({ files: 100, folders: 2, archives: 0 });
+        app.ImportPathsWithRetryForDrive.mockImplementationOnce(async () => {
+            handlers.get('import_start')?.();
+            handlers.get('import_complete')?.({
+                status: 'failed', uploaded: 2, failed: 1, scheduled: 3, unattempted: 97, error: 'Connection lost',
+            });
+            return {
+                result: { ok: false, error: { code: 'unknown', message: 'Connection lost' } },
+                retryFiles: [{ path: '/tmp/tree/a.txt', relativePath: 'tree/a.txt', parentId: 'd:tree', size: 1,
+                    modifiedAt: '2026-11-23T00:00:00Z', code: 'temporary_failure', message: 'Connection lost' }],
+            };
+        });
+
+        await importFolderWithParentID('d:parent');
+
+        const note = 'About 97 files were never attempted.';
+        expect(get(uploadActivities)[0]).toMatchObject({ status: 'failed', error: expect.stringContaining(note) });
+        expect(get(failedUploadReports)[0]).toMatchObject({ importInterruption: expect.stringContaining(note) });
+        expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({ body: expect.stringContaining(note) }));
+    });
+
     it('reports a fatal completion once even when ImportPaths subsequently rejects', async () => {
         await importFolderWithParentID('');
 

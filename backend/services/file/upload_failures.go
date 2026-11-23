@@ -47,7 +47,10 @@ func (s *Service) UploadWithFailures(ctx context.Context, channelID int64, fileP
 }
 
 func (s *Service) uploadWithFailures(ctx context.Context, channelID int64, filePaths, parentIDs []string, encrypt bool, options uploadOptions) ([]Metadata, []UploadFailure, error) {
-	observer := newFailureUploadObserver(ctx, detailedUploadObserver{service: s})
+	if options.observer == nil {
+		options.observer = detailedUploadObserver{service: s}
+	}
+	observer := newFailureUploadObserver(ctx, options.observer)
 	options.observer = observer
 	files, err := s.upload(ctx, channelID, filePaths, parentIDs, encrypt, options)
 	failures := make([]UploadFailure, 0, len(observer.failures))

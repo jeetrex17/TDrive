@@ -38,9 +38,12 @@ test('folder import uses the selected merge policy and defaults to a separate co
     ]);
 });
 
-test('Activity retries only the eligible failed file in its original imported subfolder', async ({ page }) => {
+test('Activity explains an interrupted folder import and retries only the eligible failed file', async ({ page }) => {
     const root = '/tmp/Photos';
     const parent = 'd:archive';
+    const interruption = 'Connection unavailable before the import finished';
+    const unattempted = 'About 97 files were never attempted';
+    const manualRecovery = 'Let the original destination sync, then upload any files that are still missing.';
     const retryFile = {
         path: `${root}/2024/retry.jpg`,
         parentId: 'd:photos-2024',
@@ -55,8 +58,10 @@ test('Activity retries only the eligible failed file in its original imported su
             '': resolves({ folders: [{ id: parent, name: 'Archive', parent_id: '' }], files: [] }),
         }, resolves({ folders: [], files: [] })),
         SelectFolder: resolves(root),
-        PlanImport: resolves({ files: 3, folders: 3, bytes: 96, archives: 0, limitExceeded: false }),
-        ImportPathsWithRetryForDrive: deferred('folder-import', { result: { ok: true }, retryFiles: [retryFile] }),
+        PlanImport: resolves({ files: 100, folders: 3, bytes: 3200, archives: 0, limitExceeded: false }),
+        ImportPathsWithRetryForDrive: deferred('folder-import', {
+            result: { ok: false, error: { code: 'network_unavailable', message: interruption } }, retryFiles: [retryFile],
+        }),
         RetryImportedFilesForDrive: resolves({
             result: { ok: true }, files: [{ name: 'retry.jpg', msg_id: 42, size: 32 }], failures: [],
         }),
@@ -70,7 +75,7 @@ test('Activity retries only the eligible failed file in its original imported su
         { args: [[root], parent, false, false, 1, ''], state: 'pending' },
     ]);
     await mock.emit('import_start');
-    await mock.emit('import_uploading', { files: 3, folders: 3 });
+    await mock.emit('import_uploading', { files: 100, folders: 3 });
     await mock.emit('import_upload_progress', {
         files: 3, done: 1, failed: 2, settled: [
             { id: 0, name: 'accepted.jpg', path: 'Photos/2023/accepted.jpg', size: 32, status: 'done' },
@@ -78,7 +83,9 @@ test('Activity retries only the eligible failed file in its original imported su
             { id: 2, name: 'uncertain.jpg', path: 'Photos/2024/uncertain.jpg', size: 32, status: 'failed', message: 'Receipt was lost' },
         ],
     });
-    await mock.emit('import_complete', { status: 'done', uploaded: 1, failed: 2, scheduled: 3, folders: 3 });
+    await mock.emit('import_complete', {
+        status: 'failed', error: interruption, uploaded: 1, failed: 2, scheduled: 3, folders: 3, unattempted: 97,
+    });
     await mock.release('folder-import');
 
     const activity = page.getByRole('dialog', { name: 'Activity', exact: true });
@@ -89,12 +96,16 @@ test('Activity retries only the eligible failed file in its original imported su
     const files = activity.getByRole('region', { name: 'Files in upload', exact: true });
     await expect(files.getByRole('listitem').filter({ hasText: 'accepted.jpg' })).toContainText('Completed');
     await expect(files.getByRole('listitem').filter({ hasText: 'uncertain.jpg' })).toContainText('Receipt was lost');
+    await expect(activity.getByText(unattempted, { exact: false })).toBeVisible();
+    await expect(activity.getByText(manualRecovery, { exact: false })).toBeVisible();
     await expect(review).toBeVisible();
     await review.click();
 
     const dialog = page.getByRole('dialog', { name: 'Failed uploads', exact: true });
     const retry = dialog.getByRole('button', { name: /^Retry failed files/ });
     await expect(dialog.getByRole('list', { name: 'Failed files' })).toContainText('Photos/2024/retry.jpg');
+    await expect(dialog.getByText(unattempted, { exact: false })).toBeVisible();
+    await expect(dialog.getByText(manualRecovery, { exact: false })).toBeVisible();
     await expect(retry).toHaveText('Retry failed files (1)');
     await retry.click();
     await expect.poll(() => mock.calls('RetryImportedFilesForDrive')).toMatchObject([

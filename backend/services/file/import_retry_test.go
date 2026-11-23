@@ -52,6 +52,35 @@ func TestFolderImportRetriesOnlyFailedFilesInOriginalFolders(t *testing.T) {
 	}
 }
 
+func TestFolderImportReportsWindowThatFailedBeforeSending(t *testing.T) {
+	svc, db, fake, _ := newTestService(t)
+	svc.CreateFolder = testFolderCreator(db)
+	svc.ActorID = func(context.Context) (int64, error) { return 0, errors.New("actor unavailable") }
+	events := &importTestEventRecorder{}
+	svc.Events = events
+	root := filepath.Join(t.TempDir(), "Photos")
+	mkfile(t, filepath.Join(root, "first.txt"), "one")
+	mkfile(t, filepath.Join(root, "Trip", "second.txt"), "two")
+
+	sources, err := svc.RunImportWithRetry(t.Context(), personalChannelID, []string{root}, "", false, false, "")
+	if err != nil || len(fake.SentFiles()) != 0 || len(sources) != 2 {
+		t.Fatalf("error=%v sent=%d retry=%+v, want both sources from a preflight failure", err, len(fake.SentFiles()), sources)
+	}
+	photos := folderIDByName(t, db, personalChannelID, "", "Photos")
+	trip := folderIDByName(t, db, personalChannelID, photos, "Trip")
+	wantParents := map[string]string{"Photos/first.txt": photos, "Photos/Trip/second.txt": trip}
+	for _, source := range sources {
+		if wantParents[source.RelativePath] != source.ParentID || source.Code != "not_sent" {
+			t.Fatalf("retry source = %+v, want original parent and not_sent", source)
+		}
+		delete(wantParents, source.RelativePath)
+	}
+	payload, ok := events.lastPayload("import_upload_progress")
+	if !ok || payload["failed"] != 2 {
+		t.Fatalf("last progress event = %+v, want both failures recorded before completion", payload)
+	}
+}
+
 func TestFolderImportDoesNotRetryUnknownAcceptance(t *testing.T) {
 	svc, db, fake, _ := newTestService(t)
 	svc.CreateFolder = testFolderCreator(db)

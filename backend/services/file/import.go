@@ -369,7 +369,6 @@ type importTasks struct {
 	encrypt          bool
 	fileConflict     string
 	nextUploadID     int
-	files            int
 	remoteItems      int
 	folders          int
 	oversize         int
@@ -396,7 +395,6 @@ func (t *importTasks) add(srcPath, parentID, label string, retrySource ImportRet
 	if err := t.reserveRemoteItem(); err != nil {
 		return err
 	}
-	t.files++
 	if t.pendingNames != nil {
 		if key, err := projection.CanonicalNameKey(filepath.Base(srcPath)); err == nil {
 			t.pendingNames[importSiblingName{parentID: parentID, key: key}] = struct{}{}
@@ -625,7 +623,14 @@ func (s *Service) runImport(ctx context.Context, channelID int64, paths []string
 	}
 	observer.Flush()
 	uploaded, observerFailed, canceled, uploadReasons := observer.Summary()
-	failed := max(0, tasks.files-uploaded-canceled, observerFailed)
+	scheduled := tasks.nextUploadID
+	failed := max(0, scheduled-uploaded-canceled, observerFailed)
+	var unattempted int
+	if fatalErr != nil {
+		// Preflight counted the original selection. Files discovered during
+		// traversal can change, so the unreached remainder is an estimate.
+		unattempted = max(0, plan.Files-scheduled-tasks.conflictsSkipped)
+	}
 	errorsOut := append([]string(nil), tasks.errors...)
 	for _, reason := range uploadReasons {
 		if len(errorsOut) >= maxImportErrorDetails {
@@ -645,7 +650,8 @@ func (s *Service) runImport(ctx context.Context, channelID int64, paths []string
 	s.emitEvent("import_complete", map[string]any{
 		"uploaded":         uploaded,
 		"failed":           failed,
-		"scheduled":        tasks.files,
+		"scheduled":        scheduled,
+		"unattempted":      unattempted,
 		"folders":          tasks.folders,
 		"oversize":         tasks.oversize,
 		"empty":            tasks.empty,

@@ -63,6 +63,7 @@
 <ModalShell hostId="failed-uploads-modal" open={$view.open} title="Failed uploads" titleId="failed-uploads-title"
     {subtitle} initialFocus="#retry-failed-uploads" restoreFocus="#file-list" onClose={onClose}>
     <div class="failed-upload-body">
+    {#if $view.payload?.importInterruption}<p class="failed-upload-note">{$view.payload.importInterruption}</p>{/if}
     {#if retryCount > 0 || checkCount > 0}
         <div class="failed-upload-counts">
             {#if retryCount > 0}<span class="failure-count" data-tone="accent">{retryCount} ready to retry</span>{/if}
@@ -187,5 +188,6 @@
     }
     .page-buttons button:disabled { opacity: 0.4; cursor: default; }
     :global(html.mobile) .page-buttons button { min-height: 36px; padding: 0 14px; }
+    .failed-upload-note { margin: 0; color: var(--text-muted); font-size: var(--type-sm); }
     .failed-upload-error { margin: 0; color: var(--danger); font-size: var(--type-base); }
 </style>

@@ -6,6 +6,7 @@ export interface FailedUploadsPayload {
     paths: string[];
     /** Original sources and per-file destinations for an import retry. Session only. */
     importFiles?: ImportRetryFile[];
+    importInterruption?: string;
     failures: UploadFailure[];
     parentId: string;
     encrypt: boolean;
