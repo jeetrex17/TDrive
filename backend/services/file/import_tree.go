@@ -23,7 +23,7 @@ func (s *Service) RunImportWithFolderMerge(ctx context.Context, channelID int64,
 	if fileConflict != importConflictSkip && fileConflict != importConflictKeepBoth {
 		return fmt.Errorf("import: choose Skip or Keep Both for matching filenames")
 	}
-	return s.runImport(ctx, channelID, paths, parentID, encrypt, extractArchives, fileConflict)
+	return s.runImport(ctx, channelID, paths, parentID, encrypt, extractArchives, fileConflict, nil)
 }
 
 type importSiblingName struct {
@@ -51,8 +51,8 @@ func (s *Service) importSibling(parentID, name string, tasks *importTasks) (proj
 
 // addFileTask queues a file unless it is ineligible or its name is already
 // occupied by a file in a folder merge that skips conflicts.
-func (s *Service) addFileTask(srcPath, label string, size int64, parentID string, withinTree bool, tasks *importTasks) error {
-	stored := uploadByteSize(size, tasks.encrypt)
+func (s *Service) addFileTask(srcPath, label string, info os.FileInfo, parentID string, withinTree, temporary bool, tasks *importTasks) error {
+	stored := uploadByteSize(info.Size(), tasks.encrypt)
 	if stored == 0 {
 		tasks.empty++
 		return nil
@@ -75,12 +75,17 @@ func (s *Service) addFileTask(srcPath, label string, size int64, parentID string
 			return nil
 		}
 	}
-	return tasks.add(srcPath, parentID, label)
+	var retrySource ImportRetryFile
+	if tasks.batch.retrySources != nil && !temporary && info.Mode().IsRegular() && filepath.IsAbs(srcPath) {
+		retrySource = ImportRetryFile{Path: srcPath, ParentID: parentID, RelativePath: label,
+			Size: info.Size(), ModifiedAt: importSourceModifiedAt(info), SkipExisting: withinTree && tasks.fileConflict == importConflictSkip}
+	}
+	return tasks.add(srcPath, parentID, label, retrySource)
 }
 
 // importTree builds or reuses folders before visiting their children and queues
 // each file with its resolved destination.
-func (s *Service) importTree(ctx context.Context, root, topName, parentID string, tasks *importTasks) error {
+func (s *Service) importTree(ctx context.Context, root, topName, parentID string, temporary bool, tasks *importTasks) error {
 	topID, name, err := s.importTreeFolder(ctx, parentID, topName, true, tasks)
 	if err != nil {
 		return err
@@ -117,7 +122,7 @@ func (s *Service) importTree(ctx context.Context, root, topName, parentID string
 			tasks.addError(rel, err)
 			return false, nil
 		}
-		return false, s.addFileTask(p, path.Join(name, rel), info.Size(), parentID, true, tasks)
+		return false, s.addFileTask(p, path.Join(name, rel), info, parentID, true, temporary, tasks)
 	}, func(p string, err error) error {
 		tasks.addError(filepath.Base(p), err)
 		return nil

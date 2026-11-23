@@ -23,7 +23,9 @@
     const checkCount = $derived(failures.filter((failure) => statusFor(failure).tone === 'warning').length);
     const pages = $derived(Math.max(1, Math.ceil(failures.length / PAGE_SIZE)));
     const driveTitle = $derived($view.payload?.driveTitle ?? 'the original drive');
-    const subtitle = $derived(uploaded > 0
+    const subtitle = $derived($view.payload?.importFiles && uploaded === 0
+        ? `Review these failed files from your folder upload to ${driveTitle}.`
+        : uploaded > 0
         ? `${failures.length} of ${total} files didn't upload to ${driveTitle}. Files that uploaded won't be sent again.`
         : `${failures.length} ${failures.length === 1 ? "file didn't" : "files didn't"} upload to ${driveTitle}.`);
     $effect(() => {

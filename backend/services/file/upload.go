@@ -50,6 +50,10 @@ type uploadOptions struct {
 	pausable bool
 	// The merge runner relies on a settled window before checking sibling names.
 	prioritizeFatalImportError bool
+	// Retries validate only their original source before reading its bytes.
+	expectedImportSources []ImportRetryFile
+	// Import retries keep queued IDs cancellable across calls to upload.
+	cancelWindow *uploadWindow
 }
 
 type uploadedResult struct {
@@ -119,8 +123,12 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 	uploaded := make([]uploadedResult, 0, len(filePaths))
 	failed := 0
 	var firstErr error
-	window, closeWindow := s.openUploadWindow(options.idOffset, len(filePaths))
-	defer closeWindow()
+	window := options.cancelWindow
+	if window == nil {
+		var closeWindow func()
+		window, closeWindow = s.openUploadWindow(options.idOffset, len(filePaths))
+		defer closeWindow()
+	}
 	// fail reports a file that did not upload. A file the user cancelled on
 	// its own is reported too, but the batch carried on without it, so it is
 	// not a failure of the batch.
@@ -165,7 +173,11 @@ func (s *Service) upload(ctx context.Context, channelID int64, filePaths []strin
 				}
 			}()
 
-			meta, op, header, err := s.uploadSingleWithObserver(uploadCtx, uploadID, path, pid, channelID, encrypt, *peer, observer, options.resumable)
+			var expected *ImportRetryFile
+			if len(options.expectedImportSources) > 0 {
+				expected = &options.expectedImportSources[i]
+			}
+			meta, op, header, err := s.uploadSingleWithObserver(uploadCtx, uploadID, path, pid, channelID, encrypt, *peer, observer, options.resumable, expected)
 			receivedAt := time.Now()
 			if err != nil {
 				if meta.MsgID != 0 {

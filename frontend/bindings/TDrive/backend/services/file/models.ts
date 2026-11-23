@@ -68,6 +68,21 @@ export interface ImportPlan {
 }
 
 /**
+ * ImportRetryFile is a session-only retry source. Only the relative path is
+ * suitable for display or for Activity history.
+ */
+export interface ImportRetryFile {
+    "path": string;
+    "parentId": string;
+    "relativePath": string;
+    "size": number;
+    "modifiedAt": string;
+    "message": string;
+    "code": string;
+    "skipExisting"?: boolean;
+}
+
+/**
  * ResumableDownload is the account-scoped view of a download job.
  * VerifiedBytes counts blocks committed to the journal, not in-flight reads.
  */

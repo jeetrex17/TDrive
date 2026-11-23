@@ -3,6 +3,7 @@ package file
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -30,10 +31,11 @@ func (s *Service) uploadSingle(ctx context.Context, uploadID int, filePath strin
 		peer,
 		detailedUploadObserver{service: s},
 		false,
+		nil,
 	)
 }
 
-func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, filePath string, parentID string, channelID int64, wantEncrypted bool, peer tgclient.InputPeer, observer uploadObserver, resumable bool) (Metadata, projection.Op, string, error) {
+func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, filePath string, parentID string, channelID int64, wantEncrypted bool, peer tgclient.InputPeer, observer uploadObserver, resumable bool, expected *ImportRetryFile) (Metadata, projection.Op, string, error) {
 	if channelID == 0 {
 		return Metadata{}, projection.Op{}, "", fmt.Errorf("drive channel id not found")
 	}
@@ -41,8 +43,29 @@ func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, fi
 	filename := filepath.Base(filePath)
 	sourceStarted := time.Now()
 
+	var checked os.FileInfo
+	if expected != nil {
+		if err := s.checkImportRetryName(channelID, expected, filename); err != nil {
+			return Metadata{}, projection.Op{}, "", err
+		}
+		info, err := os.Lstat(filePath)
+		if errors.Is(err, os.ErrNotExist) {
+			return Metadata{}, projection.Op{}, "", errImportRetrySourceMissing
+		}
+		if err != nil {
+			return Metadata{}, projection.Op{}, "", fmt.Errorf("%w: cannot inspect the original file", errUploadSource)
+		}
+		if !filepath.IsAbs(filePath) || !expected.matches(info) {
+			return Metadata{}, projection.Op{}, "", errImportRetrySourceChanged
+		}
+		checked = info
+	}
+
 	plainFile, err := os.Open(filePath)
 	if err != nil {
+		if expected != nil && errors.Is(err, os.ErrNotExist) {
+			return Metadata{}, projection.Op{}, "", errImportRetrySourceMissing
+		}
 		slog.Error("file: upload open source failed", "channel_id", channelID, "name", filename, "error", err)
 		return Metadata{}, projection.Op{}, "", fmt.Errorf("%w: %w", errUploadSource, err)
 	}
@@ -51,6 +74,9 @@ func (s *Service) uploadSingleWithObserver(ctx context.Context, uploadID int, fi
 	info, err := plainFile.Stat()
 	if err != nil {
 		return Metadata{}, projection.Op{}, "", fmt.Errorf("%w: %w", errUploadSource, err)
+	}
+	if expected != nil && (!os.SameFile(checked, info) || !expected.matches(info)) {
+		return Metadata{}, projection.Op{}, "", errImportRetrySourceChanged
 	}
 	plaintextSize := info.Size()
 	if uploadByteSize(plaintextSize, wantEncrypted) == 0 {

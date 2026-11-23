@@ -1,9 +1,11 @@
 import { createModalController } from './modal-store';
-import type { UploadFailure } from '../../types';
+import type { ImportRetryFile, UploadFailure } from '../../types';
 import { writable } from 'svelte/store';
 
 export interface FailedUploadsPayload {
     paths: string[];
+    /** Original sources and per-file destinations for an import retry. Session only. */
+    importFiles?: ImportRetryFile[];
     failures: UploadFailure[];
     parentId: string;
     encrypt: boolean;

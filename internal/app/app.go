@@ -260,12 +260,12 @@ func (a *App) SelectFolder() (string, error) {
 // files whose cleanup didn't finish. It only touches parts behind a tombstone,
 // never an upload still in flight, so it's safe to run at the start of an upload
 // flow. Best effort — a normal session finds nothing and never hits Telegram.
-func (a *App) sweepOrphanParts(ctx context.Context) {
+func (a *App) sweepOrphanParts(ctx context.Context, channelID int64) {
 	svc := a.fileService()
 	if svc == nil {
 		return
 	}
-	if err := svc.SweepOrphanParts(ctx, a.ActiveChannelID()); err != nil {
+	if err := svc.SweepOrphanParts(ctx, channelID); err != nil {
 		fmt.Printf("warn: orphan-part sweep failed: %v\n", err)
 	}
 }
@@ -349,16 +349,17 @@ func (a *App) uploadToDriveFS(filePaths []string, parentIDs []string, encrypt bo
 		return UploadResult{Result: operationFailure(err), Failures: fileservice.NotSentFailures(sources, err)}
 	}
 	defer a.releaseUnreferencedUploadSources(svc, staged)
-	a.sweepOrphanParts(ctx)
+	a.sweepOrphanParts(ctx, channelID)
 	files, failures, err := svc.UploadWithFailures(ctx, channelID, filePaths, parentIDs, encrypt)
+	return uploadOperationResult(files, failures, err)
+}
+
+func uploadOperationResult(files []fileservice.Metadata, failures []fileservice.UploadFailure, err error) UploadResult {
 	out := make([]backend.FileMetaData, 0, len(files))
 	for _, f := range files {
 		out = append(out, uploadMetaToBackend(f))
 	}
-	if err != nil {
-		return UploadResult{Result: operationFailure(err), Files: out, Failures: failures}
-	}
-	return UploadResult{Result: operationSuccess(), Files: out, Failures: failures}
+	return UploadResult{Result: operationFailure(err), Files: out, Failures: failures}
 }
 
 // ListResumableUploads returns backend-confirmed multipart upload checkpoints
@@ -452,13 +453,13 @@ func (a *App) PlanImport(paths []string, encrypt bool, extractArchives bool) fil
 // is set, otherwise uploaded as-is. Progress flows through aggregate import_*
 // events.
 func (a *App) ImportPaths(paths []string, parentID string, encrypt bool, extractArchives bool) OperationResult {
-	return a.importPaths(paths, parentID, encrypt, extractArchives, a.ActiveChannelID(), false, "")
+	return a.importPaths(paths, parentID, encrypt, extractArchives, a.ActiveChannelID(), false, "", nil)
 }
 
 // ImportPathsForDrive starts a waiting import only in its original drive and
 // never replaces an active upload.
 func (a *App) ImportPathsForDrive(paths []string, parentID string, encrypt bool, extractArchives bool, expectedChannelID int64) OperationResult {
-	return a.importPathsForDrive(paths, parentID, encrypt, extractArchives, expectedChannelID, "")
+	return a.importPathsForDrive(paths, parentID, encrypt, extractArchives, expectedChannelID, "", nil)
 }
 
 // MergeImportPathsForDrive imports into matching folders and applies the chosen
@@ -467,17 +468,17 @@ func (a *App) MergeImportPathsForDrive(paths []string, parentID string, encrypt 
 	if fileConflict != "skip" && fileConflict != "keep-both" {
 		return operationFailureMessage(errors.New("invalid import file conflict policy"), "Choose Skip or Keep Both for matching files")
 	}
-	return a.importPathsForDrive(paths, parentID, encrypt, extractArchives, expectedChannelID, fileConflict)
+	return a.importPathsForDrive(paths, parentID, encrypt, extractArchives, expectedChannelID, fileConflict, nil)
 }
 
-func (a *App) importPathsForDrive(paths []string, parentID string, encrypt bool, extractArchives bool, expectedChannelID int64, fileConflict string) OperationResult {
+func (a *App) importPathsForDrive(paths []string, parentID string, encrypt bool, extractArchives bool, expectedChannelID int64, fileConflict string, retryFiles *[]fileservice.ImportRetryFile) OperationResult {
 	if expectedChannelID == 0 || a.ActiveChannelID() != expectedChannelID {
 		return operationFailureMessage(errors.New("upload destination changed"), "Switch back to the original drive before starting this import")
 	}
-	return a.importPaths(paths, parentID, encrypt, extractArchives, expectedChannelID, true, fileConflict)
+	return a.importPaths(paths, parentID, encrypt, extractArchives, expectedChannelID, true, fileConflict, retryFiles)
 }
 
-func (a *App) importPaths(paths []string, parentID string, encrypt bool, extractArchives bool, channelID int64, queued bool, fileConflict string) OperationResult {
+func (a *App) importPaths(paths []string, parentID string, encrypt bool, extractArchives bool, channelID int64, queued bool, fileConflict string, retryFiles *[]fileservice.ImportRetryFile) OperationResult {
 	svc, err := a.requireFileService()
 	if err != nil {
 		return operationFailure(err)
@@ -494,7 +495,12 @@ func (a *App) importPaths(paths []string, parentID string, encrypt bool, extract
 	}
 	defer finish()
 	defer a.transfers.forgetPickerSources(paths)
-	a.sweepOrphanParts(ctx)
+	a.sweepOrphanParts(ctx, channelID)
+	if retryFiles != nil {
+		sources, err := svc.RunImportWithRetry(ctx, channelID, paths, parentID, encrypt, extractArchives, fileConflict)
+		*retryFiles = sources
+		return operationFailure(err)
+	}
 	if fileConflict != "" {
 		return operationFailure(svc.RunImportWithFolderMerge(ctx, channelID, paths, parentID, encrypt, extractArchives, fileConflict))
 	}

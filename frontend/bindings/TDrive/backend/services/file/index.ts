@@ -3,6 +3,7 @@
 
 export type {
     ImportPlan,
+    ImportRetryFile,
     ResumableDownload,
     ResumableUpload,
     SourceCopyInput,
