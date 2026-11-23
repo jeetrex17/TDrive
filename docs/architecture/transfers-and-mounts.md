@@ -75,11 +75,9 @@ observer's start event precedes every send, so an input without one never left
 the machine. Source access must be restored before retrying a source failure.
 Accepted files needing indexing must not be resent; unknown outcomes remain for
 reconciliation, and durable large-upload jobs use their own recovery controls.
-The ordinary failed-file list belongs to the current app session and retains the
-original destination and encryption choice. It does not journal ordinary upload
-identity across restarts or enable additional automatic retries. Consuming a
-retry invalidates its original report so reviewing it cannot resend files that
-have since succeeded.
+The retry report belongs to the current app session and retains the original
+destination and encryption choice. Consuming a retry invalidates that report
+so reviewing it cannot resend files that have since succeeded.
 
 Uploads wait for every server-directed `FLOOD_WAIT` while their transfer context
 is live, including repeated cooldowns and waits longer than 30 seconds. The
@@ -142,7 +140,12 @@ keep a running batch on its aggregate row, which carries progress and cancel,
 and list waiting batches separately. Activity combines notifications, ordinary
 transfer summaries, session upload batches and journal-backed recovery jobs; it
 folds a batch's aggregate row into the batch and owns that batch's failed-file
-review. Toasts stay hidden while Activity is open. Existing journal rows
+review. When a batch fails, Activity saves a bounded set of failed-file details
+on this device for the signed-in account. The saved record contains the upload
+destination, file names, selection-relative paths, sizes, and display-safe
+failure reasons. Queue entries, local source paths, and retry state stay in
+memory. Clearing Activity history also clears the saved details.
+Toasts stay hidden while Activity is open. Existing journal rows
 supersede their matching legacy progress rows. Display progress is not a remote
 receipt, and ordinary uploads do not gain pause/resume or broader retry
 eligibility merely because they appear in Activity.

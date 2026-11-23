@@ -6,7 +6,9 @@
 
 import { logout } from '../../api';
 import { resetRenditions } from '../renditions/runtime';
+import { resetDashboardIdentity, suspendUploadHistoryForLogout } from '../auth';
 import { showAuthView } from '../../ui/app/app-store';
+import { clearAllFailedUploadHistory } from '../../ui/notifications/failed-upload-history';
 
 import { notify, dismissNotification } from '../notifications';
 import { humanizeBackendError } from '../errors';
@@ -26,10 +28,14 @@ export async function confirmLogout(mode: LogoutMode): Promise<void> {
     });
     logoutModal.setBusy(true);
     resetRenditions();
+    const resumeUploadHistory = mode === 'full' ? suspendUploadHistoryForLogout() : undefined;
+    // The backend can quit before the promise resolves.
+    if (mode === 'full') clearAllFailedUploadHistory();
     try {
         await logout(mode);
         // Backend issues runtime.Quit on success, so this fallback only
         // runs if the process somehow stays alive (e.g. dev hot-reload).
+        resetDashboardIdentity();
         logoutModal.close();
         dismissNotification(progressId);
         showAuthView('phone');
@@ -41,6 +47,7 @@ export async function confirmLogout(mode: LogoutMode): Promise<void> {
             body: humanizeBackendError(err),
         });
     } finally {
+        resumeUploadHistory?.();
         logoutModal.setBusy(false);
     }
 }

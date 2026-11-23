@@ -4,7 +4,8 @@ import { get } from 'svelte/store';
 import ActivityView from './ActivityView.svelte';
 import { activityView, closeActivity, openActivity } from './activity-store';
 import { historyEvents, notifPanelOpen } from './notif-store';
-import { uploadActivities, uploadsPaused, type UploadActivity } from './upload-activity-store';
+import { addUploadActivity, clearUploadActivities, finishUploadActivity, startUploadActivity, uploadActivities, uploadsPaused, type UploadActivity } from './upload-activity-store';
+import { clearFailedUploadHistory, setFailedUploadHistoryAccount } from './failed-upload-history';
 import { resumableUploads } from '../../modules/resumable-uploads';
 import { resumableDownloads } from '../../modules/resumable-downloads';
 import { failedUploadReports, type FailedUploadsPayload } from '../modals/failed-uploads-store';
@@ -38,6 +39,12 @@ function button(text: string): HTMLButtonElement {
     return match;
 }
 beforeEach(() => {
+    const storage = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value),
+        removeItem: (key: string) => storage.delete(key),
+    });
     historyEvents.set([]); uploadActivities.set([]); resumableUploads.set([]); resumableDownloads.set([]);
     host = document.createElement('div'); host.id = 'activity-modal'; document.body.appendChild(host);
     app = mount(ActivityView, { target: host }); flushSync();
@@ -46,6 +53,9 @@ afterEach(async () => {
     closeActivity(); flushSync(); await unmount(app); host.remove();
     historyEvents.set([]); uploadActivities.set([]); resumableUploads.set([]); resumableDownloads.set([]); failedUploadReports.set([]);
     sidebarState.update((state) => ({ ...state, activeChannelId: null }));
+    clearFailedUploadHistory();
+    setFailedUploadHistoryAccount(0);
+    vi.unstubAllGlobals();
     vi.clearAllMocks();
 });
 
@@ -165,6 +175,61 @@ describe('full activity view', () => {
         button('Clear history').click(); await settle();
         button('Clear').click(); await settle();
         expect(get(historyEvents)).toEqual([]);
+    });
+
+    it('restores failed files in Activity and clears the saved batch with its transfer summary', async () => {
+        setFailedUploadHistoryAccount(42);
+        const transferId = 'xfer:up:past';
+        addUploadActivity({
+            id: 'past', name: 'Holiday uploads', driveId: 8, driveTitle: 'Family',
+            destination: 'Family / Summer', encrypt: true, fileCount: 2, transferId,
+            files: [
+                { index: 0, name: 'beach.jpg', status: 'queued' },
+                { index: 1, name: 'hike.jpg', path: 'Album/2024/hike.jpg', size: 24576, status: 'queued' },
+            ],
+        });
+        startUploadActivity('past');
+        finishUploadActivity('past', 'failed', [{ index: 1, message: 'Connection closed' }]);
+
+        setFailedUploadHistoryAccount(0);
+        clearUploadActivities();
+        setFailedUploadHistoryAccount(42);
+        historyEvents.set([{
+            kind: 'transfer', id: transferId, name: 'Holiday uploads', direction: 'up',
+            status: 'failed', progress: 0, bytes: 0, speed: 0, total: 0, startedAt: 1, finishedAt: 2,
+        }]);
+        openActivity({ selectedId: transferId }); await settle();
+        const details = host.querySelector('[aria-label="Details for Holiday uploads"]');
+        expect(details?.textContent).toContain('Family');
+        expect(details?.textContent).toContain('Summer');
+        expect(details?.textContent).toContain('Album / 2024');
+        expect(details?.textContent).toContain('hike.jpg');
+        expect(details?.textContent).toContain('24 KB');
+        expect(details?.textContent).toContain('Connection closed');
+        expect(details?.textContent).not.toContain('beach.jpg');
+        expect(details?.textContent).not.toContain('Retry');
+        button('Activity').click(); await settle();
+        expect(host.querySelectorAll('[aria-label="View Holiday uploads"]')).toHaveLength(1);
+
+        button('Clear history').click(); await settle();
+        button('Clear').click(); await settle();
+        setFailedUploadHistoryAccount(0);
+        setFailedUploadHistoryAccount(42);
+        await settle();
+        expect(host.textContent).toContain('No transfers yet');
+    });
+
+    it('shows the actual failed count when saved file details have been trimmed', async () => {
+        uploadActivities.set([{
+            ...batch('failed'), fileCount: 8, failedFileCount: 5,
+            files: [{ index: 0, name: 'Saved failure.jpg', status: 'failed' }],
+        }]);
+        openActivity(); await settle();
+        expect(host.querySelector('.activity-item .item-summary')?.textContent).toContain('5 of 8 files failed');
+        host.querySelector<HTMLButtonElement>('[aria-label="View Photo selection"]')?.click(); await settle();
+        const details = host.querySelector('[aria-label="Details for Photo selection"]');
+        expect(details?.textContent).toContain("5 of 8 files didn't upload");
+        expect(details?.textContent).toContain('Showing 1 of 5 failed files.');
     });
 
     it('opens a batch from the bell by its aggregate row id', async () => {

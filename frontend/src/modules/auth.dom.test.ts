@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync } from 'svelte';
 import { get } from 'svelte/store';
 
@@ -15,6 +15,7 @@ const authApi = vi.hoisted(() => ({
     selectPersonalDrive: vi.fn(),
     createPersonalDrive: vi.fn(),
     getMyUserId: vi.fn(),
+    logout: vi.fn(),
     syncChannel: vi.fn(),
 }));
 
@@ -25,6 +26,7 @@ const collaborators = vi.hoisted(() => ({
     renderBreadcrumb: vi.fn(),
     notify: vi.fn(),
     dismissNotification: vi.fn(),
+    triggerRefresh: vi.fn(),
 }));
 
 vi.mock('../api', () => authApi);
@@ -32,6 +34,8 @@ vi.mock('./navigation', () => ({ renderBreadcrumb: collaborators.renderBreadcrum
 vi.mock('./channels', () => ({ loadChannels: collaborators.loadChannels }));
 vi.mock('./encryption', () => ({ loadEncryptionStatus: collaborators.loadEncryptionStatus }));
 vi.mock('./profile-menu', () => ({ loadSelfUser: collaborators.loadSelfUser }));
+vi.mock('./renditions/runtime', () => ({ resetRenditions: vi.fn() }));
+vi.mock('./app-actions', () => ({ appActions: () => ({ triggerRefresh: collaborators.triggerRefresh }) }));
 vi.mock('./notifications', () => ({
     notify: collaborators.notify,
     dismissNotification: collaborators.dismissNotification,
@@ -45,6 +49,9 @@ import {
 } from './auth';
 import { appView, authScreen, showAuthView, showStartupView } from '../ui/app/app-store';
 import { personalDriveSetup } from '../ui/auth/personal-drive-store';
+import { clearAllFailedUploadHistory, failedUploadHistory, rememberFailedUploadActivity, setFailedUploadHistoryAccount } from '../ui/notifications/failed-upload-history';
+import type { UploadActivity } from '../ui/notifications/upload-activity-store';
+import { confirmLogout } from './modals/logout';
 import { state } from '../state';
 
 function deferred<T>() {
@@ -59,10 +66,15 @@ function deferred<T>() {
 
 beforeEach(() => {
     vi.resetAllMocks();
-    Object.defineProperty(window, 'triggerRefresh', {
-        configurable: true,
-        value: vi.fn(async () => undefined),
+    const storage = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+        get length() { return storage.size; },
+        key: (index: number) => [...storage.keys()][index] ?? null,
+        getItem: (key: string) => storage.get(key) ?? null,
+        setItem: (key: string, value: string) => storage.set(key, value),
+        removeItem: (key: string) => storage.delete(key),
     });
+    setFailedUploadHistoryAccount(0);
     authApi.getMyUserId.mockResolvedValue(77);
     authApi.waitForBackendReady.mockResolvedValue(undefined);
     authApi.checkSystemStatus.mockResolvedValue('READY');
@@ -74,7 +86,85 @@ beforeEach(() => {
     personalDriveSetup.reset();
 });
 
+afterEach(() => {
+    clearAllFailedUploadHistory();
+    vi.unstubAllGlobals();
+});
+
+function failedBatch(name: string): UploadActivity {
+    return {
+        id: name, name, driveId: 8, driveTitle: 'Personal', destination: 'Personal / Photos',
+        encrypt: false, addedAt: 10, startedAt: 11, finishedAt: 12, status: 'failed', fileCount: 1,
+        files: [{ index: 0, name: `${name}.jpg`, status: 'failed' }],
+    };
+}
+
 describe('personal drive startup gate', () => {
+    it('loads only the authenticated account’s failed uploads after identity resolves', async () => {
+        setFailedUploadHistoryAccount(77);
+        rememberFailedUploadActivity(failedBatch('My upload'));
+        setFailedUploadHistoryAccount(99);
+        rememberFailedUploadActivity(failedBatch('Other account upload'));
+        const identity = deferred<number>();
+        authApi.getMyUserId.mockReturnValueOnce(identity.promise);
+        authApi.preparePersonalDrive.mockResolvedValue({ status: 'ready', activeChannelId: '8200' });
+
+        const startup = initializeSession();
+        await vi.waitFor(() => expect(authApi.getMyUserId).toHaveBeenCalledOnce());
+        expect(get(failedUploadHistory)).toEqual([]);
+        identity.resolve(77);
+        await startup;
+        expect(get(failedUploadHistory).map((entry) => entry.name)).toEqual(['My upload']);
+    });
+
+    it('clears failed upload history before full logout and ignores late failures', async () => {
+        setFailedUploadHistoryAccount(77);
+        rememberFailedUploadActivity(failedBatch('Earlier upload'));
+        const identity = deferred<number>();
+        authApi.getMyUserId.mockReturnValueOnce(identity.promise);
+        authApi.preparePersonalDrive.mockResolvedValue({ status: 'ready', activeChannelId: '8200' });
+        const startup = initializeSession();
+        await vi.waitFor(() => expect(authApi.getMyUserId).toHaveBeenCalledOnce());
+        const result = deferred<void>();
+        authApi.logout.mockReturnValueOnce(result.promise);
+
+        const loggingOut = confirmLogout('full');
+        expect(authApi.logout).toHaveBeenCalledWith('full');
+        identity.resolve(77);
+        await startup;
+        expect(state.myUserID).toBe(77);
+        expect(get(failedUploadHistory)).toEqual([]);
+        rememberFailedUploadActivity(failedBatch('Late upload'));
+        result.resolve();
+        await loggingOut;
+
+        expect(state.myUserID).toBe(0);
+        setFailedUploadHistoryAccount(77);
+        expect(get(failedUploadHistory)).toEqual([]);
+    });
+
+    it('lets the dashboard load and resumes history for its identity if full logout fails', async () => {
+        const identity = deferred<number>();
+        authApi.getMyUserId.mockReturnValueOnce(identity.promise);
+        authApi.preparePersonalDrive.mockResolvedValue({ status: 'ready', activeChannelId: '8200' });
+        const startup = initializeSession();
+        await vi.waitFor(() => expect(authApi.getMyUserId).toHaveBeenCalledOnce());
+        const result = deferred<void>();
+        authApi.logout.mockReturnValueOnce(result.promise);
+
+        const loggingOut = confirmLogout('full');
+        identity.resolve(77);
+        await startup;
+        expect(collaborators.loadEncryptionStatus).toHaveBeenCalledOnce();
+        result.reject(new Error('Local cleanup failed'));
+        await loggingOut;
+
+        expect(get(appView)).toEqual({ kind: 'dashboard' });
+        expect(state.myUserID).toBe(77);
+        rememberFailedUploadActivity(failedBatch('New upload'));
+        expect(get(failedUploadHistory).map((entry) => entry.name)).toEqual(['New upload']);
+    });
+
     it('keeps startup visible until the backend is ready before checking login', async () => {
         const readiness = deferred<void>();
         authApi.waitForBackendReady.mockReturnValueOnce(readiness.promise);

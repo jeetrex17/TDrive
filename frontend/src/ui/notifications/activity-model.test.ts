@@ -35,6 +35,12 @@ describe('activity view model', () => {
         expect(entries[0]).toMatchObject({ kind: 'batch', summary: 'Uploading · 25%', transfer: aggregate, batch: { files: [{ name: 'Venice.jpg' }, { name: 'Rome.jpg' }] } });
     });
 
+    it('uses the original failed count when only some failure details were saved', () => {
+        const source = { ...batch('failed'), files: batch('failed').files.slice(0, 1), failedFileCount: 2 };
+        const [entry] = activityEntries([source], [], [], []);
+        expect(entry.summary).toBe('Needs attention · 2 of 2 files failed');
+    });
+
     it('pauses a queued batch while another drive is open', () => {
         const source = batch();
         expect(isBatchPaused(source, 3)).toBe(false);
