@@ -93,6 +93,19 @@ describe('folder shortcuts', () => {
         press(document.body, keys);
         expect(actions.navigateBack).not.toHaveBeenCalled();
     });
+    it('leaves keys inside the breadcrumb path field, message included, to the field', () => {
+        const editor = document.createElement('div');
+        editor.className = 'breadcrumb-path-editor';
+        const message = document.createElement('p');
+        message.tabIndex = -1;
+        editor.append(message);
+        document.body.append(editor);
+        for (const keys of [...parentShortcuts.map(({ keys }) => keys), { key: 'ArrowLeft', altKey: true }]) {
+            expect(press(message, keys).defaultPrevented).toBe(false);
+        }
+        expect(actions.navigateBack).not.toHaveBeenCalled();
+        expect(actions.navigateHistory).not.toHaveBeenCalled();
+    });
     it('leaves modal and menu ownership intact', () => {
         const modal = document.createElement('div');
         document.body.append(modal);

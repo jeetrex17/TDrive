@@ -39,7 +39,8 @@ function handleFolderShortcut(event: KeyboardEvent): void {
     if (!folderViewOwnsInput()) return;
 
     const target = event.target instanceof Element ? event.target : null;
-    const editor = target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]');
+    // The breadcrumb's path field counts as one editor with its message.
+    const editor = target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], .breadcrumb-path-editor');
     const input = document.getElementById('search-input');
     if (editor && (!(search || editPath) || editor !== input)) return;
 
