@@ -209,9 +209,7 @@ describe('Breadcrumb path field', () => {
         show();
         clickBesideCrumbs();
         press(field()!, { key: 'Enter' });
-        const paste = new Event('paste', { bubbles: true, cancelable: true });
-        field()!.dispatchEvent(paste);
-        expect(paste.defaultPrevented).toBe(true);
+        expect(paste({ 'text/plain': '/Team' }).defaultPrevented).toBe(true);
         expect(field()!.value).toBe('/Docs/Taxes');
     });
 
