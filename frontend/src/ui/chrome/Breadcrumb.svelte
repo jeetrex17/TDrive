@@ -23,6 +23,8 @@
         // Opens a typed path; resolves to a message to show, or null once it
         // has gone there. Without it the trail cannot be edited.
         onPathSubmit?: (text: string, stillWanted: () => boolean) => Promise<string | null>;
+        // Called as the field opens, so nothing queued earlier takes its focus.
+        onPathEditStart?: () => void;
     }
 
     let {
@@ -33,6 +35,7 @@
         canGoBack = false,
         canGoForward = false,
         onPathSubmit,
+        onPathEditStart = () => undefined,
     }: Props = $props();
     const apple = isApplePlatform();
 
@@ -79,6 +82,7 @@
         error = '';
         busy = false;
         editing = true;
+        onPathEditStart();
     }
 
     function stopEditing(restoreFocus: boolean): void {
@@ -165,12 +169,16 @@
             event.preventDefault();
             return;
         }
-        const text = event.clipboardData?.getData('text/plain') ?? '';
-        if (!/[\r\n]/.test(text)) return;
+        const plain = event.clipboardData?.getData('text/plain') ?? '';
+        // Some Linux file managers copy a location only as a URI list, which
+        // a text field would paste as nothing; take its first entry.
+        const uris = plain ? '' : event.clipboardData?.getData('text/uri-list') ?? '';
+        if (!uris && !/[\r\n]/.test(plain)) return;
         // A text field joins pasted lines into one, which no path survives;
         // keep the first line that has anything on it.
         event.preventDefault();
-        const line = text.split(/\r\n|\r|\n/).map((part) => part.trim()).find((part) => part !== '') ?? '';
+        const line = (plain || uris).split(/\r\n|\r|\n/).map((part) => part.trim())
+            .find((part) => part !== '' && !(uris && part.startsWith('#'))) ?? '';
         const input = event.currentTarget as HTMLInputElement;
         input.setRangeText(line, input.selectionStart ?? input.value.length, input.selectionEnd ?? input.value.length, 'end');
         draft = input.value;
@@ -357,9 +365,14 @@
     .breadcrumb-path.is-editable { flex: 1 1 auto; cursor: text; }
 
     .breadcrumb-edit-btn { flex: 0 0 auto; opacity: 0; }
-    .breadcrumb-edit-btn:focus-visible { opacity: 1; }
+    /* :focus, not :focus-visible, which macOS 11's WebKit does not know. */
+    .breadcrumb-edit-btn:focus { opacity: 1; }
     @media (hover: hover) {
         :global(.drive-breadcrumb:hover) .breadcrumb-edit-btn { opacity: 1; }
+    }
+    /* A touch screen has no hover to reveal it with. */
+    @media (hover: none) {
+        .breadcrumb-edit-btn { opacity: 1; }
     }
     :global(.main-content.trash-mode) .breadcrumb-edit-btn,
     :global(.main-content.photos-mode) .breadcrumb-edit-btn { display: none; }
@@ -389,6 +402,10 @@
         box-shadow: var(--focus-ring);
     }
     .breadcrumb-path-editor input[aria-invalid="true"] { border-color: var(--color-danger); }
+    /* High contrast drops the shadow ring; keep a visible focus outline. */
+    @media (forced-colors: active) {
+        .breadcrumb-path-editor input:focus { outline: 2px solid Highlight; outline-offset: 1px; }
+    }
     .breadcrumb-path-editor input[aria-busy="true"] { cursor: progress; }
 
     /* Hangs below the field instead of growing the top bar. */
