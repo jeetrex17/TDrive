@@ -127,7 +127,7 @@ describe('resolveDrivePath', () => {
         await expect(resolveDrivePath(parsed('readme.txt'), roots, source())).resolves.toEqual({ kind: 'file', path: [], fileId: '7' });
     });
 
-    it('finds raw Telegram files at the root only after the drive misses', async () => {
+    it('looks through raw Telegram files only for a file named at the root', async () => {
         const src = source(drive, [{ msgId: 99, name: 'voice.ogg' }]);
         await expect(resolveDrivePath(parsed('/voice.ogg'), roots, src)).resolves.toEqual({ kind: 'file', path: [], fileId: '99' });
         await expect(resolveDrivePath(parsed('/Team/voice.ogg'), roots, src)).resolves.toMatchObject({ kind: 'not-found' });
@@ -157,6 +157,13 @@ describe('resolveDrivePath', () => {
         const listings = { '': { folders: [], files: [] } };
         const src = source(listings, [{ msgId: 1, name: 'dup.txt' }, { msgId: 2, name: 'dup.txt' }]);
         await expect(resolveDrivePath(parsed('dup.txt'), roots, src)).resolves.toEqual({ kind: 'ambiguous', name: 'dup.txt', parent: [] });
+
+        // A raw file named like a drive file at the root is a clash too, while
+        // the same message listed both ways is one file.
+        await expect(resolveDrivePath(parsed('readme.txt'), roots, source(drive, [{ msgId: 8, name: 'readme.txt' }])))
+            .resolves.toEqual({ kind: 'ambiguous', name: 'readme.txt', parent: [] });
+        await expect(resolveDrivePath(parsed('readme.txt'), roots, source(drive, [{ msgId: 7, name: 'readme.txt' }])))
+            .resolves.toEqual({ kind: 'file', path: [], fileId: '7' });
     });
 
     it('reads a leading drive name as the root unless the root has that folder', async () => {

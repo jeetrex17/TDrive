@@ -130,11 +130,16 @@ async function walk(
             continue;
         }
 
-        let files = matchName(listing.files, segment);
-        if (files.length === 0 && last && parentId === '') {
-            files = matchName(await source.rootFiles(), segment);
+        let candidates = listing.files;
+        if (last && parentId === '') {
+            // The root also shows raw Telegram files; a name shared with a drive
+            // file has to be reported, not settled in the drive file's favour.
+            const managed = new Set(listing.files.map((file) => file.msgId));
+            const raw = await source.rootFiles();
             if (!source.current()) return null;
+            candidates = [...listing.files, ...raw.filter((file) => !managed.has(file.msgId))];
         }
+        const files = matchName(candidates, segment);
         if (files.length > 1) return { kind: 'ambiguous', name: segment.trim(), parent: where() };
         if (files.length === 1) {
             if (!last || folderOnly) return { kind: 'not-a-folder', name: files[0].name, parent: where() };
