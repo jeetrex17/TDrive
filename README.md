@@ -162,6 +162,7 @@ TDrive stores your API credentials locally; it does not ship a shared project-wi
 
 - **Alt + Up** (or **Cmd + Up** on macOS) opens the parent folder, including from an empty folder or the toolbar. On Windows and Linux, **Backspace** does the same.
 - **Alt + Left / Alt + Right** (or **Cmd + [ / Cmd + ]** on macOS) go back and forward through the folders you visited in the current drive.
+- **Ctrl/Cmd + L** turns the folder path into a text field, as does a click beside it. Type or paste a path such as `/Projects/2026` and press **Enter** to go there; a file's path opens its folder with the file selected. **Escape** puts the path back.
 - **Ctrl/Cmd + F** focuses file search.
 - **F5** or **Ctrl/Cmd + R** refreshes the current view without reloading the app.
 - **Ctrl/Cmd + A** selects all rows in the current file list.
