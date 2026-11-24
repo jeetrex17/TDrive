@@ -18,8 +18,8 @@ function driveLabel(): string {
 
 /**
  * Opens `text` in the active drive. Resolves to the message to show under the
- * field, or null once it has navigated or given way to a newer request, a
- * drive switch, or a caller that no longer wants it.
+ * field, or null once it has navigated or given way to a newer request or a
+ * caller that no longer wants it.
  */
 export async function goToDrivePath(text: string, stillWanted: () => boolean = () => true): Promise<string | null> {
     const request = ++latestRequest;
@@ -30,15 +30,12 @@ export async function goToDrivePath(text: string, stillWanted: () => boolean = (
     if (!driveId || state.channelSwitchInProgress) return 'The drive is still opening. Try again in a moment.';
     const current = () => request === latestRequest && stillWanted()
         && !state.channelSwitchInProgress && state.activeChannel?.id === driveId;
-    // A walk cut short by another drive opening still owes the field an
-    // answer; one the field, a newer path or a passing refresh gave up on
-    // does not.
-    const abandoned = () => {
-        const now = state.activeChannel?.id;
-        return request === latestRequest && stillWanted() && now && now !== driveId
-            ? 'The drive changed while the path was opening. Try again.'
-            : null;
-    };
+    // A walk the drive cut short (a switch or refresh under way) still owes
+    // the field an answer, so the typed path is never dropped silently; one
+    // the field or a newer path gave up on does not.
+    const abandoned = () => (request === latestRequest && stillWanted()
+        ? 'The drive was busy while the path was opening. Try again.'
+        : null);
 
     let target: Awaited<ReturnType<typeof resolveDrivePath>>;
     try {

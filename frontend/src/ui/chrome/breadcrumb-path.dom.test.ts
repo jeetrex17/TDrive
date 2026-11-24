@@ -169,6 +169,28 @@ describe('Breadcrumb path field', () => {
         expect(document.getElementById('breadcrumb-path')).not.toBeNull();
     });
 
+    it('keeps keys on the message away from the folder shortcuts, and cancels on Escape', async () => {
+        submit.mockResolvedValueOnce('"Q4" was not found in /Team.');
+        const reachedWindow = vi.fn();
+        window.addEventListener('keydown', reachedWindow);
+        try {
+            show();
+            clickBesideCrumbs();
+            press(field()!, { key: 'Enter' });
+            await settle();
+            const message = document.getElementById('breadcrumb-path-error')!;
+
+            press(message, { key: 'Backspace' });
+            expect(reachedWindow).not.toHaveBeenCalled();
+            expect(field()).not.toBeNull();
+
+            expect(press(message, { key: 'Escape' }).defaultPrevented).toBe(true);
+            expect(field()).toBeNull();
+        } finally {
+            window.removeEventListener('keydown', reachedWindow);
+        }
+    });
+
     it('selects the whole path again on Ctrl+L inside the field', () => {
         show();
         clickBesideCrumbs();

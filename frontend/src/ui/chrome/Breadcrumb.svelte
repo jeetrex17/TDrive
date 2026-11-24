@@ -141,8 +141,23 @@
             if (!document.hasFocus()) return;
             stopEditing(false);
         };
+        // With the message focused, Escape still cancels, and no other key
+        // reaches the folder shortcuts (Backspace would leave the folder).
+        const onMessageKeydown = (event: KeyboardEvent) => {
+            if (event.target instanceof HTMLInputElement) return;
+            event.stopPropagation();
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            stopEditing(true);
+        };
         editor.addEventListener('focusout', onFocusOut);
-        return { destroy: () => editor.removeEventListener('focusout', onFocusOut) };
+        editor.addEventListener('keydown', onMessageKeydown);
+        return {
+            destroy: () => {
+                editor.removeEventListener('focusout', onFocusOut);
+                editor.removeEventListener('keydown', onMessageKeydown);
+            },
+        };
     }
 
     function onPaste(event: ClipboardEvent): void {
@@ -395,5 +410,8 @@
            the field already marks the error. */
         color: var(--color-text);
         font-size: var(--type-sm);
+        /* The app turns text selection off; this message is meant to be copied. */
+        -webkit-user-select: text;
+        user-select: text;
     }
 </style>
