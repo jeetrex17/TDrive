@@ -169,16 +169,19 @@
             event.preventDefault();
             return;
         }
+        const firstLine = (text: string, skipComments: boolean): string => text.split(/\r\n|\r|\n/)
+            .map((part) => part.trim()).find((part) => part !== '' && !(skipComments && part.startsWith('#'))) ?? '';
         const plain = event.clipboardData?.getData('text/plain') ?? '';
-        // Some Linux file managers copy a location only as a URI list, which
-        // a text field would paste as nothing; take its first entry.
-        const uris = plain ? '' : event.clipboardData?.getData('text/uri-list') ?? '';
-        if (!uris && !/[\r\n]/.test(plain)) return;
+        // Linux file managers copy a location as a URI list, with only the bare
+        // name (Files) or nothing as plain text. The file URI says where it is,
+        // so it wins, and is then told apart as a path on this computer.
+        const uri = firstLine(event.clipboardData?.getData('text/uri-list') ?? '', true);
+        const fromList = /^file:/i.test(uri) || (!plain && uri !== '');
+        if (!fromList && !/[\r\n]/.test(plain)) return;
         // A text field joins pasted lines into one, which no path survives;
         // keep the first line that has anything on it.
         event.preventDefault();
-        const line = (plain || uris).split(/\r\n|\r|\n/).map((part) => part.trim())
-            .find((part) => part !== '' && !(uris && part.startsWith('#'))) ?? '';
+        const line = fromList ? uri : firstLine(plain, false);
         const input = event.currentTarget as HTMLInputElement;
         input.setRangeText(line, input.selectionStart ?? input.value.length, input.selectionEnd ?? input.value.length, 'end');
         draft = input.value;
