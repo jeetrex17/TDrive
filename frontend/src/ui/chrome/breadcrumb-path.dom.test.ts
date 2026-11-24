@@ -20,12 +20,20 @@ let component: ReturnType<typeof mount> | null = null;
 const submit = vi.fn<(text: string, stillWanted: () => boolean) => Promise<string | null>>();
 const navigate = vi.fn<(index: number) => void>();
 
-function show(withSubmit = true) {
+function show(withSubmit = true, extra: Record<string, unknown> = {}) {
     component = mount(Breadcrumb, {
         target,
-        props: { onNavigate: navigate, onBack: noop, drag, ...(withSubmit ? { onPathSubmit: submit } : {}) },
+        props: { onNavigate: navigate, onBack: noop, drag, ...(withSubmit ? { onPathSubmit: submit } : {}), ...extra },
     });
     flushSync();
+}
+
+function paste(data: Record<string, string>) {
+    const event = new Event('paste', { bubbles: true, cancelable: true });
+    Object.defineProperty(event, 'clipboardData', { value: { getData: (type: string) => data[type] ?? '' } });
+    field()!.dispatchEvent(event);
+    flushSync();
+    return event;
 }
 
 const field = () => document.getElementById('breadcrumb-path-input') as HTMLInputElement | null;
@@ -205,6 +213,42 @@ describe('Breadcrumb path field', () => {
         field()!.dispatchEvent(paste);
         expect(paste.defaultPrevented).toBe(true);
         expect(field()!.value).toBe('/Docs/Taxes');
+    });
+
+    it('keeps the first line of a pasted list, and the first entry of a URI list', () => {
+        show();
+        clickBesideCrumbs();
+        const input = field()!;
+
+        input.setSelectionRange(0, input.value.length);
+        expect(paste({ 'text/plain': '\n /Team/Q4 \nsecond line' }).defaultPrevented).toBe(true);
+        expect(input.value).toBe('/Team/Q4');
+
+        // Some Linux file managers copy a location only as text/uri-list.
+        input.setSelectionRange(0, input.value.length);
+        expect(paste({ 'text/uri-list': '# copied\r\nfile:///home/me/Docs\r\nfile:///home/me/More\r\n' }).defaultPrevented)
+            .toBe(true);
+        expect(input.value).toBe('file:///home/me/Docs');
+
+        // A single line is left to the field's own paste.
+        expect(paste({ 'text/plain': '/Team' }).defaultPrevented).toBe(false);
+        expect(paste({}).defaultPrevented).toBe(false);
+    });
+
+    it('tells the app each time the field opens', () => {
+        const started = vi.fn();
+        show(true, { onPathEditStart: started });
+        clickBesideCrumbs();
+        expect(started).toHaveBeenCalledTimes(1);
+        // Already open: a shortcut request starts nothing new.
+        requestBreadcrumbEdit();
+        flushSync();
+        expect(started).toHaveBeenCalledTimes(1);
+
+        press(field()!, { key: 'Escape' });
+        requestBreadcrumbEdit();
+        flushSync();
+        expect(started).toHaveBeenCalledTimes(2);
     });
 
     it('cancels with Escape and gives focus back to where it was', async () => {
