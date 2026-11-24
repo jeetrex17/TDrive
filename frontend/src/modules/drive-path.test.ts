@@ -132,6 +132,9 @@ describe('resolveDrivePath', () => {
         await expect(resolveDrivePath(parsed('/voice.ogg'), roots, src)).resolves.toEqual({ kind: 'file', path: [], fileId: '99' });
         await expect(resolveDrivePath(parsed('/Team/voice.ogg'), roots, src)).resolves.toMatchObject({ kind: 'not-found' });
         expect(src.rootFiles).toHaveBeenCalledTimes(1);
+        await expect(resolveDrivePath(parsed('/voice.ogg/'), roots, src)).resolves.toEqual({
+            kind: 'not-a-folder', name: 'voice.ogg', parent: [],
+        });
     });
 
     it('names the missing segment and where it was looked for', async () => {

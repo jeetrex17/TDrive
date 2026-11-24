@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { flushSync, mount, tick, unmount } from 'svelte';
 import Breadcrumb from './Breadcrumb.svelte';
 import { breadcrumbPath, requestBreadcrumbEdit, type BreadcrumbDrag } from './breadcrumb-store';
+import { openChannelKey } from '../channels/channel-store';
 import { sidebarState } from '../sidebar/sidebar-store';
 
 const noop = () => {};
@@ -75,6 +76,7 @@ afterEach(() => {
     component = null;
     document.body.replaceChildren();
     breadcrumbPath.set([]);
+    openChannelKey.set(null);
     sidebarState.set({ personal: [], shared: [], pending: [], activeChannelId: null, virtualView: null });
 });
 
@@ -139,9 +141,35 @@ describe('Breadcrumb path field', () => {
         expect(input.getAttribute('aria-invalid')).toBe('true');
         expect(input.getAttribute('aria-describedby')).toBe('breadcrumb-path-error');
 
+        // Pressing on the message to select its text keeps the field open.
+        const hold = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
+        message.dispatchEvent(hold);
+        expect(hold.defaultPrevented).toBe(true);
+
         type('/Team/Q');
         expect(document.getElementById('breadcrumb-path-error')).toBeNull();
         expect(field()!.hasAttribute('aria-invalid')).toBe(false);
+    });
+
+    it('selects the whole path again on Ctrl+L inside the field', () => {
+        show();
+        clickBesideCrumbs();
+        const input = field()!;
+        input.setSelectionRange(3, 3);
+        expect(press(input, { key: 'l', ctrlKey: true }).defaultPrevented).toBe(true);
+        expect([input.selectionStart, input.selectionEnd]).toEqual([0, input.value.length]);
+        expect(press(input, { key: 'l', ctrlKey: true, shiftKey: true }).defaultPrevented).toBe(false);
+    });
+
+    it('ignores a paste while a path is opening', () => {
+        submit.mockImplementationOnce(() => new Promise(() => {}));
+        show();
+        clickBesideCrumbs();
+        press(field()!, { key: 'Enter' });
+        const paste = new Event('paste', { bubbles: true, cancelable: true });
+        field()!.dispatchEvent(paste);
+        expect(paste.defaultPrevented).toBe(true);
+        expect(field()!.value).toBe('/Docs/Taxes');
     });
 
     it('cancels with Escape and gives focus back to where it was', async () => {
@@ -189,6 +217,18 @@ describe('Breadcrumb path field', () => {
         show();
         clickBesideCrumbs();
         sidebarState.update((current) => ({ ...current, virtualView: 'trash' }) as never);
+        flushSync();
+        expect(field()).toBeNull();
+
+        requestBreadcrumbEdit();
+        flushSync();
+        expect(field()).toBeNull();
+    });
+
+    it('closes when a Telegram channel covers the list, and stays shut while it is open', () => {
+        show();
+        clickBesideCrumbs();
+        openChannelKey.set('channel');
         flushSync();
         expect(field()).toBeNull();
 
