@@ -294,9 +294,12 @@ describe('Breadcrumb path field', () => {
 
         press(field()!, { key: 'Escape' });
         expect(stillWanted()).toBe(false);
+        // Open the field again: the late answer must not land in it.
+        clickBesideCrumbs();
         answer('"Docs" was not found in Personal.');
         await settle();
-        expect(field()).toBeNull();
+        expect(field()).not.toBeNull();
+        expect(field()!.hasAttribute('aria-busy')).toBe(false);
         expect(document.getElementById('breadcrumb-path-error')).toBeNull();
     });
 
