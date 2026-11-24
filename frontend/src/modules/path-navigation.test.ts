@@ -126,4 +126,10 @@ describe('forgetPendingFileFocus', () => {
         forgetPendingFileFocus();
         expect(state.pendingFocus).toBeNull();
     });
+
+    it('keeps a folder waiting for focus', () => {
+        state.pendingFocus = { type: 'folder', id: 'd:team' } as never;
+        forgetPendingFileFocus();
+        expect(state.pendingFocus).toEqual({ type: 'folder', id: 'd:team' });
+    });
 });

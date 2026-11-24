@@ -92,9 +92,13 @@ export function folderHistorySteps(): number {
     return stepsTaken;
 }
 
-/** A newer navigation landed: a step still resolving must not take the list away. */
+/**
+ * A newer navigation started: a step still resolving must not take the list
+ * away, and must not hold up a Back or Forward pressed after it.
+ */
 export function interruptFolderHistoryStep(): void {
     interruptions += 1;
+    pending = null;
 }
 
 /**
@@ -109,11 +113,13 @@ export function stepFolderHistory(delta: -1 | 1): Promise<DrivePathEntry[] | nul
     const driveId = activeDriveId();
     if (!driveId || entries[position]?.driveId !== driveId || !entries[position + delta]) return Promise.resolve(null);
     stepsTaken += 1;
-    pending = step(delta).finally(() => {
-        pending = null;
+    const run: Promise<DrivePathEntry[] | null> = step(delta).finally(() => {
+        // An interrupted step may finish after a newer one started.
+        if (pending === run) pending = null;
         publish();
     });
-    return pending;
+    pending = run;
+    return run;
 }
 
 async function step(delta: -1 | 1): Promise<DrivePathEntry[] | null> {
