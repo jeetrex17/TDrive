@@ -141,14 +141,32 @@ describe('Breadcrumb path field', () => {
         expect(input.getAttribute('aria-invalid')).toBe('true');
         expect(input.getAttribute('aria-describedby')).toBe('breadcrumb-path-error');
 
-        // Pressing on the message to select its text keeps the field open.
-        const hold = new MouseEvent('mousedown', { bubbles: true, cancelable: true });
-        message.dispatchEvent(hold);
-        expect(hold.defaultPrevented).toBe(true);
+        // The message takes focus only from a pointer, to select its text.
+        expect(message.getAttribute('tabindex')).toBe('-1');
 
         type('/Team/Q');
         expect(document.getElementById('breadcrumb-path-error')).toBeNull();
         expect(field()!.hasAttribute('aria-invalid')).toBe(false);
+    });
+
+    it('stays open while focus moves to its message and closes when focus leaves', async () => {
+        submit.mockResolvedValueOnce('"Q4" was not found in /Team.');
+        const outside = document.createElement('button');
+        document.body.append(outside);
+        show();
+        clickBesideCrumbs();
+        press(field()!, { key: 'Enter' });
+        await settle();
+        const message = document.getElementById('breadcrumb-path-error')!;
+
+        field()!.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: message }));
+        flushSync();
+        expect(field()).not.toBeNull();
+
+        message.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: outside }));
+        flushSync();
+        expect(field()).toBeNull();
+        expect(document.getElementById('breadcrumb-path')).not.toBeNull();
     });
 
     it('selects the whole path again on Ctrl+L inside the field', () => {
