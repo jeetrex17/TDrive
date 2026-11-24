@@ -7,6 +7,7 @@ import { state } from '../state';
 import { closeChannel } from '../ui/channels/channel-store';
 import { appActions } from './app-actions';
 import { describeDrivePathFailure, parseDrivePath, resolveDrivePath } from './drive-path';
+import { folderHistorySteps } from './folder-history';
 import { renderBreadcrumb } from './navigation';
 import { clearSearch } from './search';
 
@@ -29,9 +30,12 @@ export async function goToDrivePath(text: string, stillWanted: () => boolean = (
     const driveId = state.activeChannel?.id;
     if (!driveId || state.channelSwitchInProgress) return 'The drive is still opening. Try again in a moment.';
     // Back, Forward or a click elsewhere while the path is read is the newer
-    // choice; the walk must not take the list back afterwards.
+    // choice; the walk must not take the list back afterwards. A history step
+    // counts from the moment it is asked for, before its folder is known.
     const startFolder = state.currentFolderId;
-    const stayed = () => state.currentFolderId === startFolder && state.virtualView === null;
+    const startSteps = folderHistorySteps();
+    const stayed = () => state.currentFolderId === startFolder && state.virtualView === null
+        && folderHistorySteps() === startSteps;
     const current = () => request === latestRequest && stillWanted() && stayed()
         && !state.channelSwitchInProgress && state.activeChannel?.id === driveId;
     // A walk the drive cut short (a switch or refresh under way) still owes

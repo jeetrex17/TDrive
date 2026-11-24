@@ -81,6 +81,15 @@ function pathTo(index: FolderIndex, folderId: string): DrivePathEntry[] | null {
 }
 
 let pending: Promise<DrivePathEntry[] | null> | null = null;
+let stepsTaken = 0;
+
+/**
+ * Counts the back and forward steps asked for, so work that started before
+ * one (a typed path still being read) can see it came later and give way.
+ */
+export function folderHistorySteps(): number {
+    return stepsTaken;
+}
 
 /**
  * Moves one step back (-1) or forward (+1) and returns the folder path to
@@ -90,6 +99,7 @@ export function stepFolderHistory(delta: -1 | 1): Promise<DrivePathEntry[] | nul
     // A press while the previous step is still resolving is dropped, so a step
     // is never applied twice.
     if (pending) return Promise.resolve(null);
+    stepsTaken += 1;
     pending = step(delta).finally(() => {
         pending = null;
         publish();

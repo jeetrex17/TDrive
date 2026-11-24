@@ -2,6 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({ getFolderContents: vi.fn(), getFileList: vi.fn() }));
 const refreshFiles = vi.hoisted(() => vi.fn());
+const history = vi.hoisted(() => ({ steps: 0 }));
+vi.mock('./folder-history', () => ({ folderHistorySteps: () => history.steps }));
 vi.mock('../api', () => api);
 vi.mock('../ui/channels/channel-store', () => ({ closeChannel: vi.fn() }));
 vi.mock('./app-actions', () => ({ appActions: () => ({ refreshFiles }) }));
@@ -62,6 +64,17 @@ describe('goToDrivePath', () => {
         release();
         await expect(pending).resolves.toBeNull();
         expect(state.currentFolderId).toBe('d:elsewhere');
+        expect(refreshFiles).not.toHaveBeenCalled();
+    });
+
+    it('gives way to a Back or Forward asked for while the path is read', async () => {
+        const release = gate();
+        const pending = goToDrivePath('/Team');
+        // The step has not landed yet: the folder is still the same one.
+        history.steps += 1;
+        release();
+        await expect(pending).resolves.toBeNull();
+        expect(state.currentFolderId).toBe('');
         expect(refreshFiles).not.toHaveBeenCalled();
     });
 
