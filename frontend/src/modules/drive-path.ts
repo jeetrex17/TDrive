@@ -61,6 +61,8 @@ function stripQuotes(value: string): string {
 export function parseDrivePath(text: string): ParsedDrivePath | DrivePathFailure {
     // A paste can carry several lines; the path is the first one with text.
     const line = text.split(/\r\n|\r|\n/).map((part) => part.trim()).find((part) => part !== '') ?? '';
+    // Checked before the marks are stripped, which slows on a huge pasted run of them.
+    if (line.length > MAX_PATH_LENGTH * 2) return { kind: 'too-long' };
     // Windows puts an invisible direction mark before paths copied from a
     // Properties or Security tab; it is never part of the path.
     const unmarked = (part: string) => part.replace(BIDI_EDGES, '').trim();

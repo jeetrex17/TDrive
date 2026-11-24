@@ -74,6 +74,11 @@ describe('parseDrivePath', () => {
         expect(parseDrivePath('\\\\server\\share')).toEqual({ kind: 'local' });
         expect(parseDrivePath('/a'.repeat(300))).toEqual({ kind: 'too-long' });
         expect(parseDrivePath('x'.repeat(5000))).toEqual({ kind: 'too-long' });
+        // A pasted run of invisible marks is refused before they are stripped.
+        const started = Date.now();
+        expect(parseDrivePath('\u200e'.repeat(50_000) + 'x')).toEqual({ kind: 'too-long' });
+        expect(parseDrivePath('\u200e'.repeat(8000) + '/Team')).toEqual({ segments: ['Team'], folderOnly: false });
+        expect(Date.now() - started).toBeLessThan(1000);
     });
 
     it('flags paths copied from this computer that carry no drive letter', () => {
