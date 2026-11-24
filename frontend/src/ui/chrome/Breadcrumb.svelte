@@ -141,13 +141,13 @@
             if (!document.hasFocus()) return;
             stopEditing(false);
         };
-        // With the message focused, Escape still cancels, and no other key
-        // reaches the folder shortcuts (Backspace would leave the folder).
+        // With the message focused, Escape still cancels. The folder shortcuts
+        // treat the whole editor as text, so Backspace does not leave the
+        // folder, while F5 still reaches the app's own refresh.
         const onMessageKeydown = (event: KeyboardEvent) => {
-            if (event.target instanceof HTMLInputElement) return;
-            event.stopPropagation();
-            if (event.key !== 'Escape') return;
+            if (event.target instanceof HTMLInputElement || event.key !== 'Escape') return;
             event.preventDefault();
+            event.stopPropagation();
             stopEditing(true);
         };
         editor.addEventListener('focusout', onFocusOut);

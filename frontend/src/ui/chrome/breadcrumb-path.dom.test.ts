@@ -169,26 +169,21 @@ describe('Breadcrumb path field', () => {
         expect(document.getElementById('breadcrumb-path')).not.toBeNull();
     });
 
-    it('keeps keys on the message away from the folder shortcuts, and cancels on Escape', async () => {
+    it('cancels on Escape from the message and leaves its other keys alone', async () => {
         submit.mockResolvedValueOnce('"Q4" was not found in /Team.');
-        const reachedWindow = vi.fn();
-        window.addEventListener('keydown', reachedWindow);
-        try {
-            show();
-            clickBesideCrumbs();
-            press(field()!, { key: 'Enter' });
-            await settle();
-            const message = document.getElementById('breadcrumb-path-error')!;
+        show();
+        clickBesideCrumbs();
+        press(field()!, { key: 'Enter' });
+        await settle();
+        const message = document.getElementById('breadcrumb-path-error')!;
+        expect(message.closest('.breadcrumb-path-editor')).not.toBeNull();
 
-            press(message, { key: 'Backspace' });
-            expect(reachedWindow).not.toHaveBeenCalled();
-            expect(field()).not.toBeNull();
+        // F5 has to reach the app's refresh, which keeps the webview from reloading.
+        expect(press(message, { key: 'F5' }).defaultPrevented).toBe(false);
+        expect(field()).not.toBeNull();
 
-            expect(press(message, { key: 'Escape' }).defaultPrevented).toBe(true);
-            expect(field()).toBeNull();
-        } finally {
-            window.removeEventListener('keydown', reachedWindow);
-        }
+        expect(press(message, { key: 'Escape' }).defaultPrevented).toBe(true);
+        expect(field()).toBeNull();
     });
 
     it('selects the whole path again on Ctrl+L inside the field', () => {
