@@ -59,8 +59,19 @@ describe('goToDrivePath', () => {
         expect(state.folderPath).toEqual([{ id: 'd:team', name: 'Team' }]);
         expect(state.pendingFocus).toEqual({ type: 'file', id: '4' });
         expect(refreshFiles).toHaveBeenCalledTimes(1);
-        // A Back still resolving must not take the list away afterwards.
+        // A Back asked for earlier and still resolving gives way to the walk.
         expect(history.interrupt).toHaveBeenCalledTimes(1);
+    });
+
+    it('stops an earlier Back before the first read of the walk', async () => {
+        const release = gate();
+        const pending = goToDrivePath('/Team');
+        expect(history.interrupt).toHaveBeenCalledTimes(1);
+        expect(history.interrupt.mock.invocationCallOrder[0])
+            .toBeLessThan(api.getFolderContents.mock.invocationCallOrder[0]);
+        release();
+        await expect(pending).resolves.toBeNull();
+        expect(state.currentFolderId).toBe('d:team');
     });
 
     it('leaves the list alone when another folder opens while the path is read', async () => {
@@ -83,6 +94,12 @@ describe('goToDrivePath', () => {
         await expect(pending).resolves.toBeNull();
         expect(state.currentFolderId).toBe('');
         expect(refreshFiles).not.toHaveBeenCalled();
+    });
+
+    it('leaves Back alone for a path that cannot be read as one', async () => {
+        await expect(goToDrivePath('C:\\Users')).resolves.toMatch(/on this computer/);
+        state.channelSwitchInProgress = true;
+        await expect(goToDrivePath('/Team')).resolves.toBe('The drive is still opening. Try again in a moment.');
         expect(history.interrupt).not.toHaveBeenCalled();
     });
 

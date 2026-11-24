@@ -29,6 +29,9 @@ export async function goToDrivePath(text: string, stillWanted: () => boolean = (
 
     const driveId = state.activeChannel?.id;
     if (!driveId || state.channelSwitchInProgress) return 'The drive is still opening. Try again in a moment.';
+    // A Back asked for before Enter and still reading the folder index is the
+    // older choice; it must not land in the middle of the walk.
+    interruptFolderHistoryStep();
     // Back, Forward or a click elsewhere while the path is read is the newer
     // choice; the walk must not take the list back afterwards. A history step
     // counts from the moment it is asked for, before its folder is known.
@@ -65,9 +68,6 @@ export async function goToDrivePath(text: string, stillWanted: () => boolean = (
     // The same exits a search result takes: the path replaces whatever the
     // list was showing.
     if (state.searchQuery) clearSearch({ refresh: false });
-    // Even a file in the folder already open is a newer choice than a Back
-    // asked for earlier and still resolving.
-    interruptFolderHistoryStep();
     closeChannel();
     state.folderPath = target.path.map(({ id, name }) => ({ id, name }));
     state.currentFolderId = target.path[target.path.length - 1]?.id ?? '';
