@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { get } from 'svelte/store';
 import { state } from '../state';
+import { breadcrumbEditRequest } from '../ui/chrome/breadcrumb-store';
 import { openChannelKey } from '../ui/channels/channel-store';
 import { hideContextMenu, showContextMenu } from '../ui/menus/context-menu-store';
 import { activateModalOwnership, deactivateModalOwnership } from '../ui/modals/modal-a11y';
@@ -136,6 +138,38 @@ describe('folder shortcuts', () => {
         document.getElementById('toolbar')!.focus();
         press(document.body, search);
         expect(document.activeElement).toBe(document.getElementById('toolbar'));
+    });
+    it.each(['Control', 'Command'])('asks the breadcrumb for its path field with %s+L, from the root and from search', (modifier) => {
+        const editPath = { key: 'l', altKey: false, ctrlKey: modifier === 'Control', metaKey: modifier === 'Command' };
+        const before = get(breadcrumbEditRequest);
+        state.folderPath = [];
+        expect(press(document.body, editPath).defaultPrevented).toBe(true);
+        state.searchQuery = 'query';
+        expect(press(document.getElementById('search-input')!, editPath).defaultPrevented).toBe(true);
+        expect(get(breadcrumbEditRequest)).toBe(before + 2);
+        expect(actions.navigateBack).not.toHaveBeenCalled();
+    });
+    it('leaves Ctrl+L to other editors, other modifiers, alternate views, overlays and mobile', () => {
+        const editPath = { key: 'l', altKey: false, ctrlKey: true };
+        const before = get(breadcrumbEditRequest);
+        const editor = document.createElement('textarea');
+        document.body.append(editor);
+        expect(press(editor, editPath).defaultPrevented).toBe(false);
+        for (const extra of [{ shiftKey: true }, { altKey: true }, { metaKey: true }, { repeat: true }, { isComposing: true }]) {
+            press(document.body, { ...editPath, ...extra });
+        }
+        state.virtualView = 'trash';
+        press(document.body, editPath);
+        state.virtualView = null;
+        openChannelKey.set('channel');
+        press(document.body, editPath);
+        openChannelKey.set(null);
+        showContextMenu(0, 0, []);
+        press(document.body, editPath);
+        hideContextMenu();
+        actions.mobile = true;
+        press(document.body, editPath);
+        expect(get(breadcrumbEditRequest)).toBe(before);
     });
     it('does not handle prevented events and removes its listener on disposal', () => {
         const prevent = (event: Event) => event.preventDefault();
