@@ -131,10 +131,18 @@
         }
     }
 
-    function onBlur(): void {
-        // Switching to another window to copy a path keeps the field open.
-        if (!document.hasFocus()) return;
-        stopEditing(false);
+    // Focus leaving the field and its message closes the field. Switching to
+    // another window to copy a path keeps it open, and so does selecting the
+    // message's text to copy it.
+    function closeOnLeave(editor: HTMLElement) {
+        const onFocusOut = (event: FocusEvent) => {
+            const next = event.relatedTarget;
+            if (next instanceof Node && editor.contains(next)) return;
+            if (!document.hasFocus()) return;
+            stopEditing(false);
+        };
+        editor.addEventListener('focusout', onFocusOut);
+        return { destroy: () => editor.removeEventListener('focusout', onFocusOut) };
     }
 
     function onPaste(event: ClipboardEvent): void {
@@ -157,13 +165,6 @@
     function selectOnMount(input: HTMLInputElement): void {
         input.focus();
         input.select();
-    }
-
-    // Selecting the message to copy it must not blur the field and close it.
-    function keepFieldFocus(message: HTMLElement) {
-        const hold = (event: MouseEvent) => event.preventDefault();
-        message.addEventListener('mousedown', hold);
-        return { destroy: () => message.removeEventListener('mousedown', hold) };
     }
 
     // A click beside the crumbs, or on a separator, opens the field. Keyboard
@@ -265,7 +266,7 @@
     <ArrowUpIcon size={18} strokeWidth={2} aria-hidden="true" />
 </button>
 {#if editing}
-    <div class="breadcrumb-path-editor">
+    <div class="breadcrumb-path-editor" use:closeOnLeave>
         <input
             id="breadcrumb-path-input"
             type="text"
@@ -280,11 +281,11 @@
             use:selectOnMount
             oninput={() => { error = ''; }}
             onkeydown={onKeydown}
-            onblur={onBlur}
             onpaste={onPaste}
         />
         {#if error}
-            <p id="breadcrumb-path-error" class="breadcrumb-path-error" role="alert" use:keepFieldFocus>{error}</p>
+            <!-- Focusable by pointer only, so selecting its text keeps the field open. -->
+            <p id="breadcrumb-path-error" class="breadcrumb-path-error" role="alert" tabindex="-1">{error}</p>
         {/if}
     </div>
 {:else}
@@ -315,8 +316,8 @@
         {/each}
     </nav>
     {#if onPathSubmit}
-        <!-- Takes no room until the pointer is over the path row or the button
-             has keyboard focus, so the trail keeps its place at rest. -->
+        <!-- Keeps its place but stays clear until the pointer is over the path
+             row or it has keyboard focus, so showing it moves no crumb. -->
         <button
             id="breadcrumb-edit"
             class="icon-btn back-btn breadcrumb-edit-btn"
@@ -340,22 +341,10 @@
        path field; the crumbs themselves still navigate. */
     .breadcrumb-path.is-editable { flex: 1 1 auto; cursor: text; }
 
-    .breadcrumb-edit-btn { flex: 0 0 auto; }
-    .breadcrumb-edit-btn:not(:focus-visible) {
-        width: 0;
-        min-width: 0;
-        padding: 0;
-        /* Cancels the row's gap, so an unfocused button moves nothing. */
-        margin-inline-start: calc(-1 * var(--space-1-5));
-        overflow: hidden;
-        opacity: 0;
-    }
+    .breadcrumb-edit-btn { flex: 0 0 auto; opacity: 0; }
+    .breadcrumb-edit-btn:focus-visible { opacity: 1; }
     @media (hover: hover) {
-        :global(.drive-breadcrumb:hover) .breadcrumb-edit-btn {
-            width: 28px;
-            margin-inline-start: 0;
-            opacity: 1;
-        }
+        :global(.drive-breadcrumb:hover) .breadcrumb-edit-btn { opacity: 1; }
     }
     :global(.main-content.trash-mode) .breadcrumb-edit-btn,
     :global(.main-content.photos-mode) .breadcrumb-edit-btn { display: none; }

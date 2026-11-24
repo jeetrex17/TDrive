@@ -43,9 +43,12 @@ test('explains a missing path, then selects the file a pasted path names', async
 
     // The space beside the crumbs opens the field, as in File Explorer.
     const trail = page.locator('#breadcrumb-path');
-    const box = await trail.boundingBox();
-    expect(box).not.toBeNull();
-    await page.mouse.click(box!.x + box!.width - 8, box!.y + box!.height / 2);
+    await trail.hover();
+    const nav = (await trail.boundingBox())!;
+    const crumb = (await trail.locator('.breadcrumb-link').last().boundingBox())!;
+    const gapStart = crumb.x + crumb.width;
+    expect(nav.x + nav.width - gapStart).toBeGreaterThan(10);
+    await page.mouse.click((gapStart + nav.x + nav.width) / 2, nav.y + nav.height / 2);
     const field = page.getByRole('textbox', { name: 'Folder path' });
     await expect(field).toBeFocused();
 
