@@ -69,7 +69,8 @@ export function parseDrivePath(text: string): ParsedDrivePath | DrivePathFailure
     const value = unmarked(stripQuotes(unmarked(line)));
     if (!value) return { kind: 'empty' };
     if (value.length > MAX_PATH_LENGTH) return { kind: 'too-long' };
-    if (/^file:\/\//i.test(value)) return { kind: 'local' };
+    // file:///home/me, file:/home/me and file:C:/Users: any file URI is local.
+    if (/^file:/i.test(value)) return { kind: 'local' };
     if (/^[a-z][a-z0-9+.-]*:\/\//i.test(value)) return { kind: 'link' };
     // Drive names can never hold a colon, so C:\... and \\server\... are paths
     // on this computer rather than in the drive.

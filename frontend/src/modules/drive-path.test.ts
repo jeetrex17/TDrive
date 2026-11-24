@@ -68,6 +68,8 @@ describe('parseDrivePath', () => {
         expect(parseDrivePath('""')).toEqual({ kind: 'empty' });
         expect(parseDrivePath('https://t.me/c/1/2')).toEqual({ kind: 'link' });
         expect(parseDrivePath('file:///home/me')).toEqual({ kind: 'local' });
+        expect(parseDrivePath('file:/home/me/Docs')).toEqual({ kind: 'local' });
+        expect(parseDrivePath('FILE:C:/Users/me')).toEqual({ kind: 'local' });
         expect(parseDrivePath('FILE://server/share')).toEqual({ kind: 'local' });
         expect(parseDrivePath('C:\\Users\\me')).toEqual({ kind: 'local' });
         expect(parseDrivePath('"d:/Photos"')).toEqual({ kind: 'local' });
