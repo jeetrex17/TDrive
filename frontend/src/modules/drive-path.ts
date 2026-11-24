@@ -49,6 +49,7 @@ export interface DrivePathSource {
 // Each segment costs one read of the drive, so a runaway paste stops here.
 const MAX_PATH_LENGTH = 4096;
 const MAX_SEGMENTS = 256;
+const BIDI_EDGES = /^[\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]+|[\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]+$/g;
 
 function stripQuotes(value: string): string {
     // File Explorer's "Copy as path" wraps the path in double quotes.
@@ -60,7 +61,10 @@ function stripQuotes(value: string): string {
 export function parseDrivePath(text: string): ParsedDrivePath | DrivePathFailure {
     // A paste can carry several lines; the path is the first one with text.
     const line = text.split(/\r\n|\r|\n/).map((part) => part.trim()).find((part) => part !== '') ?? '';
-    const value = stripQuotes(line);
+    // Windows puts an invisible direction mark before paths copied from a
+    // Properties or Security tab; it is never part of the path.
+    const unmarked = (part: string) => part.replace(BIDI_EDGES, '').trim();
+    const value = unmarked(stripQuotes(unmarked(line)));
     if (!value) return { kind: 'empty' };
     if (value.length > MAX_PATH_LENGTH) return { kind: 'too-long' };
     if (/^file:\/\//i.test(value)) return { kind: 'local' };

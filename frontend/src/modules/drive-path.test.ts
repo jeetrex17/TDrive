@@ -57,6 +57,10 @@ describe('parseDrivePath', () => {
         expect(parsed('\n  "/Team/Projects"  \nsecond line').segments).toEqual(['Team', 'Projects']);
         expect(parsed("'Team'").segments).toEqual(['Team']);
         expect(parsed('My Drive / Team / Projects').segments).toEqual(['My Drive', ' Team', ' Projects']);
+        // Windows prefixes paths copied from Properties with an invisible direction mark.
+        expect(parsed('\u200e /Team/Projects\u200f').segments).toEqual(['Team', 'Projects']);
+        expect(parseDrivePath('\u202aC:\\Users\\me')).toEqual({ kind: 'local' });
+        expect(parseDrivePath('\ufeff"\u202a/Users/me/Taxes"')).toMatchObject({ localHint: true });
     });
 
     it('refuses empty text, links, paths on this computer and runaway pastes', () => {
