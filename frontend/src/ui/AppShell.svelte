@@ -12,7 +12,7 @@
     import { openEncryptionSettingsModal } from '../modules/modals/encryption-settings';
     import { openLogoutModal } from '../modules/modals/logout';
     import { breadcrumbDrag, navigateBack, navigateHistory, navigateToIndex } from '../modules/navigation';
-    import { goToDrivePath } from '../modules/path-navigation';
+    import { forgetPendingFileFocus, goToDrivePath } from '../modules/path-navigation';
     import { folderHistoryState } from '../modules/folder-history';
     import { cancelTransfersInDirection, cancelUploadFile, clearHistory } from '../modules/notif-bell';
     import { ensureProfileLoaded } from '../modules/profile-menu';
@@ -209,6 +209,7 @@
                         canGoForward={$folderHistoryState.canGoForward}
                         drag={breadcrumbDrag}
                         onPathSubmit={goToDrivePath}
+                        onPathEditStart={forgetPendingFileFocus}
                     />
                 {/if}
                 <div id="gallery-title" class="gallery-title">Media</div>

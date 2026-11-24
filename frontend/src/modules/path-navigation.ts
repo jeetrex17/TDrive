@@ -28,12 +28,16 @@ export async function goToDrivePath(text: string, stillWanted: () => boolean = (
 
     const driveId = state.activeChannel?.id;
     if (!driveId || state.channelSwitchInProgress) return 'The drive is still opening. Try again in a moment.';
-    const current = () => request === latestRequest && stillWanted()
+    // Back, Forward or a click elsewhere while the path is read is the newer
+    // choice; the walk must not take the list back afterwards.
+    const startFolder = state.currentFolderId;
+    const stayed = () => state.currentFolderId === startFolder && state.virtualView === null;
+    const current = () => request === latestRequest && stillWanted() && stayed()
         && !state.channelSwitchInProgress && state.activeChannel?.id === driveId;
     // A walk the drive cut short (a switch or refresh under way) still owes
     // the field an answer, so the typed path is never dropped silently; one
-    // the field or a newer path gave up on does not.
-    const abandoned = () => (request === latestRequest && stillWanted()
+    // the field, a newer path or another folder gave up on does not.
+    const abandoned = () => (request === latestRequest && stillWanted() && stayed()
         ? 'The drive was busy while the path was opening. Try again.'
         : null);
 
@@ -41,9 +45,9 @@ export async function goToDrivePath(text: string, stillWanted: () => boolean = (
     try {
         target = await resolveDrivePath(parsed, [driveLabel(), 'My Drive'], {
             list: (parentId) => getFolderContents(parentId),
-            // The root also lists recent raw Telegram files; a failed read there
-            // only means none of them can match.
-            rootFiles: () => getFileList().catch(() => []),
+            // A failed read of the root's raw Telegram files is a failed read,
+            // not proof that the named file is missing.
+            rootFiles: () => getFileList(),
             current,
         });
     } catch (error) {
@@ -65,4 +69,12 @@ export async function goToDrivePath(text: string, stillWanted: () => boolean = (
     renderBreadcrumb();
     appActions().refreshFiles();
     return null;
+}
+
+/**
+ * Called when the path field opens again: a file a previous path named, still
+ * waiting for its row, must not take focus from the field the reader is typing in.
+ */
+export function forgetPendingFileFocus(): void {
+    if (state.pendingFocus?.type === 'file') state.pendingFocus = null;
 }
