@@ -230,9 +230,9 @@ describe('Breadcrumb path field', () => {
 
         // Files (Nautilus) adds only the bare name as plain text; the file URI wins.
         input.setSelectionRange(0, input.value.length);
-        expect(paste({ 'text/plain': 'Docs', 'text/uri-list': 'file:///home/me/Docs\r\n' }).defaultPrevented)
+        expect(paste({ 'text/plain': 'Reports', 'text/uri-list': 'file:///home/me/Reports\r\n' }).defaultPrevented)
             .toBe(true);
-        expect(input.value).toBe('file:///home/me/Docs');
+        expect(input.value).toBe('file:///home/me/Reports');
 
         // A web link copied with its text keeps the field's own paste.
         expect(paste({ 'text/plain': '/Team', 'text/uri-list': 'https://example.com/' }).defaultPrevented)
