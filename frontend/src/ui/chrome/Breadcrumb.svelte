@@ -6,7 +6,9 @@
     import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
     import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
     import PencilIcon from '@lucide/svelte/icons/pencil';
+    import { formatDrivePath } from '../../modules/drive-path';
     import { breadcrumbEditRequest, breadcrumbPath, type BreadcrumbDrag } from './breadcrumb-store';
+    import { openChannelKey } from '../channels/channel-store';
     import { sidebarState } from '../sidebar/sidebar-store';
 
     interface Props {
@@ -69,11 +71,11 @@
 
     function startEditing(): void {
         const { activeChannelId, virtualView } = get(sidebarState);
-        if (!onPathSubmit || editing || virtualView !== null) return;
+        if (!onPathSubmit || editing || virtualView !== null || get(openChannelKey) !== null) return;
         const active = document.activeElement;
         returnFocus = active instanceof HTMLElement && active !== document.body ? active : null;
         editingDrive = activeChannelId;
-        draft = '/' + $breadcrumbPath.map((entry) => entry.name).join('/');
+        draft = formatDrivePath($breadcrumbPath.map((entry) => entry.name));
         error = '';
         busy = false;
         editing = true;
@@ -115,7 +117,11 @@
     function onKeydown(event: KeyboardEvent): void {
         // Enter also confirms an IME composition; that one is not a submit.
         if (event.isComposing || event.keyCode === 229) return;
-        if (event.key === 'Escape') {
+        // Ctrl/Cmd+L again selects the whole path, as it does in File Explorer.
+        if (event.key.toLowerCase() === 'l' && !event.altKey && !event.shiftKey && event.ctrlKey !== event.metaKey) {
+            event.preventDefault();
+            (event.currentTarget as HTMLInputElement).select();
+        } else if (event.key === 'Escape') {
             event.preventDefault();
             event.stopPropagation();
             stopEditing(true);
@@ -132,6 +138,10 @@
     }
 
     function onPaste(event: ClipboardEvent): void {
+        if (busy) {
+            event.preventDefault();
+            return;
+        }
         const text = event.clipboardData?.getData('text/plain') ?? '';
         if (!/[\r\n]/.test(text)) return;
         // A text field joins pasted lines into one, which no path survives;
@@ -149,6 +159,13 @@
         input.select();
     }
 
+    // Selecting the message to copy it must not blur the field and close it.
+    function keepFieldFocus(message: HTMLElement) {
+        const hold = (event: MouseEvent) => event.preventDefault();
+        message.addEventListener('mousedown', hold);
+        return { destroy: () => message.removeEventListener('mousedown', hold) };
+    }
+
     // A click beside the crumbs, or on a separator, opens the field. Keyboard
     // users have Ctrl/Cmd+L and the Edit path button for the same thing.
     function editOnEmptyClick(nav: HTMLElement) {
@@ -164,21 +181,17 @@
         const request = $breadcrumbEditRequest;
         if (request === lastEditRequest) return;
         lastEditRequest = request;
-        untrack(() => {
-            if (editing) {
-                const input = document.getElementById('breadcrumb-path-input');
-                if (input instanceof HTMLInputElement) input.select();
-                return;
-            }
-            startEditing();
-        });
+        // An open field takes Ctrl/Cmd+L itself, in onKeydown.
+        untrack(startEditing);
     });
 
-    // Media, Trash or another drive take the place the path described.
+    // Media, Trash, a Telegram channel or another drive take the place the
+    // path described.
     $effect(() => {
         const { activeChannelId, virtualView } = $sidebarState;
+        const channel = $openChannelKey;
         untrack(() => {
-            if (editing && (virtualView !== null || activeChannelId !== editingDrive)) stopEditing(false);
+            if (editing && (virtualView !== null || channel !== null || activeChannelId !== editingDrive)) stopEditing(false);
         });
     });
 
@@ -271,7 +284,7 @@
             onpaste={onPaste}
         />
         {#if error}
-            <p id="breadcrumb-path-error" class="breadcrumb-path-error" role="alert">{error}</p>
+            <p id="breadcrumb-path-error" class="breadcrumb-path-error" role="alert" use:keepFieldFocus>{error}</p>
         {/if}
     </div>
 {:else}
@@ -302,8 +315,8 @@
         {/each}
     </nav>
     {#if onPathSubmit}
-        <!-- Takes no room until it has keyboard focus, so the trail keeps its
-             place; a pointer opens the field from the space beside the crumbs. -->
+        <!-- Takes no room until the pointer is over the path row or the button
+             has keyboard focus, so the trail keeps its place at rest. -->
         <button
             id="breadcrumb-edit"
             class="icon-btn back-btn breadcrumb-edit-btn"
@@ -336,6 +349,13 @@
         margin-inline-start: calc(-1 * var(--space-1-5));
         overflow: hidden;
         opacity: 0;
+    }
+    @media (hover: hover) {
+        :global(.drive-breadcrumb:hover) .breadcrumb-edit-btn {
+            width: 28px;
+            margin-inline-start: 0;
+            opacity: 1;
+        }
     }
     :global(.main-content.trash-mode) .breadcrumb-edit-btn,
     :global(.main-content.photos-mode) .breadcrumb-edit-btn { display: none; }
@@ -382,7 +402,9 @@
         border: 1px solid var(--glass-border);
         border-radius: var(--radius-md);
         box-shadow: var(--shadow-md);
-        color: var(--color-danger);
+        /* Body text keeps the contrast every theme checks; the red border on
+           the field already marks the error. */
+        color: var(--color-text);
         font-size: var(--type-sm);
     }
 </style>

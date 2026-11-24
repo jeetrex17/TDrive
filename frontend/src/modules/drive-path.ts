@@ -131,7 +131,7 @@ async function walk(
         }
 
         let files = matchName(listing.files, segment);
-        if (files.length === 0 && last && !folderOnly && parentId === '') {
+        if (files.length === 0 && last && parentId === '') {
             files = matchName(await source.rootFiles(), segment);
             if (!source.current()) return null;
         }

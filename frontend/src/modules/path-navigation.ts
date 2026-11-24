@@ -30,6 +30,11 @@ export async function goToDrivePath(text: string, stillWanted: () => boolean = (
     if (!driveId || state.channelSwitchInProgress) return 'The drive is still opening. Try again in a moment.';
     const current = () => request === latestRequest && stillWanted()
         && !state.channelSwitchInProgress && state.activeChannel?.id === driveId;
+    // A walk the drive itself cut short still owes the field an answer; one
+    // the field or a newer path gave up on does not.
+    const abandoned = () => (request === latestRequest && stillWanted()
+        ? 'The drive changed while the path was opening. Try again.'
+        : null);
 
     let target: Awaited<ReturnType<typeof resolveDrivePath>>;
     try {
@@ -41,16 +46,16 @@ export async function goToDrivePath(text: string, stillWanted: () => boolean = (
             current,
         });
     } catch (error) {
-        if (!current()) return null;
+        if (!current()) return abandoned();
         console.error('Could not open the typed path:', error);
         return 'Could not read the drive. Try again.';
     }
-    if (!target || !current()) return null;
+    if (!target || !current()) return abandoned();
     if (target.kind !== 'folder' && target.kind !== 'file') return describeDrivePathFailure(target, driveLabel());
 
     // The same exits a search result takes: the path replaces whatever the
     // list was showing.
-    if (state.searchQuery.trim()) clearSearch({ refresh: false });
+    if (state.searchQuery) clearSearch({ refresh: false });
     closeChannel();
     state.folderPath = target.path.map(({ id, name }) => ({ id, name }));
     state.currentFolderId = target.path[target.path.length - 1]?.id ?? '';
