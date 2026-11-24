@@ -82,6 +82,7 @@ function pathTo(index: FolderIndex, folderId: string): DrivePathEntry[] | null {
 
 let pending: Promise<DrivePathEntry[] | null> | null = null;
 let stepsTaken = 0;
+let interruptions = 0;
 
 /**
  * Counts the back and forward steps asked for, so work that started before
@@ -89,6 +90,11 @@ let stepsTaken = 0;
  */
 export function folderHistorySteps(): number {
     return stepsTaken;
+}
+
+/** A newer navigation landed: a step still resolving must not take the list away. */
+export function interruptFolderHistoryStep(): void {
+    interruptions += 1;
 }
 
 /**
@@ -99,6 +105,9 @@ export function stepFolderHistory(delta: -1 | 1): Promise<DrivePathEntry[] | nul
     // A press while the previous step is still resolving is dropped, so a step
     // is never applied twice.
     if (pending) return Promise.resolve(null);
+    // Nowhere to go: answered at once, and not counted as a newer choice.
+    const driveId = activeDriveId();
+    if (!driveId || entries[position]?.driveId !== driveId || !entries[position + delta]) return Promise.resolve(null);
     stepsTaken += 1;
     pending = step(delta).finally(() => {
         pending = null;
@@ -110,6 +119,7 @@ export function stepFolderHistory(delta: -1 | 1): Promise<DrivePathEntry[] | nul
 async function step(delta: -1 | 1): Promise<DrivePathEntry[] | null> {
     const driveId = activeDriveId();
     const startFolderId = state.currentFolderId;
+    const startInterruptions = interruptions;
     if (!driveId || entries[position]?.driveId !== driveId) return null;
 
     let index: FolderIndex;
@@ -119,6 +129,7 @@ async function step(delta: -1 | 1): Promise<DrivePathEntry[] | null> {
         return null;
     }
     if (activeDriveId() !== driveId || state.currentFolderId !== startFolderId) return null;
+    if (interruptions !== startInterruptions) return null;
 
     for (let target = position + delta; target >= 0 && target < entries.length; ) {
         const path = pathTo(index, entries[target].folderId);

@@ -2,8 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const api = vi.hoisted(() => ({ getFolderContents: vi.fn(), getFileList: vi.fn() }));
 const refreshFiles = vi.hoisted(() => vi.fn());
-const history = vi.hoisted(() => ({ steps: 0 }));
-vi.mock('./folder-history', () => ({ folderHistorySteps: () => history.steps }));
+const history = vi.hoisted(() => ({ steps: 0, interrupt: vi.fn() }));
+vi.mock('./folder-history', () => ({
+    folderHistorySteps: () => history.steps,
+    interruptFolderHistoryStep: history.interrupt,
+}));
 vi.mock('../api', () => api);
 vi.mock('../ui/channels/channel-store', () => ({ closeChannel: vi.fn() }));
 vi.mock('./app-actions', () => ({ appActions: () => ({ refreshFiles }) }));
@@ -22,6 +25,8 @@ beforeEach(() => {
     api.getFolderContents.mockReset();
     api.getFileList.mockReset();
     refreshFiles.mockReset();
+    history.steps = 0;
+    history.interrupt.mockReset();
     api.getFolderContents.mockImplementation(async (id: string) => listings[id] ?? { folders: [], files: [] });
     api.getFileList.mockResolvedValue([]);
     state.activeChannel = { id: 1, title: 'Personal' } as never;
@@ -54,6 +59,8 @@ describe('goToDrivePath', () => {
         expect(state.folderPath).toEqual([{ id: 'd:team', name: 'Team' }]);
         expect(state.pendingFocus).toEqual({ type: 'file', id: '4' });
         expect(refreshFiles).toHaveBeenCalledTimes(1);
+        // A Back still resolving must not take the list away afterwards.
+        expect(history.interrupt).toHaveBeenCalledTimes(1);
     });
 
     it('leaves the list alone when another folder opens while the path is read', async () => {
@@ -76,6 +83,7 @@ describe('goToDrivePath', () => {
         await expect(pending).resolves.toBeNull();
         expect(state.currentFolderId).toBe('');
         expect(refreshFiles).not.toHaveBeenCalled();
+        expect(history.interrupt).not.toHaveBeenCalled();
     });
 
     it('still answers a walk the drive cut short', async () => {

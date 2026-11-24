@@ -7,7 +7,7 @@ import { state } from '../state';
 import { closeChannel } from '../ui/channels/channel-store';
 import { appActions } from './app-actions';
 import { describeDrivePathFailure, parseDrivePath, resolveDrivePath } from './drive-path';
-import { folderHistorySteps } from './folder-history';
+import { folderHistorySteps, interruptFolderHistoryStep } from './folder-history';
 import { renderBreadcrumb } from './navigation';
 import { clearSearch } from './search';
 
@@ -65,6 +65,9 @@ export async function goToDrivePath(text: string, stillWanted: () => boolean = (
     // The same exits a search result takes: the path replaces whatever the
     // list was showing.
     if (state.searchQuery) clearSearch({ refresh: false });
+    // Even a file in the folder already open is a newer choice than a Back
+    // asked for earlier and still resolving.
+    interruptFolderHistoryStep();
     closeChannel();
     state.folderPath = target.path.map(({ id, name }) => ({ id, name }));
     state.currentFolderId = target.path[target.path.length - 1]?.id ?? '';
