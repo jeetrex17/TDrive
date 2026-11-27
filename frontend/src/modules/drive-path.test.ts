@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
     describeDrivePathFailure,
+    firstLine,
     formatDrivePath,
     matchName,
     parseDrivePath,
@@ -80,6 +81,21 @@ describe('parseDrivePath', () => {
         expect(parseDrivePath('\u200e'.repeat(50_000) + 'x')).toEqual({ kind: 'too-long' });
         expect(parseDrivePath('\u200e'.repeat(8000) + '/Team')).toEqual({ segments: ['Team'], folderOnly: false });
         expect(Date.now() - started).toBeLessThan(1000);
+    });
+});
+
+describe('firstLine', () => {
+    it('returns the first line with text, across line endings', () => {
+        expect(firstLine('\r\n  \r \n  /Team/Q4  \nnext')).toBe('/Team/Q4');
+        expect(firstLine('one\rtwo')).toBe('one');
+        expect(firstLine('only')).toBe('only');
+        expect(firstLine(' \n\t\r\n')).toBe('');
+        expect(firstLine('')).toBe('');
+    });
+
+    it('skips uri-list comments only when asked', () => {
+        expect(firstLine('# copied\r\nfile:///home/me', true)).toBe('file:///home/me');
+        expect(firstLine('# copied\nfile:///home/me')).toBe('# copied');
     });
 });
 
@@ -178,8 +194,11 @@ describe('resolveDrivePath', () => {
     });
 
     it('reads a leading drive name as the root unless the root has that folder', async () => {
-        const search = await resolveDrivePath(parsed('My Drive / Team / Projects'), roots, source());
+        const src = source();
+        const search = await resolveDrivePath(parsed('My Drive / Team / Projects'), roots, src);
         expect(search).toMatchObject({ kind: 'folder', path: [{ id: 'd:team' }, { id: 'd:projects' }] });
+        // The retry from the root reuses the root listing it already read.
+        expect(src.list.mock.calls.map(([id]) => id)).toEqual(['', 'd:team']);
         await expect(resolveDrivePath(parsed('/Personal'), roots, source())).resolves.toEqual({ kind: 'folder', path: [] });
         await expect(resolveDrivePath(parsed('/personal/Team/'), roots, source())).resolves.toMatchObject({ kind: 'folder', path: [{ id: 'd:team' }] });
 

@@ -6,7 +6,7 @@
     import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
     import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
     import TextCursorInputIcon from '@lucide/svelte/icons/text-cursor-input';
-    import { formatDrivePath } from '../../modules/drive-path';
+    import { firstLine, formatDrivePath } from '../../modules/drive-path';
     import { breadcrumbEditRequest, breadcrumbPath, type BreadcrumbDrag } from './breadcrumb-store';
     import { openChannelKey } from '../channels/channel-store';
     import { sidebarState } from '../sidebar/sidebar-store';
@@ -172,8 +172,6 @@
             event.preventDefault();
             return;
         }
-        const firstLine = (text: string, skipComments: boolean): string => text.split(/\r\n|\r|\n/)
-            .map((part) => part.trim()).find((part) => part !== '' && !(skipComments && part.startsWith('#'))) ?? '';
         const plain = event.clipboardData?.getData('text/plain') ?? '';
         // Linux file managers copy a location as a URI list, with only the bare
         // name (Files) or nothing as plain text. The file URI says where it is,
@@ -184,7 +182,7 @@
         // A text field joins pasted lines into one, which no path survives;
         // keep the first line that has anything on it.
         event.preventDefault();
-        const line = fromList ? uri : firstLine(plain, false);
+        const line = fromList ? uri : firstLine(plain);
         const input = event.currentTarget as HTMLInputElement;
         input.setRangeText(line, input.selectionStart ?? input.value.length, input.selectionEnd ?? input.value.length, 'end');
         draft = input.value;

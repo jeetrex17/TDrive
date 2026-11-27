@@ -46,7 +46,32 @@ export interface DrivePathSource {
 // Each segment costs one read of the drive, so a runaway paste stops here.
 const MAX_PATH_LENGTH = 4096;
 const MAX_SEGMENTS = 256;
-const BIDI_EDGES = /^[\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]+|[\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]+$/g;
+const BIDI_MARK = /[\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]/;
+
+/** Drops invisible direction marks from both ends, then spaces; linear in the marks. */
+function unmarked(part: string): string {
+    let start = 0;
+    let end = part.length;
+    while (start < end && BIDI_MARK.test(part[start])) start += 1;
+    while (end > start && BIDI_MARK.test(part[end - 1])) end -= 1;
+    return part.slice(start, end).trim();
+}
+
+/**
+ * The first line of `text` that has anything on it, trimmed; with
+ * `skipComments`, lines starting with # (as in a text/uri-list) are skipped too.
+ * Stops at that line, so a long paste is not split up whole.
+ */
+export function firstLine(text: string, skipComments = false): string {
+    const breaks = /\r\n|\r|\n/g;
+    for (let start = 0; ; ) {
+        const match = breaks.exec(text);
+        const line = text.slice(start, match ? match.index : text.length).trim();
+        if (line !== '' && !(skipComments && line.startsWith('#'))) return line;
+        if (!match) return '';
+        start = breaks.lastIndex;
+    }
+}
 
 function stripQuotes(value: string): string {
     // File Explorer's "Copy as path" wraps the path in double quotes.
@@ -57,12 +82,11 @@ function stripQuotes(value: string): string {
 /** Reads a typed or pasted path into the folder names it walks through. */
 export function parseDrivePath(text: string): ParsedDrivePath | DrivePathFailure {
     // A paste can carry several lines; the path is the first one with text.
-    const line = text.split(/\r\n|\r|\n/).map((part) => part.trim()).find((part) => part !== '') ?? '';
-    // Checked before the marks are stripped, which slows on a huge pasted run of them.
+    const line = firstLine(text);
+    // A runaway paste is refused before any more work on it.
     if (line.length > MAX_PATH_LENGTH * 2) return { kind: 'too-long' };
     // Windows puts an invisible direction mark before paths copied from a
     // Properties or Security tab; it is never part of the path.
-    const unmarked = (part: string) => part.replace(BIDI_EDGES, '').trim();
     const value = unmarked(stripQuotes(unmarked(line)));
     if (!value) return { kind: 'empty' };
     if (value.length > MAX_PATH_LENGTH) return { kind: 'too-long' };
@@ -92,29 +116,30 @@ export function parseDrivePath(text: string): ParsedDrivePath | DrivePathFailure
     return { segments, folderOnly: segments.length > 0 && /[\\/]\s*$/.test(value) };
 }
 
-function looseKey(name: string): string {
-    return name.normalize('NFC').toLowerCase();
-}
-
 /**
  * The entries a typed name means: an exact match, else ones that differ only
  * in case or Unicode form. The drive keeps sibling names unique under that
  * looser comparison, so more than one result only comes from raw Telegram
- * files or a name this approximation folds differently.
+ * files or a name this approximation folds differently. One pass over the
+ * entries, normalizing each name once.
  */
 export function matchName<T extends { name: string }>(entries: readonly T[], typed: string): T[] {
-    const candidates = typed === typed.trimStart() ? [typed] : [typed, typed.trimStart()];
-    for (const candidate of candidates) {
-        const exact = candidate.normalize('NFC');
-        const found = entries.filter((entry) => entry.name.normalize('NFC') === exact);
-        if (found.length) return found;
+    const trimmed = typed.trimStart();
+    // In order of preference: exact, exact without a leading space, then the
+    // same two compared loosely.
+    const exact = [typed.normalize('NFC'), trimmed.normalize('NFC')];
+    const loose = exact.map((name) => name.toLowerCase());
+    const tiers = trimmed === typed ? 1 : 2;
+    const found: T[][] = [[], [], [], []];
+    for (const entry of entries) {
+        const name = entry.name.normalize('NFC');
+        const key = name.toLowerCase();
+        for (let tier = 0; tier < tiers; tier += 1) {
+            if (name === exact[tier]) found[tier].push(entry);
+            else if (key === loose[tier]) found[2 + tier].push(entry);
+        }
     }
-    for (const candidate of candidates) {
-        const key = looseKey(candidate);
-        const found = entries.filter((entry) => looseKey(entry.name) === key);
-        if (found.length) return found;
-    }
-    return [];
+    return found.find((matches) => matches.length > 0) ?? [];
 }
 
 async function walk(
@@ -168,7 +193,19 @@ export async function resolveDrivePath(
     rootNames: readonly string[],
     source: DrivePathSource,
 ): Promise<DrivePathTarget | DrivePathFailure | null> {
-    const result = await walk(parsed.segments, parsed.folderOnly, source);
+    // The retry below starts from the root again; it must not read it twice.
+    const listings = new Map<string, Promise<DriveListing>>();
+    let rootFiles: Promise<DrivePathFile[]> | null = null;
+    const cached: DrivePathSource = {
+        list: (parentId) => {
+            let listing = listings.get(parentId);
+            if (!listing) listings.set(parentId, listing = source.list(parentId));
+            return listing;
+        },
+        rootFiles: () => (rootFiles ??= source.rootFiles()),
+        current: source.current,
+    };
+    const result = await walk(parsed.segments, parsed.folderOnly, cached);
     const first = parsed.segments[0];
     const missedAtRoot = result !== null && (result.kind === 'not-found' || result.kind === 'not-a-folder')
         && result.parent.length === 0;
@@ -176,7 +213,7 @@ export async function resolveDrivePath(
         return result;
     }
     const rest = parsed.segments.slice(1);
-    return walk(rest, parsed.folderOnly && rest.length > 0, source);
+    return walk(rest, parsed.folderOnly && rest.length > 0, cached);
 }
 
 /** The text the path field shows for a folder path. */
