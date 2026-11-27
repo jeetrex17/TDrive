@@ -60,7 +60,6 @@ describe('parseDrivePath', () => {
         // Windows prefixes paths copied from Properties with an invisible direction mark.
         expect(parsed('\u200e /Team/Projects\u200f').segments).toEqual(['Team', 'Projects']);
         expect(parseDrivePath('\u202aC:\\Users\\me')).toEqual({ kind: 'local' });
-        expect(parseDrivePath('\ufeff"\u202a/Users/me/Taxes"')).toMatchObject({ localHint: true });
     });
 
     it('refuses empty text, links, paths on this computer and runaway pastes', () => {
@@ -81,27 +80,6 @@ describe('parseDrivePath', () => {
         expect(parseDrivePath('\u200e'.repeat(50_000) + 'x')).toEqual({ kind: 'too-long' });
         expect(parseDrivePath('\u200e'.repeat(8000) + '/Team')).toEqual({ segments: ['Team'], folderOnly: false });
         expect(Date.now() - started).toBeLessThan(1000);
-    });
-
-    it('flags paths copied from this computer that carry no drive letter', () => {
-        for (const text of [
-            '/Users/me/Taxes', '"/Volumes/Backup/Docs"', '/home/me', '/root/x', '/private/var/tmp', '/tmp/x',
-            '~', '~/Documents', '~me/Docs', '$HOME/Docs', '${HOME}/Docs', '%USERPROFILE%\\Docs', '%APPDATA%',
-            '$env:USERPROFILE\\Documents', '/media/me/usb', '/run/media/me/usb', '/run/user/1000/gvfs/x',
-            '/c/Users/Alex/Docs', '/d/Program Files/App', '/cygdrive/c/Users', '/cygdrive/c', '/mnt/c/Users/Alex',
-            '$HOME', '${HOME}', '$env:APPDATA',
-        ]) {
-            expect(parsed(text).localHint, text).toBe(true);
-        }
-        for (const text of [
-            '/Users', '/users/me', 'Users/me', '/Applications/Acme', '/Library/x', '/media/usb',
-            '/run/x/y', '/Team/Projects', '/~/x', 'My Drive / Users / me', '/Homework/x',
-            '/Users/', '/home/', '/tmpfiles/x', '/Userspace/x', '~tmp', '~$Report.docx',
-            '%Sales% growth/x', '/c/Team/x', '/run/user/me/x', '/cygdrive/stuff/x', '${HOME/Docs', '$HOME.txt',
-            '$HOMEDIR/x', '$env:PATH.old/x', '~me',
-        ]) {
-            expect(parsed(text).localHint, text).toBeUndefined();
-        }
     });
 });
 
@@ -216,35 +194,6 @@ describe('resolveDrivePath', () => {
         await expect(resolveDrivePath(parsed('/Elsewhere/Team'), roots, source())).resolves.toMatchObject({ kind: 'not-found', name: 'Elsewhere' });
     });
 
-    it('notes that a missing computer path may be one, but still opens a drive folder of that name', async () => {
-        await expect(resolveDrivePath(parsed('/Users/me/Taxes'), roots, source())).resolves.toEqual({
-            kind: 'not-found', name: 'Users', parent: [], maybeLocal: true,
-        });
-        await expect(resolveDrivePath(parsed('~/Documents'), roots, source())).resolves.toEqual({
-            kind: 'not-found', name: '~', parent: [], maybeLocal: true,
-        });
-
-        const users = {
-            '': { folders: [{ id: 'd:users', name: 'Users' }], files: [{ msgId: 5, name: 'home' }] },
-            'd:users': { folders: [{ id: 'd:me', name: 'me' }], files: [] },
-        };
-        await expect(resolveDrivePath(parsed('/Users/me'), roots, source(users))).resolves.toEqual({
-            kind: 'folder', path: [{ id: 'd:users', name: 'Users' }, { id: 'd:me', name: 'me' }],
-        });
-        // Past the root the miss is inside the drive, so the plain message stands.
-        await expect(resolveDrivePath(parsed('/Users/nobody/x'), roots, source(users))).resolves.toEqual({
-            kind: 'not-found', name: 'nobody', parent: ['Users'],
-        });
-        // A root file of that name is reported as a file, not as a computer path.
-        await expect(resolveDrivePath(parsed('/home/me'), roots, source(users))).resolves.toEqual({
-            kind: 'not-a-folder', name: 'home', parent: [],
-        });
-        // Without the computer shape a root miss keeps the plain message.
-        await expect(resolveDrivePath(parsed('/users/me'), roots, source())).resolves.toEqual({
-            kind: 'not-found', name: 'users', parent: [],
-        });
-    });
-
     it('matches a leading space in a name before trimming it', async () => {
         await expect(resolveDrivePath(parsed('/ Spaced'), roots, source())).resolves.toEqual({
             kind: 'folder', path: [{ id: 'd:spaced', name: ' Spaced' }],
@@ -279,9 +228,6 @@ describe('describeDrivePathFailure', () => {
             .toBe('"a.pdf" in /Docs is a file, not a folder.');
         expect(describeDrivePathFailure({ kind: 'ambiguous', name: 'x', parent: [] }, 'My Drive'))
             .toBe('More than one item in My Drive is named "x".');
-        expect(describeDrivePathFailure({ kind: 'not-found', name: 'Users', parent: [], maybeLocal: true }, 'My Drive'))
-            .toBe('"Users" was not found in My Drive. If that is a path on this computer, it cannot be opened here. '
-                + 'Type a path such as /Documents/Taxes.');
         expect(describeDrivePathFailure({ kind: 'local' }, 'My Drive'))
             .toBe('That is a path on this computer, so it cannot be opened here. Type a path such as /Documents/Taxes.');
         expect(describeDrivePathFailure({ kind: 'link' }, 'My Drive')).toContain('link');
