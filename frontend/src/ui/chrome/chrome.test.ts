@@ -72,6 +72,19 @@ describe('Breadcrumb', () => {
         expect((body.match(/aria-current="location"/g) || [])).toHaveLength(1);
         expect(body).toContain('data-index="1"');
     });
+
+    it('offers the path field only when it can open a path', () => {
+        const plain = render(Breadcrumb, { props: breadcrumbProps }).body;
+        expect(plain).not.toContain('breadcrumb-edit');
+        expect(plain).not.toContain('is-editable');
+
+        const { body } = render(Breadcrumb, { props: { ...breadcrumbProps, onPathSubmit: async () => null } });
+        expect(body).toMatch(/id="breadcrumb-edit"[^>]*aria-label="Edit path"/);
+        expect(body).toMatch(/aria-keyshortcuts="(Control\+L|Meta\+L)"/);
+        expect(body).toContain('is-editable');
+        // The trail renders until the field is opened.
+        expect(body).not.toContain('breadcrumb-path-input');
+    });
 });
 
 describe('Breadcrumb history buttons', () => {

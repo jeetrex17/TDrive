@@ -2,6 +2,7 @@ import { get } from 'svelte/store';
 import { isMobilePlatform } from '../api';
 import { state } from '../state';
 import { isApplePlatform } from '../utils';
+import { requestBreadcrumbEdit } from '../ui/chrome/breadcrumb-store';
 import { openChannelKey } from '../ui/channels/channel-store';
 import { contextMenuState } from '../ui/menus/context-menu-store';
 import { hasActiveModal } from '../ui/modals/modal-a11y';
@@ -30,20 +31,29 @@ function handleFolderShortcut(event: KeyboardEvent): void {
     const parent = !event.ctrlKey && !event.shiftKey && (parentArrow || parentBackspace);
     const search = event.key.toLowerCase() === 'f' && !event.altKey && !event.shiftKey
         && (event.ctrlKey !== event.metaKey);
+    // File Explorer's Ctrl+L: type or paste a path into the breadcrumb.
+    const editPath = event.key.toLowerCase() === 'l' && !event.altKey && !event.shiftKey
+        && (event.ctrlKey !== event.metaKey);
     const history = historyStep(event);
-    if (!parent && !search && history === 0) return;
+    if (!parent && !search && !editPath && history === 0) return;
     if (!folderViewOwnsInput()) return;
 
     const target = event.target instanceof Element ? event.target : null;
-    const editor = target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"]');
+    // The breadcrumb's path field counts as one editor with its message.
+    const editor = target?.closest('input, textarea, select, [contenteditable]:not([contenteditable="false"]), [role="textbox"], .breadcrumb-path-editor');
     const input = document.getElementById('search-input');
-    if (editor && (!search || editor !== input)) return;
+    if (editor && (!(search || editPath) || editor !== input)) return;
 
     if (search) {
         if (!(input instanceof HTMLInputElement) || input.disabled || !isVisible(input)) return;
         event.preventDefault();
         input.focus();
         input.select();
+        return;
+    }
+    if (editPath) {
+        event.preventDefault();
+        requestBreadcrumbEdit();
         return;
     }
     if (state.searchQuery.trim()) return;

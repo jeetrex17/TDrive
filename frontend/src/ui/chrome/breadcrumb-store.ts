@@ -20,3 +20,11 @@ export interface BreadcrumbDrag {
 // truth (several modules mutate it); modules/navigation.ts mirrors it here
 // on every renderBreadcrumb() call.
 export const breadcrumbPath = writable<BreadcrumbEntry[]>([]);
+
+// Bumped to ask the breadcrumb to open its path field (Ctrl/Cmd+L); the
+// component acts on each new value.
+export const breadcrumbEditRequest = writable(0);
+
+export function requestBreadcrumbEdit(): void {
+    breadcrumbEditRequest.update((request) => request + 1);
+}

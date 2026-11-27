@@ -37,6 +37,13 @@ other item actions. Alt+Left/Right (Cmd+[/] on Apple) step through
 `folder-history.ts`, which `renderBreadcrumb` feeds with every folder shown in
 the active drive and resets on a drive switch.
 
+Ctrl/Cmd+L asks the desktop breadcrumb, through `breadcrumbEditRequest`, to
+open its path field; a click beside the crumbs does the same. The breadcrumb
+only edits text and shows the answer. `drive-path.ts` holds the parsing and
+name-matching rules and walks the drive one folder listing per path segment.
+`path-navigation.ts` supplies those reads, gives way to a Back, Forward or other
+folder opened meanwhile, and navigates.
+
 Playback engines, native player geometry and transport lifetime remain in the
 TypeScript video controller. Svelte owns the rendered controls and shell. The
 [media architecture](../../../docs/architecture/media-streaming.md) describes the transport
