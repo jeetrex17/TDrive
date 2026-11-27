@@ -52,8 +52,8 @@ export async function goToDrivePath(text: string, stillWanted: () => boolean = (
     try {
         target = await resolveDrivePath(parsed, [driveLabel(), 'My Drive'], {
             list: (parentId) => getFolderContents(parentId),
-            // A failed read of the root's raw Telegram files is a failed read,
-            // not proof that the named file is missing.
+            // The backend answers a failed read of the raw Telegram files with
+            // an empty list, so such a file then reads as not found.
             rootFiles: () => getFileList(),
             current,
         });
