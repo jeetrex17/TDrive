@@ -5,7 +5,7 @@
     import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
     import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
     import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
-    import PencilIcon from '@lucide/svelte/icons/pencil';
+    import TextCursorInputIcon from '@lucide/svelte/icons/text-cursor-input';
     import { formatDrivePath } from '../../modules/drive-path';
     import { breadcrumbEditRequest, breadcrumbPath, type BreadcrumbDrag } from './breadcrumb-store';
     import { openChannelKey } from '../channels/channel-store';
@@ -94,7 +94,10 @@
         if (!restoreFocus) return;
         const target = returnFocus?.isConnected ? returnFocus : null;
         returnFocus = null;
-        void tick().then(() => (target ?? editButton)?.focus());
+        // Reopened meanwhile: the field keeps the focus.
+        void tick().then(() => {
+            if (!editing) (target ?? editButton)?.focus();
+        });
     }
 
     async function submit(): Promise<void> {
@@ -291,35 +294,15 @@
 >
     <ArrowUpIcon size={18} strokeWidth={2} aria-hidden="true" />
 </button>
-{#if editing}
-    <div class="breadcrumb-path-editor" use:closeOnLeave>
-        <input
-            id="breadcrumb-path-input"
-            type="text"
-            bind:value={draft}
-            aria-label="Folder path"
-            aria-invalid={error ? 'true' : undefined}
-            aria-describedby={error ? 'breadcrumb-path-error' : undefined}
-            aria-busy={busy ? 'true' : undefined}
-            readonly={busy}
-            autocomplete="off"
-            spellcheck="false"
-            use:selectOnMount
-            oninput={() => { error = ''; }}
-            onkeydown={onKeydown}
-            onpaste={onPaste}
-        />
-        {#if error}
-            <!-- Focusable by pointer only, so selecting its text keeps the field open. -->
-            <p id="breadcrumb-path-error" class="breadcrumb-path-error" role="alert" tabindex="-1">{error}</p>
-        {/if}
-    </div>
-{:else}
+<!-- While the field is open the trail stays in place, unseen, and the field
+     lies over it, so opening it resizes nothing else in the row. -->
+<div class="breadcrumb-trail" class:is-editing={editing}>
     <nav
         id="breadcrumb-path"
         class="breadcrumb-path"
         class:is-editable={Boolean(onPathSubmit)}
         aria-label="Folder path"
+        aria-hidden={editing ? 'true' : undefined}
         use:editOnEmptyClick
     >
         {#each items as item, idx (item.index === -1 ? 'root' : item.id)}
@@ -354,14 +337,49 @@
             bind:this={editButton}
             onclick={startEditing}
         >
-            <PencilIcon size={16} strokeWidth={2} aria-hidden="true" />
+            <TextCursorInputIcon size={16} strokeWidth={2} aria-hidden="true" />
         </button>
     {/if}
-{/if}
+    {#if editing}
+        <div class="breadcrumb-path-editor" use:closeOnLeave>
+            <input
+                id="breadcrumb-path-input"
+                type="text"
+                bind:value={draft}
+                aria-label="Folder path"
+                aria-invalid={error ? 'true' : undefined}
+                aria-describedby={error ? 'breadcrumb-path-error' : undefined}
+                aria-busy={busy ? 'true' : undefined}
+                readonly={busy}
+                autocomplete="off"
+                spellcheck="false"
+                use:selectOnMount
+                oninput={() => { error = ''; }}
+                onkeydown={onKeydown}
+                onpaste={onPaste}
+            />
+            {#if error}
+                <!-- Focusable by pointer only, so selecting its text keeps the field open. -->
+                <p id="breadcrumb-path-error" class="breadcrumb-path-error" role="alert" tabindex="-1">{error}</p>
+            {/if}
+        </div>
+    {/if}
+</div>
 
 <style>
     /* At the root there is nowhere to go back to, and the title starts flush. */
     .is-hidden { display: none; }
+
+    .breadcrumb-trail {
+        position: relative;
+        display: flex;
+        flex: 1 1 auto;
+        align-items: center;
+        gap: var(--space-1-5);
+        min-width: 0;
+        min-height: var(--toolbar-control);
+    }
+    .breadcrumb-trail.is-editing > :not(.breadcrumb-path-editor) { visibility: hidden; }
 
     /* The trail fills the row so the space beside the crumbs can open the
        path field; the crumbs themselves still navigate. */
@@ -377,13 +395,14 @@
     @media (hover: none) {
         .breadcrumb-edit-btn { opacity: 1; }
     }
-    :global(.main-content.trash-mode) .breadcrumb-edit-btn,
-    :global(.main-content.photos-mode) .breadcrumb-edit-btn { display: none; }
+    :global(.main-content.trash-mode) .breadcrumb-trail,
+    :global(.main-content.photos-mode) .breadcrumb-trail { display: none; }
 
     .breadcrumb-path-editor {
-        flex: 1 1 0;
-        min-width: 0;
-        position: relative;
+        position: absolute;
+        inset: 0;
+        display: flex;
+        align-items: center;
     }
 
     /* Matches the search field beside it, without the room for its icon. */

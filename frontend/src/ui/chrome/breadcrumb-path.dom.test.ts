@@ -97,7 +97,8 @@ describe('Breadcrumb path field', () => {
         expect(input.value).toBe('/Docs/Taxes');
         expect(document.activeElement).toBe(input);
         expect([input.selectionStart, input.selectionEnd]).toEqual([0, input.value.length]);
-        expect(document.getElementById('breadcrumb-path')).toBeNull();
+        // The trail keeps its place under the field, hidden from assistive tech.
+        expect(document.getElementById('breadcrumb-path')?.getAttribute('aria-hidden')).toBe('true');
     });
 
     it('leaves crumb clicks to navigation', () => {
@@ -130,7 +131,7 @@ describe('Breadcrumb path field', () => {
 
         expect(submit).toHaveBeenCalledWith('/Team/Q4', expect.any(Function));
         expect(field()).toBeNull();
-        expect(document.getElementById('breadcrumb-path')).not.toBeNull();
+        expect(document.getElementById('breadcrumb-path')?.hasAttribute('aria-hidden')).toBe(false);
     });
 
     it('keeps the text and says why when the path does not open', async () => {
@@ -174,7 +175,7 @@ describe('Breadcrumb path field', () => {
         message.dispatchEvent(new FocusEvent('focusout', { bubbles: true, relatedTarget: outside }));
         flushSync();
         expect(field()).toBeNull();
-        expect(document.getElementById('breadcrumb-path')).not.toBeNull();
+        expect(document.getElementById('breadcrumb-path')?.hasAttribute('aria-hidden')).toBe(false);
     });
 
     it('cancels on Escape from the message and leaves its other keys alone', async () => {
