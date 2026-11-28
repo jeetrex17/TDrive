@@ -37,11 +37,11 @@
     const SECTIONS: ReadonlyArray<{ id: SettingsSection; labelKey: MessageKey; icon: typeof PaletteIcon }> = [
         { id: 'account', labelKey: 'account', icon: CircleUserIcon },
         { id: 'appearance', labelKey: 'appearance', icon: PaletteIcon },
+        { id: 'language', labelKey: 'language', icon: LanguagesIcon },
         { id: 'backup', labelKey: 'photoBackup', icon: CloudUploadIcon },
         { id: 'encryption', labelKey: 'encryption', icon: LockKeyholeIcon },
         { id: 'mount', labelKey: 'mount', icon: HardDriveIcon },
         { id: 'updates', labelKey: 'updates', icon: DownloadIcon },
-        { id: 'language', labelKey: 'language', icon: LanguagesIcon },
     ];
 
     // Mount only has a setting where drives have letters: Windows.
