@@ -26,14 +26,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
-            platform: linux/amd64
-
+          # Desktop test/release builds are Windows-only for now.
           - os: windows-latest
             platform: windows/amd64
-
-          - os: macos-15
-            platform: darwin/arm64
 
     steps:
       - name: Checkout
