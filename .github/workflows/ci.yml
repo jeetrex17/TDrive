@@ -437,12 +437,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-22.04
-            platform: linux/amd64
           - os: windows-latest
             platform: windows/amd64
-          - os: macos-15
-            platform: darwin/arm64
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
