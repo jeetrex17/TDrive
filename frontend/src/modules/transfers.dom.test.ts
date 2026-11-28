@@ -670,7 +670,7 @@ describe('the picker window', () => {
     it('rejects an oversized selection before starting upload work', async () => {
         app.SelectFiles.mockResolvedValue(['/tmp/huge']);
         app.PlanImport.mockResolvedValue({
-            files: 12_000,
+            files: 100_000,
             folders: 1,
             archives: 0,
             limitExceeded: true,
