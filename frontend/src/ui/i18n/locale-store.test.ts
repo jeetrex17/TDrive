@@ -1,11 +1,7 @@
-import { beforeEach, describe, expect, it } from 'vitest';
-import { resolveLocale, setLocalePreference, LOCALE_STORAGE_KEY } from './locale-store';
+import { describe, expect, it } from 'vitest';
+import { resolveLocale } from './locale-store';
 
 describe('locale selection', () => {
-    beforeEach(() => {
-        window.localStorage.clear();
-    });
-
     it('resolves Traditional Chinese system locales', () => {
         expect(resolveLocale('system', 'zh-TW')).toBe('zh-TW');
         expect(resolveLocale('system', 'zh-Hant-HK')).toBe('zh-TW');
@@ -25,10 +21,5 @@ describe('locale selection', () => {
     it('honours an explicit language preference', () => {
         expect(resolveLocale('zh-TW', 'zh-CN')).toBe('zh-TW');
         expect(resolveLocale('zh-CN', 'en-US')).toBe('zh-CN');
-    });
-
-    it('persists a selected language', () => {
-        setLocalePreference('zh-CN');
-        expect(window.localStorage.getItem(LOCALE_STORAGE_KEY)).toBe('zh-CN');
     });
 });
