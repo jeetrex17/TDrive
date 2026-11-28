@@ -670,11 +670,11 @@ describe('the picker window', () => {
     it('rejects an oversized selection before starting upload work', async () => {
         app.SelectFiles.mockResolvedValue(['/tmp/huge']);
         app.PlanImport.mockResolvedValue({
-            files: 12_000,
+            files: 100_000,
             folders: 1,
             archives: 0,
             limitExceeded: true,
-            maxItems: 5000,
+            maxItems: 100_000,
         });
 
         await uploadWithParentID('folder-1');
@@ -684,7 +684,7 @@ describe('the picker window', () => {
         expect(mocks.notify).toHaveBeenCalledWith(expect.objectContaining({
             level: 'info',
             title: 'Selection is too large',
-            body: expect.stringContaining('5,000'),
+            body: expect.stringContaining('100,000'),
         }));
     });
 

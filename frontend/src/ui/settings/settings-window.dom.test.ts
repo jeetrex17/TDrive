@@ -17,6 +17,7 @@ import { checkForUpdates } from '../../modules/updates';
 import SettingsWindow from './SettingsWindow.svelte';
 import { openSettings, settingsView } from './settings-store';
 import { setPreferredTheme, setThemeMode, THEME_TRANSITION_CLASS, themeController } from '../theme/theme-controller';
+import { setLocalePreference } from '../i18n/locale-store';
 
 let component: Record<string, unknown> | null = null;
 let host: HTMLElement | null = null;
@@ -55,10 +56,33 @@ afterEach(async () => {
     component = null;
     host = null;
     settingsView.set({ open: false, section: 'account' });
+    setLocalePreference('system');
     vi.mocked(checkForUpdates).mockClear();
 });
 
 describe('SettingsWindow', () => {
+    it('switches the Settings interface to Simplified and Traditional Chinese', async () => {
+        setup();
+        openSettings('language');
+        await settle();
+
+        const language = host?.querySelector<HTMLSelectElement>('#settings-language');
+        if (!language) throw new Error('language selector did not render');
+        language.value = 'zh-CN';
+        language.dispatchEvent(new Event('change', { bubbles: true }));
+        await settle();
+
+        expect(host?.querySelector('#settings-title')?.textContent).toBe('设置');
+        expect(host?.querySelector('#settings-nav-account')?.textContent).toContain('账户');
+
+        language.value = 'zh-TW';
+        language.dispatchEvent(new Event('change', { bubbles: true }));
+        await settle();
+
+        expect(host?.querySelector('#settings-title')?.textContent).toBe('設定');
+        expect(host?.querySelector('#settings-nav-account')?.textContent).toContain('帳戶');
+    });
+
     it('opens with the keyboard shortcut on the section shown last', async () => {
         setup();
         settingsView.set({ open: false, section: 'encryption' });

@@ -25,10 +25,10 @@ import (
 // extracted archive's contents; it is removed when the import returns.
 
 const (
-	archiveExtractedFileLimit            = 10000
+	archiveExtractedFileLimit            = 100_000
 	archiveExtractedBytesLimitFloor      = 512 * 1024 * 1024
 	archiveExtractedBytesLimitMultiplier = 8
-	maxImportItems                       = 10_000
+	maxImportItems                       = 100_000
 	// Leave room for ignored and oversize members without permitting metadata
 	// alone to pin the app on an adversarial or generated archive.
 	maxImportArchiveScanEntries = maxImportItems * 4
@@ -291,7 +291,7 @@ func scanArchiveForImportLimit(ctx context.Context, archivePath string, maxScann
 	if maxScanned <= 0 {
 		return nil, 0, fmt.Errorf("archive scan limit must be positive")
 	}
-	entries := make([]ArchiveEntry, 0, min(maxImportItems, 256))
+	entries := make([]ArchiveEntry, 0, min(maxImportArchiveScanEntries, 256))
 	ignoredRoots := make(map[string]struct{})
 	seen := 0
 	err := forEachArchiveEntry(archivePath, func(entry ArchiveEntry) error {
@@ -303,7 +303,7 @@ func scanArchiveForImportLimit(ctx context.Context, archivePath string, maxScann
 			return errArchiveScanLimit
 		}
 		if root := ignoredArchiveRoot(entry.RelPath, entry.IsDir); root != "" {
-			if len(ignoredRoots) < maxImportItems {
+			if len(ignoredRoots) < maxImportArchiveScanEntries {
 				ignoredRoots[root] = struct{}{}
 			}
 			return nil

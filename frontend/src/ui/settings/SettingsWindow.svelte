@@ -6,6 +6,7 @@
     import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
     import PaletteIcon from '@lucide/svelte/icons/palette';
     import XIcon from '@lucide/svelte/icons/x';
+    import LanguagesIcon from '@lucide/svelte/icons/languages';
     import { tick } from 'svelte';
     import ModalShell from '../modals/ModalShell.svelte';
     import SwitchRow from '../SwitchRow.svelte';
@@ -21,6 +22,8 @@
     import { checkForUpdates } from '../../modules/updates';
     import { encryptUploads, setEncryptUploads } from '../../modules/upload-preferences';
     import { closeSettings, openSettings, settingsView, showSettingsSection, type SettingsSection } from './settings-store';
+    import { locale, localePreference, setLocalePreference, type LocalePreference } from '../i18n/locale-store';
+    import { translate, type MessageKey } from '../i18n/messages';
 
     interface Props {
         // False on phones, which update through their app stores.
@@ -31,23 +34,24 @@
 
     let { updaterAvailable = true, onEncryptionSettings, onLogout }: Props = $props();
 
-    const SECTIONS: ReadonlyArray<{ id: SettingsSection; label: string; icon: typeof PaletteIcon }> = [
-        { id: 'account', label: 'Account', icon: CircleUserIcon },
-        { id: 'appearance', label: 'Appearance', icon: PaletteIcon },
-        { id: 'backup', label: 'Photo backup', icon: CloudUploadIcon },
-        { id: 'encryption', label: 'Encryption', icon: LockKeyholeIcon },
-        { id: 'mount', label: 'Mount', icon: HardDriveIcon },
-        { id: 'updates', label: 'Updates', icon: DownloadIcon },
+    const SECTIONS: ReadonlyArray<{ id: SettingsSection; labelKey: MessageKey; icon: typeof PaletteIcon }> = [
+        { id: 'account', labelKey: 'account', icon: CircleUserIcon },
+        { id: 'appearance', labelKey: 'appearance', icon: PaletteIcon },
+        { id: 'language', labelKey: 'language', icon: LanguagesIcon },
+        { id: 'backup', labelKey: 'photoBackup', icon: CloudUploadIcon },
+        { id: 'encryption', labelKey: 'encryption', icon: LockKeyholeIcon },
+        { id: 'mount', labelKey: 'mount', icon: HardDriveIcon },
+        { id: 'updates', labelKey: 'updates', icon: DownloadIcon },
     ];
 
     // Mount only has a setting where drives have letters: Windows.
-    const sections = $derived(SECTIONS.filter((entry) => {
+    const sections = $derived(SECTIONS.map((entry) => ({ ...entry, label: translate(entry.labelKey, $locale) })).filter((entry) => {
         if (entry.id === 'updates') return updaterAvailable;
         if (entry.id === 'mount') return $mountLetter.available;
         return true;
     }));
     const current = $derived(sections.find((entry) => entry.id === $settingsView.section) ?? sections[0]);
-    const displayName = $derived(!$profileLoaded ? 'Loading account…' : $profileUser?.displayName || 'Telegram account');
+    const displayName = $derived(!$profileLoaded ? translate('loadingAccount', $locale) : $profileUser?.displayName || translate('telegramAccount', $locale));
     const handle = $derived(($profileUser?.username || '').trim());
 
     // The update section asks for a fresh check each time it is shown, as the
@@ -119,7 +123,7 @@
 >
     <div class="settings-layout">
         <nav class="settings-nav" aria-labelledby="settings-title">
-            <h2 id="settings-title" class="settings-nav-title">Settings</h2>
+            <h2 id="settings-title" class="settings-nav-title">{translate('settings', $locale)}</h2>
             {#each sections as entry, index (entry.id)}
                 {@const Icon = entry.icon}
                 <button
@@ -143,7 +147,7 @@
         <section class="settings-content" aria-labelledby="settings-section-title">
             <header class="settings-content-head">
                 <h3 id="settings-section-title" tabindex="-1">{current.label}</h3>
-                <button class="viewer-icon-btn settings-close" type="button" aria-label="Close settings" title="Close" onclick={closeSettings}>
+                <button class="viewer-icon-btn settings-close" type="button" aria-label={translate('closeSettings', $locale)} title={translate('closeSettings', $locale)} onclick={closeSettings}>
                     <XIcon aria-hidden="true" />
                 </button>
             </header>
@@ -162,10 +166,10 @@
                     <div class="settings-group">
                         <div class="settings-row">
                             <div class="settings-row-copy">
-                                <div class="settings-row-title">Log out</div>
-                                <div class="settings-row-description">Sign this device out of Telegram. Your files stay in your Telegram account.</div>
+                                <div class="settings-row-title">{translate('logOut', $locale)}</div>
+                                <div class="settings-row-description">{translate('logOutDescription', $locale)}</div>
                             </div>
-                            <button class="secondary-btn settings-danger" type="button" onclick={() => handOff(onLogout)}>Log out…</button>
+                            <button class="secondary-btn settings-danger" type="button" onclick={() => handOff(onLogout)}>{translate('logOut', $locale)}…</button>
                         </div>
                     </div>
                 {:else if current.id === 'appearance'}
@@ -175,8 +179,8 @@
                 {:else if current.id === 'encryption'}
                     <div class="settings-group">
                         <SwitchRow
-                            title="Encrypt uploads"
-                            description="New uploads to My Drive are encrypted with your password. Names and folders stay visible."
+                            title={translate('encryptUploads', $locale)}
+                            description={translate('encryptUploadsDescription', $locale)}
                             checked={$encryptUploads === true}
                             onchange={(checked) => setEncryptUploads(checked)}
                         />
@@ -184,16 +188,31 @@
                     <div class="settings-group">
                         <div class="settings-row">
                             <div class="settings-row-copy">
-                                <div class="settings-row-title">Password and device unlock</div>
+                                <div class="settings-row-title">{translate('passwordAndDeviceUnlock', $locale)}</div>
                                 <div class="settings-row-description">
                                     {$encryptionEntryVisible
-                                        ? 'Change your encryption password and hint, or unlock with this device.'
-                                        : 'You set a password the first time you encrypt an upload.'}
+                                        ? translate('changeEncryptionPassword', $locale)
+                                        : translate('setEncryptionPassword', $locale)}
                                 </div>
                             </div>
                             {#if $encryptionEntryVisible}
-                                <button class="secondary-btn" type="button" onclick={() => handOff(onEncryptionSettings)}>Manage…</button>
+                                <button class="secondary-btn" type="button" onclick={() => handOff(onEncryptionSettings)}>{translate('manage', $locale)}</button>
                             {/if}
+                        </div>
+                    </div>
+                {:else if current.id === 'language'}
+                    <div class="settings-group">
+                        <div class="settings-row">
+                            <div class="settings-row-copy">
+                                <div class="settings-row-title">{translate('language', $locale)}</div>
+                                <div class="settings-row-description">{translate('languageDescription', $locale)}</div>
+                            </div>
+                            <select id="settings-language" value={$localePreference} onchange={(event) => setLocalePreference(event.currentTarget.value as LocalePreference)} aria-label={translate('language', $locale)}>
+                                <option value="system">{translate('systemDefault', $locale)}</option>
+                                <option value="en">{translate('english', $locale)}</option>
+                                <option value="zh-CN">{translate('simplifiedChinese', $locale)}</option>
+                                <option value="zh-TW">{translate('traditionalChinese', $locale)}</option>
+                            </select>
                         </div>
                     </div>
                 {:else if current.id === 'mount'}
