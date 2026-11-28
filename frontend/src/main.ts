@@ -1,5 +1,6 @@
 import { loadFileSortPreference, RuntimeUnavailableError, saveFileSortPreference, waitForGatewayReady } from './api';
 import { state } from './state';
+import { localePreference } from './ui/i18n/locale-store';
 import { configureAppActions } from './modules/app-actions';
 import { mountApplication } from './modules/app-shell';
 import { connectAuthEvents, initializeSession } from './modules/auth';
