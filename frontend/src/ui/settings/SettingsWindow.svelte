@@ -179,8 +179,8 @@
                 {:else if current.id === 'encryption'}
                     <div class="settings-group">
                         <SwitchRow
-                            title="Encrypt uploads"
-                            description="{translate('encryptUploadsDescription', $locale)}"
+                            title={translate('encryptUploads', $locale)}
+                            description={translate('encryptUploadsDescription', $locale)}
                             checked={$encryptUploads === true}
                             onchange={(checked) => setEncryptUploads(checked)}
                         />
